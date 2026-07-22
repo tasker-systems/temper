@@ -17,8 +17,8 @@ use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
 
 use temper_core::types::access_gate::{
-    AccessMode, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
-    PublicSystemSettings, SystemSettings,
+    Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
+    SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -34,8 +34,9 @@ use crate::error::{ApiError, ApiResult};
 // ---------------------------------------------------------------------------
 
 /// Check if a profile has system-level access.
-/// In `open` mode this always returns true.
-/// In `invite_only` mode the profile must be a member of the gating team.
+///
+/// Reads the SQL `has_system_access` predicate, which since Task 7's repoint answers from the
+/// principal's **standing** (`approved`), not from an `access_mode`/gating-team-membership check.
 pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
     let result = sqlx::query_scalar!("SELECT has_system_access($1)", *profile_id,)
         .fetch_one(pool)
@@ -501,57 +502,34 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// Admin-only partial update of the singleton `kb_system_settings` row.
 ///
 /// COALESCE semantics: each `Some` field overwrites its column; each `None`
-/// leaves the column unchanged. `access_mode` is validated against
-/// `{open, invite_only}`. Guards against the lockout footgun: an effective
-/// `invite_only` mode with no `gating_team_slug` would make `has_system_access`
-/// false for everyone, so it is rejected.
+/// leaves the column unchanged. `access_mode` is no longer writable — it was
+/// retired as a control (spec §14 / D18); the column survives read-only until
+/// Phase 2 drops it, so this function never touches it.
+///
+/// One guard survives, decoupled from the retired mode: if a `gating_team_slug`
+/// is being set, the team must exist. That slug's ownership confers a system
+/// admin (`is_system_admin` reads governance keyed on it), so pointing it at a
+/// nonexistent team would silently break admin resolution. This is *not* the old
+/// lockout guard — under Task 7's repoint `has_system_access` reads standing, so
+/// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
     pool: &PgPool,
     _admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
-    // Validate access_mode (parse-don't-validate against the DB CHECK).
-    if let Some(mode) = req.access_mode.as_deref() {
-        if AccessMode::from_db_str(mode).is_none() {
+    // If a gating team is being set, it must name a real team.
+    if let Some(ref slug) = req.gating_team_slug {
+        let exists: bool = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+            slug
+        )
+        .fetch_one(pool)
+        .await?
+        .unwrap_or(false);
+        if !exists {
             return Err(ApiError::BadRequest(format!(
-                "invalid access_mode {mode:?} (expected 'open' or 'invite_only')"
+                "gating_team_slug '{slug}' does not exist — create the team first"
             )));
-        }
-    }
-
-    // Compute the EFFECTIVE post-update mode + gating slug to guard lockout.
-    let current = get_system_settings(pool).await?;
-    let effective_mode = req
-        .access_mode
-        .clone()
-        .unwrap_or(current.access_mode.clone());
-    let effective_gating = req
-        .gating_team_slug
-        .clone()
-        .or(current.gating_team_slug.clone());
-    if effective_mode == "invite_only" && effective_gating.is_none() {
-        return Err(ApiError::BadRequest(
-            "invite_only mode requires a gating_team_slug (set --gating-team in the same call \
-             or beforehand) — otherwise no one can access the instance"
-                .to_string(),
-        ));
-    }
-    // Guard: if the effective gating slug names a team that doesn't exist,
-    // enabling invite_only would lock everyone out.
-    if effective_mode == "invite_only" {
-        if let Some(ref slug) = effective_gating {
-            let exists: bool = sqlx::query_scalar!(
-                "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
-                slug
-            )
-            .fetch_one(pool)
-            .await?
-            .unwrap_or(false);
-            if !exists {
-                return Err(ApiError::BadRequest(format!(
-                    "gating_team_slug '{slug}' does not exist — create the team before enabling invite_only"
-                )));
-            }
         }
     }
 
@@ -559,17 +537,15 @@ pub async fn update_system_settings(
         SystemSettings,
         r#"
         UPDATE kb_system_settings
-           SET access_mode        = COALESCE($1, access_mode),
-               gating_team_slug   = COALESCE($2, gating_team_slug),
-               instance_name      = COALESCE($3, instance_name),
-               terms_version      = COALESCE($4, terms_version),
-               terms_resource_uri = COALESCE($5, terms_resource_uri),
+           SET gating_team_slug   = COALESCE($1, gating_team_slug),
+               instance_name      = COALESCE($2, instance_name),
+               terms_version      = COALESCE($3, terms_version),
+               terms_resource_uri = COALESCE($4, terms_resource_uri),
                updated            = now()
          WHERE id = 1
         RETURNING id, access_mode, gating_team_slug, terms_version,
                   terms_resource_uri, instance_name, updated
         "#,
-        req.access_mode,
         req.gating_team_slug,
         req.instance_name,
         req.terms_version,

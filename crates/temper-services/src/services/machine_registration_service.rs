@@ -27,28 +27,19 @@ use crate::services::profile_service;
 /// Enroll `profile_id` in the configured gating team as `watcher` — **but only if `caller`,
 /// the minter, is a member of that gating team themselves.**
 ///
-/// D14 is why the enrollment exists at all: `trg_sync_system_membership` auto-joins new profiles
-/// ONLY while `access_mode = 'open'`, because `has_system_access` short-circuits true under that
-/// mode. Under `invite_only` it enrolls nothing, and an unenrolled machine authenticates and then
-/// 403s at `require_system_access`. So we enroll explicitly, exactly as
-/// `access_service::review_request` does for an approved human. Never depend on the trigger: its
-/// behavior is a function of a setting that is about to change.
+/// This predates the standing cutover. Its original rationale was access-conferring: gating-team
+/// membership WAS system access (the old `has_system_access` read gating-team ownership/membership),
+/// so a machine had to be enrolled to authenticate past `require_system_access`, and the caller
+/// check contained a minter from conferring access they did not hold. That rationale is retired:
+/// under D11 every principal is born `Denied` and `has_system_access` reads **standing** (Task 7's
+/// repoint), so gating-team membership now confers no system access at all — a machine's access
+/// comes from its standing, granted by an admin, never from this enrollment.
 ///
-/// The caller check is why it is CONTAINED. This was the one piece of a machine's reach that
-/// escaped B2's containment rule — every other piece passes through `machine_authz`, which bounds
-/// a non-admin minter to reach they could confer on a human. Gating-team membership is system
-/// access, so an unconditional enrollment lets a minter confer access they may not hold.
-///
-/// Today that is unobservable and stays so: `temper-system` carries `auto_join_role = 'watcher'`
-/// and prod runs `open`, so the trigger has already made EVERY profile — every minter — a
-/// gating-team member, and every machine still enrolls. The check binds the day that stops
-/// (auto_join_role cleared, or the instance moved off open mode): from then on a machine can only
-/// hold system access if the human who minted it did. An admin is by definition an OWNER of the
-/// gating team (`is_system_admin` IS that ownership), so an admin-minted machine always enrolls
-/// and D14 is preserved on the path that matters most.
-///
-/// Note the predicate is MEMBERSHIP, not admin-ness: the ordinary minter is a plain human whom
-/// auto-join made a `watcher`, and their machines must keep enrolling.
+/// What survives is ordinary team hygiene: the gating team keeps its usual membership, the caller
+/// check keeps a non-admin minter from adding rows to a team they are not on, and admins (owners of
+/// the gating team) always enroll. It confers nothing on the access gate; whether machine
+/// enrollment is still wanted at all under the standing model is a question for the machine-principal
+/// follow-up, not this change — which only removes the `access_mode`-based reasoning above.
 async fn enroll_in_gating_team(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,

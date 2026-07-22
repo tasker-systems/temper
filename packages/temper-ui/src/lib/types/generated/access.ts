@@ -34,4 +34,22 @@ export type PublicSystemSettings = { access_mode: string, terms_version: string 
  * We are reflecting the caller's own profile back — not disclosing another
  * user's information. Do not add fields that reveal other users' data.
  */
-export type SystemAccessDetails = { email: string | null, display_name: string | null, access_mode: string, join_request_status: JoinRequestStatus | null, request_url: string | null, cli_command: string | null, };
+export type SystemAccessDetails = { email: string | null, display_name: string | null, 
+/**
+ * Why this principal was refused, typed (spec §7). Replaces the stringly `access_mode` the 403
+ * used to carry (retired: it was never rendered by any client and its tests asserted a sentinel
+ * `"join_request"` the system never emits). Unlike `access_mode` + `join_request_status`
+ * inference, the typed refusal distinguishes "never granted" (`denied`) from "granted and
+ * revoked" (`revoked`) — a distinction that matters to the user and in an audit.
+ *
+ * Carried as `temper_principal::Refusal` so the Rust surfaces branch on it exhaustively. This
+ * struct is not an OpenAPI component (the error body serializes `details` as a free-form value),
+ * so only the ts-rs generator needs steering — it sees the field as opaque for now, since
+ * temper-principal stays free of schema-derive deps by design; enriching that is a parity follow-up.
+ */
+refusal: unknown, 
+/**
+ * Legacy field kept one release for the deployed CLI, which renders it. New clients branch on
+ * `refusal` instead; Phase 2 retires this. Populated from the caller's own join request.
+ */
+join_request_status: JoinRequestStatus | null, request_url: string | null, cli_command: string | null, };

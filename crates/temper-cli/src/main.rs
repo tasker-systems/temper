@@ -60,6 +60,7 @@ fn main() {
             temper_cli::error::TemperError::SystemAccessRequired(details) => {
                 temper_cli::access_gate::render_system_access_required(
                     details.email.as_deref(),
+                    details.refusal.as_ref(),
                     details.join_request_status.as_deref(),
                     details.request_url.as_deref(),
                     details.cli_command.as_deref(),
@@ -609,7 +610,6 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         },
         Commands::Admin { action } => match action {
             AdminAction::Settings {
-                access_mode,
                 gating_team_slug,
                 instance_name,
                 terms_version,
@@ -617,7 +617,6 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
                     let req = temper_core::types::admin::UpdateSettingsRequest {
-                        access_mode,
                         gating_team_slug,
                         instance_name,
                         terms_version,

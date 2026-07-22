@@ -9,7 +9,9 @@ use thiserror::Error;
 pub struct CliAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
-    pub access_mode: String,
+    /// The typed refusal, when the server sent one. `None` from an older server that predates the
+    /// typed 403 — the CLI then falls back to rendering from `join_request_status`.
+    pub refusal: Option<temper_principal::Refusal>,
     pub join_request_status: Option<String>,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,

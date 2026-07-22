@@ -62,38 +62,12 @@ pub struct JoinRequestWithProfile {
     pub email: Option<String>,
 }
 
-/// The system access gate mode — the `kb_system_settings.access_mode` set.
-///
-/// Stored as a `VARCHAR(16)` CHECK column (not a PG enum), so it is parsed at
-/// the logic boundary via [`Self::from_db_str`] rather than decoded by sqlx.
-/// Typing the gate decision removes the stringly `== "open"` branch and makes a
-/// new mode a compile error at every match site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccessMode {
-    Open,
-    InviteOnly,
-}
-
-impl AccessMode {
-    /// Canonical DB string form (the `access_mode` CHECK values).
-    pub fn as_db_str(self) -> &'static str {
-        match self {
-            AccessMode::Open => "open",
-            AccessMode::InviteOnly => "invite_only",
-        }
-    }
-
-    /// Parse the `access_mode` column value. Returns `None` for any value
-    /// outside the CHECK set (which the DB constraint should make impossible).
-    pub fn from_db_str(s: &str) -> Option<Self> {
-        match s {
-            "open" => Some(AccessMode::Open),
-            "invite_only" => Some(AccessMode::InviteOnly),
-            _ => None,
-        }
-    }
-}
+// The `AccessMode` enum was retired with the `access_mode` control (spec §14 / D18): standing now
+// answers per-principal what a global mode switch answered instance-wide, so no code branches on the
+// mode any more. `kb_system_settings.access_mode` survives as a read-only `String` (below) that
+// `/settings` still projects, until Phase 2 drops the column. Re-introducing a typed mode here would
+// be the first step of re-coupling admission to a global switch — which is exactly what standing
+// replaced.
 
 /// Instance-wide system settings (singleton row).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -162,7 +136,20 @@ pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \
 pub struct SystemAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
-    pub access_mode: String,
+    /// Why this principal was refused, typed (spec §7). Replaces the stringly `access_mode` the 403
+    /// used to carry (retired: it was never rendered by any client and its tests asserted a sentinel
+    /// `"join_request"` the system never emits). Unlike `access_mode` + `join_request_status`
+    /// inference, the typed refusal distinguishes "never granted" (`denied`) from "granted and
+    /// revoked" (`revoked`) — a distinction that matters to the user and in an audit.
+    ///
+    /// Carried as `temper_principal::Refusal` so the Rust surfaces branch on it exhaustively. This
+    /// struct is not an OpenAPI component (the error body serializes `details` as a free-form value),
+    /// so only the ts-rs generator needs steering — it sees the field as opaque for now, since
+    /// temper-principal stays free of schema-derive deps by design; enriching that is a parity follow-up.
+    #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
+    pub refusal: temper_principal::Refusal,
+    /// Legacy field kept one release for the deployed CLI, which renders it. New clients branch on
+    /// `refusal` instead; Phase 2 retires this. Populated from the caller's own join request.
     pub join_request_status: Option<JoinRequestStatus>,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,

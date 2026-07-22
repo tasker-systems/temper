@@ -44,41 +44,12 @@ async fn update_settings_partial_coalesces(pool: sqlx::PgPool) {
     assert_eq!(updated.access_mode, "open"); // untouched field preserved
 }
 
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn update_settings_rejects_unknown_access_mode(pool: sqlx::PgPool) {
-    reset_settings(&pool).await;
-    let admin = admin_proof(&pool).await;
-
-    let req = UpdateSettingsRequest {
-        access_mode: Some("banana".to_owned()),
-        ..Default::default()
-    };
-    let err = access_service::update_system_settings(&pool, &admin, &req)
-        .await
-        .expect_err("should reject");
-    assert!(matches!(
-        err,
-        temper_services::error::ApiError::BadRequest(_)
-    ));
-}
-
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn update_settings_invite_only_requires_gating_team(pool: sqlx::PgPool) {
-    reset_settings(&pool).await; // gating_team_slug is NULL
-    let admin = admin_proof(&pool).await;
-
-    let req = UpdateSettingsRequest {
-        access_mode: Some("invite_only".to_owned()),
-        ..Default::default()
-    };
-    let err = access_service::update_system_settings(&pool, &admin, &req)
-        .await
-        .expect_err("invite_only without a gating team should be rejected");
-    assert!(matches!(
-        err,
-        temper_services::error::ApiError::BadRequest(_)
-    ));
-}
+// The `access_mode` control is retired (spec §14 / D18): `update_system_settings` no longer accepts
+// it, so the old "rejects unknown access_mode" and "invite_only requires a gating team" tests are
+// gone with the behaviors they pinned. The lockout they guarded can no longer happen — Task 7's
+// repoint made `has_system_access` read standing, not gating-team membership. The gating-team-exists
+// guard survives, decoupled from the mode; it is exercised by
+// `update_settings_rejects_nonexistent_gating_team` below.
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promote_admin_defaults_to_gating_team(pool: sqlx::PgPool) {
@@ -133,18 +104,20 @@ async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool)
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn update_settings_invite_only_rejects_nonexistent_gating_team(pool: sqlx::PgPool) {
-    reset_settings(&pool).await; // gating_team_slug is NULL, no team named "does-not-exist"
+async fn update_settings_rejects_nonexistent_gating_team(pool: sqlx::PgPool) {
+    reset_settings(&pool).await; // no team named "does-not-exist"
     let admin = admin_proof(&pool).await;
 
+    // The gating-team-exists guard survives the access_mode retirement, decoupled from any mode:
+    // pointing the gating slug at a nonexistent team would silently break admin resolution
+    // (`is_system_admin` reads governance keyed on that team's ownership).
     let req = UpdateSettingsRequest {
-        access_mode: Some("invite_only".to_owned()),
         gating_team_slug: Some("does-not-exist".to_owned()),
         ..Default::default()
     };
     let err = access_service::update_system_settings(&pool, &admin, &req)
         .await
-        .expect_err("invite_only with a nonexistent gating team should be rejected");
+        .expect_err("a nonexistent gating team should be rejected");
     assert!(matches!(
         err,
         temper_services::error::ApiError::BadRequest(_)
