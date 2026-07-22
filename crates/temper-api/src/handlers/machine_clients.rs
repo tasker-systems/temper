@@ -47,10 +47,12 @@ pub async fn rebind(
     Path(id): Path<Uuid>,
     Json(mut body): Json<RebindMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    // rebind is system-admin-only (B2): the &SystemAdmin proof is the gate (admin-authz enclosure,
+    // spec §3), minted here. Team ownership cannot bound the reach a rebind inherits.
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
     // The path segment is authoritative for which client is being rotated away from.
     body.from_machine_client_id = id;
-    let client = machine_registration_service::rebind(&state.pool, caller, &body).await?;
+    let client = machine_registration_service::rebind(&state.pool, &admin, &body).await?;
     Ok(Json(client))
 }
 
