@@ -82,7 +82,12 @@ async fn system_settings_no_slug_leak(pool: sqlx::PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.expect("json parse");
 
-    assert!(body.get("access_mode").is_some(), "should have access_mode");
+    // The public settings object is present (a public field surfaces) but the sensitive
+    // gating_team_slug never does. `access_mode` was dropped from the wire in Phase 2.
+    assert!(
+        body.get("instance_name").is_some(),
+        "the public settings object should surface instance_name"
+    );
     assert!(
         body.get("gating_team_slug").is_none(),
         "should NOT have gating_team_slug"
@@ -153,7 +158,16 @@ async fn enriched_403_contains_access_details(pool: sqlx::PgPool) {
 
     // Details
     let details = &body["error"]["details"];
-    assert_eq!(details["access_mode"], "invite_only");
+    // Typed refusal replaces the retired `access_mode`: a never-granted principal is born `denied`
+    // (D11), and the refusal says so — distinct from `revoked`, which the old access_mode could not.
+    assert_eq!(
+        details["refusal"]["kind"], "denied",
+        "a never-granted principal's refusal is `denied`"
+    );
+    assert!(
+        details["access_mode"].is_null(),
+        "the retired access_mode field must no longer be on the 403"
+    );
     assert!(
         details["email"].as_str().is_some(),
         "email should be present"
@@ -199,7 +213,7 @@ fn assert_advertised_command_is_runnable(advertised: &str) {
 // ---------------------------------------------------------------------------
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn enriched_403_shows_pending_join_request_status(pool: sqlx::PgPool) {
+async fn enriched_403_shows_a_pending_request_via_typed_refusal(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
     let admin_profile = preflight(&app, &app.token).await;
     let admin_id = profile_id(&admin_profile);
@@ -236,11 +250,16 @@ async fn enriched_403_shows_pending_join_request_status(pool: sqlx::PgPool) {
     let body: Value = resp.json().await.expect("json parse");
 
     assert_eq!(body["error"]["code"], "SYSTEM_ACCESS_REQUIRED");
+    // Phase 2 dropped the legacy `join_request_status` field; the typed `refusal` is the sole
+    // signal now. A request moves standing Denied → Requested (Act::Request), so it is `requested`.
     assert_eq!(
-        body["error"]["details"]["join_request_status"], "pending",
-        "should reflect pending join request"
+        body["error"]["details"]["refusal"]["kind"], "requested",
+        "a pending requester's typed refusal is `requested`"
     );
-    assert_eq!(body["error"]["details"]["access_mode"], "invite_only");
+    assert!(
+        body["error"]["details"]["join_request_status"].is_null(),
+        "the legacy join_request_status field is gone from the 403"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -723,8 +742,9 @@ async fn access_gate_403_renders_entirely_on_stderr(pool: sqlx::PgPool) {
         stderr.contains("requires approved access"),
         "the 403 explanation must reach stderr; stderr={stderr:?}"
     );
+    // Lead-in for the `denied` refusal (this second user is born Denied under invite_only).
     assert!(
-        stderr.contains("To request access, run:"),
+        stderr.contains("Access has not been granted. To request it, run:"),
         "the remedy's lead-in must reach stderr; stderr={stderr:?}"
     );
     assert!(
@@ -735,7 +755,7 @@ async fn access_gate_403_renders_entirely_on_stderr(pool: sqlx::PgPool) {
     // ...and stdout must carry none of it. These are the exact lines that were
     // written to stdout before the fix.
     for leaked in [
-        "To request access, run:",
+        "Access has not been granted. To request it, run:",
         "temper auth request-access",
         "requires approved access",
     ] {
@@ -824,8 +844,9 @@ async fn init_gated_403_renders_enriched_guidance_on_stderr(pool: sqlx::PgPool) 
         stderr.contains("requires approved access"),
         "the 403 explanation must reach stderr; stderr={stderr:?}"
     );
+    // Lead-in for the `denied` refusal (a brand-new user hitting invite_only is born Denied).
     assert!(
-        stderr.contains("To request access, run:"),
+        stderr.contains("Access has not been granted. To request it, run:"),
         "the remedy's lead-in must reach stderr; stderr={stderr:?}"
     );
     assert!(
@@ -843,7 +864,7 @@ async fn init_gated_403_renders_enriched_guidance_on_stderr(pool: sqlx::PgPool) 
     );
 
     for leaked in [
-        "To request access, run:",
+        "Access has not been granted. To request it, run:",
         "temper auth request-access",
         "requires approved access",
     ] {
@@ -1189,10 +1210,12 @@ async fn a_revoked_principal_cannot_re_request_but_may_ask_for_review(pool: sqlx
         .send()
         .await
         .unwrap();
-    // INTERIM STATUS (Task 17): the illegal-transition refusal rides `standing_service::apply`'s
-    // interim `ApiError::BadRequest` (400) — a 4xx that names why, chosen over payload-less
-    // `Forbidden` so the reason survives (`standing_service.rs:97`). Task 17's typed `Refusal`
-    // upgrades this self-service refusal to a 403; until then the contract is 400.
+    // The illegal-transition refusal rides `standing_service::apply`'s `refusal_to_api_error`
+    // (`ApiError::BadRequest` 400 here, `Conflict` 409 for already-Requested/Approved) — a 4xx that
+    // names why. Task 17 deliberately leaves this path as-is: a Revoked→Request is a malformed *act*,
+    // not a "you need system access" gate refusal, so mapping it to the `SystemAccessRequired` 403
+    // (which Task 17 gives the *admission gate*) would misrepresent it to the caller. The typed
+    // `Refusal` still carries the reason; only the admission 403 renders it as a typed 403.
     assert_eq!(
         resp.status(),
         StatusCode::BAD_REQUEST,

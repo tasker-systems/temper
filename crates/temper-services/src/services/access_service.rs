@@ -12,12 +12,13 @@ use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
 use uuid::Uuid;
 
+use crate::auth::SystemAdmin;
 use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
 
 use temper_core::types::access_gate::{
-    AccessMode, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
-    PublicSystemSettings, SystemSettings,
+    Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
+    SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -33,8 +34,9 @@ use crate::error::{ApiError, ApiResult};
 // ---------------------------------------------------------------------------
 
 /// Check if a profile has system-level access.
-/// In `open` mode this always returns true.
-/// In `invite_only` mode the profile must be a member of the gating team.
+///
+/// Reads the SQL `has_system_access` predicate, which since Task 7's repoint answers from the
+/// principal's **standing** (`approved`), not from an `access_mode`/gating-team-membership check.
 pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
     let result = sqlx::query_scalar!("SELECT has_system_access($1)", *profile_id,)
         .fetch_one(pool)
@@ -474,7 +476,7 @@ pub(crate) async fn cogmap_write_requires_admin(
 pub async fn get_system_settings(pool: &PgPool) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
         SystemSettings,
-        "SELECT id, access_mode, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
+        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
@@ -489,59 +491,45 @@ pub async fn get_public_settings(pool: &PgPool) -> ApiResult<PublicSystemSetting
         .map(PublicSystemSettings::from)
 }
 
+/// Admin-authority read of the FULL settings (admin-authz enclosure, spec §3.4). The proof goes on
+/// this admin *act*, never on the shared `get_system_settings` reader — that reader also backs the
+/// public route and internal callers (`promote_admin`, `update_system_settings`), so gating it would
+/// deny the public path. The `_admin` param is the capability; the body just delegates.
+pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<SystemSettings> {
+    get_system_settings(pool).await
+}
+
 /// Admin-only partial update of the singleton `kb_system_settings` row.
 ///
 /// COALESCE semantics: each `Some` field overwrites its column; each `None`
-/// leaves the column unchanged. `access_mode` is validated against
-/// `{open, invite_only}`. Guards against the lockout footgun: an effective
-/// `invite_only` mode with no `gating_team_slug` would make `has_system_access`
-/// false for everyone, so it is rejected.
+/// leaves the column unchanged. `access_mode` is no longer writable — it was
+/// retired as a control (spec §14 / D18); the column survives read-only until
+/// Phase 2 drops it, so this function never touches it.
+///
+/// One guard survives, decoupled from the retired mode: if a `gating_team_slug`
+/// is being set, the team must exist. That slug's ownership confers a system
+/// admin (`is_system_admin` reads governance keyed on it), so pointing it at a
+/// nonexistent team would silently break admin resolution. This is *not* the old
+/// lockout guard — under Task 7's repoint `has_system_access` reads standing, so
+/// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
     pool: &PgPool,
+    _admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
-    // Validate access_mode (parse-don't-validate against the DB CHECK).
-    if let Some(mode) = req.access_mode.as_deref() {
-        if AccessMode::from_db_str(mode).is_none() {
+    // If a gating team is being set, it must name a real team.
+    if let Some(ref slug) = req.gating_team_slug {
+        let exists: bool = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+            slug
+        )
+        .fetch_one(pool)
+        .await?
+        .unwrap_or(false);
+        if !exists {
             return Err(ApiError::BadRequest(format!(
-                "invalid access_mode {mode:?} (expected 'open' or 'invite_only')"
+                "gating_team_slug '{slug}' does not exist — create the team first"
             )));
-        }
-    }
-
-    // Compute the EFFECTIVE post-update mode + gating slug to guard lockout.
-    let current = get_system_settings(pool).await?;
-    let effective_mode = req
-        .access_mode
-        .clone()
-        .unwrap_or(current.access_mode.clone());
-    let effective_gating = req
-        .gating_team_slug
-        .clone()
-        .or(current.gating_team_slug.clone());
-    if effective_mode == "invite_only" && effective_gating.is_none() {
-        return Err(ApiError::BadRequest(
-            "invite_only mode requires a gating_team_slug (set --gating-team in the same call \
-             or beforehand) — otherwise no one can access the instance"
-                .to_string(),
-        ));
-    }
-    // Guard: if the effective gating slug names a team that doesn't exist,
-    // enabling invite_only would lock everyone out.
-    if effective_mode == "invite_only" {
-        if let Some(ref slug) = effective_gating {
-            let exists: bool = sqlx::query_scalar!(
-                "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
-                slug
-            )
-            .fetch_one(pool)
-            .await?
-            .unwrap_or(false);
-            if !exists {
-                return Err(ApiError::BadRequest(format!(
-                    "gating_team_slug '{slug}' does not exist — create the team before enabling invite_only"
-                )));
-            }
         }
     }
 
@@ -549,17 +537,15 @@ pub async fn update_system_settings(
         SystemSettings,
         r#"
         UPDATE kb_system_settings
-           SET access_mode        = COALESCE($1, access_mode),
-               gating_team_slug   = COALESCE($2, gating_team_slug),
-               instance_name      = COALESCE($3, instance_name),
-               terms_version      = COALESCE($4, terms_version),
-               terms_resource_uri = COALESCE($5, terms_resource_uri),
+           SET gating_team_slug   = COALESCE($1, gating_team_slug),
+               instance_name      = COALESCE($2, instance_name),
+               terms_version      = COALESCE($3, terms_version),
+               terms_resource_uri = COALESCE($4, terms_resource_uri),
                updated            = now()
          WHERE id = 1
-        RETURNING id, access_mode, gating_team_slug, terms_version,
+        RETURNING id, gating_team_slug, terms_version,
                   terms_resource_uri, instance_name, updated
         "#,
-        req.access_mode,
         req.gating_team_slug,
         req.instance_name,
         req.terms_version,
@@ -576,14 +562,13 @@ pub async fn update_system_settings(
 /// `team_id == None` resolves to the configured gating team — system-admin ≡
 /// owner of the gating team, so this mints a second system admin. Decoupled
 /// from `kb_profiles.system_access` (the auth gate reads gating-team ownership,
-/// not the enum). Auth is enforced by the caller (handler `is_system_admin`).
+/// not the enum). Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3); the promoting
+/// admin (`admin.actor()`) is recorded as the actor on the governance grant and standing transition.
 pub async fn promote_admin(
     pool: &PgPool,
+    admin: &SystemAdmin,
     profile_id: Uuid,
     team_id: Option<Uuid>,
-    // The promoting admin, recorded as the actor on the governance grant and standing transition.
-    // `None` for callers that do not carry one (fixture/mechanics tests).
-    actor: Option<ProfileId>,
 ) -> ApiResult<TeamMemberRow> {
     // Resolve the target team: explicit, else the configured gating team.
     let target_team = match team_id {
@@ -657,7 +642,7 @@ pub async fn promote_admin(
     sqlx::query_scalar!(
         "SELECT principal_governance_set($1, true, $2, 'system admin promotion')",
         profile_id,
-        actor.map(|a| *a),
+        Some(*admin.actor()),
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -672,7 +657,7 @@ pub async fn promote_admin(
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'approve','approved',$2,'system admin promotion')",
             profile_id,
-            actor.map(|a| *a),
+            Some(*admin.actor()),
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -694,33 +679,30 @@ pub async fn promote_admin(
 // and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
 // it is a join-request decision, handled atomically inside `review_request` (D14).
 //
-// The `is_system_admin` gate lives HERE, in the service, not in the surface — so both surfaces
-// (temper-api today, temper-mcp when parity lands) enforce it identically, and a service caller can
-// never reach `ActorAuthority::Admin` without being one. That is the F-3 posture the
+// The gate is the `&SystemAdmin` proof each act requires (admin-authz enclosure, spec §3.2): its
+// presence in the signature IS the authorization requirement, minted once by `require_system_admin`
+// at the surface and read via `admin.actor()`. The old private
+// `require_system_admin(pool, actor) -> ApiResult<()>` per-act gate is gone — an ungated call path is
+// now a compile error, not a forgotten `.await?`. Both surfaces (temper-api today, temper-mcp when
+// parity lands) inherit the gate by construction, and a service caller can never reach
+// `ActorAuthority::Admin` without holding the proof. That is the F-3 posture the
 // `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
 // ---------------------------------------------------------------------------
-
-/// Refuse unless `actor` is a system admin. The gate the four admin acts share; it runs before any
-/// standing write (auth before writes).
-async fn require_system_admin(pool: &PgPool, actor: ProfileId) -> ApiResult<()> {
-    if is_system_admin(pool, actor).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
 /// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
 /// enrolls a *human requester* into the auto-join pool; a direct grant confers standing only.
-pub async fn admin_approve(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
+pub async fn admin_approve(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Approve,
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -732,17 +714,16 @@ pub async fn admin_approve(pool: &PgPool, subject: ProfileId, actor: ProfileId) 
 /// ledger, and a later `RequestReview`'s reviewer needs it (D15) — which is why it is required.
 pub async fn admin_revoke(
     pool: &PgPool,
+    admin: &SystemAdmin,
     subject: ProfileId,
-    actor: ProfileId,
     reason: String,
 ) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Revoke { reason },
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -753,16 +734,15 @@ pub async fn admin_revoke(
 /// Deactivate a principal from any live state (§6).
 pub async fn admin_deactivate(
     pool: &PgPool,
+    admin: &SystemAdmin,
     subject: ProfileId,
-    actor: ProfileId,
 ) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Deactivate,
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -774,16 +754,15 @@ pub async fn admin_deactivate(
 /// reads the prior state from the log and refuses rather than guesses.
 pub async fn admin_reactivate(
     pool: &PgPool,
+    admin: &SystemAdmin,
     subject: ProfileId,
-    actor: ProfileId,
 ) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Reactivate { prior: None },
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -797,13 +776,13 @@ pub async fn admin_reactivate(
 /// profile alone, so it takes no team. Idempotent — a no-op on a profile that holds no grant.
 ///
 /// Governance-only: it never touches standing. A demoted admin keeps its access; it just may no
-/// longer change the rules. The gate lives HERE (F-3), so both surfaces enforce it identically.
-pub async fn demote_admin(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
+/// longer change the rules. The `&SystemAdmin` proof is the gate (F-3), so both surfaces enforce it
+/// identically.
+pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId) -> ApiResult<()> {
     sqlx::query_scalar!(
         "SELECT principal_governance_set($1, false, $2, 'system admin demotion')",
         *subject,
-        *actor,
+        *admin.actor(),
     )
     .fetch_one(pool)
     .await?;
@@ -1015,8 +994,12 @@ pub async fn create_review_request(
     Ok(())
 }
 
-/// List pending join requests with profile info (admin view).
-pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWithProfile>> {
+/// List pending join requests with profile info (admin view). The `_admin` proof is the capability
+/// (admin-authz enclosure, spec §3.2).
+pub async fn list_pending_requests(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+) -> ApiResult<Vec<JoinRequestWithProfile>> {
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -1048,10 +1031,11 @@ pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWi
     Ok(rows)
 }
 
-/// Parameters for reviewing (approving/rejecting) a join request.
+/// Parameters for reviewing (approving/rejecting) a join request. The reviewer is no longer carried
+/// here: it is the authorizing admin (`admin.actor()` on [`review_request`]), so a caller can no
+/// longer supply a reviewer id that disagrees with who actually authorized the decision.
 pub struct ReviewRequestParams {
     pub request_id: Uuid,
-    pub reviewer_profile_id: ProfileId,
     pub decision: JoinRequestStatus,
     pub decision_note: Option<String>,
 }
@@ -1059,7 +1043,14 @@ pub struct ReviewRequestParams {
 /// Approve or reject a join request. On approval, atomically insert the
 /// substrate-shaped team membership row (no `id`/`joined_at`/`invited_by_profile_id`;
 /// reviewer attribution survives on `kb_join_requests.reviewed_by_profile_id`).
-pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiResult<JoinRequest> {
+///
+/// Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3.2); the reviewer recorded on the
+/// decision and the standing transition is `admin.actor()`.
+pub async fn review_request(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    params: ReviewRequestParams,
+) -> ApiResult<JoinRequest> {
     if params.decision != JoinRequestStatus::Approved
         && params.decision != JoinRequestStatus::Rejected
     {
@@ -1092,7 +1083,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         "#,
         params.request_id,
         params.decision as JoinRequestStatus,
-        *params.reviewer_profile_id,
+        *admin.actor(),
         params.decision_note,
     )
     .fetch_optional(&mut *tx)
@@ -1110,7 +1101,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'approve','approved',$2,$3)",
             row.requesting_profile_id,
-            *params.reviewer_profile_id,
+            *admin.actor(),
             params.decision_note,
         )
         .fetch_one(&mut *tx)
@@ -1146,7 +1137,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'reject','denied',$2,$3)",
             row.requesting_profile_id,
-            *params.reviewer_profile_id,
+            *admin.actor(),
             params.decision_note,
         )
         .fetch_one(&mut *tx)

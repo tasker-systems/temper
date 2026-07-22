@@ -16,8 +16,6 @@ require 'time'
 module Temper::Generated
   # Public-facing system settings (no gating_team_slug — prevents info leakage).
   class PublicSystemSettings < ApiModelBase
-    attr_accessor :access_mode
-
     attr_accessor :instance_name
 
     attr_accessor :terms_resource_uri
@@ -27,7 +25,6 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'access_mode' => :'access_mode',
         :'instance_name' => :'instance_name',
         :'terms_resource_uri' => :'terms_resource_uri',
         :'terms_version' => :'terms_version'
@@ -47,7 +44,6 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'access_mode' => :'String',
         :'instance_name' => :'String',
         :'terms_resource_uri' => :'String',
         :'terms_version' => :'String'
@@ -79,12 +75,6 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'access_mode')
-        self.access_mode = attributes[:'access_mode']
-      else
-        self.access_mode = nil
-      end
-
       if attributes.key?(:'instance_name')
         self.instance_name = attributes[:'instance_name']
       end
@@ -103,10 +93,6 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @access_mode.nil?
-        invalid_properties.push('invalid value for "access_mode", access_mode cannot be nil.')
-      end
-
       invalid_properties
     end
 
@@ -114,18 +100,7 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @access_mode.nil?
       true
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] access_mode Value to be assigned
-    def access_mode=(access_mode)
-      if access_mode.nil?
-        fail ArgumentError, 'access_mode cannot be nil'
-      end
-
-      @access_mode = access_mode
     end
 
     # Checks equality by comparing each attribute.
@@ -133,7 +108,6 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          access_mode == o.access_mode &&
           instance_name == o.instance_name &&
           terms_resource_uri == o.terms_resource_uri &&
           terms_version == o.terms_version
@@ -148,7 +122,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [access_mode, instance_name, terms_resource_uri, terms_version].hash
+      [instance_name, terms_resource_uri, terms_version].hash
     end
 
     # Builds the object from hash

@@ -574,10 +574,10 @@ pub(crate) async fn provision_profile_entities(
 
 /// Load a profile by ID.
 ///
-/// `is_active` is a real deactivation flag read from the `kb_profiles` column —
-/// it is the authn lever for soft-deleted/deactivated accounts. `require_auth`
-/// rejects the request when it comes back `false`; every `resolve_from_claims`
-/// path routes through here, so the flag surfaces everywhere.
+/// Deactivation is no longer a column here — the Level-1 authn gate
+/// (`gate_resolved_profile`) reads it from `kb_principal_standing` (state
+/// `'deactivated'`) since principal-admission Phase 2 dropped `is_active`.
+/// Every `resolve_from_claims` path still routes through this loader.
 pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
     let profile = sqlx::query_as!(
         Profile,
@@ -589,7 +589,6 @@ pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
                NULL::text AS avatar_url,
                preferences as "preferences: serde_json::Value",
                '{}'::jsonb AS "vault_config!: serde_json::Value",
-               is_active,
                created,
                created AS "updated!"
           FROM kb_profiles

@@ -130,7 +130,10 @@ pub fn transition(
 }
 
 fn illegal(from: Option<Standing>, act: &'static str) -> Refusal {
-    Refusal::IllegalTransition { from, act }
+    Refusal::IllegalTransition {
+        from,
+        act: act.to_string(),
+    }
 }
 
 /// Spec §6's actor column, enforced.

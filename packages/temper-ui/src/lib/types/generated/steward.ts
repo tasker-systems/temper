@@ -85,18 +85,25 @@ new_resources: bigint,
 new_events: bigint, };
 
 /**
- * Outcome of one embed-dispatch pass (issue #299): how many resource-keyed embed jobs were claimed,
- * how many completed cleanly, how many failed (left for the reaper's retry→dead path), and the total
- * chunks embedded. Returned by the `/api/embed/dispatch` drain so a cron/operator has observability.
+ * Outcome of one embed-dispatch invocation (issue #299): across the invocation's claim loop, how
+ * many resource-keyed embed jobs were claimed, how many completed cleanly, how many failed (left for
+ * the reaper's retry→dead path), and the total chunks embedded. Returned by the
+ * `/api/embed/dispatch` drain so a cron/operator has observability. (An invocation loop-drains: it
+ * keeps claiming until the queue is empty or the wall-clock deadline is hit, so these counts span
+ * many claims, not one — see the `claimed` field.)
  */
 export type EmbedDispatchSummary = { 
 /**
- * Dead embed jobs re-enqueued this pass (Phase 4 re-drive). Zero unless the caller asked for a
- * re-drive (`?redrive=true`); these resources are then eligible for the same pass's claim.
+ * Dead embed jobs re-enqueued this invocation (Phase 4 re-drive). Zero unless the caller asked
+ * for a re-drive (`?redrive=true`); these resources are then eligible for the invocation's claim
+ * loop.
  */
 redriven: number, 
 /**
- * Jobs claimed this pass (bounded by the dispatch cap).
+ * Total jobs claimed across the invocation's claim loop. Each loop iteration claims ≤ the
+ * dispatch cap, so the invocation total routinely **exceeds** `cap` — and a re-enqueued partial
+ * re-claimed on a later iteration is counted again. `claimed = 30` at `cap = 5` is a healthy long
+ * invocation, not a bug.
  */
 claimed: number, 
 /**
@@ -108,14 +115,16 @@ completed: number,
  */
 failed: number, 
 /**
- * Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were
- * **re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger
- * than one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently
- * non-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.
+ * Jobs that embedded their per-claim chunk budget but still hold stale chunks, and were
+ * **re-enqueued** to resume later (a subsequent claim this same invocation, or a later tick). Not
+ * a failure — the normal path for a resource larger than one claim's budget (prod's biggest holds
+ * 939 chunks against a budget of 64). A persistently non-zero `partial` with `chunks_embedded`
+ * climbing is a drain making progress, not a stuck one.
  */
 partial: number, 
 /**
- * Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.
+ * Total chunks embedded across all jobs this invocation, whether they completed or were
+ * re-enqueued.
  */
 chunks_embedded: bigint, };
 

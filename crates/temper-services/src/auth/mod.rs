@@ -77,7 +77,8 @@ pub enum AuthzError {
     /// "failed to check system access" diagnostic instead of collapsing it into
     /// the resolve-failure message.
     AccessCheck(ApiError),
-    /// The resolved profile is soft-deleted (`is_active == false`).
+    /// The resolved profile's principal standing is `Deactivated` — the Level-1 kill-switch,
+    /// sourced from `kb_principal_standing` since Phase 2 dropped `kb_profiles.is_active`.
     Deactivated { profile_id: uuid::Uuid },
     /// The profile is not an approved member of the gating team.
     /// Carries the id so a surface can build its own denial payload.
@@ -174,7 +175,7 @@ pub async fn authenticate_token_existing_only(
             AuthzError::Refused("no existing temper profile for this identity")
         })?;
 
-    gate_resolved_profile(profile, &claims)
+    gate_resolved_profile(&state.pool, profile, &claims).await
 }
 
 /// **The federated path.** An identity asserted by a trusted peer, not a token.
@@ -225,7 +226,7 @@ pub(crate) async fn authenticate(
         .await
         .map_err(AuthzError::ProfileResolution)?;
 
-    gate_resolved_profile(profile, claims)
+    gate_resolved_profile(pool, profile, claims).await
 }
 
 /// Level 1's post-resolution tail: every gate that applies *after* a profile is resolved,
@@ -239,11 +240,22 @@ pub(crate) async fn authenticate(
 ///
 /// Takes the profile by value and returns the [`AuthenticatedProfile`] so that constructing
 /// one without passing the gate requires going out of your way.
-fn gate_resolved_profile(
+async fn gate_resolved_profile(
+    pool: &PgPool,
     profile: Profile,
     claims: &AuthClaims,
 ) -> Result<AuthenticatedProfile, AuthzError> {
-    if !profile.is_active {
+    // Level-1 kill-switch, repointed off the dropped `kb_profiles.is_active` onto principal
+    // standing (Phase 2). A `Deactivated` standing bars authentication entirely; `Denied` and
+    // `Revoked` deliberately pass Level 1 so they can still reach the auth-only request/review
+    // routes — only Level 2 (`require_system_access`) refuses them.
+    let standing = crate::services::standing_service::load(
+        pool,
+        temper_core::types::ids::ProfileId::from(profile.id),
+    )
+    .await
+    .map_err(AuthzError::AccessCheck)?;
+    if standing == Some(temper_principal::Standing::Deactivated) {
         return Err(AuthzError::Deactivated {
             profile_id: profile.id,
         });
@@ -259,8 +271,19 @@ fn gate_resolved_profile(
 /// system-authorized. Only obtainable from [`require_system_access`], which
 /// only accepts an [`AuthenticatedProfile`] — so the type makes it impossible
 /// to run Level 2 without having passed Level 1.
+///
+/// SEALED: the field is private, so the only way to hold one is [`require_system_access`].
+/// A struct-literal forgery outside this module is a compile error — the enforcement the
+/// doc comment above has always *claimed* but, with a `pub` field, did not have.
 #[derive(Debug)]
-pub struct SystemAuthorized(pub AuthenticatedProfile);
+pub struct SystemAuthorized(AuthenticatedProfile);
+
+impl SystemAuthorized {
+    /// The authenticated identity this proof was minted for.
+    pub fn authenticated(&self) -> &AuthenticatedProfile {
+        &self.0
+    }
+}
 
 /// Level 2 — system authorization. Consumes proof of Level 1, adds the
 /// gating-team access gate. Runs on the gated tier of both surfaces.
@@ -282,6 +305,39 @@ pub async fn require_system_access(
     }
 
     Ok(SystemAuthorized(authed.clone()))
+}
+
+/// Proof the caller is a system admin (D10 governance / spec §3). SEALED: the private field means the
+/// only way to hold one is [`require_system_admin`], which checks the DB. Forging one by struct
+/// literal is a compile error outside this module — so a pure-admin fn that takes `&SystemAdmin`
+/// cannot be reached without the gate having run. It carries the acting admin's [`ProfileId`], the
+/// only thing admin fns need for governance/standing/ledger writes.
+#[derive(Debug)]
+pub struct SystemAdmin(ProfileId);
+
+impl SystemAdmin {
+    /// The acting admin — recorded as `actor` on every governance/standing/ledger write.
+    pub fn actor(&self) -> ProfileId {
+        self.0
+    }
+}
+
+/// Level 3 — governance check. A sibling of [`require_system_access`] off Level 1, not a chain on top
+/// of it: it consumes an [`AuthenticatedProfile`] and reads governance *alone* (D11's posture that
+/// `is_system_admin` never ANDs standing). Returns a plain [`ApiError::Forbidden`] on denial — admin
+/// denial needs none of `AuthzError::SystemAccessDenied`'s CLI-presentation payload, and `Forbidden`
+/// is exactly what the admin gate returns today, so parity is trivial and no new surface mapping is
+/// needed.
+pub async fn require_system_admin(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+) -> ApiResult<SystemAdmin> {
+    let actor = ProfileId::from(authed.profile.id);
+    if crate::services::access_service::is_system_admin(pool, actor).await? {
+        Ok(SystemAdmin(actor))
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -541,11 +597,14 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_only_token_path_still_refuses_a_deactivated_profile(pool: PgPool) {
         let id = seed_linked_human(&pool, "auth0|gone", "gone@example.test").await;
-        sqlx::query("UPDATE kb_profiles SET is_active = false WHERE id = $1")
-            .bind(id)
-            .execute(&pool)
-            .await
-            .expect("deactivate");
+        sqlx::query(
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,'deactivated') \
+             ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("deactivate via standing");
 
         let err = authenticate_token_existing_only(
             &state(pool.clone()),
@@ -672,7 +731,7 @@ mod tests {
 
         let c = machine_claims("agent-rails");
         let authed = authenticate(&pool, &c).await.expect("authenticate machine");
-        assert!(authed.profile.is_active);
+        // Level 1 passed ⇒ not `Deactivated` standing; the dedicated refuse-tests carry that contract.
         assert_eq!(
             authed.claims.principal_kind,
             temper_core::types::PrincipalKind::Machine
@@ -699,7 +758,7 @@ mod tests {
     async fn authenticate_returns_active_profile(pool: PgPool) {
         let c = claims("seam-active", "active@example.test");
         let authed = authenticate(&pool, &c).await.expect("should authenticate");
-        assert!(authed.profile.is_active);
+        // Level 1 passed ⇒ not `Deactivated` standing (the is_active proxy was dropped in Phase 2).
         assert_eq!(authed.claims.external_user_id, "seam-active");
     }
 
@@ -710,12 +769,15 @@ mod tests {
         let authed = authenticate(&pool, &c).await.expect("first resolve");
         let id = authed.profile.id;
 
-        // Soft-delete it (runtime query — test fixture, no macro cache needed).
-        sqlx::query("UPDATE kb_profiles SET is_active = false WHERE id = $1")
-            .bind(id)
-            .execute(&pool)
-            .await
-            .expect("deactivate");
+        // Deactivate via standing (runtime query — test fixture, no macro cache needed).
+        sqlx::query(
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,'deactivated') \
+             ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("deactivate via standing");
 
         let err = authenticate(&pool, &c).await.expect_err("should refuse");
         assert!(

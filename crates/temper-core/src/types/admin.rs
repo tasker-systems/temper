@@ -2,9 +2,10 @@
 //!
 //! `UpdateSettingsRequest` is a partial-update payload: every `Some` field
 //! overwrites that `kb_system_settings` column, every `None` leaves it
-//! unchanged (COALESCE on the server). `access_mode` is a raw string validated
-//! server-side against `{open, invite_only}` — mirrors how `SystemSettings`
-//! keeps `access_mode` as `String` rather than a sqlx-decoded enum.
+//! unchanged (COALESCE on the server). `access_mode` is retired as a control
+//! (spec §14 / D18): standing now answers per-principal what a global mode
+//! switch used to answer instance-wide, so the settings surface no longer
+//! accepts it. The column survives read-only until Phase 2 drops it.
 //!
 //! `PromoteAdminRequest` grants the target profile `owner` on a team. A `None`
 //! `team_id` means "the configured gating team" (resolved server-side so the
@@ -21,9 +22,7 @@ use uuid::Uuid;
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateSettingsRequest {
-    /// `"open"` or `"invite_only"`. Validated server-side.
-    pub access_mode: Option<String>,
-    /// Slug of the team that gates the instance in `invite_only` mode.
+    /// Slug of the team whose ownership confers a system admin. `None` leaves it unchanged.
     pub gating_team_slug: Option<String>,
     /// Human-facing instance name.
     pub instance_name: Option<String>,
@@ -36,8 +35,7 @@ pub struct UpdateSettingsRequest {
 impl UpdateSettingsRequest {
     /// True when no field is set — the caller wants a read, not a write.
     pub fn is_empty(&self) -> bool {
-        self.access_mode.is_none()
-            && self.gating_team_slug.is_none()
+        self.gating_team_slug.is_none()
             && self.instance_name.is_none()
             && self.terms_version.is_none()
             && self.terms_resource_uri.is_none()

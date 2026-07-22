@@ -17,8 +17,9 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
+use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service::{self, insert_grant, InsertGrantParams};
+use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
@@ -26,28 +27,19 @@ use crate::services::profile_service;
 /// Enroll `profile_id` in the configured gating team as `watcher` — **but only if `caller`,
 /// the minter, is a member of that gating team themselves.**
 ///
-/// D14 is why the enrollment exists at all: `trg_sync_system_membership` auto-joins new profiles
-/// ONLY while `access_mode = 'open'`, because `has_system_access` short-circuits true under that
-/// mode. Under `invite_only` it enrolls nothing, and an unenrolled machine authenticates and then
-/// 403s at `require_system_access`. So we enroll explicitly, exactly as
-/// `access_service::review_request` does for an approved human. Never depend on the trigger: its
-/// behavior is a function of a setting that is about to change.
+/// This predates the standing cutover. Its original rationale was access-conferring: gating-team
+/// membership WAS system access (the old `has_system_access` read gating-team ownership/membership),
+/// so a machine had to be enrolled to authenticate past `require_system_access`, and the caller
+/// check contained a minter from conferring access they did not hold. That rationale is retired:
+/// under D11 every principal is born `Denied` and `has_system_access` reads **standing** (Task 7's
+/// repoint), so gating-team membership now confers no system access at all — a machine's access
+/// comes from its standing, granted by an admin, never from this enrollment.
 ///
-/// The caller check is why it is CONTAINED. This was the one piece of a machine's reach that
-/// escaped B2's containment rule — every other piece passes through `machine_authz`, which bounds
-/// a non-admin minter to reach they could confer on a human. Gating-team membership is system
-/// access, so an unconditional enrollment lets a minter confer access they may not hold.
-///
-/// Today that is unobservable and stays so: `temper-system` carries `auto_join_role = 'watcher'`
-/// and prod runs `open`, so the trigger has already made EVERY profile — every minter — a
-/// gating-team member, and every machine still enrolls. The check binds the day that stops
-/// (auto_join_role cleared, or the instance moved off open mode): from then on a machine can only
-/// hold system access if the human who minted it did. An admin is by definition an OWNER of the
-/// gating team (`is_system_admin` IS that ownership), so an admin-minted machine always enrolls
-/// and D14 is preserved on the path that matters most.
-///
-/// Note the predicate is MEMBERSHIP, not admin-ness: the ordinary minter is a plain human whom
-/// auto-join made a `watcher`, and their machines must keep enrolling.
+/// What survives is ordinary team hygiene: the gating team keeps its usual membership, the caller
+/// check keeps a non-admin minter from adding rows to a team they are not on, and admins (owners of
+/// the gating team) always enroll. It confers nothing on the access gate; whether machine
+/// enrollment is still wanted at all under the standing model is a question for the machine-principal
+/// follow-up, not this change — which only removes the `access_mode`-based reasoning above.
 async fn enroll_in_gating_team(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
@@ -391,16 +383,13 @@ pub async fn issue(
 /// path (`auth0-m2m`); a team owner rotating a temper-issued credential uses `rotate_secret`.
 pub async fn rebind(
     pool: &PgPool,
-    caller: ProfileId,
+    admin: &SystemAdmin,
     req: &RebindMachineRequest,
 ) -> ApiResult<MachineClient> {
+    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a rebind
+    // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
+    // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
-
-    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a
-    // rebind inherits.
-    if !access_service::is_system_admin(pool, caller).await? {
-        return Err(ApiError::Forbidden);
-    }
 
     // A revoked credential is dead; it must be re-created by a fresh `provision`, never
     // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
@@ -441,7 +430,7 @@ pub async fn rebind(
         req.label,
         old.profile_id,
         old.team_id,
-        *caller,
+        *admin.actor(),
     )
     .fetch_one(&mut *tx)
     .await
@@ -453,7 +442,7 @@ pub async fn rebind(
                   SET revoked_at = now(), revoked_by_profile_id = $2
                 WHERE id = $1 AND revoked_at IS NULL"#,
             old.id,
-            *caller,
+            *admin.actor(),
         )
         .execute(&mut *tx)
         .await?;
@@ -539,6 +528,15 @@ mod tests {
         crate::test_support::approved_admin(pool, id).await;
 
         ProfileId::from(id)
+    }
+
+    /// Mint the sealed `SystemAdmin` proof for a seeded admin — `rebind` now requires it (admin-authz
+    /// enclosure). Provision/issue/revoke still take a bare `ProfileId` caller, so this is rebind-only.
+    async fn admin_proof(pool: &PgPool, admin: ProfileId) -> crate::auth::SystemAdmin {
+        let authed = crate::test_support::authenticated_profile_for(pool, *admin).await;
+        crate::auth::require_system_admin(pool, &authed)
+            .await
+            .expect("admin proof")
     }
 
     /// Seed a plain team owner who is NOT a system admin and holds NO gating-team membership,
@@ -915,9 +913,10 @@ mod tests {
             .await
             .expect("provision");
 
+        let proof = admin_proof(&pool, admin).await;
         let new = svc::rebind(
             &pool,
-            admin,
+            &proof,
             &RebindMachineRequest {
                 client_id: "new-client".to_string(),
                 from_machine_client_id: old.id,
@@ -949,9 +948,10 @@ mod tests {
             .await
             .expect("provision");
 
+        let proof = admin_proof(&pool, admin).await;
         svc::rebind(
             &pool,
-            admin,
+            &proof,
             &RebindMachineRequest {
                 client_id: "overlap-new".to_string(),
                 from_machine_client_id: old.id,
@@ -1010,22 +1010,25 @@ mod tests {
             .expect("provision");
 
         // Alice owns the machine's team — she can revoke it (tested elsewhere) — but she may NOT
-        // rebind it onto a client_id she controls and inherit its identity.
-        let err = svc::rebind(
-            &pool,
-            ProfileId::from(alice),
-            &RebindMachineRequest {
-                client_id: "alice-controls-this".to_string(),
-                from_machine_client_id: old.id,
-                label: "hijack".to_string(),
-                keep_old_active: false,
-            },
-        )
-        .await
-        .expect_err("a non-admin team owner must not rebind");
+        // rebind it onto a client_id she controls and inherit its identity. Post-enclosure the bar is
+        // structural: rebind requires a `&SystemAdmin`, and a non-admin cannot mint one. The refusal
+        // now happens at the proof gate, before rebind is even reachable.
+        let alice_authed = crate::test_support::authenticated_profile_for(&pool, alice).await;
+        let err = crate::auth::require_system_admin(&pool, &alice_authed)
+            .await
+            .expect_err("a non-admin team owner cannot mint an admin proof");
         assert!(
             matches!(err, crate::error::ApiError::Forbidden),
             "got {err:?}"
+        );
+
+        // And the machine is untouched — the refusal happened before any rebind write.
+        let still = crate::services::machine_client_service::get(&pool, old.id)
+            .await
+            .expect("old row");
+        assert!(
+            still.revoked_at.is_none(),
+            "the refused caller changed nothing"
         );
     }
 
@@ -1042,9 +1045,10 @@ mod tests {
             .await
             .expect("revoke");
 
+        let proof = admin_proof(&pool, admin).await;
         let err = svc::rebind(
             &pool,
-            admin,
+            &proof,
             &RebindMachineRequest {
                 client_id: "resurrected".to_string(),
                 from_machine_client_id: old.id,

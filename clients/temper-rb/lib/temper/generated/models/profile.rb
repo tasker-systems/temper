@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Profile — the temper-domain identity.  Bridges external auth identity to everything temper cares about: team membership, resource ownership, preferences, vault configuration. A profile is \"who I am in temper\" regardless of which provider I authenticated through. No auth provider fields — those live in `ProfileAuthLink`.  Auto-provisioned on first authenticated request. Soft-deleted via `is_active = false` for referential integrity and GDPR compliance.
+  # Profile — the temper-domain identity.  Bridges external auth identity to everything temper cares about: team membership, resource ownership, preferences, vault configuration. A profile is \"who I am in temper\" regardless of which provider I authenticated through. No auth provider fields — those live in `ProfileAuthLink`.  Auto-provisioned on first authenticated request. Deactivation is a principal-standing state (`kb_principal_standing.state = 'deactivated'`), not a column on this row — the legacy `is_active` flag was dropped in principal-admission Phase 2.
   class Profile < ApiModelBase
     attr_accessor :avatar_url
 
@@ -25,8 +25,6 @@ module Temper::Generated
     attr_accessor :email
 
     attr_accessor :id
-
-    attr_accessor :is_active
 
     attr_accessor :preferences
 
@@ -44,7 +42,6 @@ module Temper::Generated
         :'display_name' => :'display_name',
         :'email' => :'email',
         :'id' => :'id',
-        :'is_active' => :'is_active',
         :'preferences' => :'preferences',
         :'slug' => :'slug',
         :'updated' => :'updated',
@@ -70,7 +67,6 @@ module Temper::Generated
         :'display_name' => :'String',
         :'email' => :'String',
         :'id' => :'String',
-        :'is_active' => :'Boolean',
         :'preferences' => :'Object',
         :'slug' => :'String',
         :'updated' => :'Time',
@@ -130,12 +126,6 @@ module Temper::Generated
         self.id = nil
       end
 
-      if attributes.key?(:'is_active')
-        self.is_active = attributes[:'is_active']
-      else
-        self.is_active = nil
-      end
-
       if attributes.key?(:'preferences')
         self.preferences = attributes[:'preferences']
       else
@@ -178,10 +168,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "id", id cannot be nil.')
       end
 
-      if @is_active.nil?
-        invalid_properties.push('invalid value for "is_active", is_active cannot be nil.')
-      end
-
       if @slug.nil?
         invalid_properties.push('invalid value for "slug", slug cannot be nil.')
       end
@@ -200,7 +186,6 @@ module Temper::Generated
       return false if @created.nil?
       return false if @display_name.nil?
       return false if @id.nil?
-      return false if @is_active.nil?
       return false if @slug.nil?
       return false if @updated.nil?
       true
@@ -237,16 +222,6 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] is_active Value to be assigned
-    def is_active=(is_active)
-      if is_active.nil?
-        fail ArgumentError, 'is_active cannot be nil'
-      end
-
-      @is_active = is_active
-    end
-
-    # Custom attribute writer method with validation
     # @param [Object] slug Value to be assigned
     def slug=(slug)
       if slug.nil?
@@ -276,7 +251,6 @@ module Temper::Generated
           display_name == o.display_name &&
           email == o.email &&
           id == o.id &&
-          is_active == o.is_active &&
           preferences == o.preferences &&
           slug == o.slug &&
           updated == o.updated &&
@@ -292,7 +266,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [avatar_url, created, display_name, email, id, is_active, preferences, slug, updated, vault_config].hash
+      [avatar_url, created, display_name, email, id, preferences, slug, updated, vault_config].hash
     end
 
     # Builds the object from hash

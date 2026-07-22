@@ -18,11 +18,7 @@ team_id: string | null, };
  */
 export type UpdateSettingsRequest = { 
 /**
- * `"open"` or `"invite_only"`. Validated server-side.
- */
-access_mode: string | null, 
-/**
- * Slug of the team that gates the instance in `invite_only` mode.
+ * Slug of the team whose ownership confers a system admin. `None` leaves it unchanged.
  */
 gating_team_slug: string | null, 
 /**

@@ -10,10 +10,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use temper_core::types::admin::{ReembedRequest, ReembedSummary};
-use temper_core::types::ids::ProfileId;
 use temper_core::types::workflow_job::EmbedDispatchSummary;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::access_service;
 use temper_services::services::embed_service::{self, ReembedScope};
 use temper_services::state::AppState;
 
@@ -191,10 +189,9 @@ pub async fn reembed(
     auth: AuthUser,
     Json(body): Json<ReembedRequest>,
 ) -> ApiResult<Json<ReembedSummary>> {
-    // Auth before anything else — this can enqueue work across the entire index.
-    if !access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Auth before anything else — this can enqueue work across the entire index. The `&SystemAdmin`
+    // proof required by `enqueue_stale` is the gate (admin-authz enclosure, spec §3); minted here.
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
 
     // Exactly one scope. An empty body is a no-op rather than an implicit "everything": the most
     // destructive interpretation must never be the default one.
@@ -215,7 +212,7 @@ pub async fn reembed(
         Vec::new()
     } else {
         let limit = body.limit.unwrap_or(DEFAULT_REEMBED_LIMIT);
-        embed_service::enqueue_stale(&state.pool, scope, limit).await?
+        embed_service::enqueue_stale(&state.pool, &admin, scope, limit).await?
     };
 
     tracing::info!(

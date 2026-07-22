@@ -2993,8 +2993,10 @@ export interface components {
          *     authenticated through. No auth provider fields — those live in
          *     `ProfileAuthLink`.
          *
-         *     Auto-provisioned on first authenticated request. Soft-deleted via
-         *     `is_active = false` for referential integrity and GDPR compliance.
+         *     Auto-provisioned on first authenticated request. Deactivation is a
+         *     principal-standing state (`kb_principal_standing.state = 'deactivated'`),
+         *     not a column on this row — the legacy `is_active` flag was dropped in
+         *     principal-admission Phase 2.
          */
         Profile: {
             avatar_url?: string | null;
@@ -3004,7 +3006,6 @@ export interface components {
             email?: string | null;
             /** Format: uuid */
             id: string;
-            is_active: boolean;
             preferences: unknown;
             slug: string;
             /** Format: date-time */
@@ -3073,7 +3074,6 @@ export interface components {
         };
         /** @description Public-facing system settings (no gating_team_slug — prevents info leakage). */
         PublicSystemSettings: {
-            access_mode: string;
             instance_name?: string | null;
             terms_resource_uri?: string | null;
             terms_version?: string | null;

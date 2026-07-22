@@ -1038,10 +1038,7 @@ pub enum TeamAction {
 pub enum AdminAction {
     /// Show system settings, or update them when any flag is provided
     Settings {
-        /// Access mode: open | invite_only
-        #[arg(long = "access-mode")]
-        access_mode: Option<String>,
-        /// Gating team slug (the team that gates invite_only access)
+        /// Gating team slug (the team whose ownership confers a system admin)
         #[arg(long = "gating-team")]
         gating_team_slug: Option<String>,
         /// Human-facing instance name
