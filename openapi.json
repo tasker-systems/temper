@@ -8905,14 +8905,13 @@
       },
       "Profile": {
         "type": "object",
-        "description": "Profile — the temper-domain identity.\n\nBridges external auth identity to everything temper cares about:\nteam membership, resource ownership, preferences, vault configuration.\nA profile is \"who I am in temper\" regardless of which provider I\nauthenticated through. No auth provider fields — those live in\n`ProfileAuthLink`.\n\nAuto-provisioned on first authenticated request. Soft-deleted via\n`is_active = false` for referential integrity and GDPR compliance.",
+        "description": "Profile — the temper-domain identity.\n\nBridges external auth identity to everything temper cares about:\nteam membership, resource ownership, preferences, vault configuration.\nA profile is \"who I am in temper\" regardless of which provider I\nauthenticated through. No auth provider fields — those live in\n`ProfileAuthLink`.\n\nAuto-provisioned on first authenticated request. Deactivation is a\nprincipal-standing state (`kb_principal_standing.state = 'deactivated'`),\nnot a column on this row — the legacy `is_active` flag was dropped in\nprincipal-admission Phase 2.",
         "required": [
           "id",
           "display_name",
           "slug",
           "preferences",
           "vault_config",
-          "is_active",
           "created",
           "updated"
         ],
@@ -8939,9 +8938,6 @@
           "id": {
             "type": "string",
             "format": "uuid"
-          },
-          "is_active": {
-            "type": "boolean"
           },
           "preferences": {},
           "slug": {
@@ -9112,13 +9108,7 @@
       "PublicSystemSettings": {
         "type": "object",
         "description": "Public-facing system settings (no gating_team_slug — prevents info leakage).",
-        "required": [
-          "access_mode"
-        ],
         "properties": {
-          "access_mode": {
-            "type": "string"
-          },
           "instance_name": {
             "type": [
               "string",

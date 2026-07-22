@@ -15,7 +15,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::AuthenticatedProfile;
 
 use temper_services::error::ApiError;
-use temper_services::services::{access_service, standing_service};
+use temper_services::services::standing_service;
 use temper_services::state::AppState;
 
 /// Axum middleware that checks system-level access after authentication.
@@ -48,8 +48,6 @@ pub async fn require_system_access(
                 .await
                 .err()
                 .unwrap_or(temper_principal::Refusal::NoStanding);
-            // Kept one release for the deployed CLI, which still renders it.
-            let own_request = access_service::get_own_request(&state.pool, profile_id).await?;
             // SECURITY NOTE: email and display_name are safe to return here because
             // the caller already proved ownership of this identity through OAuth.
             // We are reflecting their own profile data back to them.
@@ -57,7 +55,6 @@ pub async fn require_system_access(
                 email: authed.profile.email.clone(),
                 display_name: Some(authed.profile.display_name.clone()),
                 refusal,
-                join_request_status: own_request.map(|r| r.status),
                 request_url: Some("https://temperkb.io/request-access".to_string()),
                 cli_command: Some(
                     temper_core::types::access_gate::REQUEST_ACCESS_COMMAND.to_string(),

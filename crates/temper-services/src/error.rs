@@ -159,17 +159,10 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
             ApiError::Internal(s) => TemperError::Api(format!("internal: {s}")),
             ApiError::SystemAccessRequired { details } => {
-                // Lowercased Debug intentionally matches serde's snake_case rename for JoinRequestStatus
-                // — see From<TemperError> for ApiError below for the inverse parse path.
-                let join_request_status = details
-                    .join_request_status
-                    .as_ref()
-                    .map(|s| format!("{s:?}").to_lowercase());
                 TemperError::SystemAccessRequired(Box::new(CliAccessDetails {
                     email: details.email,
                     display_name: details.display_name,
                     refusal: Some(details.refusal),
-                    join_request_status,
                     request_url: details.request_url,
                     cli_command: details.cli_command,
                 }))
@@ -181,7 +174,7 @@ impl From<ApiError> for temper_core::error::TemperError {
 impl From<temper_core::error::TemperError> for ApiError {
     fn from(err: temper_core::error::TemperError) -> Self {
         use temper_core::error::TemperError;
-        use temper_core::types::access_gate::{JoinRequestStatus, SystemAccessDetails};
+        use temper_core::types::access_gate::SystemAccessDetails;
 
         match err {
             // Clean cases that mirror the inbound conversion
@@ -193,19 +186,6 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {
-                // Round-trip the join_request_status string back to the enum.
-                // The inbound conversion stringified it as `format!("{s:?}").to_lowercase()`,
-                // which produces strings like "pending", "approved", "rejected", "withdrawn".
-                // Since JoinRequestStatus derives serde::Deserialize with rename_all = "snake_case",
-                // we can deserialize those strings back directly.
-                let join_request_status = details.join_request_status.as_ref().and_then(|s| {
-                    let parsed = serde_json::from_value::<JoinRequestStatus>(serde_json::Value::String(s.clone()));
-                    if let Err(ref e) = parsed {
-                        tracing::warn!(status = s, error = %e, "could not parse join_request_status enum from string; dropping field");
-                    }
-                    parsed.ok()
-                });
-
                 ApiError::SystemAccessRequired {
                     details: Box::new(SystemAccessDetails {
                         email: details.email,
@@ -215,7 +195,6 @@ impl From<temper_core::error::TemperError> for ApiError {
                         refusal: details
                             .refusal
                             .unwrap_or(temper_principal::Refusal::NoStanding),
-                        join_request_status,
                         request_url: details.request_url,
                         cli_command: details.cli_command,
                     }),
@@ -304,7 +283,6 @@ mod tests {
                 // A real refusal, not the retired sentinel: `Revoked` is the case the typed value
                 // exists to distinguish from `Denied`.
                 refusal: Refusal::Revoked,
-                join_request_status: None,
                 request_url: Some("https://x".into()),
                 cli_command: Some("temper join".into()),
             }),
@@ -375,15 +353,13 @@ mod tests {
     #[test]
     fn temper_error_system_access_required_round_trip() {
         use temper_core::error::CliAccessDetails;
-        use temper_core::types::access_gate::JoinRequestStatus;
         use temper_principal::Refusal;
 
-        // Create a TemperError with a join_request_status that will round-trip cleanly.
+        // A typed refusal round-trips cleanly through the CLI error chain.
         let details = CliAccessDetails {
             email: Some("test@example.com".into()),
             display_name: Some("Test User".into()),
             refusal: Some(Refusal::Requested),
-            join_request_status: Some("pending".into()), // stringified enum value
             request_url: Some("https://example.com/join".into()),
             cli_command: Some("temper join-request".into()),
         };
@@ -396,11 +372,6 @@ mod tests {
                 assert_eq!(details.email.as_deref(), Some("test@example.com"));
                 assert_eq!(details.display_name.as_deref(), Some("Test User"));
                 assert_eq!(details.refusal, Refusal::Requested);
-                // join_request_status should have round-tripped to the enum
-                assert_eq!(
-                    details.join_request_status,
-                    Some(JoinRequestStatus::Pending)
-                );
                 assert_eq!(
                     details.request_url.as_deref(),
                     Some("https://example.com/join")

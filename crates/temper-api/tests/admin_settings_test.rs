@@ -41,7 +41,8 @@ async fn update_settings_partial_coalesces(pool: sqlx::PgPool) {
         .expect("update");
 
     assert_eq!(updated.instance_name.as_deref(), Some("Acme Temper"));
-    assert_eq!(updated.access_mode, "open"); // untouched field preserved
+    // (the COALESCE "untouched field preserved" check previously asserted on `access_mode`, which
+    // Phase 2 removed from the settings wire type; instance_name above carries the same guarantee.)
 }
 
 // The `access_mode` control is retired (spec §14 / D18): `update_system_settings` no longer accepts

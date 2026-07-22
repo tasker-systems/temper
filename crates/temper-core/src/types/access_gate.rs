@@ -64,16 +64,15 @@ pub struct JoinRequestWithProfile {
 
 // The `AccessMode` enum was retired with the `access_mode` control (spec §14 / D18): standing now
 // answers per-principal what a global mode switch answered instance-wide, so no code branches on the
-// mode any more. `kb_system_settings.access_mode` survives as a read-only `String` (below) that
-// `/settings` still projects, until Phase 2 drops the column. Re-introducing a typed mode here would
-// be the first step of re-coupling admission to a global switch — which is exactly what standing
-// replaced.
+// mode any more. Phase 2 finishes the retirement — the `access_mode` wire field is gone from both
+// settings structs below, and the `kb_system_settings.access_mode` column drops in Phase 2's
+// operator-run migration. Re-introducing a typed mode here would be the first step of re-coupling
+// admission to a global switch — which is exactly what standing replaced.
 
 /// Instance-wide system settings (singleton row).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SystemSettings {
     pub id: i32,
-    pub access_mode: String,
     pub gating_team_slug: Option<String>,
     pub terms_version: Option<String>,
     pub terms_resource_uri: Option<String>,
@@ -87,7 +86,6 @@ pub struct SystemSettings {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicSystemSettings {
-    pub access_mode: String,
     pub terms_version: Option<String>,
     pub terms_resource_uri: Option<String>,
     pub instance_name: Option<String>,
@@ -96,7 +94,6 @@ pub struct PublicSystemSettings {
 impl From<SystemSettings> for PublicSystemSettings {
     fn from(s: SystemSettings) -> Self {
         Self {
-            access_mode: s.access_mode,
             terms_version: s.terms_version,
             terms_resource_uri: s.terms_resource_uri,
             instance_name: s.instance_name,
@@ -136,11 +133,10 @@ pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \
 pub struct SystemAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
-    /// Why this principal was refused, typed (spec §7). Replaces the stringly `access_mode` the 403
-    /// used to carry (retired: it was never rendered by any client and its tests asserted a sentinel
-    /// `"join_request"` the system never emits). Unlike `access_mode` + `join_request_status`
-    /// inference, the typed refusal distinguishes "never granted" (`denied`) from "granted and
-    /// revoked" (`revoked`) — a distinction that matters to the user and in an audit.
+    /// Why this principal was refused, typed (spec §7). The sole refusal signal on the 403 since
+    /// Phase 2 retired the legacy `join_request_status` field new clients never branched on. The
+    /// typed refusal distinguishes "never granted" (`denied`) from "granted and revoked" (`revoked`)
+    /// — a distinction that matters to the user and in an audit.
     ///
     /// Carried as `temper_principal::Refusal` so the Rust surfaces branch on it exhaustively. This
     /// struct is not an OpenAPI component (the error body serializes `details` as a free-form value),
@@ -148,9 +144,6 @@ pub struct SystemAccessDetails {
     /// temper-principal stays free of schema-derive deps by design; enriching that is a parity follow-up.
     #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
     pub refusal: temper_principal::Refusal,
-    /// Legacy field kept one release for the deployed CLI, which renders it. New clients branch on
-    /// `refusal` instead; Phase 2 retires this. Populated from the caller's own join request.
-    pub join_request_status: Option<JoinRequestStatus>,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,
 }
