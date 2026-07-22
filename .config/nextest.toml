@@ -49,17 +49,16 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 # COMPILE, not runtime: trybuild builds each compile-fail fixture in an *isolated* workspace under
 # `target/tests/trybuild/`, so it recompiles temper-services and its whole dep tree (ort included) from
 # scratch rather than reusing the main build cache. Locally that's ~57s cold; on a CI runner it blew
-# past the 120s default (60s×2) mid-`Checking temper-services-tests`. It was killed while still
-# compiling, so the true cold-compile time is unknown — 60s×10 ⇒ killed at 600s is a deliberately
-# generous first bound to get one green CI run WITHOUT a second slow round-trip; the log from that run
-# reveals the real time, and this should then be tightened toward the default (see the segmented-body
-# override above for the same measure-then-tighten pattern). If the CI cost proves not worth the proof,
-# the fixtures can move behind a dedicated (still-in-a-job) feature — do NOT delete them: they are the
-# guarantee demonstrated.
+# past the 120s default (60s×2) mid-`Checking temper-services-tests`. A green CI run then MEASURED it
+# at 156.7s (test-rust / Unit, run 29920297399). 60s×5 ⇒ killed at 300s gives ~1.9× headroom over that
+# — safe against runner-to-runner variance while far tighter than the default would allow a real hang
+# to run. (Same measure-then-tighten pattern, and the same bound, as the segmented-body override above.)
+# If the CI cost proves not worth the proof, the fixtures can move behind a dedicated (still-in-a-job)
+# feature — do NOT delete them: they are the guarantee demonstrated.
 [[profile.default.overrides]]
 filter = 'test(=system_admin_is_unforgeable_and_gates_admin_fns)'
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
 filter = 'test(=system_admin_is_unforgeable_and_gates_admin_fns)'
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = { period = "60s", terminate-after = 5 }
