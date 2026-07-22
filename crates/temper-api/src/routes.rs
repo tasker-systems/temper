@@ -168,6 +168,10 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/promote",
             post(handlers::access::promote_admin),
         )
+        .route(
+            "/api/access/admin/demote",
+            post(handlers::access::demote_admin),
+        )
         // The admin standing acts (Task 13). Same operator-only convention as their neighbours:
         // plain `.route()`, out of the OpenAPI contract, allowlisted in
         // `.github/scripts/check-openapi-routes.sh`. The admin gate is in each handler.

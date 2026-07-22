@@ -1054,6 +1054,11 @@ pub enum AdminAction {
         #[arg(long)]
         team: Option<String>,
     },
+    /// Demote a system admin — revoke its governance grant (the manual twin of `promote`)
+    Demote {
+        /// Profile ID (UUID) to demote
+        profile: String,
+    },
     /// Admit, revoke, deactivate, or reactivate a principal's system access
     Access {
         #[command(subcommand)]

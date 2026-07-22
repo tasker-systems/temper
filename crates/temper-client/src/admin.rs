@@ -9,8 +9,8 @@ use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{
-    AdminLedgerQuery, AdminLedgerResponse, PromoteAdminRequest, ReembedRequest, ReembedSummary,
-    UpdateSettingsRequest,
+    AdminLedgerQuery, AdminLedgerResponse, DemoteAdminRequest, PromoteAdminRequest, ReembedRequest,
+    ReembedSummary, UpdateSettingsRequest,
 };
 use temper_core::types::team::TeamMemberRow;
 
@@ -71,6 +71,23 @@ impl<'a> AdminClient<'a> {
         self.http
             .send_json(&Method::POST, path, req, Some(&token))
             .await
+    }
+
+    /// Demote a system admin — revoke its governance grant (admin only). Returns `200 OK`, no body.
+    ///
+    /// The governance twin of [`Self::promote`]; the automatic path is demotion-by-transition
+    /// (`revoke`/`deactivate` demote). Not team-scoped.
+    pub async fn demote(&self, profile_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/demote";
+        let req = self
+            .http
+            .post(path)
+            .json(&DemoteAdminRequest { profile_id });
+        self.http
+            .send(&Method::POST, path, req, Some(&token))
+            .await?;
+        Ok(())
     }
 
     /// List pending join requests for the gating team (admin only).

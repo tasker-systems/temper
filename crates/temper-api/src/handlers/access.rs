@@ -9,7 +9,7 @@ use uuid::Uuid;
 use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, SystemSettings,
 };
-use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
+use temper_core::types::admin::{DemoteAdminRequest, PromoteAdminRequest, UpdateSettingsRequest};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::TeamMemberRow;
 
@@ -271,6 +271,26 @@ pub async fn promote_admin(
     )
     .await
     .map(Json)
+}
+
+/// POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
+///
+/// The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in
+/// `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries
+/// NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the
+/// `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+pub async fn demote_admin(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<DemoteAdminRequest>,
+) -> ApiResult<StatusCode> {
+    access_service::demote_admin(
+        &state.pool,
+        ProfileId::from(body.profile_id),
+        ProfileId::from(auth.0.profile.id),
+    )
+    .await?;
+    Ok(StatusCode::OK)
 }
 
 // ---------------------------------------------------------------------------

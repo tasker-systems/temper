@@ -33,6 +33,23 @@ pub async fn settings_remote(
     Ok(())
 }
 
+/// Demote a system admin — revoke its governance grant. The manual twin of `promote`; not
+/// team-scoped (governance is keyed on the profile alone). Prints `{profile_id} demoted` on success,
+/// mirroring the standing acts.
+pub async fn demote_remote(client: &temper_client::TemperClient, profile: &str) -> Result<()> {
+    let profile_id = uuid::Uuid::parse_str(profile)
+        .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))?;
+
+    client
+        .admin()
+        .demote(profile_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+    println!("{profile_id} demoted");
+    Ok(())
+}
+
 /// Promote a profile to owner on a team (defaults to the gating team).
 pub async fn promote_remote(
     client: &temper_client::TemperClient,

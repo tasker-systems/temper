@@ -791,6 +791,25 @@ pub async fn admin_reactivate(
     Ok(())
 }
 
+/// Demote a system admin — revoke the governance grant (D10 / §9). The manual twin of `promote`, and
+/// the deliberate counterpart to demotion-by-transition (Revoke/Deactivate demote automatically in
+/// `standing_service::apply`). Unlike `promote` it is **not** team-scoped: governance is keyed on the
+/// profile alone, so it takes no team. Idempotent — a no-op on a profile that holds no grant.
+///
+/// Governance-only: it never touches standing. A demoted admin keeps its access; it just may no
+/// longer change the rules. The gate lives HERE (F-3), so both surfaces enforce it identically.
+pub async fn demote_admin(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
+    sqlx::query_scalar!(
+        "SELECT principal_governance_set($1, false, $2, 'system admin demotion')",
+        *subject,
+        *actor,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Join request lifecycle
 // ---------------------------------------------------------------------------

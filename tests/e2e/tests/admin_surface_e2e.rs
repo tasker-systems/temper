@@ -159,6 +159,31 @@ async fn admin_can_set_settings_and_promote_second_admin(pool: sqlx::PgPool) {
         StatusCode::OK,
         "promoted admin should have access"
     );
+
+    // First admin demotes the second via the CLI (the manual governance twin of `promote`).
+    let out = common::run_temper_cli(&app, &["admin", "demote", &second_id.to_string()])
+        .await
+        .expect("cli demote");
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The demoted user is no longer a system admin: admin settings → 403. Governance is gone; the
+    // standing (access) it was granted on promotion is untouched — demotion is governance-only.
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/access/admin/settings"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .send()
+        .await
+        .expect("demoted admin settings");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a demoted admin no longer governs"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -213,6 +238,17 @@ async fn non_admin_is_forbidden_on_all_admin_endpoints(pool: sqlx::PgPool) {
         .send()
         .await
         .expect("promote");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // POST demote → 403. Service-gated (F-3), so the gate fires the same as the handler-gated ones.
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/admin/demote"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .json(&json!({"profile_id": admin_id}))
+        .send()
+        .await
+        .expect("demote");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // GET admin requests → 403 (admin gate fires before list logic).
