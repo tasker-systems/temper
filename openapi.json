@@ -4443,6 +4443,78 @@
         ]
       }
     },
+    "/api/resources/{id}/evidence": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Resources"
+        ],
+        "operationId": "resource_evidence",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resource evidential-standing shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingShape"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/resources/{id}/finalize": {
       "parameters": [
         {
@@ -10579,6 +10651,60 @@
           "desc",
           "asc"
         ]
+      },
+      "StandingShape": {
+        "type": "object",
+        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"",
+        "required": [
+          "finding_id",
+          "indep_breadth",
+          "adversarial_survival",
+          "challenge_count",
+          "contradiction_balance",
+          "freshness",
+          "r_parent",
+          "band"
+        ],
+        "properties": {
+          "adversarial_survival": {
+            "type": "number",
+            "format": "double",
+            "description": "N challenges withstood (`resource_adversarial_survival`); 0 when there have been no\nchallenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`)."
+          },
+          "band": {
+            "type": "string",
+            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over\nthe shape above. Carried WITH the shape, never presented instead of it (spec §1.1)."
+          },
+          "challenge_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of adversarial challenges raised against the finding, so a consumer can distinguish\n\"0 challenges\" from \"N challenges, 0 withstood.\""
+          },
+          "contradiction_balance": {
+            "type": "number",
+            "format": "double",
+            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount."
+          },
+          "finding_id": {
+            "$ref": "#/components/schemas/ResourceId",
+            "description": "`kb_resources.id` of the finding this shape describes."
+          },
+          "freshness": {
+            "type": "number",
+            "format": "double",
+            "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment."
+          },
+          "indep_breadth": {
+            "type": "number",
+            "format": "double",
+            "description": "Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence\ndefault: an unasserted pair is assumed correlated, not independent."
+          },
+          "r_parent": {
+            "type": "number",
+            "format": "double",
+            "description": "Reinforcement breadth: count of uncorrected provenance over the finding's live blocks."
+          }
+        }
       },
       "Subscription": {
         "type": "object",
