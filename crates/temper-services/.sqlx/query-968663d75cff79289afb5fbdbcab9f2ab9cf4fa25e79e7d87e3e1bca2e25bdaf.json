@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id,\n               display_name,\n               handle AS \"slug!\",\n               email,\n               NULL::text AS avatar_url,\n               preferences as \"preferences: serde_json::Value\",\n               '{}'::jsonb AS \"vault_config!: serde_json::Value\",\n               is_active,\n               created,\n               created AS \"updated!\"\n          FROM kb_profiles\n         WHERE id = $1\n        ",
+  "query": "\n        SELECT id,\n               display_name,\n               handle AS \"slug!\",\n               email,\n               NULL::text AS avatar_url,\n               preferences as \"preferences: serde_json::Value\",\n               '{}'::jsonb AS \"vault_config!: serde_json::Value\",\n               created,\n               created AS \"updated!\"\n          FROM kb_profiles\n         WHERE id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -40,16 +40,11 @@
       },
       {
         "ordinal": 7,
-        "name": "is_active",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 8,
         "name": "created",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 9,
+        "ordinal": 8,
         "name": "updated!",
         "type_info": "Timestamptz"
       }
@@ -68,9 +63,8 @@
       false,
       null,
       false,
-      false,
       false
     ]
   },
-  "hash": "6774c126ba4666599d1c0d52c19394fa522bf91d5710480f9a63af658b86255c"
+  "hash": "968663d75cff79289afb5fbdbcab9f2ab9cf4fa25e79e7d87e3e1bca2e25bdaf"
 }

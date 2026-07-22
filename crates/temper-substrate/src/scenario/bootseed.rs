@@ -28,8 +28,10 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
     let boot: BootSeed = serde_yaml::from_str(&std::fs::read_to_string(SYSTEM_SEED)?)?;
 
     // The canonical system actor (events require a NOT NULL emitter). handle is UNIQUE; entity name is not.
+    // Admin-ness rides standing + governance below (F6), NOT the `system_access` column — Phase 2 A4
+    // stopped writing that doomed projection.
     let profile: Uuid = sqlx::query_scalar!(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) VALUES ('system','System','admin') \
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('system','System') \
          ON CONFLICT (handle) DO UPDATE SET display_name=EXCLUDED.display_name RETURNING id"
     )
     .fetch_one(pool)

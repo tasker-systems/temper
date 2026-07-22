@@ -58,13 +58,8 @@ async fn root_bootstrap_first_admin(pool: &sqlx::PgPool, admin_id: Uuid) {
         .execute(pool)
         .await
         .expect("gating");
-    sqlx::query("UPDATE kb_profiles SET system_access='admin' WHERE id=$1")
-        .bind(admin_id)
-        .execute(pool)
-        .await
-        .expect("promote first admin"); // trigger mints owner of temper-system
-                                        // D11: is_system_admin reads governance, has_system_access reads standing; the column + gating
-                                        // ownership above confer neither. Grant both so the bootstrapped admin can actually act.
+    // D11: admin-ness is `approved` standing + a `kb_principal_governance` grant. Neither the
+    // Phase-2-retired `system_access` column nor gating ownership confers it.
     common::approved_admin(pool, admin_id).await;
 }
 

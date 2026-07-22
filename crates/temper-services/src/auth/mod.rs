@@ -821,13 +821,10 @@ mod tests {
         let authed = authenticate(&pool, &c).await.expect("authenticate");
         let id = authed.profile.id;
 
-        sqlx::query(
-            "UPDATE kb_system_settings SET access_mode = 'invite_only', \
-             gating_team_slug = 'nonexistent-gating-team'",
-        )
-        .execute(&pool)
-        .await
-        .expect("enable gate");
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'nonexistent-gating-team'")
+            .execute(&pool)
+            .await
+            .expect("enable gate");
 
         let err = require_system_access(&pool, &authed)
             .await

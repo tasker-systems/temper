@@ -15,15 +15,15 @@
 
 mod common;
 
-/// Seed a clean artifact (01+02), the singleton `kb_system_settings (access_mode='open')`, and one
-/// profile; assert the two grafted system-access functions evaluate (open mode grants any profile),
+/// Seed a clean artifact (01+02), the `kb_system_settings` singleton, and one profile; assert the
+/// two grafted system-access functions evaluate (an `approved` standing row grants access under D11),
 /// `kb_profiles` carries `email`/`preferences`, and each of the 6 grafted infra tables is queryable.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn identity_graft_resolves(pool: sqlx::PgPool) {
     // Reset to clean 01+02 baseline — L0 kernel migration seeds kb_system_settings(id=1).
     common::reset_schema(&pool).await;
-    // The instance-access singleton in 'open' mode, plus one profile to gate.
-    sqlx::query("INSERT INTO kb_system_settings (id, access_mode) VALUES (1, 'open')")
+    // The instance-access singleton row (access_mode retired in Phase 2), plus one profile to gate.
+    sqlx::query("INSERT INTO kb_system_settings (id) VALUES (1)")
         .execute(&pool)
         .await
         .expect("seed kb_system_settings");

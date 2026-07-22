@@ -48,15 +48,20 @@ async fn loads_topology_row_counts(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(teams, 13);
-    // alice: temper-system root (approved) + epd-team-a + personal-alice => 3 memberships.
+    // alice: epd-team-a + personal-alice => 2 memberships. Phase 2 A4 stopped the loader writing
+    // `system_access`, so the pre-auto-join slug trigger (which fired on that write to join approved
+    // profiles to the temper-system root) no longer enrolls her. Scenario-load mints authoritative
+    // `approved` standing but does NOT run the prod approval endpoint's explicit auto-join; the
+    // temper-system membership is decorative under D18 (confers no access), and every S1–S8 access
+    // invariant in this suite still holds without it (proves_all_access_invariants passes).
     let alice_teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_team_members m JOIN kb_profiles p ON p.id=m.profile_id WHERE p.handle='alice'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(alice_teams, 3);
-    // nomad (system_access=none) gets ONLY the personal team.
+    assert_eq!(alice_teams, 2);
+    // nomad (denied standing) gets ONLY the personal team.
     let nomad_teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_team_members m JOIN kb_profiles p ON p.id=m.profile_id WHERE p.handle='nomad'",
     )
@@ -88,10 +93,10 @@ async fn proves_context_share_invariants(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn s8_capability_check_rejects_write_without_read(pool: sqlx::PgPool) {
-    // Minimal anchors. 'none' avoids the root-join trigger.
+    // Minimal anchors. No standing is minted, so the root-join trigger no-ops (not eligible).
     let pid: uuid::Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) \
-         VALUES ('s8user','S8','none') RETURNING id",
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ('s8user','S8') RETURNING id",
     )
     .fetch_one(&pool)
     .await

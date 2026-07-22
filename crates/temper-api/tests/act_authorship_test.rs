@@ -26,15 +26,11 @@ mod common;
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 
-/// Approve the profile so the `sync_system_membership` trigger joins it to the `temper-system` root
-/// team that owns L0 — making the kernel map readable (so it can open + correlate invocations on L0).
+/// Grant the profile `approved` standing — the D11 front door (`has_system_access`) so it can act.
+/// L0 is the public kernel map, readable regardless of membership; write is granted below (F2).
 async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ProfileId, ContextId) {
     let (profile, context) = common::fixtures::create_test_profile_with_context(pool, email).await;
-    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
-        .bind(profile)
-        .execute(pool)
-        .await
-        .expect("approve test profile");
+    common::fixtures::approve_standing(pool, profile).await;
     // Self-attributed invocation-open on L0 now requires WRITE (F2), not just the read root-join
     // confers — grant it so `open_inv` succeeds.
     common::fixtures::grant_cogmap_write(pool, L0_COGMAP, profile).await;

@@ -25,8 +25,8 @@ fn sha256_hex(s: &str) -> String {
 /// Boot a fresh profile + entity inline (mirrors `charter_set_writes.rs`).
 async fn seed_actor(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
     let profile: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) \
-         VALUES ('owner', 'Owner', 'approved'::system_access) RETURNING id",
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ('owner', 'Owner') RETURNING id",
     )
     .fetch_one(pool)
     .await

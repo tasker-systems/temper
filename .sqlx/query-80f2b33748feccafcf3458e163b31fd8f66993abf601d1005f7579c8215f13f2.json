@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1,$2) RETURNING id",
+  "query": "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$2) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -12,12 +12,12 @@
     "parameters": {
       "Left": [
         "Text",
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "705cc750d094e0df9acc6234ab017ea1e9390db545d28806db5797cddd792a3d"
+  "hash": "80f2b33748feccafcf3458e163b31fd8f66993abf601d1005f7579c8215f13f2"
 }
