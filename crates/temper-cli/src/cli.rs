@@ -554,6 +554,14 @@ pub enum ResourceAction {
         #[arg(long, value_delimiter = ',')]
         fields: Vec<String>,
     },
+    /// Show a resource's evidential-standing shape — the maturity vector
+    /// (independence-discounted breadth, adversarial survival, contradiction
+    /// balance, freshness) plus a lossy read-time `band` chip carried WITH the
+    /// shape, never in place of it. Calls GET /evidence.
+    Evidence {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
     /// Update a resource's frontmatter and/or body
     ///
     /// Mutates frontmatter from flag args. Optionally rewrites the body — the
