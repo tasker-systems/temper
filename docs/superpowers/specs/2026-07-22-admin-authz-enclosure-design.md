@@ -67,15 +67,19 @@ impl SystemAdmin {
     pub fn actor(&self) -> ProfileId { self.0 }
 }
 
-/// Level 3 — governance check. Consumes proof of Level 1; mirrors `require_system_access`.
+/// Level 3 — governance check. Consumes proof of Level 1 (like `require_system_access`), but returns
+/// `ApiResult` with a plain `Forbidden`: admin denial needs none of the CLI-presentation payload that
+/// `AuthzError::SystemAccessDenied` carries, and `Forbidden` is exactly what the admin gate returns
+/// today — so parity is trivial and no new `AuthzError` variant / surface mapping is needed.
 pub async fn require_system_admin(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
-) -> Result<SystemAdmin, AuthzError> {
-    if access_service::is_system_admin(pool, ProfileId::from(authed.profile.id)).await? {
-        Ok(SystemAdmin(ProfileId::from(authed.profile.id)))
+) -> ApiResult<SystemAdmin> {
+    let actor = ProfileId::from(authed.profile.id);
+    if access_service::is_system_admin(pool, actor).await? {
+        Ok(SystemAdmin(actor))
     } else {
-        Err(AuthzError::/* admin-required */)
+        Err(ApiError::Forbidden)
     }
 }
 ```
@@ -276,9 +280,10 @@ the settings read (via a new `admin_get_settings` wrapper — §3.4); `update_sy
 (`handlers/machine_clients.rs`) mints the proof. Note its rationale (reach containment: team ownership
 is deliberately *not* sufficient) so a future reviewer doesn't "helpfully" widen it to `machine_authz`.
 
-**Gate + type home:** `require_system_admin` and `SystemAdmin` in `temper-services/src/auth/mod.rs`;
-the old private `access_service::require_system_admin(-> ())` helper is removed. `AuthzError` gains (or
-reuses) an admin-required variant, mapped to `ApiError::Forbidden` at the surface.
+**Gate + type home:** `require_system_admin` and `SystemAdmin` in `temper-services/src/auth/mod.rs`
+(must be co-located — the private field means only that module can construct the proof, so the gate that
+mints it lives there). It returns `ApiResult<SystemAdmin>` with `Err(ApiError::Forbidden)` (§3.1). The
+old private `access_service::require_system_admin(-> ApiResult<()>)` helper is removed.
 
 **Untouched (compositional):** `machine_authz::authorize`, `can_administer_grant` /
 `require_admin_or_can_grant`, `admin_ledger_service`.
