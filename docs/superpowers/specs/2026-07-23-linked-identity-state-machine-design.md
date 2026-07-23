@@ -1,16 +1,61 @@
 # Linked identity as a state machine — the Slack auth flow in the admission idiom
 
-**Status:** design, 2026-07-23. Goal `019f6344-01a5-7fc0-9e22-a80585f801fc` (@temper on Slack).
-**Character:** behaviour change on two undocumented internal wire contracts, plus a new CI gate.
-No DB migration. No `openapi.json` / gem / `schema.ts` regeneration. **Does** require a `.sqlx`
+**Status:** design, 2026-07-23. **Revision 2** — see §0. Goal
+`019f6344-01a5-7fc0-9e22-a80585f801fc` (@temper on Slack).
+**Character:** behaviour change on two undocumented internal wire contracts, plus a CI gate.
+No DB migration. No `openapi.json` / gem / `schema.ts` regeneration. **Requires** a `.sqlx`
 regeneration — §2.3 changes query text (see §8).
 **Successor to:** the principal-admission state machine
 (`2026-07-20-principal-admission-state-machine-design.md`) and the admin-authz enclosure
-(`2026-07-22-admin-authz-enclosure-design.md`), whose idioms this instantiates for a second domain.
+(`2026-07-22-admin-authz-enclosure-design.md`).
+
+---
+
+## 0. Revision 2 — what changed and why
+
+Revision 1 was reviewed by two independent adversarial passes (security, design-coherence), both
+instructed to refute. Both broke it. The **diagnosis in §1 survived both and was independently
+re-verified**; most of the prescription did not. Recorded here rather than silently rewritten,
+because several of the corrections are more instructive than the original.
+
+| R1 claim | Verdict | Now |
+|---|---|---|
+| `FROM kb_profile_auth_links l LEFT JOIN … FOR UPDATE OF v` | **Invalid SQL.** `ERROR: FOR UPDATE cannot be applied to the nullable side of an outer join` | §2.3 — CTE-locked shape, **executed**, with lock behaviour proven by a two-session test |
+| The join needs only the two uniqueness constraints | **Wrong.** Nothing tied `v.profile_id` to `l.profile_id`; the old query held that correlation *structurally* | §2.3 — explicit correlation, fail-closed |
+| `LinkRefusal::Standing(Refusal)` | **Does not serialize.** Two internally-tagged enums nest to duplicate `kind` keys; ts-rs emits an uninhabitable `never` | §2.1 — distinct tag + struct variant, per `SystemAccessDetails` |
+| Site it in `temper-principal`, "Linear lands beside it" | **Rationalization.** Phase 2's Linear is Eve-brokered outbound — no auth-link row, no vault, no triple. The emitters spec forecloses new authz vocabulary | §3 — temper-services |
+| "Structurally identical to `admit`" + copy its arity pin | **Trips D2.** Three provisional facts ANDed is D2's forbidden shape; copying `admit`'s anti-conjunction pin onto it *disables the alarm* | §3.1 — D2 addressed head-on; no arity pin |
+| `SlackLinkOutcome::NoRefreshToken` | **No producer**, and it mis-framed a paid-for decision as a defect | Dropped (§0.1) |
+| §5's premise is stale | **Half true.** The HMAC verify runs in temper-api, so a `pub` no-op constructor is still required unless the *verification* moves | §5.1 |
+| The drift gate closes the gap | **Covers the wrong types.** temper-api has no `ts-rs`, so the `status` tags stay ungated | §6 — general gate; tags filed separately |
+
+An interim revision proposed `LinkAuthority: ScopedAuthority`. **Rejected on grounding:**
+`resolve(pool, caller: ProfileId, subject)` presumes a caller axis this domain does not have (the
+mint is a secret-holding agent acting for a Slack principal, with no authenticated caller profile);
+`fn denial() -> ApiError` is static, so a denial arm cannot carry its cause; and `authorize` renders
+denial as `Err(ApiError)` where this surface deliberately returns **200 with a typed payload**
+(`slack_mint.rs:31-33`).
+
+### 0.1 One R1 finding was itself a misreading — retracted
+
+R1 §1.3 called it a defect that the service returns `Linked` while the handler overrules. It is a
+documented decision (`slack_link.rs:279-311`):
+
+> *"THIS ARM MUST NOT RENDER SUCCESS. It used to `warn!` and return `Ok(slug)`… `tx` is DROPPED
+> without commit, so the directory row is rolled back too. That is the deliberate call: half-linked
+> is the worst of the three states… Rolling back leaves the user cleanly UNLINKED, which is the one
+> state the flow can recover from on its own."*
+
+**Consequence, and it corrects §2.2's rationale:** because that arm rolls back, *"linked but not
+vaulted"* is **no longer producible by the callback**. It survives only for rows written before T3.
+`slack_mint.rs:52-56`'s doc comment describes the pre-rollback world and is stale; R1 cited it as
+evidence.
 
 ---
 
 ## 1. The finding
+
+*(Unchanged from R1 — independently re-verified by both reviewers.)*
 
 `mint_access_token` collapses seven distinct facts into one outcome, and the fact the outcome is
 *named* after cannot happen.
@@ -25,231 +70,242 @@ if row.revoked_at.is_some() || row.standing.as_deref() != Some("approved") {
 
 **The left disjunct is dead in production.** Every writer of `kb_slack_grant_vault.revoked_at` is a
 test — `slack_grant_vault_service.rs:686`, `:840`, `tests/e2e/tests/slack_link_test.rs:1736` — and
-the two production sites write `NULL` (`:179`, `:188`). Commit `3a45b1ab` says so in its subject:
-*"drop the never-wired vault revoke flag in favour of disconnect's delete"*. Disconnect `DELETE`s the
-row (`slack_disconnect_service.rs:161`), which yields `NotVaulted`.
+the two production sites write `NULL` (`:179`, `:188`). Commit `3a45b1ab`: *"drop the never-wired
+vault revoke flag in favour of disconnect's delete"*. Disconnect `DELETE`s the row
+(`slack_disconnect_service.rs:161`), yielding `NotVaulted`. Independently confirmed by both
+reviewers: no trigger on the table (`pg_trigger` → 0 rows), no SQL function, and
+`slack_disconnect_service.rs:298`'s `SET revoked_at = now()` is on **`kb_oauth_refresh_tokens`**, a
+different table.
 
-**The right disjunct is six facts, not one.** `temper_principal::admit` already returns each as a
-reason-carrying `Refusal` (`crates/temper-principal/src/admission.rs:37-59`): `Denied`, `Requested`,
-`Revoked`, `Deactivated`, `NoStanding`, `UnrecognizedStanding { raw }`. The gate consults none of
-them; it compares a raw `Option<&str>` against a string literal.
-
-So in production `MintOutcome::Revoked` means exactly *"this human's standing is not approved"* — and
-never what it says.
+**The right disjunct is six facts.** `temper_principal::admit` returns each as a reason-carrying
+`Refusal` (`admission.rs:37-59`): `Denied`, `Requested`, `Revoked`, `Deactivated`, `NoStanding`,
+`UnrecognizedStanding { raw }`. The gate consults none of them.
 
 ### 1.1 The consequence is a false remedy, shipped to a human
 
-`crates/temper-api/src/handlers/slack_mint.rs:49-51`:
-
-```rust
-/// A vault row exists but is not mintable: explicitly revoked, or the profile deactivated.
-/// The user must re-link; retrying will never succeed.
-Revoked,
-```
-
-Re-linking calls `store_grant`, which touches `kb_slack_grant_vault` and sets `revoked_at = NULL`
-(`:188`). **It never touches `kb_principal_standing`.** For every reachable cause of this arm,
-re-linking provably cannot change the outcome. The mention agent renders exactly that instruction on
-the unmerged T4 branch (`packages/agent-workflows/mention/agent/lib/identity.ts:151-158`):
-
-> *"Your temper access from Slack has been revoked… If that wasn't deliberate, reconnecting will
-> restore it."*
+`slack_mint.rs:49-51` instructs: *"The user must re-link; retrying will never succeed."* Re-linking
+calls `store_grant`, which touches the vault and sets `revoked_at = NULL` (`:188`). **It never
+touches `kb_principal_standing`.** For every reachable cause, re-linking cannot change the outcome.
+The mention agent renders exactly that on the unmerged T4 branch (`identity.ts:151-158`).
 
 ### 1.2 And on a fresh instance it is the modal first-link outcome
 
-`crates/temper-principal/src/transition.rs:35-38` births every `OauthFirstLogin` human `Denied`. The
-Slack callback's only identity gate is Level 1, which passes `Denied` **deliberately**
-(`crates/temper-services/src/auth/mod.rs:249-251`):
+`transition.rs:35-38` births every `OauthFirstLogin` human `Denied`. The callback's only identity
+gate is Level 1, which passes `Denied` **deliberately** (`auth/mod.rs:249-251`). Level 2 is never
+applied to it — `slack_link_public_routes()` is merged with no layer (`routes.rs:426`), by design
+(`:326-330`).
 
-> *"A `Deactivated` standing bars authentication entirely; `Denied` and `Revoked` deliberately pass
-> Level 1 so they can still reach the auth-only request/review routes — only Level 2
-> (`require_system_access`) refuses them."*
+So a `Denied` human completes the browser link, gets a grant vaulted, and is shown **"Account
+connected."** — after which every mention fails permanently with a remedy that cannot work. The e2e
+suite documents the workaround rather than the bug (`slack_link_test.rs:866-868`), and **no test
+drives the un-approved path.**
 
-Level 2 is never applied to the callback: `slack_link_public_routes()` is merged with no layer
-(`crates/temper-api/src/routes.rs:426`), by design (`:326-330`, *"Ungated by design: it is the IdP's
-redirect target"*).
+### 1.3 The link half's typed outcome is erased at the boundary
 
-So a `Denied` human completes the whole browser link, gets a grant vaulted, and is shown
-**"Account connected."** (`slack_link.rs:494-503`) — after which every mention fails permanently with
-a remedy that cannot work.
-
-The repo's own e2e suite documents this as a workaround rather than a bug
-(`tests/e2e/tests/slack_link_test.rs:866-868`):
-
-```rust
-// D-A: the mint gate is `standing = 'approved'`, and the callback births `Denied` — approve so
-// the happy-path mint below returns a token rather than `Revoked`.
-approve_standing(&pool, profile_id_for_sub(&pool, sub).await).await;
-```
-
-**No test drives the un-approved link path end to end.** Every mint test seeds `approved` first.
-
-### 1.3 The link half has the mirror-image problem
-
-- **13 refusal sites → 11 distinct sentences → 1 status code.** `callback` returns `Response`, not
-  `Result` (`slack_link.rs:164-169`), so every outcome including success is HTTP 200 `text/html`.
-  The e2e tests discriminate by grepping rendered HTML for `Account <em>connected</em>.`, because
-  there is no typed outcome to assert on.
-- **`SlackLinkOutcome` has two variants where the callback has three post-auth outcomes.** "Linked
-  but un-vaultable" — the IdP returned no refresh token (`slack_link.rs:279-311`) — is not a
-  variant. The service returns `Linked`, having written its row; the handler overrules it and drops
-  the transaction.
-- **The one typed refusal is erased at the boundary.** `AlreadyLinkedToAnotherProfile` is compared
-  with `==` at `slack_link.rs:252` and converted to a `String`.
+`AlreadyLinkedToAnotherProfile` is compared with `==` at `slack_link.rs:252` and converted to a
+`String`. The callback returns `Response`, not `Result` (`:164-169`), so all 13 refusal sites and
+success alike are HTTP 200 `text/html` — which is why the e2e tests discriminate by grepping for
+`Account <em>connected</em>.`
 
 ### 1.4 What the model is today
 
-Six Rust types and two hand-written TypeScript mirrors, none of which reference each other:
+Six Rust types and two hand-written TypeScript mirrors, none referencing each other:
+`SlackLinkOutcome` (`slack_link_service.rs:159`), `SlackLinkStateResponse` (`slack_link.rs:60`),
+`MintOutcome` (`slack_grant_vault_service.rs:60`), `SlackMintResponse` (`slack_mint.rs:38-57`),
+plus `LinkState` (`mention/agent/lib/link.ts:35-37`) and `MintOutcome`
+(`mention/agent/lib/mint.ts:31-45`, **#498's branch only**).
 
-| Incumbent | Arms | Site |
-|---|---|---|
-| `SlackLinkOutcome` | `Linked` / `AlreadyLinkedToAnotherProfile` | `slack_link_service.rs:159` |
-| `SlackLinkStateResponse` | `Linked{handle}` / `Unlinked{authorize_url}` | `slack_link.rs:60` |
-| `MintOutcome` | `Token` / `Revoked` / `NotVaulted` | `slack_grant_vault_service.rs:60` |
-| `SlackMintResponse` | wire mirror of the above, own redacting `Debug` + `From` | `slack_mint.rs:38-57` |
-| `LinkState` (TS) | hand-written mirror of row 2 | `mention/agent/lib/link.ts:35-37` |
-| `MintOutcome` (TS) | hand-written mirror of row 4 | `mention/agent/lib/mint.ts:31-45` (T4 branch) |
-
-The **cartesian product of rows 2 and 4 is computed at the far edge, in TypeScript** — it is the
-four-row table in PR #498's description. The state machine exists; it lives in the agent, and nothing
-type-checks it against the Rust.
+The **cartesian product of rows 2 and 4 is computed in TypeScript** — it is the four-row table in
+PR #498's description.
 
 ---
 
 ## 2. The model
 
-### 2.1 Shape: `Result`, mirroring `admit`
-
-The decision is `Result<ActiveLink, LinkRefusal>`, structurally identical to
-`admit(…) -> Result<AdmittedPrincipal, Refusal>` (`admission.rs:37`). Two outcomes; the refusal
-carries the reason.
+### 2.1 Two arms, and a refusal that carries its cause
 
 ```rust
-/// Evidence the service gathered. NO IDENTIFIERS — see §3.
-pub struct LinkEvidence<'a> {
-    pub linked: bool,
-    pub vaulted: bool,
-    /// Raw text, parsed inside the machine — as `admit` takes it (`admission.rs:37`).
-    pub standing: Option<&'a str>,
+pub enum MintOutcome {
+    Token { access_token: String, expires_at: DateTime<Utc> },
+    Refused(LinkRefusal),
 }
 
-/// Proof that a linked identity may act. SEALED: private field, no public constructor,
-/// no `Default`, no `From` — `AdmittedPrincipal`'s shape (`admission.rs:14-25`).
-pub struct ActiveLink { standing: Standing }
-
+#[serde(rename_all = "snake_case", tag = "reason")]   // NOTE: "reason", not "kind"
 pub enum LinkRefusal {
     NotLinked,
-    /// Verbatim, never restated. Six reasons, each with `reason()`.
-    Standing(Refusal),
     NotVaulted,
+    Standing { refusal: Refusal },
 }
-
-pub fn resolve(ev: LinkEvidence<'_>) -> Result<ActiveLink, LinkRefusal>;
 ```
 
-`LinkRefusal` takes `Refusal`'s serde and ts-rs derives (`refusal.rs:19-23`) —
-`#[serde(rename_all = "snake_case", tag = "kind")]` plus `ts_rs::TS` under `typescript`.
+**The tag name and the struct variant are both load-bearing, and this is the R1 blocker.** `Refusal`
+is `#[serde(tag = "kind")]` (`refusal.rs:22`). Nesting a second internally-tagged enum under the
+same key emits duplicate keys — measured:
 
-**Deliberately NOT `utoipa::ToSchema`.** Both routes that carry this type are allowlisted out of
-`openapi.json` (`check-openapi-routes.sh:63-64`), so the derive would buy nothing and imply a public
-contract that does not exist — which is also why §8 records no OpenAPI regeneration. If either route
-is ever published, adding `ToSchema` requires a per-variant
-`#[cfg_attr(feature = "web-api", schema(title = "…"))]` for the reason `refusal.rs:13-18` gives:
-without them openapi-generator names anonymous `oneOf` branches positionally, and they renumber when
-a variant is inserted rather than appended.
+```
+Standing(Denied)  =>  {"kind":"standing","kind":"denied"}
+round-trip        =>  Err(Error("duplicate field `kind`"))
+```
 
-Every variant carries a non-empty `reason()`, asserted across the whole cell space, per
-`refusal.rs:62-66`.
+and ts-rs emits `{ kind: "standing" } & Refusal`, which narrows `kind` to `never` — an uninhabitable
+arm. A distinct tag (`reason`) plus a **named field** (`Standing { refusal }`) nests properly:
+`{"reason":"standing","refusal":{"kind":"denied"}}`.
 
-### 2.2 The resolution order is forced, and it is the fix
+**CONFORM** — this is the incumbent carrier. `SystemAccessDetails` (`access_gate.rs:145`) carries
+`Refusal` as a named struct field, never as a variant payload of a second tagged enum.
 
-**`NotLinked` first — by data availability, not preference.** Standing is a property of the *temper
-profile*. An unlinked Slack principal has no profile to look up, so standing is unknowable until the
-link exists. The order is a consequence of the domain, not a policy choice.
+**`Refusal` is embedded whole, not narrowed.** Only 5 of its 9 variants are reachable here —
+`IllegalTransition`, `InsufficientAuthority` and `NoPriorStanding` belong to the *transition*
+machine and `admit` cannot return them (`admission.rs:37-58`). A parallel narrowed enum would be a
+second copy to keep in sync; instead the reachable set is guaranteed by construction (`admit` is the
+only producer) and **pinned by a test** asserting no other variant ever appears.
 
-**`Standing` before `NotVaulted` — and this is the correction.** For a linked-but-unvaulted human,
-"re-link" is the right remedy. For a `Denied` human it is the false one we ship today. Checking
-standing first means the actionable sentence wins.
+### 2.2 The decision
 
-### 2.3 Consequence: the mint query must re-root at the identity
+```rust
+pub struct LinkEvidence<'a> { pub linked: bool, pub vaulted: bool, pub standing: Option<&'a str> }
+pub struct Mintable { /* private */ }   // sealed; gates the decrypt, never leaves the service
+pub fn resolve(ev: LinkEvidence<'_>) -> Result<Mintable, LinkRefusal>;
+```
 
-Today's query roots at the vault (`slack_grant_vault_service.rs:246-258`):
+`Mintable` is internal — it gates the decrypt/refresh inside `mint_access_token` and is never
+returned to a surface. **This is R1's §4.2 defect fixed:** R1 had `mint_for_mention` returning
+`Result<ActiveLink, LinkRefusal>` where `ActiveLink` was a sealed single-field `{ standing }`, i.e.
+nowhere for the access token to go on the endpoint whose purpose is returning one — whose tempting
+repair was to put a live credential inside a type the plan told the implementer to derive `Debug` on.
+
+**Ordering.** `NotLinked` first — by data availability, not preference: standing is a property of the
+temper *profile*, so it is unknowable before the link exists. Then `Standing`, then `NotVaulted` —
+so a `Denied` human is told the remedy that works rather than the one that cannot.
+
+> **Scope note (per §0.1):** `NotVaulted` is now reachable only for pre-T3 rows, since the callback
+> rolls back a link it cannot vault. It stays a named arm because those rows exist and the agent
+> must say something true about them — not because the callback still produces the state.
+
+### 2.3 The query — executed, not asserted
+
+R1's re-rooted query is invalid. Postgres, live:
+
+```
+ERROR:  FOR UPDATE cannot be applied to the nullable side of an outer join
+```
+
+`FOR NO KEY UPDATE OF v` and bare `FOR UPDATE` fail identically. The lock cannot be expressed in a
+statement where the vault is the nullable side.
+
+**The shape that works** — the lock lives in a CTE, so the vault is a driving relation there while
+the outer query still LEFT JOINs it:
 
 ```sql
-FROM kb_slack_grant_vault v
-LEFT JOIN kb_principal_standing s ON s.profile_id = v.profile_id
-WHERE v.slack_principal_id = $1
+WITH locked AS (
+  SELECT * FROM kb_slack_grant_vault WHERE slack_principal_id = $1 FOR UPDATE
+)
+SELECT l.profile_id,
+       v.rt_nonce, v.rt_ciphertext, v.at_nonce, v.at_ciphertext,
+       v.access_expires_at,
+       (v.id IS NOT NULL) AS vaulted,
+       s.state AS standing
+  FROM kb_profile_auth_links l
+  LEFT JOIN locked v                ON v.profile_id = l.profile_id
+  LEFT JOIN kb_principal_standing s ON s.profile_id = l.profile_id
+ WHERE l.auth_provider = 'slack' AND l.auth_provider_user_id = $1
 ```
 
-With no vault row there is no `profile_id`, so **standing is structurally unreachable** — which is
-why `NotVaulted` currently short-circuits before it, and why mint cannot tell "never linked" from
-"linked, not vaulted". §2.2's ordering is not implementable against this shape.
+**Executed evidence, not inference.** It runs; it takes the same three locks the incumbent does
+(`kb_slack_grant_vault` + both its indexes, `RowShareLock`); and a two-session test proves the **row**
+lock is genuinely held — with the CTE open in one session, both a mint-style and a
+disconnect-style `FOR UPDATE NOWAIT` in another fail with:
 
-It re-roots at the identity row:
-
-```sql
-FROM kb_profile_auth_links l
-LEFT JOIN kb_slack_grant_vault v  ON v.slack_principal_id = l.auth_provider_user_id
-LEFT JOIN kb_principal_standing s ON s.profile_id = l.profile_id
-WHERE l.auth_provider = 'slack' AND l.auth_provider_user_id = $1
+```
+ERROR:  could not obtain lock on row in relation "kb_slack_grant_vault"
 ```
 
-One read, three facts, refusals ordered by usefulness rather than by query shape. `NotLinked` becomes
-representable at the mint for the first time. `FOR UPDATE OF v` still locks the vault row for the RT
-spend. The unique constraints both joins rely on exist:
-`kb_profile_auth_links_auth_provider_auth_provider_user_id_key` and
-`kb_slack_grant_vault_slack_principal_id_key` (live DDL).
+So both properties R1's shape would have destroyed are preserved: mint↔mint RT-rotation
+serialization (`slack_grant_vault_service.rs:209-214`) and mint↔disconnect mutual exclusion
+(`:341-342`).
 
-**CONFORM:** the ordering rule *"not-mintable checks first, before any cached token is decrypted or
-the RT is spent"* (`:264-267`) is preserved — `resolve` runs on the row before the cache branch at
-`:273`.
+**`ON v.profile_id = l.profile_id` is the correlation, and it is deliberate.** The incumbent roots
+at the vault and reads standing through `v.profile_id`, so the standing checked is *definitionally*
+the grant owner's. Re-rooting loses that unless it is stated: there is **no** constraint tying the
+two columns (no composite FK, no shared unique key, no trigger). Joining on `profile_id` means a
+skewed pair reads as *no vault row* — fail-closed to `NotVaulted` rather than minting profile A's
+refresh token under profile B's standing. This is the repo's *"absence denies"* posture (admission
+spec §7 obligation 1) applied to a join. Not reachable today (rebind is refused atomically,
+`slack_link_service.rs:212-217`; disconnect deletes both in one transaction), but the open
+account-merge task `019f4473` exists to repoint `profile_id`s.
+
+**sqlx nullability requires explicit annotation.** The committed cache proves sqlx infers columns
+from the nullable side of a LEFT JOIN as `NOT NULL` — the incumbent gets `Option<String>` only from
+its hand-written `"standing?"` override. So `v.*` columns need `?` (e.g. `v.rt_nonce AS "rt_nonce?"`)
+and `vaulted` needs `!`. Without them, `rt_nonce` generates as `Vec<u8>` and decode-errors to a 500
+on exactly the `NotVaulted` / `NotLinked` cells this design exists to reach — passing every static
+gate on the way.
+
+**CONFORM:** the decision still runs before the cache branch (`:264-267`, *"Not-mintable checks
+first, before any cached token is decrypted or the RT is spent"*).
 
 ### 2.4 `revoked_at`: drop the disjunct, keep the column
 
-The `revoked_at.is_some()` term is removed from the gate; `LinkRefusal` has no arm for it. The
-**column stays** — dropping it is a destructive migration for a column that costs nothing sitting
-`NULL`, and this design carries no migration. The spec records that soft-revoke was superseded by
-disconnect's `DELETE` (commit `3a45b1ab`) so the next reader does not re-derive it.
-
-### 2.5 `SlackLinkOutcome` gains its third arm
-
-`NoRefreshToken` — the state at `slack_link.rs:279-311` that the service currently reports as
-`Linked` and the handler overrules. Three arms, matching the callback's three outcomes (§4.3).
+The term is removed; `LinkRefusal` has no arm for it. The **column stays** — dropping it is a
+destructive migration for a column that costs nothing sitting `NULL`. Record in code that
+soft-revoke was superseded by disconnect's `DELETE` (commit `3a45b1ab`).
 
 ---
 
 ## 3. Where it lives
 
-**`crates/temper-principal/src/linked_identity.rs`.**
+**`crates/temper-services/`, beside the Slack services it serves. A free function.**
 
-Named for the general concept, not for Slack: goal `019f6344` Phase 2 brings a Linear pull, and goal
-`019f5e07` brings external systems as emitters. A per-channel crate would need a sibling per
-integration; a `slack.rs` module would need a rename. If the module later outgrows this crate it
-lifts into a `temper-integrations` crate intact — a file move, not a redesign.
+Not `temper-principal`: R1's justification (*"Linear lands beside it"*) does not survive. Phase 2's
+Linear credential is **Eve-brokered outbound** — no `auth_provider='linear'` row, no per-user vault,
+so no `linked × vaulted × standing` triple. And the emitters design forecloses the premise
+(`2026-07-13-external-systems-as-subscribed-emitters-design.md:437-460`):
 
-**This honours the crate's constraint literally, not by exception.** `lib.rs:11-13` says the crate
-*"performs no I/O, holds no identifiers, and never resolves a credential."* The `slack:<team>:<user>`
-string is the **lookup key the service uses to gather evidence** — the judgment itself needs only
-three facts, so `LinkEvidence` carries no identifier at all.
+> *"**No new authz vocabulary** — and, as of PR #418, no new authz *predicate* either. A connection
+> is a machine principal wearing an integration's clothes."*
 
-**CONFORM — the crate boundary is the enforcement.** `lib.rs:7-10`:
+Not `ScopedAuthority` — see §0 for the three grounded mismatches.
 
-> *"Every `match` over [`Standing`] here is exhaustive with no `_ =>` arm, so adding a state becomes
-> a compile error at every decision site (spec §7 obligation 3). That property is what the crate
-> boundary buys; it cannot be bought by discipline inside a larger crate."*
+### 3.1 D2, addressed rather than skirted
 
-Siting this in `temper-services` was considered and rejected for exactly that reason: every
-neighbouring file has `sqlx`, so nothing would stop a future edit putting a query inside the decision
-function. Purity by convention is the failure mode this design exists to remove.
+`resolve` returns `Ok` only on `linked ∧ vaulted ∧ approved` — three provisional facts written by
+three different paths. D2 (`2026-07-20-principal-admission-state-machine-design.md:349-356`) says:
 
-**CONFORM — `Cargo.toml:6-12` stays honest.** The module adds no dependency: `Refusal` and `Standing`
-are already local, and `LinkEvidence` takes no `ProfileId` (which would drag `sqlx` back in via
-`temper-core`).
+> *"A conjunction across provisional conditions, written by different paths, is the bug shape
+> itself."*
 
-**The service seam mirrors `standing_service`** (`standing_service.rs:1-10`): services gather
-evidence, `temper-principal` decides, and every identifier stays on the services side. Note
-`standing_service::admit` returns `Result<_, Refusal>` and **not** `ApiResult` (`:58`) — the typed
-refusal escapes the service layer intact. The Slack seam does the same.
+**D2 governs *admission* — whether a principal is admitted at all — and this is not that.** Admission
+is answered once, by `admit`, from standing alone, and this design *calls* it rather than restating
+it. What `resolve` adds is a *capability* question: given an admitted human, is there a credential to
+present as them? A mint genuinely requires all three facts; requiring fewer would mint without a
+grant.
+
+**Therefore: no arity pin on `resolve`.** R1's plan told the implementer to copy
+`admit_reads_standing_and_nothing_else` (`admission.rs:102-109`), whose comment reads *"Do not 'fix'
+it by updating the call; re-read D2."* Copying that pin onto a deliberate three-fact conjunction does
+not honour the obligation — it **disables the alarm**, by making a future reader think the obligation
+is respected here. `admit`'s pin stays where it is and keeps meaning what it says.
+
+### 3.2 Instance two of a one-instance pattern — deliberately not extracted
+
+Two live patterns answer "what may this principal do":
+
+| Pattern | Shape | Instances |
+|---|---|---|
+| Return flat facts, client decides | `Entitlements { system_access, is_admin, join_request_status }` (`access_gate.rs:110-114`) | the access surface |
+| Decide server-side, return proof-or-typed-reason | `admit(…) -> Result<AdmittedPrincipal, Refusal>` | **one** — `standing_service.rs:58` is the only service fn returning `Result<_, non-ApiError>` |
+
+The first is *what produced this bug*: the mention agent was handed facts, computed the product, and
+got the remedy wrong. So this design takes the second, making it instance two.
+
+**No shared machinery is extracted, on the repo's own precedent.** The ScopedAuthority spec named its
+pattern only after *"three domains had independently grown the same shape"*. Extracting at two is
+what the rejected interim revision attempted, and it failed because the trait was shaped by three
+domains sharing a caller axis this one lacks.
+
+Discoverability is bought with **explicit kinship instead**: `resolve`'s doc names `admit` as the
+shape it follows and states the semantic difference (§3.1); `admit` gains a "see also". A grep for
+`Refusal` then lands on `admit`, `SystemAccessDetails` and this together.
 
 ---
 
@@ -257,164 +313,142 @@ refusal escapes the service layer intact. The Slack seam does the same.
 
 ### 4.1 Both internal routes keep their separate secrets
 
-Collapsing `link-state` and `mint` into one call was considered — PR #498's four-row table is
-precisely their product — and **rejected**. `mention/agent/lib/mint.ts:8-13`:
+Collapsing them was rejected — `mint.ts:8-13`: *"`SLACK_LINK_SECRET` gates an endpoint that answers
+a question… `SLACK_MINT_SECRET` gates one that hands back a token carrying that human's ENTIRE
+temper reach. Sharing a key would make compromise of the cheap capability yield the expensive one."*
 
-> *"`SLACK_LINK_SECRET` gates an endpoint that answers a question — 'is this principal linked?'.
-> `SLACK_MINT_SECRET` gates one that hands back a token carrying that human's ENTIRE temper reach.
-> Sharing a key would make compromise of the cheap capability yield the expensive one."*
+**One vocabulary, two renderings**: `link-state` returns the resolved state without a token; `mint`
+returns it with.
 
-Instead: **one vocabulary, two renderings.** `link-state` returns the resolved state *without* a
-token; `mint` returns it *with*. The agent's cartesian product collapses because both endpoints speak
-the same enum — not because the endpoints merge.
+**Two widenings, both recorded rather than incidental.** (a) `link-state`'s answer grows from
+*linked/unlinked* to *+ why-refused*, telling a `SLACK_LINK_SECRET` holder a linked human's standing —
+acceptable, since that holder can already enumerate who is linked and standing is not a credential.
+(b) **`link-state` acquires a read of `kb_slack_grant_vault`**, since `resolve` needs `vaulted`. The
+cheap-capability endpoint gains a code path touching the credential store. It needs only a boolean
+and must stay one.
 
-**Recorded deliberately, not as a side effect:** `link-state`'s answer widens from *linked/unlinked*
-to *linked/unlinked + why-refused*, which tells a `SLACK_LINK_SECRET` holder a linked human's
-standing. Judged acceptable — that holder can already enumerate who is linked, and the agent cannot
-state the true remedy without it — but it is a widening and it is written down.
+This decides item 3 of open task `019f7cd1-a3fb-79c1-aa3f-befd4b843b17` (*"Decide whether link-state
+should report it at all"*), which should be closed done-by. Its second criterion — operator
+observability of the unvaulted-link state — is **not** addressed here; see §9.
 
 ### 4.2 `slack_mint`
 
-Takes the sealed principal proof (§5) instead of `Json<SlackMintRequest>`. `mint_for_mention`
-(`slack_mint_service.rs:59`) returns `Result<ActiveLink, LinkRefusal>`; the handler renders it.
+Renders `MintOutcome`'s two arms. The `From<MintOutcome> for SlackMintResponse` impl
+(`slack_mint.rs:71-85`) stays total and information-preserving. **Delete** the false remedy at
+`:49-51`. The hand-written redacting `Debug` (`:59-69`) must survive on the token arm.
 
-### 4.3 The callback gets a third page
+### 4.3 The callback's third page
 
-This is where the §1.2 trap dies. **Not by refusing the link** — refusing means the human must
-re-link after approval, for no gain. By writing both rows in the same transaction as today and
-rendering honestly:
+Where the §1.2 trap dies. **Not by refusing the link** — refusing means re-linking after approval,
+for no gain:
 
 | Outcome | Page |
 |---|---|
-| linked, vaulted, `ActiveLink` | "Account connected." (as today) |
-| linked, vaulted, `LinkRefusal::Standing(_)` | connected — **and you cannot act until an admin approves**, carrying `Refusal::reason()` |
-| `AlreadyLinkedToAnotherProfile` / `NoRefreshToken` | "Not connected." (as today) |
+| linked, vaulted, `Mintable` | "Account connected." (as today) |
+| linked, vaulted, standing refuses | connected — **and you cannot act until an admin approves**, carrying `Refusal::reason()` |
+| `AlreadyLinkedToAnotherProfile` / no refresh token | "Not connected." (as today, `slack_link.rs:279-311`) |
 
-The moment an admin approves, it works with no further user action.
+**CONFORM:** the one-transaction invariant is untouched, pinned by
+`link_is_rolled_back_with_its_caller_transaction` (`slack_link_service.rs:474`). **No new
+`SlackLinkOutcome` arm** — see §0.1.
 
-**CONFORM:** the one-transaction invariant for `{identity row, vaulted grant}` is untouched
-(`slack_link.rs:225-332`, proven by `link_is_rolled_back_with_its_caller_transaction`,
-`slack_link_service.rs:474`).
+**The new renderer must `html_escape`.** Both incumbents do (`:501`, `:509`) and there is a test for
+the failure page (`:605-610`). `Refusal::UnrecognizedStanding` formats `raw` with `{:?}`
+(`refusal.rs:68-70`), which escapes quotes but **not** `<`/`>`. It is currently safe only because a
+CHECK constraint on *another table* bounds `raw` to five literals — a defence that should not live
+there.
+
+**Accepted cost, stated:** `store_grant` seals a live refresh token plus a cached access token
+(TTL ≤ `MAX_AT_TTL_SECS`, 24h) for a principal that may never be admitted. No new access is
+conferred — the mint still refuses — but this is the one place §4.3 expands credential-at-rest.
 
 ---
 
-## 5. The sealed transport proof
+## 5. The sealed `VerifiedSlackPrincipal`
 
-`slack_mint_service.rs:32-37` considered and rejected a `VerifiedSlackPrincipal` newtype:
+`slack_mint_service.rs:32-37` rejected this on the premise that the constructor must be `pub` for a
+different crate to call it.
 
-> *"its constructor must be `pub` for the handler (a different crate) to call it, so any code could
-> mint the proof alongside the claim… If temper ever wants this structurally, the honest shape is for
-> the signature middleware to insert a non-constructible token into request extensions, which is a
-> larger change than T4 warrants."*
+### 5.1 The premise holds unless the verification moves — R1 got this half wrong
 
-**That premise is now stale, and the shape it names as honest is the incumbent pattern.** It assumes
-the *handler* mints. In the pattern that shipped afterwards, the middleware receives an
-already-minted value from the sealing crate and the handler only extracts:
+The incumbent seal is real because **the check lives inside the sealing crate**: `auth.rs:82` calls
+`temper_services::auth::authenticate_token`, and temper-api never mints an `AuthenticatedProfile` —
+it hands over a token and receives a proof.
 
-- `crates/temper-api/src/middleware/auth.rs:119` — `request.extensions_mut().insert(authed)`, where
-  `authed` came from `temper_services::auth::authenticate_token` (`:82`)
-- `crates/temper-api/src/middleware/auth.rs:34-37` — `parts.extensions.get::<AuthenticatedProfile>().cloned()`
-- `crates/temper-services/src/auth/mod.rs:285-288` — private fields, in a `pub` module of another crate
-- `crates/temper-services/tests/compile_fail/forge_authenticated_profile.rs` — trybuild, compiled as
-  an **external** crate, proves the struct literal is `E0451`
+The Slack mint gate is not like that. The HMAC verify runs in **temper-api**
+(`internal_auth.rs:24,39-92`). For its middleware to "mint the proof inside temper-services",
+temper-services must expose a `pub` constructor that checks nothing — R1's objection, unchanged.
 
-Constructible only inside `temper-services`; extractable in `temper-api`; forgery a compile error.
-Chronology confirms the comment was accurate when written: commit `e45ec167` (T4, the comment)
-predates `c740b399` (sealed `SystemAdmin`) and `7ae32970` (sealed `AuthenticatedProfile`).
-
-**AMEND** — the stale comment is corrected in place as part of this work.
-
-### 5.1 Shape
-
-`require_slack_mint_signature` already buffers the body and re-attaches it
-(`internal_auth.rs:90`), so it parses the principal from the **verified** bytes, mints the proof
-inside `temper-services`, and inserts it. The handler drops its `Json` extractor entirely.
+**So the verification moves.** temper-services exposes one function that both verifies and mints:
 
 ```rust
-// temper-services — the sealing crate
-pub struct VerifiedSlackPrincipal { id: String }   // private field
-impl VerifiedSlackPrincipal { pub fn id(&self) -> &str { &self.id } }
+pub fn verify_mint_request(
+    secret: &str, timestamp: i64, body: &[u8], signature: &str,
+) -> Result<VerifiedSlackPrincipal, ApiError>;
 ```
 
-Requires `#[derive(Clone)]` if extracted by value via `FromRequestParts` — `auth.rs:37` calls
-`.cloned()`, and `SystemAdmin` derives `Debug` only (`auth/mod.rs:353`), which is why only
-`&SystemAdmin` is obtainable there.
+Passing the signature is the *only* way to obtain the proof — `authenticate_token`'s shape exactly.
+Without this, the trybuild fixture proves only that struct-literal forgery fails while
+`VerifiedSlackPrincipal::new(attacker_string)` sits `pub` beside it.
 
-### 5.2 What this claims, precisely
+**Note:** `audit-signature-secrets.sh` computes gate/secret pairing **from source**; moving the
+verify moves what that guard reads, and the guard must move with it.
 
-It does **not** make the string more trustworthy. `slack_mint_service.rs:22-24` remains correct:
+### 5.2 Cross-gate containment is structural, not a comment
 
-> *"Provenance is extrinsic. Handed `"slack:T123:U456"`, no function can tell whether it was read off
-> a Slack-signed webhook or typed by an attacker; the string is identical either way."*
+`require_signature_with` (`internal_auth.rs:39-92`) is shared by all three gates, and the verified
+bytes exist only as a local inside it. Parsing-and-inserting there would mint the proof for
+`INTERNAL_RECONCILE_SECRET` and `SLACK_LINK_SECRET` holders too — the exact cross-gate leak the
+separate keys exist to prevent (`:36-38`, `:153-156`).
 
-What becomes impossible is **calling the mint with a principal that did not come through the gate**.
-That is the enclosure's class of bug — *"forgot to gate an internal call path"* — not a wire-level
-upgrade. Possession of `SLACK_MINT_SECRET` remains the wire-level enforcement, as
-`internal_auth.rs:158-161` states.
+**The helper takes an explicit per-gate hook** (a closure or enum parameter) so the mint proof is
+minted by the mint gate *by construction*. A negative test — a proof obtained behind the link gate —
+is required, not optional.
 
-**CONFORM:** `ScopedAuthority` / `Authorized<A>` are **not** used here — they are `pub(crate)` to
-`temper-services` (`authz/mod.rs:54,99`) and unreachable from `temper-api`. The `auth::`-style seal
-(pub struct, private fields, pub module) is the one that crosses the crate boundary.
+`validate_slack_principal` (`slack_link.rs:133-150`) moves onto this path and **must keep returning
+`BadRequest`**: `mint_rejects_a_malformed_principal` (`slack_link_test.rs:1750-1761`) asserts 400,
+while every other refusal in this middleware is `Unauthorized`.
+
+### 5.3 What this claims, precisely
+
+It does **not** make the string more trustworthy — `slack_mint_service.rs:22-24` remains correct
+that *"provenance is extrinsic."* It makes **calling the mint with a principal that did not come
+through the gate** unrepresentable: the enclosure's class of bug, not a wire-level upgrade.
+Possession of `SLACK_MINT_SECRET` remains the wire-level enforcement.
+
+**CONFORM:** not `Authorized<A>` — `pub(crate)` to temper-services (`authz/mod.rs:54,99`).
 
 ---
 
-## 6. The contract gate
+## 6. The drift gate — general, not Slack-shaped
 
-Both internal routes are deliberately excluded from `openapi.json` — `/internal/slack/link-state` and
-`/internal/slack/mint` are on the allowlist in `.github/scripts/check-openapi-routes.sh:63-64`. Their
-only consumers are **hand-written** TypeScript unions (`link.ts:35-37`, `mint.ts:31-45`).
+R1 proposed a Slack-named gate over `temper-principal`'s `admission.ts`. That **covers the wrong
+types**: the discriminants the agent switches on are `SlackLinkStateResponse` (`slack_link.rs:60`)
+and `SlackMintResponse` (`slack_mint.rs:38-57`), both in **temper-api — which has no `ts-rs`
+dependency at all**. Renaming `SlackMintResponse::NotVaulted` would still pass it.
 
-**A Rust-side variant rename compiles clean, passes `openapi-check`, `openapi-routes-check`,
-`openapi-rb-drift` and `openapi-ts-drift`, and breaks the agent at runtime.** It is the one contract
-in the repo with no gate at all — and typed exhaustive states enforced on one side of a boundary are
-half a design.
+**`check-ts-rs-drift.sh`**, over everything `generate-ts-types` writes. Same cargo build; closes the
+repo-wide gap CLAUDE.md records (*"NO CI gate on ts-rs type drift"*) instead of one instance; and
+covers both output trees — a narrow gate would catch drift in the mention tree and miss it in
+temper-ui's, from the same generator run.
 
-Putting the routes into `openapi.json` was rejected: the allowlist exists to keep internal
-server-to-server routes out of the public contract and both SDKs.
+Modelled on `check-temper-ts-drift.sh`, including its two hard-won properties: regenerate then
+`git diff --exit-code` (against **git**, not a fresh build), and **assert the artifact is tracked
+before diffing** (`:26-34`) — *"A gate that cannot fail is not a gate."*
 
-### 6.1 Generation
+**Generation.** `TS_RS_EXPORT_DIR` is per-invocation (`main.toml:276-281`), so `generate-ts-types`
+gains a second `-p temper-principal` line targeting the mention package's own tree — it is
+*"deliberately NOT a bun `workspaces` member"* and cannot import from temper-ui's. `package.json`
+declares `"imports": { "#*": "./agent/*" }`, so the file is importable as `#generated/admission.js`.
 
-`temper-principal` is already in `generate-ts-types` (`tools/cargo-make/main.toml:281`), exporting to
-`admission.ts`. But `TS_RS_EXPORT_DIR` points at
-`packages/temper-ui/src/lib/types/generated/` — and **the mention package is deliberately not a bun
-workspace member** (CLAUDE.md: *"workspace-isolated — deliberately NOT a bun `workspaces` member"*),
-so it cannot import across that boundary.
+**Wiring.** `[tasks.check]` (`main.toml:27-37`), and the **`rust-quality`** CI job — *not*
+`guard-tests`, whose header says *"Pure bash, no toolchain, no services"* (`code-quality.yml:119`).
+The gate needs cargo. Its **harness** (`test-check-ts-rs-drift.sh`) goes in `guard-tests`, matching
+the existing split: guards run in `rust-quality`, harnesses in `guard-tests`.
 
-`TS_RS_EXPORT_DIR` is per-invocation, so `generate-ts-types` gains a second `-p temper-principal`
-line targeting the mention package's own tree. The generated file lands **inside** the package and is
-imported locally — no cross-package import, no coupling to temper-ui's toolchain, isolation intact.
-
-### 6.2 `check-slack-contract-drift.sh`
-
-Modelled on `check-temper-ts-drift.sh`, including the two things that script learned the hard way:
-
-- **Regenerate, then `git diff --exit-code`** — compares against git, not against a fresh build.
-  Corollary, already documented in CLAUDE.md: a just-correctly-regenerated artifact still fails while
-  unstaged. The error message says so.
-- **Assert the artifact is tracked before diffing.** `git diff --exit-code -- <path>` exits 0 when
-  the path matches nothing, so an untracked or gitignored target makes the gate pass forever while
-  checking nothing. `check-temper-ts-drift.sh:26-34`: *"A gate that cannot fail is not a gate; make
-  that state loud instead of green."*
-
-**It never skips.** It needs `cargo test -p temper-principal --features typescript` — a compile, not
-just Node. Acceptable: `temper-principal` has no `sqlx` and no `ort`, `cargo make check` already
-builds the workspace for clippy and docs, so the marginal cost is small. Named here so the trade is
-explicit rather than discovered.
-
-### 6.3 Wiring
-
-- **`cargo make check`** — a new `slack-contract-drift` task added to `[tasks.check].dependencies`
-  (`tools/cargo-make/main.toml:27-37`), beside `openapi-rb-drift` and `openapi-ts-drift`, for the
-  reason `:18-26` already gives about products of the router.
-- **CI** — a step in the existing `guard-tests` job (`code-quality.yml:121`, on `main` since #501),
-  which is where the `audit-*` harnesses already run.
-- **A self-test** — `test-check-slack-contract-drift.sh`, matching the four existing
-  `test-audit-*.sh` harnesses that `guard-tests` runs. It proves the gate goes red when the thing it
-  protects breaks: patch a Rust variant, observe red, restore, observe green. A guard whose failure
-  path is never exercised is the gap #498's audit found in `audit-route-auth.sh`.
-
-This closes one bounded instance of a known repo gap — CLAUDE.md records that there is **no CI gate
-on ts-rs type drift** at all. It does not close the general case, and does not claim to.
+**Not closed, filed instead:** the temper-api `status` tags have no generator and remain ungated. A
+separate task carries the evidence and the options (relocate the wire enums to a `ts-rs` crate, or
+gate them another way). Saying so beats implying coverage that does not exist.
 
 ---
 
@@ -422,22 +456,26 @@ on ts-rs type drift** at all. It does not close the general case, and does not c
 
 | Test | Mirrors |
 |---|---|
-| Full-cell matrix: `linked` × `vaulted` × (5 standings + absent + unrecognized). Every cell decided; every refusal carries a non-empty `reason()` | `temper-principal/tests/matrix.rs` — `every_cell_is_decided_and_every_refusal_carries_a_reason` |
-| Signature test pinning `resolve`'s parameter, so a future "and also check X" conjunction fails loudly rather than silently widening the decision | `admit_reads_standing_and_nothing_else` (`admission.rs:102-109`) |
-| trybuild fixtures forging `VerifiedSlackPrincipal` and `ActiveLink` | `tests/compile_fail/forge_system_admin.rs`; feature-gated `trybuild`, `.stderr` committed |
-| **The test that does not exist today:** link an un-approved principal end to end; assert the callback does *not* render bare "Account connected."; assert mint names the standing refusal, not `revoked` | — (§1.2) |
-| The `guard-tests` self-test for the new drift gate | `test-audit-route-auth.sh` and siblings |
+| Full-cell matrix: `linked` × `vaulted` × (5 standings + absent + unrecognized); every cell decided; every refusal a non-empty `reason()` | `temper-principal/tests/matrix.rs` |
+| **Serialization round-trip over every `LinkRefusal` arm** — the test whose absence would have shipped R1's duplicate-key blocker | — |
+| A pin that only `admit`-reachable `Refusal` variants ever appear (§2.1) | — |
+| trybuild: forging `VerifiedSlackPrincipal` | `tests/compile_fail/forge_system_admin.rs` |
+| A proof obtained behind the **link** gate must fail (§5.2) | — |
+| **The test that does not exist today:** un-approved principal, end to end | §1.2 |
 
-**Expected churn, which is the deliverable:** `mint_refuses_a_profile_without_approved_standing`
-(`slack_grant_vault_service.rs:762`) and its siblings at `:679`, `:707`, `:735` currently assert
-`MintOutcome::Revoked`. Their assertions become named refusals. A test that still passed unchanged
-would mean the collapse survived.
+**Expected churn** — five sites, not four. `slack_grant_vault_service.rs:679`, `:707`, `:735`,
+`:762`, **and `tests/e2e/tests/slack_link_test.rs:1727`** (`mint_reports_a_revoked_grant_as_revoked`),
+whose entire premise is the dropped disjunct — R1's plan missed it, which invited an implementer to
+delete an unlisted red. Decide it deliberately: the column survives (§2.4), so either the test
+survives against a directly-flipped flag, or it goes with a recorded reason.
+
+**One executable step is mandatory before any Rust is written around §2.3's SQL: run it against the
+dev database.** R1's query passed `cargo check`, `cargo sqlx prepare`, the cold-offline check and
+`cargo make check` — every gate in the plan — while being illegal to execute.
 
 ---
 
 ## 8. Blast radius
-
-Established by grounding, not assumed.
 
 | Type | Exposure | Regenerates |
 |---|---|---|
@@ -445,60 +483,53 @@ Established by grounding, not assumed.
 | `SlackLinkStateResponse` | wire, allowlisted out of `openapi.json` | the TS mirror (§6) |
 | `MintOutcome` + `SlackMintResponse` | wire, allowlisted out | the TS mirror (§6) |
 
-No `openapi.json`, no gem, no `clients/temper-ts/src/generated/schema.ts`, no substrate payload
-snapshot, no migration. **No `.sqlx` churn** — §2.3 changes query *text*, so the workspace cache and
-`crates/temper-services/.sqlx` both need `prepare`; `tests/e2e/.sqlx` holds one
-`kb_profile_auth_links` entry and is unaffected unless e2e SQL changes. Ritual order per CLAUDE.md:
-`cargo sqlx prepare --workspace -- --all-features`, then `cargo make prepare-services`.
+No `openapi.json`, no gem, no `schema.ts`, no substrate snapshot, no migration. **`.sqlx` does churn**
+— §2.3 changes query text, so `cargo sqlx prepare --workspace -- --all-features` then
+`cargo make prepare-services`, in that order. Verify with a **cold** offline check
+(`cargo clean -p temper-services` first), noting that this proves cache honesty and **not** SQL
+validity (§7).
 
-**Two CI guards hardcode the type names.** `.github/scripts/audit-credential-debug.sh:7,69,164,181`
-cites `MintOutcome` / `NewGrant` / `SlackMintResponse` as its canonical redacting-`Debug` exemplars
-and carries a literal `BASELINE` list at `:73-79`; `test-audit-credential-debug.sh:97,101` fixtures
-the same names. Renaming restales a security guard's failure message and its self-test. The redacting
-`Debug` on the token-carrying arm must survive the refactor — that guard exists because a derived
-`Debug` once leaked a credential.
+`audit-credential-debug.sh` baselines `MintOutcome` / `NewGrant` / `SlackMintResponse` by name
+(`:73-79`) and its self-test fixtures them (`test-audit-credential-debug.sh:97,101`); a rename moves
+both in the same commit.
 
 ---
 
 ## 9. Out of scope — named, not dropped
 
-- **The disconnect half and `IdpRevocation`.** Six committed artifacts, a **shipped immutable
-  migration** (`20260719000020_slack_disconnect_event.sql`, which inlines the payload schema
-  byte-for-byte), and a live `kb_event_types.payload_schema` row. A variant change there needs a new
-  forward migration, and `verify_ledger_roundtrip` (`payloads.rs:1139-1141`) must keep deserializing
-  already-persisted rows. Recorded so nobody folds it in casually.
-- **Dropping the `revoked_at` column** (§2.4) — destructive migration, operator-run.
-- **The intent lifecycle.** `consume_intent` runs on the pool (`slack_link_service.rs:59`) 38 lines
-  before `pool.begin()` (`slack_link.rs:235`), so the nonce burn is outside the transaction:
-  `consumed` conflates *succeeded*, *refused*, and *rolled back*. Also `create_intent` is unbounded —
-  no per-principal cap, no dedup, plaintext PKCE verifier per mention.
-- **`_event_append` performs no `payload_schema` validation.** The registry schema is descriptive;
-  the only thing holding the ledger to the enum's spellings is `IdpRevocation::as_str` at one call
-  site. A ledger concern, orthogonal to this axis.
-- **MCP parity.** Consistent with the admission arc, where it was held as lower tier.
+- **The disconnect half and `IdpRevocation`** — six committed artifacts, a shipped immutable
+  migration (`20260719000020`), and a live `kb_event_types` row.
+- **Dropping the `revoked_at` column** (§2.4).
+- **The intent lifecycle** — the nonce burn outside the transaction (`consumed` conflates succeeded,
+  refused and rolled back); unbounded `create_intent`.
+- **Operator observability of the unvaulted-link state** — the second acceptance criterion of task
+  `019f7cd1-a3fb-79c1-aa3f-befd4b843b17`. §4.1 closes its first; this one needs an operator surface
+  and is a different piece of work. Named here because R1 dropped it silently.
+- **The temper-api `status`-tag generator gap** (§6), filed separately.
+- **`_event_append` performs no `payload_schema` validation.**
+- **MCP parity.**
 
 ---
 
-## 10. Consequence for PR #498
+## 10. Sequencing — #498 lands first
 
-#498 is now TypeScript-only (19 files; the Rust half shipped in #496/#501). Its
-`revokedPrompt`/`notVaultedPrompt` (`identity.ts:132,151`) become a match over the new refusal arms,
-and its four-row table becomes one switch over generated types. `channels/slack.ts:137,143` reads
-`link.handle` *inside* the mint switch — a cross-enum coupling that this unification changes.
+R1 said #498 *"should rebase onto this"*. That is circular for the gate: `mint.ts` exists **only** on
+#498's branch, so a gate built on `main` would cover one consumer, and R1's own §6 cited
+`mint.ts:31-45` as a consumer that is not there.
 
-**It should rebase onto this rather than merge first.** Merging first ships the §1.1 false remedy to
-the only surface that shows it to a human.
+- **PR 1–2** (the Rust work, §2–§5) land first. #498 rebases onto them — it must, since its
+  `revokedPrompt` (`identity.ts:151`) is the false remedy §1.1 identifies, and merging it first
+  ships that to the only surface a human reads.
+- **#498** lands next, bringing `mint.ts`.
+- **PR 3** (§6, generation + gate) lands last, when both consumers exist.
 
-The three dependencies named in its draft comment have all landed since (Phase 2 A1 repointed
-`slack_grant_vault_service`'s `is_active` reader onto standing; `is_system_admin` moved to
-`kb_principal_governance`; `access_mode` retired and dropped in #515), so the original reason to hold
-it is spent. This is a different reason.
+Against the repo's *"split PRs on coherence when deployed, not testability"*: the gate is testable
+alone and **not shippable alone**, which is the case that convention names.
 
 ---
 
 ## 11. Adjacent, filed separately
 
-`admin_disconnect_slack_principal` (`slack_disconnect_service.rs:267`) is a Bucket-1 system-authority
-act still gated by a bare bool, which the enclosure's audit missed — task
-`019f8ec3-793f-7c52-9378-47dda5d90a5d`. It takes `&SystemAdmin` and reads `admin.actor()`. That is
-the enclosure's pattern, in the disconnect half, and it is independent of this design.
+`admin_disconnect_slack_principal` (`slack_disconnect_service.rs:267`) is a Bucket-1
+system-authority act still gated by a bare bool — task `019f8ec3-793f-7c52-9378-47dda5d90a5d`. It
+takes `&SystemAdmin` and reads `admin.actor()`. Independent of this design.
