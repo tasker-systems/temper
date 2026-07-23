@@ -36,7 +36,7 @@ pub async fn provision(
     auth: AuthUser,
     Json(body): Json<ProvisionConnectionRequest>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     let connection = connection_service::provision(&state.pool, caller, &body).await?;
     Ok(Json(connection))
 }
@@ -46,7 +46,7 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Connection>>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::list(&state.pool, caller, q.include_revoked).await?,
     ))
@@ -57,7 +57,7 @@ pub async fn get(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::get_for_caller(&state.pool, caller, id).await?,
     ))
@@ -68,7 +68,7 @@ pub async fn revoke(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::revoke(&state.pool, id, caller).await?,
     ))
@@ -82,7 +82,7 @@ pub async fn attach_credential(
     Path(id): Path<Uuid>,
     Json(body): Json<ConnectionCredential>,
 ) -> ApiResult<Json<AttachCredentialResponse>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::attach_credential(
             &state.pool,
@@ -106,7 +106,7 @@ pub async fn set_webhook_events(
     Path(id): Path<Uuid>,
     Json(body): Json<SetWebhookEventsRequest>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::set_webhook_events(&state.pool, caller, id, &body.events).await?,
     ))
@@ -119,7 +119,7 @@ pub async fn set_tool_manifest(
     Path(id): Path<Uuid>,
     Json(body): Json<SetToolManifestRequest>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::set_tool_manifest(&state.pool, caller, id, &body.tools).await?,
     ))
@@ -133,7 +133,7 @@ pub async fn grant_reach(
     Path(id): Path<Uuid>,
     Json(body): Json<GrantConnectionReachRequest>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::grant_reach(&state.pool, caller, id, body.team, body.affirm_reach)
             .await?,
@@ -147,7 +147,7 @@ pub async fn revoke_reach(
     Path(id): Path<Uuid>,
     Json(body): Json<GrantConnectionReachRequest>,
 ) -> ApiResult<Json<Connection>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         connection_service::revoke_reach(&state.pool, caller, id, body.team).await?,
     ))

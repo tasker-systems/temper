@@ -33,7 +33,7 @@ pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<ContextRowWithCounts>>> {
-    context_service::list_visible(&state.pool, ProfileId::from(auth.0.profile.id))
+    context_service::list_visible(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
 }
@@ -55,7 +55,7 @@ pub async fn create(
     auth: AuthUser,
     Json(body): Json<ContextCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<ContextRow>)> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     let (owner_table, owner_id) =
         context_service::resolve_create_owner(&state.pool, caller, body.owner.as_ref()).await?;
     let row = context_service::create(&state.pool, &owner_table, owner_id, &body.name).await?;
@@ -81,7 +81,7 @@ pub async fn get(
 ) -> ApiResult<Json<ContextRow>> {
     context_service::get_visible(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         ContextId::from(context_id),
     )
     .await
@@ -108,7 +108,7 @@ pub async fn share_team(
 ) -> ApiResult<Json<ShareContextOutcome>> {
     let outcome = context_service::share(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         context_id,
         &body,
     )
@@ -137,7 +137,7 @@ pub async fn unshare_team(
 ) -> ApiResult<Json<UnshareContextOutcome>> {
     let outcome = context_service::unshare(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         context_id,
         team_id,
     )
@@ -167,7 +167,7 @@ pub async fn reassign(
 ) -> ApiResult<Json<ReassignContextOutcome>> {
     let outcome = context_service::reassign(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         context_id,
         body.to_team_id,
     )
@@ -215,7 +215,7 @@ pub async fn shape(
 ) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
     temper_services::backend::substrate_read::anchor_shape_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         HomeAnchor::Context(ContextId::from(context_id)),
         q.lens,
     )
@@ -246,7 +246,7 @@ pub async fn region_metrics(
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
     temper_services::backend::substrate_read::anchor_region_metrics_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         HomeAnchor::Context(ContextId::from(context_id)),
         q.lens,
     )
@@ -283,7 +283,7 @@ pub async fn materialize(
         threshold: req.threshold,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .materialize_on_threshold(cmd)
         .await

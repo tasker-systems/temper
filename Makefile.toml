@@ -89,7 +89,7 @@ cargo nextest run -p temper-substrate --features artifact-tests
 '''
 
 [tasks.test-trybuild]
-description = "Run the compile-fail seal proof (trybuild) for the sealed SystemAdmin. Compiles temper-services + ort in an isolated target dir (~157s); no DB (offline sqlx cache) and no ONNX runtime needed — it only compiles fixtures."
+description = "Run the compile-fail seal proof (trybuild) for the sealed auth-ladder types (AuthenticatedProfile, SystemAdmin). Compiles temper-services + ort in an isolated target dir (~157s); no DB (offline sqlx cache) and no ONNX runtime needed — it only compiles fixtures."
 # SQLX_OFFLINE: the fixtures compile temper-services' `query!` macros; offline uses the committed
 # `.sqlx` cache so no Postgres is needed (mirrors the DB-less CI "Seal Proof" job).
 env = { SQLX_OFFLINE = "true" }

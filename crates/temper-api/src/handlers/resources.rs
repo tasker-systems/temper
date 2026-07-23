@@ -65,7 +65,7 @@ pub async fn list(
     if params.meta_only.unwrap_or(false) {
         let response = temper_services::backend::substrate_read::list_meta_select(
             &state.pool,
-            ProfileId::from(auth.0.profile.id),
+            ProfileId::from(auth.0.profile().id),
             params,
         )
         .await?;
@@ -73,7 +73,7 @@ pub async fn list(
     } else {
         let response = temper_services::backend::substrate_read::list_select(
             &state.pool,
-            ProfileId::from(auth.0.profile.id),
+            ProfileId::from(auth.0.profile().id),
             params,
         )
         .await?;
@@ -107,7 +107,7 @@ pub async fn get(
         resource: ResourceId::from(resource_id),
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -131,7 +131,7 @@ pub async fn get_content(
 ) -> ApiResult<Json<ContentResponse>> {
     temper_services::backend::substrate_read::get_content_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         ResourceId::from(resource_id),
     )
     .await
@@ -157,7 +157,7 @@ pub async fn provenance(
 ) -> ApiResult<Json<Vec<BlockProvenanceRow>>> {
     temper_services::backend::substrate_read::resource_block_provenance_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         resource_id,
     )
     .await
@@ -197,7 +197,7 @@ pub async fn annotate(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .annotate_resource(cmd)
         .await
@@ -230,7 +230,7 @@ pub async fn create(
     // `ContextRef::Id` does the profile-visibility check without needing a name lookup.
     let context = context_service::resolve_context_ref(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         &ContextRef::Id(req.kb_context_id),
     )
     .await?;
@@ -262,7 +262,7 @@ pub async fn create(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -319,7 +319,7 @@ pub async fn update(
         Some(
             context_service::resolve_context_ref(
                 &state.pool,
-                ProfileId::from(auth.0.profile.id),
+                ProfileId::from(auth.0.profile().id),
                 &r,
             )
             .await?,
@@ -360,7 +360,7 @@ pub async fn update(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -398,7 +398,7 @@ pub async fn delete(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     backend.delete_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
@@ -437,7 +437,7 @@ pub async fn grant(
         can_grant: body.can_grant,
     };
     let outcome =
-        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile().id), &req)
             .await?;
     Ok(Json(outcome))
 }
@@ -469,7 +469,7 @@ pub async fn revoke(
         principal_id: body.principal_id,
     };
     let outcome =
-        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile().id), &req)
             .await?;
     Ok(Json(outcome))
 }
