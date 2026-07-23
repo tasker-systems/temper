@@ -55,7 +55,12 @@ actually applies:
 3. **Plus**: a new test only where the task creates an *observable new property* (Task 6's decision,
    Task 9's call-site count).
 
-Task 6 is the one genuine red-green task — it changes behavior — and it is written that way.
+~~Task 6 is the one genuine red-green task — it changes behavior — and it is written that way.~~
+**Superseded 2026-07-23: there is no behaviour-changing task in this plan.** Task 6 was written
+expecting to resolve the gating-team asymmetry in one direction; grounding found three sites with
+three different and individually correct relationships to the gating team, and the resolution was to
+record them (spec §6.1). Its new test pins a deliberate *absence* and is green on first run — which
+is the correct shape for pinning existing behaviour, not a failed red-green cycle.
 
 ---
 
@@ -67,6 +72,9 @@ Task 6 is the one genuine red-green task — it changes behavior — and it is w
   `GrantWarrant`, `BornSubject`.
 - `crates/temper-services/src/authz/machine.rs` — `impl ScopedAuthority for MachineAuthority`.
 - `crates/temper-services/src/authz/two_sided.rs` — `TwoSidedAuthority` (PR 2).
+- `crates/temper-services/src/authz/connection.rs` — `ConnectionAuthority` (PR 2). Its own file
+  rather than a `two_sided.rs` arm: it shares the *shape* but none of the resolver, and the
+  one-policy-per-file rule below is what makes that legible.
 - `crates/temper-services/src/authz/read_gates.rs` — `TeamReadAuthority`, `ActorHistoryAuthority`.
 
 **Modified (exact sites in each task):** `lib.rs:10` (module decl), `services/access_service.rs`,
@@ -322,7 +330,41 @@ arms `SelfActor | SystemAdmin | None`, `denial() -> ApiError::NotFound`.
 # PR 2 — Collapse the two-sided gates
 
 **Branch fresh off `main` after PR 1 merges.**
-**Coherence:** one policy where there were three. This is where spec §6's asymmetry becomes a decision.
+**Coherence:** one policy where there were three, **in Rust** (spec §6.2 — `context_reassign`'s plpgsql
+copy is a fourth, deliberately out of reach). This is where spec §6's asymmetry becomes a decision.
+
+> **Execution log (2026-07-23).** Branch `jct/scoped-authority-pr2`, four commits: the spec/plan
+> amendment, then Tasks 6, 7, 8. Behavior-preserving throughout; **zero test edits** across
+> temper-services (37 connection + 11 context), temper-api, and the e2e bind/share/transfer suites.
+>
+> 1. **Task 6 stopped being a behaviour change**, and that was the substantive finding of this PR.
+>    Its premise — one asymmetry, pick a direction — did not survive grounding: `can_bind`'s guard is
+>    structural (and its load-bearing direction is *unbind*, which its comment never said),
+>    `can_share`'s guard outlived the D11 change that invalidated its stated reason, and
+>    `contain_target_team` correctly has none. Pete chose no behaviour change; the deliverable became
+>    the three reasons plus a test pinning the deliberate absence. **The plan now contains no
+>    behaviour-changing task at all.** Spec §6.1 records it.
+> 2. **Spec §6's table missed a fourth instance, and it is in plpgsql.** `context_reassign` carries
+>    the whole policy independently. It bounds what the collapse may claim (§6.2) and is why
+>    `can_share`'s gating-team exclusion still has a reason to exist at all.
+> 3. **`TwoSidedObject`, not `RefTarget`.** Task 7's interface line specified
+>    `type Subject = (RefTarget, Uuid)`. `RefTarget` has four variants and two of them cannot occur
+>    here, so the impl would have owed an answer for resources and connections whose only honest form
+>    is a silent denial. A closed two-arm enum makes the match exhaustive over what is real.
+> 4. **`ConnectionScope`/`TwoSidedScope` are named structs, not tuples.** Task 8 specified
+>    `(Uuid, Uuid)`. Two same-typed ids in positional order is precisely the transposition this layer
+>    exists to remove — the tuple type-checks with the arguments swapped.
+> 5. **`ConnectionAuthority` maps one error variant back to a denial arm.** `contain_target_team`
+>    refuses with `Forbidden` but reports an absent target team with `NotFound`. Only the refusal
+>    becomes an arm; `NotFound` propagates. Folding both would turn "that team does not exist" into
+>    "you may not" — a behaviour change pinned by an existing test.
+> 6. **Task 8 touches `grant_reach` only.** The plan's `:480,503` line refs point at the two
+>    `insert_grant` sites, which are PR 3's business. `revoke_reach` deliberately asks only the first
+>    of the two questions and is not this gate's shape.
+>
+> The PR-1 rustdoc gate recurred exactly as logged (`-D broken-intra-doc-links` on `pub(crate)`
+> items), costing one `cargo make check` cycle. The note was right; reading it earlier would have
+> saved the cycle.
 
 ---
 
@@ -351,26 +393,26 @@ get lost in the move.
 - [x] **Step 1 — ESCALATED and decided.** Presented 2026-07-23 with the live predicate bodies as
       evidence. Outcome: option "no behaviour change; record three reasons." Recorded in spec §6.1.
 
-- [ ] **Step 2 — CONFORM: `can_bind`'s comment gains the unbind direction.** The existing text names
+- [x] **Step 2 — CONFORM: `can_bind`'s comment gains the unbind direction.** The existing text names
       only binding ("binding there flips the map into the `require_cogmap_write_admin` regime"). Add
       that `can_bind` also gates `unbind_team` (`:121`), so the guard's sharper purpose is preventing a
       non-admin from **un**binding a protected map out of the admin-write regime. Both the module
       header (`:9-13`) and the fn doc (`:58-61`) carry the claim; update both or they drift.
 
-- [ ] **Step 3 — AMEND: `can_share`'s rationale is replaced, not deleted.** Strike *"sharing into the
+- [x] **Step 3 — AMEND: `can_share`'s rationale is replaced, not deleted.** Strike *"sharing into the
       root team is an instance-level escalation"* — quote the live `has_system_access` /
       `is_system_admin` bodies from spec §6.1 as the reason it is stale. Replace with the footing that
       does hold: `can_share` also gates `reassign` (`:505`), a transfer of ownership into the root team
       that `context_reassign`'s plpgsql independently forbids, so relaxing the Rust half would split the
       two copies into different error paths. Cite spec §6.1 and §6.2.
 
-- [ ] **Step 4 — EXTEND: pin `contain_target_team`'s deliberate absence.** Its doc gains a paragraph
+- [x] **Step 4 — EXTEND: pin `contain_target_team`'s deliberate absence.** Its doc gains a paragraph
       stating the absence is a decision (a reach grant confers READ on the granter's own connection
       data; it flips no regime), and a test asserts it: a non-admin team owner grants connection reach
       to the gating team and **succeeds**. This test must be **GREEN on first run** — it pins current
       behaviour. A red here means the behaviour is not what §6.1 grounded; stop and escalate.
 
-- [ ] **Step 5 — Verify.** New test green. The three tests pinning the live exclusions
+- [x] **Step 5 — Verify.** New test green. The three tests pinning the live exclusions
       (`bind_cogmap_e2e.rs:424`, `context_share_e2e.rs:437`, `context_service.rs:946`) green,
       **no edits** — needing to edit one is the signal the direction was wrong.
       ```bash
@@ -378,9 +420,9 @@ get lost in the move.
       cargo make test-e2e   # bind_cogmap_e2e + context_share_e2e
       ```
 
-- [ ] **Step 6 — If the test added a `query!` macro:** `cargo make prepare-services`.
+- [x] **Step 6 — If the test added a `query!` macro:** `cargo make prepare-services`.
 
-- [ ] **Step 7 — Commit.** `git commit -m "authz: the three reasons behind the gating-team asymmetry"`
+- [x] **Step 7 — Commit.** `git commit -m "authz: the three reasons behind the gating-team asymmetry"`
 
 ---
 
@@ -402,28 +444,28 @@ get lost in the move.
 **Interfaces — Produces:** `impl ScopedAuthority for TwoSidedAuthority { type Subject = (RefTarget, Uuid); .. }`
 — the subject is the **pair**, which is what closes the transposition hazard (spec §2.2).
 
-- [ ] **Step 1 — Baseline.**
+- [x] **Step 1 — Baseline.**
       ```bash
       cargo nextest run -p temper-api --features test-db --test cogmap_authz_test
       cargo make test-e2e   # covers context_share_e2e + bind_cogmap_e2e
       ```
 
-- [ ] **Step 2 — CONFORM: identify the single difference.** Subject-administration is
+- [x] **Step 2 — CONFORM: identify the single difference.** Subject-administration is
       `profile_can_grant(pool, caller, "kb_cogmaps", id)` for bind, and
       `caller_administers_context(pool, caller, id)` for share. Everything else — admin short-circuit,
       gating-team exclusion, `can_manage` on the target team — is the same policy twice. Parameterize
       **only** that probe.
 
-- [ ] **Step 3 — EXTEND: the shared resolver.** Carry both gates' doc-comment rationale onto it; those
+- [x] **Step 3 — EXTEND: the shared resolver.** Carry both gates' doc-comment rationale onto it; those
       comments are the record of *why* the gating-team exclusion exists and must not be lost in the move.
 
-- [ ] **Step 4 — Re-point both call sites.** `cogmap_service.rs:34` and `:121`; `context_service.rs:436`,
+- [x] **Step 4 — Re-point both call sites.** `cogmap_service.rs:34` and `:121`; `context_service.rs:436`,
       `:469`, `:505`. Each currently maps `false → Err(Forbidden)`; that mapping now comes from
       `denial()`.
 
-- [ ] **Step 5 — Verify.** Both suites green, no edits. `cargo make check`.
+- [x] **Step 5 — Verify.** Both suites green, no edits. `cargo make check`.
 
-- [ ] **Step 6 — Commit.** `git commit -m "authz: one TwoSidedAuthority replaces can_bind and can_share"`
+- [x] **Step 6 — Commit.** `git commit -m "authz: one TwoSidedAuthority replaces can_bind and can_share"`
 
 ---
 
@@ -440,18 +482,18 @@ connection subject."* Preserve that; do not "unify" it into `GrantAuthority`.
 **Interfaces — Produces:** `impl ScopedAuthority for ConnectionAuthority { type Subject = (Uuid, Uuid); .. }`
 — `(connection_id, target_team_id)`. Needed by Task 11's `GrantWarrant::ConnectionReach`.
 
-- [ ] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib connection`
+- [x] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib connection`
       plus `cargo nextest run -p temper-api --features test-db --test connection_reach_grant_equivalence_test`
 
-- [ ] **Step 2 — CONFORM: the two questions.** The doc comment names them explicitly — *"May you act on
+- [x] **Step 2 — CONFORM: the two questions.** The doc comment names them explicitly — *"May you act on
       this connection?"* (`machine_authz::authorize` on the connection's owning team) and *"May you
       hand read-reach to THAT team?"* (`contain_target_team`). Both, in that order.
 
-- [ ] **Step 3 — EXTEND: the impl**, composing the two existing calls. Call them; do not restate them.
+- [x] **Step 3 — EXTEND: the impl**, composing the two existing calls. Call them; do not restate them.
 
-- [ ] **Step 4 — Verify.** Suite green, no edits. `cargo make check`.
+- [x] **Step 4 — Verify.** Suite green, no edits. `cargo make check`.
 
-- [ ] **Step 5 — Commit + open PR 2.**
+- [x] **Step 5 — Commit + open PR 2.**
       ```bash
       cargo make check && cargo make test-db
       gh pr create --title "ScopedAuthority: collapse the two-sided gates" --base main
