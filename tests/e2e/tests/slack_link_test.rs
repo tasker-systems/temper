@@ -1516,6 +1516,75 @@ async fn mint_returns_a_token_for_a_vaulted_principal(pool: PgPool) {
     );
 }
 
+/// The born-`Denied` path, end to end — the case NO test drove before, because every mint fixture
+/// approved at setup (`link_a_vaulted_principal`, the workaround that hid it). An un-approved human
+/// completes the whole browser link, sees an HONEST page (saved, but not yet able to act, with the
+/// reason), and mint names the STANDING refusal — not `revoked`, and not the false re-link prompt.
+/// After an admin approves, the SAME principal mints a token with NO re-link. This is the trap the
+/// whole design exists to close.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unapproved_principal_links_but_cannot_mint_until_approved(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    // Complete the real browser link WITHOUT approving. The callback births the principal `Denied`
+    // (D11) and its only identity gate passes `Denied`, so link + vault both land.
+    let sub = "idp-sub-unapproved";
+    let email = "unapproved-9f2a11@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+
+    // The callback is honest: the link is saved, but it is NOT the bare success page, and it says
+    // why the human cannot act yet.
+    assert!(body.contains("Linked as"), "the link is saved: {body}");
+    assert!(
+        !body.contains("Account <em>connected</em>."),
+        "an un-approved principal must NOT see the bare success page: {body}",
+    );
+    assert!(
+        body.contains("can't act through @temper just yet"),
+        "the page must tell the human they cannot act yet: {body}",
+    );
+
+    // Mint names the STANDING refusal — the remedy is an admin approval, never re-linking.
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(res.status(), 200, "a refusal is not a transport error");
+    let mint: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(mint["status"], "refused", "{mint}");
+    assert_eq!(
+        mint["reason"], "standing",
+        "a born-Denied human must be refused on STANDING, not told to re-link: {mint}",
+    );
+    assert!(
+        mint["access_token"].is_null(),
+        "no token may ride along on a refusal: {mint}",
+    );
+
+    // An admin approves. Nothing else changes — no re-link, no new intent, no new grant.
+    approve_standing(&pool, profile_id_for_sub(&pool, sub).await).await;
+
+    // The SAME principal now mints a token. Approval alone made the existing link mintable.
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(res.status(), 200);
+    let mint: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(
+        mint["status"], "token",
+        "approval alone must make the existing link mintable, with no re-link: {mint}",
+    );
+    assert!(
+        mint["access_token"].as_str().is_some_and(|t| !t.is_empty()),
+        "the token arm must carry a non-empty access token: {mint}",
+    );
+}
+
 /// **The bite probe for the two-key split.** A mint call signed with the LINK-STATE key must be
 /// refused.
 ///
@@ -1689,7 +1758,7 @@ async fn callback_without_a_refresh_token_does_not_report_success(pool: PgPool) 
 /// the vault has nothing. The two endpoints must disagree in a way the agent can act on, which is
 /// why this is its own status rather than an error or a null token.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mint_reports_not_vaulted_distinctly_from_revoked(pool: PgPool) {
+async fn mint_reports_not_vaulted_distinctly_from_not_linked(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
     link_a_vaulted_principal(&app, &pool).await;
 
@@ -1717,36 +1786,22 @@ async fn mint_reports_not_vaulted_distinctly_from_revoked(pool: PgPool) {
         "no grant on file is not a transport error"
     );
     let body: serde_json::Value = res.json().await.expect("mint body");
-    assert_eq!(body["status"], "not_vaulted");
+    // The typed refusal: a 200 carrying `refused` with a `not_vaulted` reason — distinct from
+    // `not_linked` (no directory row) and from a `standing` refusal (not admitted).
+    assert_eq!(body["status"], "refused", "{body}");
+    assert_eq!(body["reason"], "not_vaulted", "{body}");
     assert!(
         body["access_token"].is_null(),
-        "no token may ride along on a not_vaulted answer: {body}",
+        "no token may ride along on a refusal: {body}",
     );
 }
 
-/// A revoked grant mints nothing, and is reported as `revoked` rather than `not_vaulted`.
-///
-/// The distinction matters to the human: `not_vaulted` means "finish linking", `revoked` means
-/// "this link was deliberately severed". Collapsing them would make one of those sentences a lie.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mint_reports_a_revoked_grant_as_revoked(pool: PgPool) {
-    let app = setup_slack_app(&pool).await;
-    link_a_vaulted_principal(&app, &pool).await;
-
-    sqlx::query("UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1")
-        .bind(SLACK_PRINCIPAL)
-        .execute(&pool)
-        .await
-        .expect("revoke the grant");
-
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
-    assert_eq!(res.status(), 200);
-    let body: serde_json::Value = res.json().await.expect("mint body");
-    assert_eq!(
-        body["status"], "revoked",
-        "a revoked grant must be distinguishable from one that was never vaulted: {body}",
-    );
-}
+// The former `mint_reports_a_revoked_grant_as_revoked` is deleted deliberately, not lost: the
+// `revoked_at` disjunct was dropped (spec §2.4) because soft-revoke was superseded by disconnect's
+// DELETE (commit `3a45b1ab`), so a flagged `revoked_at` no longer produces any mint outcome to
+// assert. The column's new inertness is pinned at the service layer by
+// `a_flagged_revoked_at_no_longer_blocks_minting`; a standing refusal at the wire is covered by the
+// end-to-end un-approved-link test.
 
 /// A malformed principal is refused at the route, on the same shape checks link-state applies.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

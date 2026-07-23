@@ -136,7 +136,9 @@ pub async fn admin_disconnect(
         .as_ref()
         .ok_or_else(|| ApiError::Unauthorized("slack link disabled".to_string()))?;
 
-    crate::handlers::slack_link::validate_slack_principal(&body.slack_principal_id)?;
+    temper_services::services::slack_link_service::validate_slack_principal(
+        &body.slack_principal_id,
+    )?;
 
     let provider = link_provider::derive(&state.config.auth, cfg);
     // The admin gate lives in the SERVICE, not here — see

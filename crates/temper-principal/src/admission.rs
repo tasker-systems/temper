@@ -34,6 +34,12 @@ impl AdmittedPrincipal {
 /// a `Revoked` principal is refused whether or not a review is pending, and ANDing any second
 /// provisional fact into this decision restores exactly the bug shape D2 forbids. A future change
 /// that adds a parameter here should be rejected at review.
+///
+/// **See also** the linked-identity resolver in temper-services
+/// (`services::slack_link_state::resolve`), which *calls* this to decide standing and then layers
+/// on the vault facts `admit` deliberately refuses to know. That is a capability gate, not an
+/// admission decision — so it is allowed the conjunction D2 forbids here, and it carries no arity
+/// pin. The distinction is why one function can conjoin three facts while this one must not.
 pub fn admit(raw_standing: Option<&str>) -> Result<AdmittedPrincipal, Refusal> {
     // Absence denies — not an error, not a default-grant (spec §7 obligation 1).
     let Some(raw) = raw_standing else {
