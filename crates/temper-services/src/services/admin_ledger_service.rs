@@ -178,10 +178,10 @@ pub async fn list_by_actor(
         return Err(ApiError::NotFound);
     }
 
-    // Reading someone else's history is an audit, and audits are admin-only.
-    if caller != actor && !access_service::is_system_admin(pool, caller).await? {
-        return Err(ApiError::NotFound);
-    }
+    // Reading someone else's history is an audit, and audits are admin-only. The `has_system_access`
+    // check above is deliberately NOT folded into this one: that is a standing question, and this is
+    // an authority question about the actor axis. Keeping them separate is the point.
+    crate::authz::authorize::<crate::authz::ActorHistoryAuthority>(pool, caller, actor).await?;
 
     // No per-subject gate: that is the decision. The full catalogue is correct here precisely
     // because the axis is the caller's own authorship (or an admin's audit).

@@ -58,3 +58,48 @@ impl ScopedAuthority for TeamReadAuthority {
         ApiError::NotFound
     }
 }
+
+/// Who may read a principal's authorship history on the admin ledger's **actor axis**.
+///
+/// Scoped to the actor being read about — NOT to standing. `list_by_actor`'s `has_system_access`
+/// check sits above this one and stays there: that asks whether the caller is admitted at all,
+/// which is a standing question, and ANDing a provisional fact into an authority decision is the
+/// shape `temper_principal::admit` exists to forbid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActorHistoryAuthority {
+    /// Reading your own authorship. Not an admin act.
+    SelfActor,
+    /// Reading someone else's is an audit, and audits are admin-only.
+    SystemAdmin,
+    /// Neither.
+    None,
+}
+
+#[async_trait]
+impl ScopedAuthority for ActorHistoryAuthority {
+    /// The actor whose history is being read.
+    type Subject = ProfileId;
+
+    async fn resolve(pool: &PgPool, caller: ProfileId, actor: ProfileId) -> ApiResult<Self> {
+        // Self-read first, and it is free: no query at all. Probing `is_system_admin` ahead of it
+        // would charge every principal a round-trip to read their own authorship.
+        if caller == actor {
+            return Ok(ActorHistoryAuthority::SelfActor);
+        }
+        Ok(if access_service::is_system_admin(pool, caller).await? {
+            ActorHistoryAuthority::SystemAdmin
+        } else {
+            ActorHistoryAuthority::None
+        })
+    }
+
+    fn is_denial(&self) -> bool {
+        matches!(self, ActorHistoryAuthority::None)
+    }
+
+    /// `NotFound`, matching what this axis has always returned: a `Forbidden` would confirm that
+    /// the queried profile exists and has ledger authorship, which is what the refusal withholds.
+    fn denial() -> ApiError {
+        ApiError::NotFound
+    }
+}
