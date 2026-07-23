@@ -164,12 +164,12 @@ pub(crate) enum GrantWarrant<'a> {
     /// Connection read-reach: authority over the connection, plus manage on the receiving team.
     ConnectionReach(&'a Authorized<ConnectionAuthority>),
     /// Creator seed at cogmap genesis — the subject is born in this txn.
-    Birth(&'a BornSubject<SubjectRef>),
+    Birth(&'a BornSubject<RefTarget>),
 }
 
 impl GrantWarrant<'_> {
     /// `insert_grant` reads the subject from here and takes no subject argument at all.
-    pub(crate) fn subject(&self) -> SubjectRef { .. }
+    pub(crate) fn subject(&self) -> RefTarget { .. }
 }
 ```
 
@@ -210,9 +210,9 @@ exceptions; the code-risk is owned *somewhere*, and this is the smallest blast r
 
 | Site | Becomes | `Subject` | Denial |
 |---|---|---|---|
-| `access_service::grant_authority` (`:103`) | `impl ScopedAuthority for GrantAuthority` | `SubjectRef` | `Forbidden` |
+| `access_service::grant_authority` (`:103`) | `impl ScopedAuthority for GrantAuthority` | `RefTarget` | `Forbidden` |
 | `machine_authz::authorize` (`:68`) | `impl ScopedAuthority for MachineAuthority` + explicit `None` arm | `Option<TeamId>` (fails closed on `None`) | `Forbidden` |
-| `cogmap_service::can_bind` (`:62`) **+** `context_service::can_share` (`:370`) | **one** `TwoSidedAuthority` resolver, parameterized by the subject-administration probe | `(SubjectRef, TeamId)` | `Forbidden` |
+| `cogmap_service::can_bind` (`:62`) **+** `context_service::can_share` (`:370`) | **one** `TwoSidedAuthority` resolver, parameterized by the subject-administration probe | `(RefTarget, TeamId)` | `Forbidden` |
 | `connection_service` reach-grant (`:480,503`) | `ConnectionAuthority` | `(ConnectionId, TeamId)` | `Forbidden` |
 | `team_service::team_detail` (`:280`) | `impl ScopedAuthority for TeamReadAuthority` | `TeamId` | **`NotFound`** |
 | `admin_ledger_service::list_by_actor` actor axis (`:181`) | `impl ScopedAuthority for ActorHistoryAuthority` | `ProfileId` (the actor read about) | **`NotFound`** |
@@ -327,12 +327,20 @@ gap is written down where the next person looks.
 
 ## 8. Testing
 
-- **`trybuild`** — the harness and three fixtures already exist (`tests/compile_fail.rs`), so this is
-  purely additive: forging an `Authorized`; calling `insert_grant` with no warrant; forging a
-  `BornSubject` from outside temper-services.
-- **A call-site-count test for `BornSubject`**, in the style of `admission.rs`'s signature test — a new
-  construction site fails a test rather than slipping through review. The test carries the reason, so
-  the fix is never "bump the number."
+- **No `trybuild` fixtures for this layer — and that is a conclusion, not a gap.** The existing three
+  fixtures work because `SystemAdmin`/`SystemAuthorized` are **`pub` types with private fields**, so an
+  external fixture can name the type and fail on the field. Everything sealed here — `Authorized`,
+  `BornSubject`, `GrantWarrant`, and the narrowed `insert_grant` — is **`pub(crate)`**, so an external
+  fixture cannot name it at all and would fail with "item is private" *whether or not the seal
+  existed*. That is a test that passes for the wrong reason, and it would rot into false assurance the
+  first time someone loosened a field. The seal here rests on Rust's module privacy, which is exactly
+  what `AuthorizedReach` (`machine_authz.rs:93` — `pub(crate)`, private fields, no fixture) has relied
+  on since it shipped. **Do not add a fixture to "match" the enclosure.**
+- **A call-site-count test for `BornSubject`** — in-crate, so unlike a fixture it *can* reach the type.
+  In the style of `admission.rs`'s signature test: a new construction site fails a test rather than
+  slipping through review. The test carries the reason, so the fix is never "bump the number."
+- **`GrantWarrant` exhaustiveness** — a match over the enum with no `_ =>` arm, so a fifth way to write
+  a grant row is a compile error at the primitive, which is the property §2.3 claims.
 - **Behavioral parity** — `admin_ledger_test`, `access_grants_test`, `cogmap_authz_test`,
   `team_lifecycle_test`, `machine_authz`'s own suite, and the e2e admin surface stay green
   **unchanged**. Same outcomes; only the enforcement moves.
