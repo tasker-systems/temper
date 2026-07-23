@@ -220,6 +220,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         fields: &fields,
                     },
                 ),
+                ResourceAction::Evidence { r#ref } => {
+                    temper_cli::commands::resource::evidence(&config, &r#ref, output_format)
+                }
                 ResourceAction::Update {
                     r#ref,
                     type_to,

@@ -1044,6 +1044,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/{id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["resource_evidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/finalize": {
         parameters: {
             query?: never;
@@ -3906,6 +3925,55 @@ export interface components {
          * @enum {string}
          */
         Standing: "denied" | "requested" | "approved" | "revoked" | "deactivated";
+        /**
+         * @description A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are
+         *     non-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),
+         *     so an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side
+         *     read returns `Option<StandingShape>`, `None` for "not readable."
+         */
+        StandingShape: {
+            /**
+             * Format: double
+             * @description N challenges withstood (`resource_adversarial_survival`); 0 when there have been no
+             *     challenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`).
+             */
+            adversarial_survival: number;
+            /**
+             * @description Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over
+             *     the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
+             */
+            band: string;
+            /**
+             * Format: int32
+             * @description Count of adversarial challenges raised against the finding, so a consumer can distinguish
+             *     "0 challenges" from "N challenges, 0 withstood."
+             */
+            challenge_count: number;
+            /**
+             * Format: double
+             * @description Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
+             */
+            contradiction_balance: number;
+            /** @description `kb_resources.id` of the finding this shape describes. */
+            finding_id: components["schemas"]["ResourceId"];
+            /**
+             * Format: double
+             * @description Reversible time-decay off the finding's most recent uncorrected reinforcement; computed
+             *     live at read (never from the memo) because it must reflect the current moment.
+             */
+            freshness: number;
+            /**
+             * Format: double
+             * @description Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence
+             *     default: an unasserted pair is assumed correlated, not independent.
+             */
+            indep_breadth: number;
+            /**
+             * Format: double
+             * @description Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.
+             */
+            r_parent: number;
+        };
         /**
          * @description A sync subscription — scopes which resources materialize locally.
          *
@@ -6839,6 +6907,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GraphEdgeRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    resource_evidence: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource evidential-standing shape */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandingShape"];
                 };
             };
             /** @description Unauthorized */

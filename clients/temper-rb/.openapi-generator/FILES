@@ -189,6 +189,7 @@ lib/temper/generated/models/slack_disconnected_principal.rb
 lib/temper/generated/models/slice_request.rb
 lib/temper/generated/models/sort_order.rb
 lib/temper/generated/models/standing.rb
+lib/temper/generated/models/standing_shape.rb
 lib/temper/generated/models/subscription.rb
 lib/temper/generated/models/subscription_override.rb
 lib/temper/generated/models/system_access_details.rb

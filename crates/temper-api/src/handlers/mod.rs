@@ -6,6 +6,7 @@ pub mod contexts;
 pub mod edges;
 pub mod embed;
 pub mod events;
+pub mod evidence;
 pub mod facets;
 pub mod graph;
 pub mod health;
