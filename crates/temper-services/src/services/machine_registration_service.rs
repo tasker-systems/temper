@@ -133,9 +133,10 @@ async fn apply_reach(
     for grant in reach.grants() {
         insert_grant(
             &mut *conn,
+            // Per-ROW warrant: the subject is this grant's own cogmap, read from the sealed item
+            // rather than named again here.
+            &crate::authz::GrantWarrant::MachineReach(grant),
             &InsertGrantParams {
-                subject_table: "kb_cogmaps".to_string(),
-                subject_id: grant.cogmap_id(),
                 principal_table: "kb_profiles".to_string(),
                 principal_id: profile_id,
                 // Write implies read — the DB's coherence CHECK enforces it anyway.

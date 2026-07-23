@@ -454,7 +454,7 @@ pub async fn grant_reach(
     affirm_reach: Option<String>,
 ) -> ApiResult<Connection> {
     let connection = get(pool, connection_id).await?;
-    crate::authz::authorize::<ConnectionAuthority>(
+    let proof = crate::authz::authorize::<ConnectionAuthority>(
         pool,
         caller,
         ConnectionScope::new(connection_id, team_id),
@@ -489,7 +489,8 @@ pub async fn grant_reach(
             .await?;
             access_service::insert_grant(
                 &mut tx,
-                &reach_grant_params(connection_id, team_id, caller),
+                &crate::authz::GrantWarrant::ConnectionReach(&proof),
+                &reach_grant_params(team_id, caller),
                 emitter,
             )
             .await?;
@@ -512,7 +513,8 @@ pub async fn grant_reach(
             let mut conn = pool.acquire().await?;
             access_service::insert_grant(
                 &mut conn,
-                &reach_grant_params(connection_id, team_id, caller),
+                &crate::authz::GrantWarrant::ConnectionReach(&proof),
+                &reach_grant_params(team_id, caller),
                 emitter,
             )
             .await?;
@@ -537,14 +539,10 @@ fn reach_descriptor(connection: &Connection) -> String {
 
 /// The columns of a team's read-reach grant on a connection — read-only, conferring no write,
 /// delete, or grant. Built in one place so the two grant paths (affirmed, unaffirmed) cannot drift.
-fn reach_grant_params(
-    connection_id: Uuid,
-    team_id: Uuid,
-    granted_by: ProfileId,
-) -> InsertGrantParams {
+/// The non-subject columns of a reach grant. The connection is absent on purpose — it is the
+/// warrant's subject, and naming it here as well is the second spelling PR 3 removes.
+fn reach_grant_params(team_id: Uuid, granted_by: ProfileId) -> InsertGrantParams {
     InsertGrantParams {
-        subject_table: "kb_connections".into(),
-        subject_id: connection_id,
         principal_table: "kb_teams".into(),
         principal_id: team_id,
         can_read: true,

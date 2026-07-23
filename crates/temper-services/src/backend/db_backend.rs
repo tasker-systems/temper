@@ -2222,11 +2222,20 @@ impl Backend for DbBackend {
         // always a freshly-minted id that cannot already carry a grant. The conflict arm is
         // unreachable, and the event is always a fresh `grant_created` with no `previous`.
         let creator = uuid::Uuid::from(self.profile_id);
+        // The `Birth` warrant, and the ONLY `BornSubject` in the crate — the paragraph above is its
+        // justification: `born_cogmap` is minted in this very transaction, so there is no prior
+        // authority over it that any gate could have checked. `BornSubject` cannot verify that; the
+        // call-site-count test in `authz/grant.rs` is what keeps this the only place claiming it.
+        let born = crate::authz::BornSubject::minted_in_this_transaction(
+            temper_substrate::payloads::RefTarget {
+                kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                id: uuid::Uuid::from(born_cogmap),
+            },
+        );
         crate::services::access_service::insert_grant(
             &mut tx,
+            &crate::authz::GrantWarrant::Birth(&born),
             &crate::services::access_service::InsertGrantParams {
-                subject_table: "kb_cogmaps".to_string(),
-                subject_id: uuid::Uuid::from(born_cogmap),
                 principal_table: "kb_profiles".to_string(),
                 principal_id: creator,
                 can_read: true,

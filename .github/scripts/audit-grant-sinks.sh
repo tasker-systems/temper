@@ -62,6 +62,27 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #   when the sink had simply stepped out of the guard's field of view. A guard whose coverage
 #   quietly narrows is worse than one that never had it, because the number went the reassuring way.
 #   `sql_current()` below now scans migrations/ as well. See task 019f7c98-fbea-7a62-b5f0-5f8e0556b196.
+# ⚠️ 2026-07-23 (ScopedAuthority PR 3) — the DEFINITION-EXCLUSION PATTERN WAS VISIBILITY-COUPLED.
+#   It read `pub async fn insert_grant`. When PR 3 narrowed the primitive to `pub(crate)` (nothing
+#   outside temper-services calls it any more), the definition line stopped matching the exclusion
+#   and started counting as a SINK — access_service.rs went 1 → 2 with no new write anywhere. The
+#   baseline was NOT bumped for it; the pattern was fixed to `fn insert_grant` (word-boundaried), so
+#   it no longer cares about visibility.
+#   Worth stating because the failure was in the safe direction and would have been trivially
+#   "fixed" by rebaselining: a false POSITIVE that gets absorbed into the baseline teaches the next
+#   reader that the number moves for cosmetic reasons, which is how a tripwire stops being read.
+#   The 2026-07-20 blind-spot note above is the same lesson in the other direction.
+#
+#   PR 3 itself changed no grant sink and added none. It changed how the existing sinks are
+#   REACHED: `insert_grant` now takes a `GrantWarrant` (mintable only by a gate) and reads the
+#   subject from it, so the subject_table/subject_id arguments are gone.
+#   AUTHORITY: strictly tightened. Every sink already gated; the gate's proof is now a required
+#     ARGUMENT rather than a doc comment saying "every caller must gate first". The four legitimate
+#     ways to mint a grant are the four `GrantWarrant` arms, and a fifth is a compile error.
+#   ATTENUATION: unchanged. It lives in `authorize_capability_grant`, which `GrantWarrant::
+#     Administered` is minted by; the machine sink still routes through the same shared decision.
+#     The genesis `Birth` arm confers no attenuation because there is nothing to attenuate against —
+#     see `BornSubject`, including its stated inability to prove freshness.
 # REVIEWED 2026-07-21 (Principal Admission Task 14) — machine_client_service.rs 0 → 1.
 #   The new hit is a TEST-ONLY seed inside `#[cfg(all(test, feature = "test-db"))] mod tests`
 #   (`seed_machine_with_reach`), which inserts one `can_read`-only grant so
@@ -110,7 +131,7 @@ current() {
      -e 'INSERT INTO kb_access_grants' \
      crates 2>/dev/null \
   | grep -E '^[^:]*/src/[^:]*\.rs:' \
-  | grep -vE 'pub async fn insert_grant|use .*insert_grant|^[^:]*:[0-9]+:[[:space:]]*//' \
+  | grep -vE '(^|[^[:alnum:]_])fn insert_grant|use .*insert_grant|^[^:]*:[0-9]+:[[:space:]]*//' \
   | awk -F: '{print $1}' \
   | sort | uniq -c \
   | awk '{printf "%s %s\n", $1, $2}' \
