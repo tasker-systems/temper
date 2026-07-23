@@ -82,8 +82,36 @@ for tree in "${TREES[@]}"; do
 done
 
 echo "Regenerating ts-rs types into: ${TREES[*]}"
+
+# Capture the generator's output and replay it ONLY on failure.
+#
+# Not `>/dev/null`: cargo-make writes its errors to STDOUT, so discarding stdout discards the
+# reason. That shipped once and cost a full CI round trip — the gate failed in `rust-quality` with
+# nothing between "Regenerating" and "exit code 1", which is the same sin this gate exists to
+# punish (a check whose result you cannot act on).
+#
+# Not streamed either: a successful run emits ~80KB, almost all of it ts-rs `failed to parse serde
+# attribute` warnings, and burying every green run in that is how people stop reading the log.
+GENERATE_LOG="$(mktemp)"
+trap 'rm -f "$GENERATE_LOG"' EXIT
+# The status is captured OUTSIDE any `if !`: after `if ! cmd; then`, `$?` is the status of the
+# NEGATION — i.e. 0 — so the obvious spelling exits 0 on a failed generator and the gate passes
+# the very case it is supposed to fail. Caught by case (h) of the harness, which is exactly the
+# kind of thing a harness is for.
+set +e
 # shellcheck disable=SC2086 # the stub form in tests is a compound command, so word-splitting is wanted
-(cd "$REPO_ROOT" && eval $GENERATE_CMD) >/dev/null
+(cd "$REPO_ROOT" && eval $GENERATE_CMD) >"$GENERATE_LOG" 2>&1
+generate_status=$?
+set -e
+
+if [ "$generate_status" -ne 0 ]; then
+    echo >&2
+    echo "ERROR: the type generator failed, so nothing was regenerated and this gate cannot" >&2
+    echo "       tell you whether the committed types are current. Its output:" >&2
+    echo >&2
+    cat "$GENERATE_LOG" >&2
+    exit "$generate_status"
+fi
 
 # `git status --porcelain`, NOT `git diff --exit-code`. The diff form reports only tracked-file
 # changes, so a NEWLY derived type — a brand-new .ts nobody has committed — is invisible to it and

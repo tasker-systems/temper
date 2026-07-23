@@ -134,6 +134,15 @@ run_case "zero derived trees fails" "$WORK/f" "true" 1 "no ts-rs output trees"
 make_repo "$WORK/g"
 run_case "a FAILING generator fails the gate" "$WORK/g" "exit 3" 3
 
+# (h) ...and must SAY WHY. Case (g) only pins the exit code, and a gate that fails silently is
+#     barely better than one that passes wrongly: the first version of this script sent the
+#     generator's output to /dev/null, cargo-make writes its errors to STDOUT, and the result was a
+#     red CI job whose log went straight from "Regenerating" to "exit code 1" with no reason in
+#     between. Cost a full round trip. Assert the generator's own words reach the operator.
+make_repo "$WORK/h"
+run_case "a failing generator's OUTPUT reaches the operator" "$WORK/h" \
+    "echo i-am-the-generator-error; exit 3" 3 "i-am-the-generator-error"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 [ "$FAIL" -eq 0 ]
