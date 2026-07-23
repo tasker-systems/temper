@@ -593,10 +593,16 @@ differing is correct rather than sloppy.
 - [ ] **Step 3 — AMEND: `subject()` with no catchall.** Match all four arms. A `_ =>` here would defeat
       the compile-error-on-a-fifth-way property (Global Constraints).
 
-- [ ] **Step 4 — AMEND: the primitives.** `insert_grant` takes the warrant and **drops
+- [ ] **Step 4 — AMEND: the primitive.** `insert_grant` takes the warrant and **drops
       `subject_table`/`subject_id` from `InsertGrantParams`** — reading them from `warrant.subject()`.
-      Same for `delete_grant`. If you find yourself passing a subject *alongside* a warrant, stop: that
-      reintroduces the second spelling this whole PR exists to remove.
+      If you find yourself passing a subject *alongside* a warrant, stop: that reintroduces the second
+      spelling this whole PR exists to remove.
+
+      > **AMENDED 2026-07-23: this step said "Same for `delete_grant`". It cannot be.** Revocation is
+      > deliberately weaker-gated on **both** its paths (spec §2.5), and `revoke_reach` cannot mint an
+      > `Authorized<ConnectionAuthority>` without demanding the target-team role that
+      > `revoke_reach_survives_losing_the_target_team_role` proves it must not. `delete_grant` gets its
+      > own `RevokeWarrant` in **Task 11b**. Leave it alone in this task.
 
 - [ ] **Step 5 — Migrate the five call sites**, each to its own arm per spec §2.3's table. The
       `db_backend.rs:2225` genesis seed is the `Birth` arm — read `:2210–2224` first; the comment there
@@ -606,6 +612,52 @@ differing is correct rather than sloppy.
       expects 1. `cargo make check`.
 
 - [ ] **Step 7 — Commit.** `git commit -m "authz: kb_access_grants writes require a warrant"`
+
+---
+
+### Task 11b: `RevokeWarrant` and the delete primitive
+
+> **Added 2026-07-23.** Task 11 assumed one warrant covered both primitives. Spec §2.5 records why it
+> does not, and Pete's decision to seal the revoke axis rather than leave `delete_grant` half-sealed.
+
+**Files:**
+- Create: `crates/temper-services/src/authz/connection.rs` (add `ConnectionControlAuthority` beside
+  the existing `ConnectionAuthority`), `authz/grant.rs` (the `RevokeWarrant` enum, beside `GrantWarrant`)
+- Modify: `services/access_service.rs` (`delete_grant` + `revoke_capability`),
+  `services/connection_service.rs` (`revoke_reach`)
+
+**Read first:** spec §2.5 **in full**, including the two quoted rationales for why each revoke gate is
+weaker than its granting counterpart. Then read `revoke_reach_survives_losing_the_target_team_role`
+(`connection_service.rs:1700`) — it opens *"The grant/revoke asymmetry, asserted so nobody 'fixes' it
+into symmetry"*, and it is the test that makes this a separate warrant rather than a shared one.
+
+**Interfaces — Produces:** `ConnectionControlAuthority` (`type Subject = Uuid`, the connection),
+`pub(crate) enum RevokeWarrant<'a>` with exactly two arms and `fn subject(&self) -> RefTarget`.
+
+- [ ] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib connection`
+      plus the access-grants suites. Record green.
+
+- [ ] **Step 2 — EXTEND: `ConnectionControlAuthority`.** It is `ConnectionAuthority`'s first question
+      under its own name. **Then make `ConnectionAuthority` compose it** — if the two end up asking
+      the owning-team question separately, this factoring has cost a type and bought nothing.
+
+- [ ] **Step 3 — EXTEND: `RevokeWarrant`.** Two arms, each doc-commented with the gate that mints it
+      **and the reason that gate is weaker than its insert counterpart** (spec §2.5's two quotes —
+      carry them, do not summarise). No `_ =>` in `subject()`.
+
+- [ ] **Step 4 — AMEND: `delete_grant`** takes `RevokeWarrant` and drops `subject_table`/`subject_id`.
+
+- [ ] **Step 5 — Migrate both call sites.** `revoke_capability` → `Administered`;
+      `revoke_reach` → `ConnectionControl`. `revoke_capability` currently gates with the **bool**
+      `can_administer_grant`; it needs the proof instead, so route it through
+      `authorize::<GrantAuthority>` — that is the same decision, not a stronger one (attenuation lives
+      in `authorize_capability_grant`, which revocation deliberately does not call).
+
+- [ ] **Step 6 — Verify.** Both suites green, **no test edits** —
+      `revoke_reach_survives_losing_the_target_team_role` passing unchanged is the proof the asymmetry
+      survived. `cargo make check`.
+
+- [ ] **Step 7 — Commit.** `git commit -m "authz: kb_access_grants revocations require a warrant too"`
 
 ---
 
