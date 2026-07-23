@@ -26,6 +26,7 @@
 //! Design: `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
 
 mod grant;
+mod machine;
 
 pub(crate) use grant::wire_subject;
 
