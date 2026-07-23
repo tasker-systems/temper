@@ -28,9 +28,11 @@
 mod grant;
 mod machine;
 mod read_gates;
+mod two_sided;
 
 pub(crate) use grant::wire_subject;
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};
+pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};
 
 use async_trait::async_trait;
 use sqlx::PgPool;
