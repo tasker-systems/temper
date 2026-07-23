@@ -114,4 +114,12 @@ jobs:
       # so the first sign of it is a failed Vercel deploy. That is exactly how it shipped
       # once. Build here instead of finding out in prod.
       - name: Build (eve discovery)
+        # `agent/connections/temper.ts` resolves TEMPER_MCP_URL at MODULE LOAD, matching the
+        # steward. That is deliberate: a missing variable then fails the BUILD rather than the
+        # first user turn. Discovery consequently needs the variable PRESENT, not correct —
+        # nothing here connects to it. `.invalid` is reserved by RFC 2606 and can never
+        # resolve, so this cannot accidentally reach a real host. The deployed value is
+        # supplied per-environment.
+        env:
+          TEMPER_MCP_URL: https://mcp.example.invalid
         run: npm run build

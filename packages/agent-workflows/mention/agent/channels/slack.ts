@@ -1,8 +1,17 @@
 import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
-import { decideIdentity, linkedPrompt, unlinkedPrompt } from "../lib/identity.js";
+import { deliverEphemeral } from "../lib/ephemeral.js";
+import {
+  decideIdentity,
+  linkVanishedPrompt,
+  notVaultedPrompt,
+  standingReply,
+  unlinkedPrompt,
+} from "../lib/identity.js";
 import { requestLinkState } from "../lib/link.js";
+import { requestMintedToken } from "../lib/mint.js";
+import { ephemeralEvents } from "../lib/events.js";
 
 /**
  * Slack channel for the @temper mention agent.
@@ -16,6 +25,50 @@ import { requestLinkState } from "../lib/link.js";
  * (`connectSlackCredentials`) is the eventual path — see CLAUDE.md.
  */
 export default slackChannel({
+  /**
+   * Every eve default that routes model-derived text to a channel-visible sink
+   * — `thread.post` AND the `startTyping` status — is replaced with a
+   * channel-root ephemeral or a constant. A dispatched turn runs under the
+   * mentioning human's full temper reach, so the answer, every failure message
+   * that can quote it, and every reasoning/tool status derived from it belong
+   * to that human alone. See `events.ts`, including the documented residual gap
+   * on `authorization.required`.
+   *
+   * **The invariant is ONE `thread.post` in this agent, not zero**, and it is
+   * `ephemeralFailureNotice` in `lib/ephemeral.ts` — posted only when
+   * `chat.postEphemeral` itself failed, carrying only Slack's error code and
+   * never the undelivered reply. Silence was the one outcome worth refusing.
+   * Any OTHER `thread.post` is a bug.
+   */
+  events: ephemeralEvents,
+
+  /**
+   * DMs are deliberately NOT served.
+   *
+   * This is a real gate, not an omission. eve resolves
+   * `onDirectMessage ?? defaultOnDirectMessage`, and the default
+   * (`.../slack/defaults.js`) is:
+   *
+   *   async function defaultOnDirectMessage(e,t){
+   *     return await e.thread.startTyping(`Thinking...`),{auth:defaultSlackAuth(t,e)} }
+   *
+   * — it DISPATCHES UNCONDITIONALLY: no `decideIdentity`, no
+   * `principalType === "user"` gate, no link-state, no mint pre-flight. An
+   * unlinked human DMing would get a turn that dies into the generic
+   * `turn.failed` line with no path to a link URL, and a bot would get a turn
+   * at all. Leaving this key absent means inheriting that.
+   *
+   * It is currently unreachable — `message.im` is commented out in
+   * `slack-app-manifest.yml`'s phase-2 block — but `im:history` is already a
+   * live scope, so it is three uncommented lines away.
+   *
+   * Returning `null` drops. **Enabling `message.im` requires wiring the
+   * identity pipeline here first** (the `onAppMention` body, re-grounded: the
+   * DM ctx shape and whether a channel-root `chat.postEphemeral` is even
+   * meaningful in a DM both need verifying before that body is shared).
+   */
+  onDirectMessage: async () => null,
+
   /**
    * Replaces eve's default mention pipeline (auth derivation + a "Thinking..."
    * typing indicator). We keep the same auth derivation and add the human-only
@@ -52,49 +105,112 @@ export default slackChannel({
       // Ask what to SAY, not for a URL. A linked user gets no challenge and mints no intent;
       // asking for a URL unconditionally is what re-prompted linked users forever.
       const link = await requestLinkState(decision.principalId);
-      const reply =
-        link.status === "linked"
-          ? linkedPrompt(link.handle)
-          : unlinkedPrompt(link.authorize_url);
 
-      // Deliver privately, at the CHANNEL ROOT — not via `ctx.thread.postEphemeral`.
+      if (link.status === "unlinked") {
+        // Deliver privately, at the CHANNEL ROOT. `deliverEphemeral` owns the why — the
+        // `thread_ts`-inheritance trap and the `{ ok, error }` failure surface — and is
+        // shared with the event overrides in `events.ts`.
+        await deliverEphemeral(ctx, userId, unlinkedPrompt(link.authorize_url));
+        // DROP: a turn here would run the model under no identity — no tools, nothing to
+        // ground an answer in. The prompt IS the reply.
+        return null;
+      }
+
+      // PRE-FLIGHT THE MINT, before dispatching. The connection's `getToken` would mint too,
+      // but a failure there is a FAILED TURN, and a failed turn is routed to the
+      // `turn.failed` handler, which says one deliberately detail-free sentence
+      // (`events.ts` — it must not quote model or tool output). That is exactly the generic
+      // error each of these three states must NOT collapse into: "you were never vaulted"
+      // and "your access was revoked" need different sentences and a remedy, and neither is
+      // fixed by trying again. Minting here is what lets us say the true thing.
       //
-      // eve's thread helper inherits the mention's `thread_ts`, so the ephemeral posts INTO a
-      // thread the user isn't viewing, where an ephemeral is invisible and leaves no badge —
-      // the symptom was total silence in the channel. A channel-root `chat.postEphemeral` (no
-      // `thread_ts`) shows inline where the user actually mentioned. Still ephemeral, still
-      // private-to-them: the unlinked arm carries a credential and must never go public.
-      //
-      // `ctx.slack.request` returns the raw Slack response instead of throwing on `ok:false`
-      // (eve's typed `postEphemeral` throws, and eve's dispatcher then swallows the throw). So
-      // on failure we can surface WHY — publicly, but with only the Slack error code, never the
-      // reply. Silence is the one outcome we refuse to ship again.
-      const res = await ctx.slack.request("chat.postEphemeral", {
-        channel: ctx.slack.channelId,
-        user: userId,
-        text: reply,
-      });
-      if (!res.ok) {
-        console.error("postEphemeral failed", { error: res.error });
-        await ctx.thread.post({
-          text: `I couldn't send you a private message (Slack: ${res.error ?? "unknown_error"}). Once that's sorted, mention me again.`,
-        });
+      // This does mean a successful turn mints TWICE — once here, once inside `getToken`.
+      // That is deliberately cheap, not overlooked: the server returns the CACHED access
+      // token without touching the refresh token whenever it outlives a 5-minute skew
+      // (`slack_grant_vault_service.rs`, `mint_access_token`: "Cached access token still
+      // comfortably valid? Hand it back — no refresh, no RT rotation."). So the second mint
+      // is a row read, never a second spend of the grant.
+      const mint = await requestMintedToken(decision.principalId);
+
+      switch (mint.status) {
+        case "token":
+          // DISPATCH. Returning `auth` is what gives the turn its identity — eve projects
+          // this same `principalId` into the connection principal, so the tools run under
+          // this human and no one else.
+          return { auth: decision.auth };
+
+        case "refused":
+          // The refusal's REASON picks the reply, because the reasons carry different
+          // remedies and a remedy is the only part of this the user can act on. Re-link
+          // fixes `not_vaulted` and nothing else; every `standing` refusal needs an admin.
+          // Saying "re-link" to a denied human — which the former flat `revoked` arm did —
+          // sends them round a loop that cannot terminate.
+          switch (mint.reason) {
+            case "not_linked":
+              await deliverEphemeral(ctx, userId, linkVanishedPrompt(link.handle));
+              return null;
+
+            case "not_vaulted":
+              await deliverEphemeral(ctx, userId, notVaultedPrompt(link.handle));
+              // DROP: dispatching would fail in `getToken` and overwrite this specific,
+              // actionable message with the generic turn-failure line.
+              return null;
+
+            case "standing":
+              await deliverEphemeral(ctx, userId, standingReply(mint.refusal, link.handle));
+              // DROP, for the same reason.
+              return null;
+
+            default: {
+              // A FOURTH refusal reason — same argument as the outer `never` below.
+              const unexpected: never = mint;
+              console.error("unexpected mint refusal reason", {
+                reason: (unexpected as { reason?: unknown }).reason,
+              });
+              await deliverEphemeral(
+                ctx,
+                userId,
+                "I couldn't check your temper account just now. Please try again in a moment.",
+              );
+              return null;
+            }
+          }
+
+        default: {
+          // A THIRD mint status. Without this arm the switch falls through and
+          // `onAppMention` returns `undefined` — which eve treats as a drop, so it
+          // fails closed, but SILENTLY: no ephemeral, no log, indistinguishable
+          // from a mention that never arrived.
+          //
+          // The `never` binding makes adding a variant to the Rust response a
+          // COMPILE error here, so the runtime arm below should be unreachable.
+          // It exists because the wire type is only as honest as the last person
+          // who regenerated it: a server that ships a new status before this
+          // agent redeploys reaches this at runtime with the types still passing.
+          const unexpected: never = mint;
+          console.error("unexpected mint status", {
+            status: (unexpected as { status?: unknown }).status,
+          });
+          await deliverEphemeral(
+            ctx,
+            userId,
+            "I couldn't check your temper account just now. Please try again in a moment.",
+          );
+          return null;
+        }
       }
     } catch (err) {
-      // requestLinkState failed (API/network). eve swallows a thrown handler, so say something.
-      console.error("link state lookup failed", err);
-      await ctx.slack.request("chat.postEphemeral", {
-        channel: ctx.slack.channelId,
-        user: userId,
-        text: "I couldn't check your temper account just now. Please try again in a moment.",
-      });
+      // requestLinkState or requestMintedToken failed (API/network/secret drift). eve
+      // swallows a thrown handler, so say something. This is the one genuinely generic
+      // reply, and it is generic honestly: we do not know what is wrong, and unlike the
+      // three states above, trying again really may work.
+      console.error("temper account lookup failed", err);
+      await deliverEphemeral(
+        ctx,
+        userId,
+        "I couldn't check your temper account just now. Please try again in a moment.",
+      );
+      return null;
     }
-
-    // Deliberately DROP rather than dispatch, on BOTH arms. Unlinked, a turn would run the
-    // model under no identity — no tools, nothing to ground an answer in. Linked, there is
-    // still nothing to dispatch TO: reads under proven identity are a later task. Until then
-    // the prompt IS the reply, and the default `message.completed` handler would post an
-    // ungrounded turn if we dispatched one.
-    return null;
   },
 });

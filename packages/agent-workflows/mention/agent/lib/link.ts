@@ -70,7 +70,12 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
   return (await res.json()) as LinkState;
 }
 
-function requireEnv(name: string): string {
+/**
+ * Exported for `mint.ts`, which already imports `signIntentRequest` from here — sharing the
+ * existing dependency beats a third module holding four lines, and beats a copy that could
+ * drift in its error text.
+ */
+export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
   return value;

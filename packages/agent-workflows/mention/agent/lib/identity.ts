@@ -4,6 +4,12 @@
  * Pure — no eve I/O, no Slack calls, no env. The channel file owns the
  * eve-coupled side (deriving the auth context, posting, dispatching); this
  * module owns the decision, so the forks are unit-testable without Slack.
+ * (`standingReply` writes one `console.error` on an unrecognized standing; that is a
+ * diagnostic on an anomaly path, not I/O this module's callers depend on.)
+ *
+ * The `StandingRefusal` import is `import type` and therefore ERASED at compile — importing the
+ * mint module for real would pull in `link.js`'s env reads and cost this module its
+ * env-free-at-import property, which every test here relies on.
  *
  * ## principalId is OPAQUE
  *
@@ -28,6 +34,8 @@
  * decomposed parts for anyone who needs them, which is the other reason
  * parsing the principalId is never necessary.
  */
+
+import type { StandingRefusal } from "./mint.js";
 
 /** Why an inbound principal was refused a dispatch. */
 export type RejectionReason =
@@ -110,20 +118,159 @@ export function unlinkedPrompt(authorizeUrl: string): string {
 }
 
 /**
- * The reply shown to a Slack user whose account IS linked.
+ * The remedy for the one refusal re-linking actually fixes.
  *
- * It exists so a linked user stops being asked to link again on every mention. There is
- * still nothing to dispatch to — answering questions is a later task — so this says exactly
- * that and nothing more. Honest and unfalsifiable: no task numbers, no internal plan, no
- * date we would have to keep.
+ * There is no authorize URL to offer here, and that is structural rather than an omission:
+ * `link-state` only carries `authorize_url` on its `unlinked` arm (`link.ts`, `LinkState`),
+ * and this state is reached from the `linked` arm. So the honest instruction is the one that
+ * MAKES the user unlinked — after `temper slack disconnect`, the next mention takes the
+ * unlinked arm and gets a fresh URL from `unlinkedPrompt`.
  *
- * Delivered ephemerally like its unlinked sibling. Nothing here is a credential, but a
- * per-mention "here's your status" in a public thread is noise the channel didn't ask for.
+ * **Used by {@link notVaultedPrompt} and nothing else, deliberately.** It once ended the
+ * revoked reply too, which is precisely how the false remedy shipped: a standing refusal is not
+ * a link problem, so sending that user through disconnect-and-reconnect returns them to the
+ * same refusal with one more step behind them. If you are about to add a second caller, check
+ * first that re-linking really is the remedy for it.
  */
-export function linkedPrompt(handle: string): string {
+const RECONNECT_REMEDY =
+  "Run `temper slack disconnect`, then mention me again — I'll send you a fresh connect link.";
+
+/**
+ * The reply for a linked user whose stored credential is missing.
+ *
+ * Distinct from {@link standingRefusedPrompt} on purpose. This user did nothing wrong and
+ * nothing was withheld: their link predates the credential store, or the link never completed.
+ * Their access is fine — the credential is what is missing, which is why this is the one
+ * refusal whose remedy the user can carry out alone.
+ * The load-bearing sentence is that RETRYING WILL NOT FIX IT — without it the user mentions
+ * again, gets the same nothing, and reasonably concludes the agent is broken.
+ */
+export function notVaultedPrompt(handle: string): string {
   return [
-    `You're connected as @${handle}.`,
+    `You're connected as @${handle}, but I don't have a stored credential I can use to look things up as you.`,
     "",
-    "I can't answer questions yet — that part's still being built. Nothing for you to do; I'll be able to help here soon.",
+    "Mentioning me again won't fix this — the connection needs to be made afresh.",
+    "",
+    RECONNECT_REMEDY,
+  ].join("\n");
+}
+
+/**
+ * The reply for a linked, vaulted user whose PRINCIPAL STANDING does not admit them.
+ *
+ * Covers four `Refusal` kinds — `denied`, `no_standing`, `revoked`, `deactivated` — because they
+ * share one remedy, and the remedy is what the user needs. Grouping by remedy rather than by
+ * variant is deliberate: four near-identical sentences differing only in a fact the user cannot
+ * act on would be precision spent on the wrong axis.
+ *
+ * **The load-bearing sentence is "reconnecting won't change this."** This is the false remedy the
+ * former flat `revoked` arm shipped: it told every refused human to re-link, which for a standing
+ * refusal is a loop that cannot terminate — the link was never the problem, and re-making it
+ * lands them in exactly the same state. Only an admin can move principal standing
+ * (`temper_principal::admit` is the sole producer of these refusals).
+ *
+ * Deliberately NOT distinguishing revoked-from-denied in the copy: both mean "not approved right
+ * now", both are fixed by the same person, and a user told "your access was REVOKED" when they
+ * were merely never granted would go hunting for something that never happened.
+ */
+export function standingRefusedPrompt(handle: string): string {
+  return [
+    `You're connected as @${handle}, but your temper access isn't currently approved, so I can't look anything up as you.`,
+    "",
+    "Reconnecting won't change this — a temper admin has to approve your access.",
+    "",
+    "Ask an admin to approve you, then mention me again.",
+  ].join("\n");
+}
+
+/**
+ * The reply for a user whose access request is on file and undecided (`Refusal::Requested`).
+ *
+ * Its own message rather than folding into {@link standingRefusedPrompt} because the ACTION
+ * differs, which is the axis this copy splits on: a denied user must go ask someone, a requested
+ * user must do nothing at all. Telling someone with a pending request to "ask an admin to approve
+ * you" invites them to file a second one.
+ */
+export function pendingApprovalPrompt(handle: string): string {
+  return [
+    `You're connected as @${handle}, and your temper access request hasn't been decided yet, so I can't look anything up as you.`,
+    "",
+    "Nothing more is needed from you — an admin will approve or decline it.",
+    "",
+    "Mention me again once you've been approved.",
+  ].join("\n");
+}
+
+/**
+ * The reply for a standing value this build does not recognize (`Refusal::UnrecognizedStanding`).
+ *
+ * Reachable only through version skew: temper stored a standing state that postdates this
+ * deployment of the agent. So it is the one refusal that is genuinely OUR problem, and the copy
+ * says so rather than implying the user has been refused something. No remedy is offered because
+ * the user has none — the caller logs the raw value, which is where the actual fix starts.
+ */
+export function unknownStandingPrompt(handle: string): string {
+  return [
+    `You're connected as @${handle}, but I can't tell what your temper access is right now.`,
+    "",
+    "That's a problem on our side, not something you did. Please let a temper admin know if it keeps happening.",
+  ].join("\n");
+}
+
+/**
+ * Pick the reply for a `standing` refusal — the single place six `Refusal` kinds collapse onto
+ * three remedies.
+ *
+ * One function rather than a `switch` at each call site (the channel's ephemeral and, later,
+ * anything else that must explain a refusal) so the grouping is stated once. The grouping is the
+ * decision worth protecting: {@link standingRefusedPrompt} for the four an admin must act on,
+ * {@link pendingApprovalPrompt} for the one where the user must NOT act, and
+ * {@link unknownStandingPrompt} for the one that is our bug.
+ *
+ * No `default` arm, deliberately: the `never` binding makes a seventh `Refusal` kind a COMPILE
+ * error here rather than a silent fall-through to `undefined`. That is the whole reason the kinds
+ * are modelled as a union instead of a `string` — and until the Task 8/9 drift gate lands, this
+ * compile error is the only mechanism that will notice a new Rust variant at all.
+ */
+export function standingReply(refusal: StandingRefusal, handle: string): string {
+  switch (refusal.kind) {
+    // Never approved, no standing row at all, approved-then-withdrawn, or the profile itself
+    // disabled. Four different histories, one remedy: an admin decides.
+    case "denied":
+    case "no_standing":
+    case "revoked":
+    case "deactivated":
+      return standingRefusedPrompt(handle);
+
+    case "requested":
+      return pendingApprovalPrompt(handle);
+
+    case "unrecognized_standing":
+      // The raw value is the ONLY diagnostic for this state, and it is a value this build has
+      // never heard of — so it is logged here, beside the branch that knows it exists, rather
+      // than left for a caller to dig back out by re-switching on the kind.
+      console.error("temper returned an unrecognized principal standing", { raw: refusal.raw });
+      return unknownStandingPrompt(handle);
+  }
+}
+
+/**
+ * The reply for a mint that came back `not_linked` — the link vanished mid-mention.
+ *
+ * Reachable only as a race: `onAppMention` asks link-state first, got `linked`, and the link was
+ * removed (a `temper slack disconnect`) before the mint landed. Rare, but it is a real ordering
+ * and the generic error line would misdescribe it as a hiccup worth retrying.
+ *
+ * **This is the one broken-credential reply where "mention me again" IS the remedy**, and the
+ * asymmetry is the point: the user is now genuinely unlinked, so their next mention takes
+ * link-state's `unlinked` arm and gets a fresh authorize URL from {@link unlinkedPrompt}. We
+ * cannot hand them that URL here — this arm is reached from `linked`, which carries no
+ * `authorize_url` — so the next mention is how they get one.
+ */
+export function linkVanishedPrompt(handle: string): string {
+  return [
+    `Your temper account link for @${handle} isn't there any more, so I can't look anything up as you.`,
+    "",
+    "Mention me again and I'll send you a fresh connect link.",
   ].join("\n");
 }
