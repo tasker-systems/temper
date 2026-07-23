@@ -1555,6 +1555,71 @@ mod tests {
         assert!(!reach_grant_exists(&pool, c.id, beta).await);
     }
 
+    /// **The gating team is an ordinary target here, deliberately** — and this test exists to make
+    /// that a decision rather than an oversight.
+    ///
+    /// The two sibling two-sided gates both refuse it: `cogmap_service::can_bind` (a binding to the
+    /// gating team IS the `require_cogmap_write_admin` switch, and the same gate serves *unbind*)
+    /// and `context_service::can_share` (which also gates `reassign`, a transfer of ownership that
+    /// `context_reassign`'s plpgsql independently forbids). `contain_target_team` has no equivalent
+    /// reason: a reach grant writes one read-only `kb_access_grants` row over the caller's OWN
+    /// connection. It flips no regime and transfers no ownership. Post-D11 the gating team confers
+    /// neither standing (`has_system_access` reads `kb_principal_standing`) nor admin-ness
+    /// (`is_system_admin` reads `kb_principal_governance`), so for this act it is just a team.
+    ///
+    /// Spec §6.1, `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+    /// If a future change makes this red, that is a behaviour change to the asymmetry — read §6.1
+    /// before editing this test.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn reach_to_the_gating_team_is_allowed_for_a_non_admin(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+
+        // The target IS the gating team, and the caller manages it — the exact principal the two
+        // sibling gates refuse.
+        let gating = seed_managed_team(&pool, "temper-system", owner).await;
+
+        // Both halves of "the exact principal the siblings refuse" must be true, or this test
+        // pins nothing. A fixture where the gating slug went unconfigured, or where the caller
+        // happened to be an admin, would pass for the wrong reason.
+        let is_gating = sqlx::query_scalar!(
+            r#"SELECT EXISTS( SELECT 1 FROM kb_teams t
+                                JOIN kb_system_settings s ON t.slug = s.gating_team_slug
+                               WHERE t.id = $1 ) AS "e!: bool""#,
+            gating,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("gating check");
+        assert!(is_gating, "fixture must actually target the gating team");
+
+        let is_admin = sqlx::query_scalar!(r#"SELECT is_system_admin($1) AS "a!: bool""#, *owner)
+            .fetch_one(&pool)
+            .await
+            .expect("admin check");
+        assert!(
+            !is_admin,
+            "the caller must be a non-admin, or the D5 bypass carries this"
+        );
+
+        svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            gating,
+            Some("the root team reviews acme CI".into()),
+        )
+        .await
+        .expect("a reach grant to the gating team is not an escalation — spec §6.1");
+
+        assert!(
+            reach_grant_exists(&pool, c.id, gating).await,
+            "the grant must land; the gating team is an ordinary principal for reach"
+        );
+    }
+
     /// `kb_access_grants.principal_id` carries NO foreign key, so an unvalidated `team_id` would
     /// persist a dangling grant row pointing at nothing. A system admin skips the manage bar, so
     /// the existence check is the only thing standing between an admin's typo and that row.

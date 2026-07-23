@@ -8,9 +8,9 @@
 //!
 //! Bind/unbind gate is TWO-SIDED (`can_bind`, at the TOP of each fn, BEFORE any write):
 //! `is_system_admin`, OR the caller administers the MAP (`can_grant` on it) AND may manage the TEAM
-//! (`can_manage` = owner/maintainer, direct membership) AND the team is NOT the gating/root team
-//! (binding there flips the map into the `require_cogmap_write_admin` regime — an escalation kept
-//! admin-only).
+//! (`can_manage` = owner/maintainer, direct membership) AND the team is NOT the gating/root team.
+//! The gating-team exclusion cuts BOTH ways and the unbind direction is the load-bearing one — see
+//! `can_bind`.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -57,8 +57,21 @@ pub async fn bind_team(
 
 /// Two-sided bind/unbind gate. Allowed IFF `is_system_admin`, OR the caller can administer the MAP
 /// (`can_grant` on it) AND may manage the TEAM (`can_manage` = Owner|Maintainer, direct membership)
-/// AND the team is NOT the gating/root team. Binding to the gating team flips the map into the
-/// `require_cogmap_write_admin` regime, so that stays admin-only (escalation guard).
+/// AND the team is NOT the gating/root team.
+///
+/// **The gating-team exclusion is structural, and its load-bearing direction is UNBIND.** A
+/// `kb_team_cogmaps` row joining this map to the gating team is precisely what
+/// `access_service::cogmap_write_requires_admin` reads, so the binding does not merely *relate* the
+/// map to a team — it *is* the switch that puts the map in the admin-write regime. Since this one
+/// gate serves `unbind_team` too (a principal who could bind may unbind), dropping the exclusion
+/// would let a non-admin who holds `can_grant` on the map and manages the gating team **unbind a
+/// protected map**, taking it out of that regime. Binding into the gating team is a restriction the
+/// caller inflicts on themselves; unbinding is an escalation. The guard exists for the second.
+///
+/// Its sibling `context_service::can_share` keeps the same exclusion for a different reason, and
+/// `machine_authz::contain_target_team` deliberately has none. The three reasons are recorded in
+/// `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1 — they are not
+/// one policy, and a future unification must not flatten them into one.
 async fn can_bind(
     pool: &PgPool,
     caller: ProfileId,

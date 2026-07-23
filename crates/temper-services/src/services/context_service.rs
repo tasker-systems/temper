@@ -365,8 +365,25 @@ async fn ensure_context_and_team_exist(
 /// CONTEXT (see [`caller_administers_context`]) AND may manage the TARGET TEAM (`can_manage`
 /// = Owner|Maintainer, direct membership) AND that team is NOT the gating/root team.
 ///
-/// The gating-team exclusion mirrors `can_bind`: sharing into the root team is an
-/// instance-level escalation, kept admin-only.
+/// **The gating-team exclusion stands, but not for the reason it used to.** It read "sharing into
+/// the root team is an instance-level escalation" — true while gating-team membership *was* instance
+/// access. D11 ended that: `has_system_access` now reads `kb_principal_standing.state = 'approved'`
+/// and `is_system_admin` reads `kb_principal_governance`, and neither consults the gating team. It is
+/// now the join-request target and the cogmap-regime marker, and confers no standing and no
+/// admin-ness — so "escalation" no longer describes what sharing into it does.
+///
+/// What keeps the exclusion is narrower and specific to this gate: `can_share` also gates
+/// [`reassign`], a transfer of *ownership* into the root team, and that act is independently
+/// forbidden in plpgsql (`context_reassign`, `20260715000010_context_reassign_fns.sql:77-93`, which
+/// `RAISE`s `42501` on a gating target). The Rust check is the clean pre-check in front of that
+/// atomic enforcement; relaxing it here would split one act across two error paths. The share and
+/// unshare call sites inherit the exclusion because they share the gate, not because either is an
+/// escalation on its own.
+///
+/// Sibling gates, deliberately not identical: `cogmap_service::can_bind` keeps the exclusion for a
+/// *structural* reason (the binding IS the admin-write-regime switch, and it gates unbind);
+/// `machine_authz::contain_target_team` has none. See
+/// `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1 and §6.2.
 async fn can_share(
     pool: &PgPool,
     caller: ProfileId,
