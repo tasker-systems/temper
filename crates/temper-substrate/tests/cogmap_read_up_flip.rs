@@ -23,8 +23,8 @@ async fn insert_profile(pool: &sqlx::PgPool, handle: &str) -> Uuid {
     // system_access 'none' → no auto-join to the temper-system root, so a profile's effective teams are
     // exactly the memberships we seed (the ancestor walk is the only reach under test).
     sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) \
-         VALUES ($1, $1, 'none') RETURNING id",
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ($1, $1) RETURNING id",
     )
     .bind(handle)
     .fetch_one(pool)

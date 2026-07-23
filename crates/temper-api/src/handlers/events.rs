@@ -30,7 +30,7 @@ pub async fn cursor(
 ) -> ApiResult<Json<EventCursorResponse>> {
     let latest_event_id = event_service::latest_event_id_for_context(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         ContextId::from(kb_context_id),
     )
     .await?;
@@ -68,7 +68,7 @@ pub async fn element_trail(
     };
     event_service::element_trail(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         element_kind,
         id,
     )

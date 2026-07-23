@@ -12,7 +12,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use temper_core::types::ids::ProfileId;
-use temper_core::types::AuthenticatedProfile;
+use temper_services::auth::AuthenticatedProfile;
 
 use temper_services::error::ApiError;
 use temper_services::services::standing_service;
@@ -39,7 +39,7 @@ pub async fn require_system_access(
         Ok(_authorized) => {}
         Err(temper_services::auth::AuthzError::SystemAccessDenied { .. }) => {
             // Surface-side presentation: build the CLI-facing details payload.
-            let profile_id = ProfileId::from(authed.profile.id);
+            let profile_id = ProfileId::from(authed.profile().id);
             // The typed reason comes straight from the standing machine — no `access_mode` read.
             // `admit` returns `Err(Refusal)` for exactly the state that just failed the gate; the
             // `Ok` arm is only reachable on a race (approved between the gate check and here), in
@@ -52,8 +52,8 @@ pub async fn require_system_access(
             // the caller already proved ownership of this identity through OAuth.
             // We are reflecting their own profile data back to them.
             let details = temper_core::types::access_gate::SystemAccessDetails {
-                email: authed.profile.email.clone(),
-                display_name: Some(authed.profile.display_name.clone()),
+                email: authed.profile().email.clone(),
+                display_name: Some(authed.profile().display_name.clone()),
                 refusal,
                 request_url: Some("https://temperkb.io/request-access".to_string()),
                 cli_command: Some(

@@ -41,7 +41,7 @@
 use sqlx::PgPool;
 
 use temper_core::types::ids::ProfileId;
-use temper_core::types::{AuthClaims, AuthenticatedProfile, PrincipalKind, Profile};
+use temper_core::types::{AuthClaims, PrincipalKind, Profile};
 
 mod email;
 mod normalize;
@@ -238,9 +238,13 @@ pub(crate) async fn authenticate(
 /// is the only thing the two paths do differently, so anything after it belongs here, and a
 /// future Level 1 gate added here binds both paths by construction.
 ///
-/// Takes the profile by value and returns the [`AuthenticatedProfile`] so that constructing
-/// one without passing the gate requires going out of your way.
-async fn gate_resolved_profile(
+/// Takes the profile by value and returns the [`AuthenticatedProfile`]: this is that type's **sole**
+/// constructor, so passing the gate and holding proof of Level 1 are the same act.
+///
+/// `pub(crate)` rather than private only so `crate::test_support` can mint an honest proof — it
+/// runs this gate for real rather than stepping around it, which is why a fixture seeded
+/// `Deactivated` is refused there exactly as it would be in production.
+pub(crate) async fn gate_resolved_profile(
     pool: &PgPool,
     profile: Profile,
     claims: &AuthClaims,
@@ -265,6 +269,40 @@ async fn gate_resolved_profile(
         profile,
         claims: claims.clone(),
     })
+}
+
+/// Proof that a request carries a resolved, non-deactivated identity — Level 1.
+///
+/// SEALED: the fields are private and `gate_resolved_profile` is this module's only constructor,
+/// so a struct-literal forgery outside `temper_services::auth` is a compile error. It lived in
+/// temper-core with `pub` fields until 2026-07-22, which meant any crate could mint proof of
+/// authentication without authenticating — the enforcement this doc comment has always *claimed*.
+/// It sits beside [`SystemAuthorized`] and [`SystemAdmin`] because all three are the same kind of
+/// thing: a proof, obtainable only from the gate that establishes it.
+///
+/// Surfaces receive one from the seam and read it through the accessors below; they never build one.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedProfile {
+    profile: Profile,
+    claims: AuthClaims,
+}
+
+impl AuthenticatedProfile {
+    /// The resolved profile this proof was minted for.
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+
+    /// The token claims the profile was resolved from.
+    pub fn claims(&self) -> &AuthClaims {
+        &self.claims
+    }
+
+    /// Consume the proof for its profile. For callers that store the identity beyond the request
+    /// (temper-mcp caches it on the session) and would otherwise clone to get around the borrow.
+    pub fn into_profile(self) -> Profile {
+        self.profile
+    }
 }
 
 /// Proof that a profile passed **both** levels: authenticated *and*
@@ -821,13 +859,10 @@ mod tests {
         let authed = authenticate(&pool, &c).await.expect("authenticate");
         let id = authed.profile.id;
 
-        sqlx::query(
-            "UPDATE kb_system_settings SET access_mode = 'invite_only', \
-             gating_team_slug = 'nonexistent-gating-team'",
-        )
-        .execute(&pool)
-        .await
-        .expect("enable gate");
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'nonexistent-gating-team'")
+            .execute(&pool)
+            .await
+            .expect("enable gate");
 
         let err = require_system_access(&pool, &authed)
             .await

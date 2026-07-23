@@ -1460,6 +1460,11 @@ export interface components {
             /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
             reasoning?: string | null;
         };
+        /**
+         * @description Who is acting. Three authorities (spec §6).
+         * @enum {string}
+         */
+        ActorAuthority: "credential" | "self_principal" | "admin";
         /** @description Request body for `POST /api/teams/{id}/members`. */
         AddMemberRequest: {
             /** Format: uuid */
@@ -2224,7 +2229,7 @@ export interface components {
         };
         ErrorDetail: {
             code: string;
-            details?: unknown;
+            details?: null | components["schemas"]["SystemAccessDetails"];
             message: string;
         };
         /**
@@ -3220,6 +3225,50 @@ export interface components {
             id: string;
         };
         /**
+         * @description Why a principal was refused, typed.
+         *
+         *     This replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose
+         *     tests asserted a sentinel `"join_request"` that was never a real mode
+         *     (`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).
+         *
+         *     Spec §12: "Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at
+         *     the act is that the actor learns why; a test that only checks 'not admitted' would pass on a
+         *     silent denial."
+         */
+        Refusal: {
+            /** @enum {string} */
+            kind: "no_standing";
+        } | {
+            /** @enum {string} */
+            kind: "unrecognized_standing";
+            raw: string;
+        } | {
+            /** @enum {string} */
+            kind: "denied";
+        } | {
+            /** @enum {string} */
+            kind: "requested";
+        } | {
+            /** @enum {string} */
+            kind: "revoked";
+        } | {
+            /** @enum {string} */
+            kind: "deactivated";
+        } | {
+            act: string;
+            from?: null | components["schemas"]["Standing"];
+            /** @enum {string} */
+            kind: "illegal_transition";
+        } | {
+            actual: components["schemas"]["ActorAuthority"];
+            /** @enum {string} */
+            kind: "insufficient_authority";
+            required: components["schemas"]["ActorAuthority"];
+        } | {
+            /** @enum {string} */
+            kind: "no_prior_standing";
+        };
+        /**
          * Format: uuid
          * @description A `kb_cogmap_regions.id` value — one materialized region.
          */
@@ -3868,6 +3917,15 @@ export interface components {
          */
         SortOrder: "desc" | "asc";
         /**
+         * @description The one authoritative standing state for a principal (spec D2).
+         *
+         *     Five states plus absence. **Absence is not a variant** — a principal with no standing row is
+         *     denied structurally (spec §7 obligation 1), which is what makes D7's connection-profile safety
+         *     hold by construction rather than by a check someone can forget.
+         * @enum {string}
+         */
+        Standing: "denied" | "requested" | "approved" | "revoked" | "deactivated";
+        /**
          * @description A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are
          *     non-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),
          *     so an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side
@@ -3945,6 +4003,31 @@ export interface components {
             auto_sync?: boolean | null;
             local_paths?: string[] | null;
             merge_policy?: null | components["schemas"]["MergePolicy"];
+        };
+        /**
+         * @description Details included in the SystemAccessRequired error response.
+         *
+         *     SECURITY NOTE: The `email` and `display_name` fields are safe to include
+         *     because the caller already proved ownership of this identity through OAuth.
+         *     We are reflecting the caller's own profile back — not disclosing another
+         *     user's information. Do not add fields that reveal other users' data.
+         */
+        SystemAccessDetails: {
+            cli_command?: string | null;
+            display_name?: string | null;
+            email?: string | null;
+            /**
+             * @description Why this principal was refused, typed (spec §7). The sole refusal signal on the 403 since
+             *     Phase 2 retired the legacy `join_request_status` field new clients never branched on. The
+             *     typed refusal distinguishes "never granted" (`denied`) from "granted and revoked" (`revoked`)
+             *     — a distinction that matters to the user and in an audit.
+             *
+             *     Carried as `temper_principal::Refusal` so every surface branches on it exhaustively — the
+             *     Rust ones through the enum, the generated temper-ts / temper-rb clients through the
+             *     discriminated `kind` union that crate's feature-gated derives now emit.
+             */
+            refusal: components["schemas"]["Refusal"];
+            request_url?: string | null;
         };
         /**
          * @description Request body for `POST /api/teams`.

@@ -6,7 +6,7 @@ use axum::response::Response;
 use jsonwebtoken::{decode, TokenData};
 use std::future::Future;
 
-use temper_core::types::AuthenticatedProfile;
+use temper_services::auth::AuthenticatedProfile;
 
 use temper_services::error::ApiError;
 use temper_services::state::AppState;
@@ -100,7 +100,7 @@ pub async fn require_auth(
                 ApiError::Internal("unexpected system-access error from authenticate".to_string())
             }
         })?;
-    let profile = authed.profile.clone();
+    let profile = authed.profile().clone();
 
     tracing::Span::current().record("profile_id", tracing::field::display(profile.id));
 

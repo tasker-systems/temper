@@ -59,6 +59,10 @@ pub(crate) enum MachineAuthority {
     SystemAdmin,
     /// Owner of the team that owns (or will own) the machine. Reach is contained.
     TeamOwner,
+    /// No authority over this machine. Denial is an ARM rather than an `Err` returned from inside
+    /// the resolve, so it flows through `ScopedAuthority::denial` like every other domain's
+    /// refusal instead of short-circuiting past it.
+    None,
 }
 
 /// Resolve who the caller is with respect to a registration owned by `team`.
@@ -70,18 +74,14 @@ pub(crate) async fn authorize(
     caller: ProfileId,
     team: Option<Uuid>,
 ) -> ApiResult<MachineAuthority> {
-    if access_service::is_system_admin(pool, caller).await? {
-        return Ok(MachineAuthority::SystemAdmin);
-    }
-
-    let Some(team_id) = team else {
-        return Err(ApiError::Forbidden);
-    };
-
-    match team_service::role_on_team(pool, team_id, caller).await? {
-        Some(TeamRole::Owner) => Ok(MachineAuthority::TeamOwner),
-        _ => Err(ApiError::Forbidden),
-    }
+    // The policy itself is this enum's `ScopedAuthority` impl (`authz/machine.rs`). This wrapper
+    // keeps the non-denial arms as a bare value for the two callers that branch on them, while the
+    // gate renders refusal — so a denial still surfaces as `Forbidden`, from one place.
+    Ok(
+        crate::authz::authorize::<MachineAuthority>(pool, caller, team)
+            .await?
+            .authority(),
+    )
 }
 
 /// Reach that has been authorized against a caller's authority (spec D3).
@@ -154,6 +154,9 @@ pub(crate) async fn authorize_registration<'a>(
             contain_reach(pool, caller, teams, grants).await?;
             Ok(AuthorizedReach { teams, grants })
         }
+        // Unreachable — `authorize` refuses a denial before returning. Enumerated rather than
+        // `_ =>` so that a future arm cannot land here and fall into an authorizing branch.
+        MachineAuthority::None => Err(ApiError::Forbidden),
     }
 }
 
@@ -188,6 +191,9 @@ pub(crate) async fn contain_target_team(
         MachineAuthority::TeamOwner => {
             team_service::require_manage_on_team(pool, team_id, caller).await
         }
+        // Unreachable for the same reason as `authorize_registration`'s arm, and enumerated for
+        // the same reason.
+        MachineAuthority::None => Err(ApiError::Forbidden),
     }
 }
 
@@ -222,8 +228,10 @@ async fn contain_reach(
         access_service::authorize_capability_grant(
             pool,
             caller,
-            "kb_cogmaps",
-            grant.cogmap_id,
+            temper_substrate::payloads::RefTarget {
+                kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                id: grant.cogmap_id,
+            },
             access_service::RequestedCapabilities {
                 read: true,
                 write: grant.can_write,

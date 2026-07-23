@@ -48,5 +48,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 mcp = ["schemars"]
 scenario-schema = ["schemars"]
 test-db = []
-typescript = ["ts-rs"]
-web-api = ["utoipa", "utoipa/chrono"]
+# Both forward to temper-principal so `Refusal` — which rides the admission 403 inside
+# `SystemAccessDetails` — is described by whichever generator this boundary turned on. Without the
+# forward the field would silently fall back to an opaque `unknown`/free-form object, which is the
+# exact drift these features exist to prevent.
+typescript = ["ts-rs", "temper-principal/typescript"]
+web-api = ["utoipa", "utoipa/chrono", "temper-principal/web-api"]

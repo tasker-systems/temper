@@ -10,9 +10,13 @@
 
 use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
+use temper_substrate::payloads::RefTarget;
 use uuid::Uuid;
 
 use crate::auth::SystemAdmin;
+// In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
+// enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
+use crate::authz::ScopedAuthority;
 use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
 
@@ -76,58 +80,31 @@ pub(crate) enum GrantAuthority {
     None,
 }
 
-/// Bool projection of [`grant_authority`], kept as the seam `admin_ledger_service`'s read gate calls
-/// (spec 2026-07-16 §5) — it only needs "could you perform the act", not which arm allowed it.
+/// Bool projection of `GrantAuthority`'s [`ScopedAuthority`] resolve, kept as the seam
+/// `admin_ledger_service`'s read gate calls (spec 2026-07-16 §5) — it only needs "could you perform
+/// the act", not which arm allowed it.
 pub(crate) async fn can_administer_grant(
     pool: &PgPool,
     caller: ProfileId,
-    subject_table: &str,
-    subject_id: Uuid,
+    subject: RefTarget,
 ) -> ApiResult<bool> {
-    Ok(grant_authority(pool, caller, subject_table, subject_id).await? != GrantAuthority::None)
+    Ok(GrantAuthority::resolve(pool, caller, subject).await? != GrantAuthority::None)
 }
 
-/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
-/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
-/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
-/// `can_grant` holder) and repair stay operable.
-///
-/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
-/// through [`can_administer_grant`] (spec 2026-07-16 §5): if you could perform the act, you may read
-/// the record of it. Restating the predicate there would be a second copy of the policy that drifts
-/// from the gate it exists to mirror — tighten this fn and the ledger's read gate tightens with it.
-///
-/// Note this answers *may you administer grants here at all*. It does NOT bound WHICH capabilities
-/// may be conferred — that is attenuation, and both belong to one decision:
-/// [`authorize_capability_grant`]. Every grant sink should call that, not this.
-pub(crate) async fn grant_authority(
-    pool: &PgPool,
-    caller: ProfileId,
-    subject_table: &str,
-    subject_id: Uuid,
-) -> ApiResult<GrantAuthority> {
-    if is_system_admin(pool, caller).await? {
-        return Ok(GrantAuthority::SystemAdmin);
-    }
-    // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` exists to keep the
-    // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never consulted
-    // it — so a non-admin `can_grant` holder could mint `can_write` on the kernel, reaching by the
-    // grant axis exactly what the write axis forbids. `machine_authz`'s own tests seed such a row,
-    // so the state is reachable, not hypothetical. Admins already returned above, so a map in the
-    // admin-only regime denies here regardless of any `can_grant` the caller holds.
-    if subject_table == "kb_cogmaps"
-        && cogmap_write_requires_admin(pool, CogmapId(subject_id)).await?
-    {
-        return Ok(GrantAuthority::None);
-    }
-    Ok(
-        if profile_can_grant(pool, caller, subject_table, subject_id).await? {
-            GrantAuthority::Delegated
-        } else {
-            GrantAuthority::None
-        },
-    )
-}
+// The grant-administration gate itself — a system admin OR a holder of `can_grant` on the subject
+// (the general `can(...,'grant',...)` seam) — now lives as `GrantAuthority`'s
+// [`crate::authz::ScopedAuthority`] impl in `authz/grant.rs`. It is a DIFFERENT axis from authoring:
+// authoring stays wholly explicit (D3b §3.E), while grant-administration admits admins so
+// pre-existing maps (no seeded `can_grant` holder) and repair stay operable.
+//
+// The read gate in `admin_ledger_service` mirrors this WRITE gate by CALLING it through
+// [`can_administer_grant`] (spec 2026-07-16 §5): if you could perform the act, you may read the
+// record of it. Restating the predicate there would be a second copy of the policy that drifts from
+// the gate it exists to mirror — tighten the resolve and the ledger's read gate tightens with it.
+//
+// Resolving answers *may you administer grants here at all*. It does NOT bound WHICH capabilities
+// may be conferred — that is attenuation, and both belong to one decision:
+// [`authorize_capability_grant`]. Every grant sink should call that, not the bare resolve.
 
 /// The four capabilities a grant can carry. A closed set with a fixed SQL spelling — an enum rather
 /// than bare `&str` literals so a typo is a compile error and the set cannot silently grow.
@@ -214,11 +191,21 @@ impl From<&GrantCapabilityRequest> for RequestedCapabilities {
 pub(crate) async fn authorize_capability_grant(
     pool: &PgPool,
     caller: ProfileId,
-    subject_table: &str,
-    subject_id: Uuid,
+    subject: RefTarget,
     caps: RequestedCapabilities,
 ) -> ApiResult<()> {
-    match grant_authority(pool, caller, subject_table, subject_id).await? {
+    // The gate mints a proof bound to `subject`; denial is rendered by `GrantAuthority::denial()`
+    // (`Forbidden`), so the refusal is the domain's, not this function's.
+    let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
+
+    // Read the scope from the PROOF, not from the parameter. They are the same value today —
+    // and that is precisely the point: attenuation must probe the subject that was authorized,
+    // so there is no second spelling for a later edit to diverge.
+    let subject = proof.subject();
+
+    match proof.authority() {
+        // Unreachable: `authorize` refused it above. Enumerated rather than `_ =>` so a future
+        // arm cannot land here silently permissive.
         GrantAuthority::None => Err(ApiError::Forbidden),
         GrantAuthority::SystemAdmin => Ok(()),
         GrantAuthority::Delegated => {
@@ -229,7 +216,7 @@ pub(crate) async fn authorize_capability_grant(
                 (caps.grant, AccessAction::Grant),
             ] {
                 if requested
-                    && !profile_can(pool, caller, action, subject_table, subject_id).await?
+                    && !profile_can(pool, caller, action, subject.kind.as_str(), subject.id).await?
                 {
                     return Err(ApiError::Forbidden);
                 }
@@ -356,8 +343,9 @@ pub async fn grant_capability(
     // the machine path (`machine_authz::contain_reach`), so the two sinks cannot drift. Revocation
     // is deliberately NOT attenuated: de-escalation must never be harder than escalation, or a
     // grant becomes unwithdrawable.
-    authorize_capability_grant(pool, caller, &req.subject_table, req.subject_id, req.into())
-        .await?;
+    let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
+        .ok_or(ApiError::Forbidden)?;
+    authorize_capability_grant(pool, caller, subject, req.into()).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -388,7 +376,9 @@ pub async fn revoke_capability(
     caller: ProfileId,
     req: &RevokeCapabilityRequest,
 ) -> ApiResult<RevokeOutcome> {
-    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
+    let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
+        .ok_or(ApiError::Forbidden)?;
+    if !can_administer_grant(pool, caller, subject).await? {
         return Err(ApiError::Forbidden);
     }
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")

@@ -26,7 +26,7 @@ pub async fn evidence(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<StandingShape>> {
-    evidential_standing_service::resource_evidence(&state.pool, auth.0.profile.id, resource_id)
+    evidential_standing_service::resource_evidence(&state.pool, auth.0.profile().id, resource_id)
         .await
         .map(Json)
 }

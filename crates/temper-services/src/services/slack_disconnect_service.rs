@@ -693,13 +693,17 @@ mod tests {
         .unwrap();
         assert_eq!(intents, 0, "live intents must not survive a disconnect");
 
-        // The profile itself is untouched.
-        let alive: bool = sqlx::query_scalar("SELECT is_active FROM kb_profiles WHERE id = $1")
-            .bind(profile_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert!(alive, "disconnect is not deactivation");
+        // The profile itself is untouched — disconnect is not deactivation. Phase 2 moved
+        // deactivation off the dropped `kb_profiles.is_active` onto `kb_principal_standing`, so the
+        // check is now "no `deactivated` standing row was minted".
+        let deactivated: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM kb_principal_standing WHERE profile_id = $1 AND state = 'deactivated')",
+        )
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!deactivated, "disconnect is not deactivation");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

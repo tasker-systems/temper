@@ -6262,6 +6262,15 @@
           }
         }
       },
+      "ActorAuthority": {
+        "type": "string",
+        "description": "Who is acting. Three authorities (spec §6).",
+        "enum": [
+          "credential",
+          "self_principal",
+          "admin"
+        ]
+      },
       "AddMemberRequest": {
         "type": "object",
         "description": "Request body for `POST /api/teams/{id}/members`.",
@@ -7668,7 +7677,17 @@
           "code": {
             "type": "string"
           },
-          "details": {},
+          "details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SystemAccessDetails",
+                "description": "Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on\nevery other error."
+              }
+            ]
+          },
           "message": {
             "type": "string"
           }
@@ -9495,6 +9514,181 @@
           }
         }
       },
+      "Refusal": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "NoStanding",
+            "description": "No standing row. Absence denies (spec §7 obligation 1) — this is what makes D7 structural.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_standing"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "UnrecognizedStanding",
+            "description": "The column held a value this binary does not know (spec §7 obligation 2).",
+            "required": [
+              "raw",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unrecognized_standing"
+                ]
+              },
+              "raw": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Denied",
+            "description": "Provisioned but never granted. The refusal says *\"you may request access.\"*",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "denied"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Requested",
+            "description": "Asked, not yet decided. The refusal says *\"your request is pending.\"*",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "requested"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Revoked",
+            "description": "Was granted and lost it. A different sentence, and a different audit signal, than `Denied`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "revoked"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Deactivated",
+            "description": "The principal itself is disabled.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "deactivated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "IllegalTransition",
+            "description": "The act is not legal from this state (spec §6 — every unlisted cell).\n\n`act` is an owned `String` rather than `&'static str` so `Refusal` is `DeserializeOwned`: it\nrides the 403 wire, and a borrowed-`'static` field would make the whole enum undeserializable\nfrom a short-lived `serde_json` input. The value is still one of a fixed set of act literals.",
+            "required": [
+              "act",
+              "kind"
+            ],
+            "properties": {
+              "act": {
+                "type": "string"
+              },
+              "from": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Standing"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "illegal_transition"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "InsufficientAuthority",
+            "description": "The actor lacks the authority this act requires.",
+            "required": [
+              "required",
+              "actual",
+              "kind"
+            ],
+            "properties": {
+              "actual": {
+                "$ref": "#/components/schemas/ActorAuthority"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "insufficient_authority"
+                ]
+              },
+              "required": {
+                "$ref": "#/components/schemas/ActorAuthority"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "NoPriorStanding",
+            "description": "`Reactivate` with no recoverable prior state. The backfill's genesis pass (spec §11) exists\nso this is unreachable for pre-existing rows; the machine still refuses rather than guesses.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_prior_standing"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Why a principal was refused, typed.\n\nThis replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose\ntests asserted a sentinel `\"join_request\"` that was never a real mode\n(`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).\n\nSpec §12: \"Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at\nthe act is that the actor learns why; a test that only checks 'not admitted' would pass on a\nsilent denial.\""
+      },
       "RegionId": {
         "type": "string",
         "format": "uuid",
@@ -10642,6 +10836,17 @@
           "asc"
         ]
       },
+      "Standing": {
+        "type": "string",
+        "description": "The one authoritative standing state for a principal (spec D2).\n\nFive states plus absence. **Absence is not a variant** — a principal with no standing row is\ndenied structurally (spec §7 obligation 1), which is what makes D7's connection-profile safety\nhold by construction rather than by a check someone can forget.",
+        "enum": [
+          "denied",
+          "requested",
+          "approved",
+          "revoked",
+          "deactivated"
+        ]
+      },
       "StandingShape": {
         "type": "object",
         "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"",
@@ -10782,6 +10987,43 @@
               {
                 "$ref": "#/components/schemas/MergePolicy"
               }
+            ]
+          }
+        }
+      },
+      "SystemAccessDetails": {
+        "type": "object",
+        "description": "Details included in the SystemAccessRequired error response.\n\nSECURITY NOTE: The `email` and `display_name` fields are safe to include\nbecause the caller already proved ownership of this identity through OAuth.\nWe are reflecting the caller's own profile back — not disclosing another\nuser's information. Do not add fields that reveal other users' data.",
+        "required": [
+          "refusal"
+        ],
+        "properties": {
+          "cli_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/Refusal",
+            "description": "Why this principal was refused, typed (spec §7). The sole refusal signal on the 403 since\nPhase 2 retired the legacy `join_request_status` field new clients never branched on. The\ntyped refusal distinguishes \"never granted\" (`denied`) from \"granted and revoked\" (`revoked`)\n— a distinction that matters to the user and in an audit.\n\nCarried as `temper_principal::Refusal` so every surface branches on it exhaustively — the\nRust ones through the enum, the generated temper-ts / temper-rb clients through the\ndiscriminated `kind` union that crate's feature-gated derives now emit."
+          },
+          "request_url": {
+            "type": [
+              "string",
+              "null"
             ]
           }
         }

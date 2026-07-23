@@ -129,6 +129,7 @@ pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \
 /// user's information. Do not add fields that reveal other users' data.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemAccessDetails {
     pub email: Option<String>,
@@ -138,11 +139,9 @@ pub struct SystemAccessDetails {
     /// typed refusal distinguishes "never granted" (`denied`) from "granted and revoked" (`revoked`)
     /// — a distinction that matters to the user and in an audit.
     ///
-    /// Carried as `temper_principal::Refusal` so the Rust surfaces branch on it exhaustively. This
-    /// struct is not an OpenAPI component (the error body serializes `details` as a free-form value),
-    /// so only the ts-rs generator needs steering — it sees the field as opaque for now, since
-    /// temper-principal stays free of schema-derive deps by design; enriching that is a parity follow-up.
-    #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
+    /// Carried as `temper_principal::Refusal` so every surface branches on it exhaustively — the
+    /// Rust ones through the enum, the generated temper-ts / temper-rb clients through the
+    /// discriminated `kind` union that crate's feature-gated derives now emit.
     pub refusal: temper_principal::Refusal,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,

@@ -38,13 +38,9 @@ async fn l0_region_metrics_readable_empty(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn l0_analytics_readable_some_with_telos(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "reader2@example.com").await;
-    // Promote to 'approved' so the sync_system_membership trigger adds this profile to
-    // temper-system → cogmap_readable_by_profile(profile, L0) returns true.
-    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
-        .bind(profile)
-        .execute(&pool)
-        .await
-        .expect("promote to approved");
+    // Grant `approved` standing (D11 front door). L0 is the public kernel map, so
+    // cogmap_readable_by_profile(profile, L0) is true regardless of membership.
+    common::fixtures::approve_standing(&pool, profile).await;
     let got = cogmap_analytics_select(&pool, ProfileId::from(profile), L0_COGMAP)
         .await
         .expect("readable L0 analytics must be Ok")

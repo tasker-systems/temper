@@ -39,7 +39,7 @@ pub async fn list(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<GraphEdgeRow>>> {
-    edge_service::list_resource_edges(&state.pool, auth.0.profile.id, resource_id)
+    edge_service::list_resource_edges(&state.pool, auth.0.profile().id, resource_id)
         .await
         .map(Json)
 }
@@ -71,7 +71,7 @@ pub async fn lineage(
     axum::extract::Query(q): axum::extract::Query<LineageQuery>,
 ) -> ApiResult<Json<ResourceLineage>> {
     let depth = q.depth.unwrap_or(16).clamp(1, 64);
-    lineage_service::resource_lineage(&state.pool, auth.0.profile.id, resource_id, depth)
+    lineage_service::resource_lineage(&state.pool, auth.0.profile().id, resource_id, depth)
         .await
         .map(Json)
 }
@@ -107,7 +107,7 @@ pub async fn assert(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .assert_relationship(cmd)
         .await
@@ -147,7 +147,7 @@ pub async fn retype(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .retype_relationship(cmd)
         .await
@@ -186,7 +186,7 @@ pub async fn reweight(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .reweight_relationship(cmd)
         .await
@@ -225,7 +225,7 @@ pub async fn fold(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .fold_relationship(cmd)
         .await
