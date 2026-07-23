@@ -25,11 +25,13 @@
 //!
 //! Design: `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
 
+mod connection;
 mod grant;
 mod machine;
 mod read_gates;
 mod two_sided;
 
+pub(crate) use connection::{ConnectionAuthority, ConnectionScope};
 pub(crate) use grant::wire_subject;
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};
 pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};

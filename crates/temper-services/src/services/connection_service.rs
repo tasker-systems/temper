@@ -21,6 +21,7 @@ use temper_core::types::connection::{
 use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
+use crate::authz::{ConnectionAuthority, ConnectionScope};
 use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::InsertGrantParams;
@@ -411,13 +412,14 @@ pub async fn set_tool_manifest(
 /// `kb_access_grants` row (`subject_table = 'kb_connections'`) so the named team's members inherit
 /// READ on what the connection receives. Reach is read-only: no write, delete, or grant is conferred.
 ///
-/// Auth before writes, on **both** teams in play — they are different questions:
+/// Auth before writes, on **both** teams in play — they are different questions, and they are now
+/// one gate: `crate::authz::ConnectionAuthority`. It composes, rather than restates, the two:
 ///
-/// 1. *May you act on this connection?* — `machine_authz::authorize`, keyed on the connection's
-///    own owning team: a system admin, or the OWNER of that team; a teamless connection fails
-///    closed. The SAME policy as every other connection mutator, CALLED not restated. It
-///    deliberately does NOT route through `access_service::can_administer_grant`, whose
-///    `can_grant` seam has no bootstrap holder for a connection subject.
+/// 1. *May you act on this connection?* — `MachineAuthority`, keyed on the connection's own owning
+///    team: a system admin, or the OWNER of that team; a teamless connection fails closed. The SAME
+///    policy as every other connection mutator, CALLED not restated. It deliberately does NOT route
+///    through `access_service::can_administer_grant`, whose `can_grant` seam has no bootstrap
+///    holder for a connection subject.
 /// 2. *May you hand read-reach to THAT team?* — `machine_authz::contain_target_team`: a
 ///    manage-capable role on the RECEIVING team, system admins exempt. Without it, the owner of
 ///    one team could bind their connection's reach to any team UUID in the instance, including
@@ -425,6 +427,10 @@ pub async fn set_tool_manifest(
 ///    foreign key, a bogus UUID would persist a dangling grant row. This mirrors the machine
 ///    path's `machine_authz::contain_reach`, through the same `require_manage_on_team` seam so the
 ///    two cannot drift.
+///
+/// The connection's OWNING team is read from the row inside the gate, not passed in — so the pair
+/// the proof is about is (this connection, that team), and nothing the caller supplies decides
+/// which team its authority gets checked against.
 ///
 /// A connection whose reach is *declared* (`Connection::declares_reach`) carries a coarse remote
 /// reach that may exceed the granted team's temper reach — remote and temper scope are
@@ -448,8 +454,12 @@ pub async fn grant_reach(
     affirm_reach: Option<String>,
 ) -> ApiResult<Connection> {
     let connection = get(pool, connection_id).await?;
-    let authority = machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
-    machine_authz::contain_target_team(pool, authority, caller, team_id).await?;
+    crate::authz::authorize::<ConnectionAuthority>(
+        pool,
+        caller,
+        ConnectionScope::new(connection_id, team_id),
+    )
+    .await?;
 
     match (connection.declares_reach(), affirm_reach) {
         // Declared reach, unaffirmed: refuse, naming the declared reach and the fix. Write nothing.
