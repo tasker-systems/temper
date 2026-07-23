@@ -191,21 +191,27 @@ pub fn resolve(ev: LinkEvidence<'_>) -> Result<Mintable, LinkRefusal>;
 
 ---
 
-### Task 4: `link-state` speaks the same vocabulary
+### Task 4: `link-state` — NO CODE CHANGE (spec §4.1 narrowed)
 
-**Tag: AMEND** — spec §4.1, **including both recorded widenings**.
+**Tag: CONFORM** — spec §4.1, as amended 2026-07-23.
 
-**Files:** `crates/temper-api/src/handlers/slack_link.rs` (`:60`, `:81-124`)
+**Decision (Pete's call at implementation):** `link-state` stays two-arm (`linked` / `unlinked`);
+`mint` carries the full `LinkRefusal` vocabulary. Making `link-state` resolve would be a redundant
+second answer whose only new effect is the F10 vault-read on the cheap `SLACK_LINK_SECRET` endpoint —
+cost without benefit, since the agent calls `mint` next and `mint` (Tasks 2–3) already delivers every
+refusal. See the amended spec §4.1.
 
-- [ ] **Step 1: Failing e2e test** beside `a_linked_principal_gets_its_handle_and_mints_no_intent`
-  (`slack_link_test.rs:731`): a linked-but-`denied` principal's response names the standing refusal,
-  **and still mints no intent** — that test's existing property must not regress.
-- [ ] **Step 2: Red.** `cargo build -p temper-cli --bin temper && cargo make test-e2e-embed`
-- [ ] **Step 3: Implement.** Render the resolved state minus the token. Keep the `:96-98` read-first
-  short-circuit, whose comment calls that ordering *"the whole fix"* for a prior bug.
-  **Note the second widening (spec §4.1b):** this handler now reads `kb_slack_grant_vault` for
-  `vaulted`. It needs only a boolean — keep it one.
-- [ ] **Step 4: Green.** **Step 5: Commit** after `cargo make check`.
+**Files:** none. `slack_link.rs:81-124` is already correct for this design.
+
+- [x] **No code.** The current handler returns `Linked{handle}` / `Unlinked{authorize_url}`, which is
+  the two-arm design. A linked-but-unmintable human reads as `linked` here and gets the specific
+  refusal from `mint`.
+- [x] **Coverage already exists.** `mint_reports_not_vaulted_distinctly_from_not_linked`
+  (`slack_link_test.rs`) pins exactly this: link-state says `linked` for an unvaulted user while mint
+  says `refused`/`not_vaulted`. `a_linked_principal_gets_its_handle_and_mints_no_intent` pins
+  mints-no-intent. No new link-state test is needed; the standing-refusal-at-the-wire assertion lives
+  on `mint` (Task 3 unit + Task 6 e2e).
+- [x] **Done by amendment** — folded into the Tasks 2–3 work; no separate commit.
 
 ---
 

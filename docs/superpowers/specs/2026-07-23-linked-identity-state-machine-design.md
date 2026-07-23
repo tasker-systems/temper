@@ -317,19 +317,33 @@ Collapsing them was rejected — `mint.ts:8-13`: *"`SLACK_LINK_SECRET` gates an 
 a question… `SLACK_MINT_SECRET` gates one that hands back a token carrying that human's ENTIRE
 temper reach. Sharing a key would make compromise of the cheap capability yield the expensive one."*
 
-**One vocabulary, two renderings**: `link-state` returns the resolved state without a token; `mint`
-returns it with.
+**One vocabulary, one renderer.** `mint` carries the full [`LinkRefusal`] vocabulary
+(`not_linked` / `not_vaulted` / `standing`); `link-state` stays two-arm — `linked` / `unlinked` —
+answering only its own prior question: *does this human need to link at all?*
 
-**Two widenings, both recorded rather than incidental.** (a) `link-state`'s answer grows from
-*linked/unlinked* to *+ why-refused*, telling a `SLACK_LINK_SECRET` holder a linked human's standing —
-acceptable, since that holder can already enumerate who is linked and standing is not a credential.
-(b) **`link-state` acquires a read of `kb_slack_grant_vault`**, since `resolve` needs `vaulted`. The
-cheap-capability endpoint gains a code path touching the credential store. It needs only a boolean
-and must stay one.
+> **AMENDED at implementation (2026-07-23), narrowing the original §4.1.** Revision 2 had `link-state`
+> also *resolve* and report *why-refused*, and recorded two widenings for it: disclosing a linked
+> human's standing to a `SLACK_LINK_SECRET` holder, and — the security review's F10 — giving the
+> cheap endpoint a **read of `kb_slack_grant_vault`**, the credential store. Building it revealed the
+> widening buys nothing: the mention agent already calls `mint` after `link-state`, and `mint` now
+> delivers every refusal reason (§4.2, `MintOutcome::Refused(LinkRefusal)`), so the four-row product
+> PR #498 computed in TypeScript collapses through **`mint` alone**. `link-state` resolving would be
+> a redundant second answer whose only *new* effect is the F10 attack surface. So it stays two-arm,
+> reads no vault, and discloses no standing. **This is a strict de-scope of an approved section, made
+> because the concrete code showed the widening was cost without benefit — recorded here in place
+> rather than silently dropped** ([[feedback_amend_working_docs_in_place_not_via_pr]]).
 
-This decides item 3 of open task `019f7cd1-a3fb-79c1-aa3f-befd4b843b17` (*"Decide whether link-state
-should report it at all"*), which should be closed done-by. Its second criterion — operator
-observability of the unvaulted-link state — is **not** addressed here; see §9.
+**Consequence for `link-state` code: none.** The current handler (`slack_link.rs:81-124`) already
+returns `Linked{handle}` for any linked principal and `Unlinked{authorize_url}` otherwise, which is
+exactly this design. A linked-but-unmintable human reads as `linked` at `link-state` and gets the
+specific refusal from `mint` — the shape the e2e test
+`mint_reports_not_vaulted_distinctly_from_not_linked` already pins.
+
+This still bears on open task `019f7cd1-a3fb-79c1-aa3f-befd4b843b17` (*"linked ≠ mintable"*): the two
+states are now genuinely distinguishable **at `mint`**, which is where the agent acts. Its item 3
+(*"should `link-state` report it at all"*) is answered **no**, with the reason above; its second
+criterion (operator observability) is still unaddressed — see §9. The task is advanced, not closed
+done-by.
 
 ### 4.2 `slack_mint`
 
