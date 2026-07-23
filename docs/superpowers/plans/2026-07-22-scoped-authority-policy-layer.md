@@ -85,6 +85,28 @@ readable in one screen.
 **Coherence:** zero new policy. The shape is proven on code that already worked. Independently
 shippable; behavior identical.
 
+> **Execution log (2026-07-22).** Landed as `6cde7bda`, `b5f5eec6`, `898d4149`, `49025a00`.
+> Four deviations from the plan as written, each deliberate:
+>
+> 1. **Tasks 1 and 2 landed in one commit.** Step 4 predicted the trait would be dead code alone and
+>    prescribed a temporary `#![allow(dead_code)]`. Creating an attribute the plan itself warns must
+>    be removed is worse than folding the boundary; a trait plus its first impl is one coherent unit.
+> 2. **`authorize_capability_grant` routes through `authorize`, not bare `resolve`.** The leftover
+>    dead-code warnings on `Authorized`/`authorize` were the tell that calling `resolve` directly was
+>    the wrong shape — the function denies on `None` and then branches on the arm, which *is*
+>    `authorize` plus a match. It now reads its scope from `proof.subject()`.
+> 3. **`RefTarget` reached further than Task 2 assumed, in the useful direction.** The admin ledger
+>    already *held* one and was flattening it to `(&str, Uuid)` only because the gate took strings, so
+>    typing the gate simplified that call site. `AnchorTable::as_str()`'s doc comment names
+>    `can_administer_grant` as its reason for existing; that reason is now gone.
+> 4. **`MachineAuthority::None` is unreachable at both consumer matches**, since the `authorize`
+>    wrapper refuses denials before returning. Enumerated anyway (no `_ =>`), per Global Constraints.
+>
+> Two gates the plan did not anticipate: rustdoc's `-D broken-intra-doc-links` rejects `[`links`]` to
+> `pub(crate)` items in a private module (they became plain code spans), and `mod authz` is private
+> rather than `pub` — every item in it is `pub(crate)`, so `pub mod` would advertise a contract
+> nothing outside the crate can use.
+
 ---
 
 ### Task 1: The `authz` module — trait, proof, gate
@@ -105,33 +127,33 @@ co-located with it) lives there and is the pattern of record.
   `subject: A::Subject`; accessors `authority(&self) -> A`, `subject(&self) -> A::Subject`
 - `pub(crate) async fn authorize<A: ScopedAuthority>(pool, caller, subject) -> ApiResult<Authorized<A>>`
 
-- [ ] **Step 1 — CONFORM: read the incumbent seal.** Open `crates/temper-services/src/auth/mod.rs`
+- [x] **Step 1 — CONFORM: read the incumbent seal.** Open `crates/temper-services/src/auth/mod.rs`
       and read `SystemAdmin` + `require_system_admin`. Note three things you will copy: the private
       field, the doc comment that says *why* it is private, and the gate living in the same module as
       the type (it must — the private field means only that module can construct it).
 
-- [ ] **Step 2 — EXTEND (spec §2.1): write the trait.** Four items, exactly as in the Interfaces block
+- [x] **Step 2 — EXTEND (spec §2.1): write the trait.** Four items, exactly as in the Interfaces block
       above. Each carries a doc comment stating its obligation. `denial()` must carry the reason it
       exists — quote spec §2.1's justification (`team_service.rs:277–279` hides team existence because
       *"team slugs are globally unique and used in share flows"*), so a future reader does not
       "simplify" it to a hardcoded `Forbidden`.
 
-- [ ] **Step 3 — EXTEND (spec §2.2): write `Authorized<A>` and `authorize`.** Fields private. The
+- [x] **Step 3 — EXTEND (spec §2.2): write `Authorized<A>` and `authorize`.** Fields private. The
       doc comment on `subject()` must say it is *the only* subject an act may touch — that sentence is
       the whole point of the type. `authorize` resolves, returns `A::denial()` when `is_denial()`, and
       seals otherwise.
 
-- [ ] **Step 4 — Wire the module.** Add `pub mod authz;` to `lib.rs`. Nothing implements the trait
+- [x] **Step 4 — Wire the module.** Add `pub mod authz;` to `lib.rs`. Nothing implements the trait
       yet, so expect dead-code warnings; add `#![allow(dead_code)]` **only if** clippy fails, and
       remove it in Task 2 when the first impl lands. Do not leave it behind.
 
-- [ ] **Step 5 — Verify.**
+- [x] **Step 5 — Verify.**
       ```bash
       cargo make check
       ```
       Expected: clean. No test run needed — nothing calls this yet.
 
-- [ ] **Step 6 — Commit.**
+- [x] **Step 6 — Commit.**
       ```bash
       git add crates/temper-services/src/authz/mod.rs crates/temper-services/src/lib.rs
       git commit -m "authz: the ScopedAuthority trait and the sealed Authorized proof"
@@ -159,13 +181,13 @@ subject type `admin_ledger_service` already threads (`:89` calls
 `can_administer_grant(pool, caller, subject.kind.as_str(), subject.id)`). Reuse it; do **not** mint a
 parallel pair type.
 
-- [ ] **Step 1 — Baseline.** Record green:
+- [x] **Step 1 — Baseline.** Record green:
       ```bash
       cargo nextest run -p temper-services --features test-db --test admin_ledger_test
       cargo nextest run -p temper-api --features test-db --test access_grants_test
       ```
 
-- [ ] **Step 2 — AMEND: `RefTarget` retires the stringly-typed subject.** `grant_authority` currently
+- [x] **Step 2 — AMEND: `RefTarget` retires the stringly-typed subject.** `grant_authority` currently
       takes `subject_table: &str` and **string-compares** it (`access_service.rs:118`:
       `subject_table == "kb_cogmaps"`). `RefTarget.kind` is the `AnchorTable` enum
       (`payloads.rs:32–51`), whose variants cover every grant subject in use (`Cogmaps`, `Connections`,
@@ -175,21 +197,21 @@ parallel pair type.
       `can_administer_grant`'s existing `&str` seam working by converting at its boundary, so the
       ledger caller (`admin_ledger_service.rs:89`) is untouched by this task.
 
-- [ ] **Step 3 — CONFORM: move, do not rewrite.** Move `grant_authority`'s body (`:103–130`) into
+- [x] **Step 3 — CONFORM: move, do not rewrite.** Move `grant_authority`'s body (`:103–130`) into
       `resolve` **verbatim**, changing only the signature. The three branches — admin short-circuit,
       L0/gating guard, `profile_can_grant` — must survive in order. The short-circuit is load-bearing
       (spec D3: 1 query for an admin, 3 for a denied delegate); do not reorder it.
 
-- [ ] **Step 4 — AMEND: `is_denial` / `denial`.** `is_denial` is `matches!(self, GrantAuthority::None)`.
+- [x] **Step 4 — AMEND: `is_denial` / `denial`.** `is_denial` is `matches!(self, GrantAuthority::None)`.
       `denial()` is `ApiError::Forbidden` — verified at `access_service.rs:391` and the two sinks.
 
-- [ ] **Step 5 — Keep `can_administer_grant` working.** It is the seam `admin_ledger_service` calls
+- [x] **Step 5 — Keep `can_administer_grant` working.** It is the seam `admin_ledger_service` calls
       (`:89`) precisely so the read gate cannot drift from the write gate. Re-point it at the trait;
       **do not delete it and do not inline it into the ledger** — spec §1 quotes why.
 
-- [ ] **Step 6 — Verify.** Both suites from Step 1, still green, **no test edits**. Plus `cargo make check`.
+- [x] **Step 6 — Verify.** Both suites from Step 1, still green, **no test edits**. Plus `cargo make check`.
 
-- [ ] **Step 7 — Commit.** `git commit -m "authz: GrantAuthority implements ScopedAuthority"`
+- [x] **Step 7 — Commit.** `git commit -m "authz: GrantAuthority implements ScopedAuthority"`
 
 ---
 
@@ -206,25 +228,25 @@ deny'."* That behavior must survive exactly.
 **Interfaces — Produces:** `impl ScopedAuthority for MachineAuthority { type Subject = Option<Uuid>; .. }`
 plus a **new `None` arm** on the enum.
 
-- [ ] **Step 1 — Baseline.**
+- [x] **Step 1 — Baseline.**
       ```bash
       cargo nextest run -p temper-services --features test-db --lib machine_authz
       ```
 
-- [ ] **Step 2 — AMEND (spec §2.2): add the `None` arm.** Today denial is `Err(ApiError::Forbidden)`
+- [x] **Step 2 — AMEND (spec §2.2): add the `None` arm.** Today denial is `Err(ApiError::Forbidden)`
       returned from inside `authorize` (`:79`, `:85`). That bypasses `denial()`. Add `MachineAuthority::None`
       and have `resolve` return it instead of erroring.
 
-- [ ] **Step 3 — CONFORM: find every match on `MachineAuthority`.** `rg -n "MachineAuthority::" --type rust crates/`
+- [x] **Step 3 — CONFORM: find every match on `MachineAuthority`.** `rg -n "MachineAuthority::" --type rust crates/`
       — each match must gain a `None` arm, with **no `_ =>` catchall** (Global Constraints).
       `contain_target_team` (`:180`) is one; it currently matches two arms exhaustively.
 
-- [ ] **Step 4 — Preserve fail-closed.** The `Option<Uuid>` subject with `None` ⇒ deny must be a branch
+- [x] **Step 4 — Preserve fail-closed.** The `Option<Uuid>` subject with `None` ⇒ deny must be a branch
       in `resolve`, not an accident of a missing arm. Read `:78–81` before you move it.
 
-- [ ] **Step 5 — Verify.** Step 1's suite green, no edits. `cargo make check`.
+- [x] **Step 5 — Verify.** Step 1's suite green, no edits. `cargo make check`.
 
-- [ ] **Step 6 — Commit.** `git commit -m "authz: MachineAuthority implements ScopedAuthority, denial becomes an arm"`
+- [x] **Step 6 — Commit.** `git commit -m "authz: MachineAuthority implements ScopedAuthority, denial becomes an arm"`
 
 ---
 
@@ -241,22 +263,22 @@ the doc comment states the information-hiding intent; carry it onto `denial()` s
 **Interfaces — Produces:** `impl ScopedAuthority for TeamReadAuthority { type Subject = Uuid; .. }`,
 arms `Member | SystemAdmin | None`, `denial() -> ApiError::NotFound`.
 
-- [ ] **Step 1 — Baseline.** `cargo nextest run -p temper-api --features test-db --test team_lifecycle_test`
+- [x] **Step 1 — Baseline.** `cargo nextest run -p temper-api --features test-db --test team_lifecycle_test`
 
-- [ ] **Step 2 — CONFORM: read the existing gate.** `team_service.rs:282–285` — `is_member` (any role)
+- [x] **Step 2 — CONFORM: read the existing gate.** `team_service.rs:282–285` — `is_member` (any role)
       OR `is_system_admin`, else `NotFound`. Two probes, and `role_on_team` is called for the member
       check; reuse it, do not write new SQL.
 
-- [ ] **Step 3 — EXTEND: the impl.** Three arms so the *reason* survives (member vs admin), matching
+- [x] **Step 3 — EXTEND: the impl.** Three arms so the *reason* survives (member vs admin), matching
       how `GrantAuthority` carries why-not-just-whether (`access_service.rs:64`).
 
-- [ ] **Step 4 — Re-point `team_detail`** to `authorize::<TeamReadAuthority>`. The `NotFound` must come
+- [x] **Step 4 — Re-point `team_detail`** to `authorize::<TeamReadAuthority>`. The `NotFound` must come
       from `denial()`, not from a hand-written error at the call site.
 
-- [ ] **Step 5 — Verify.** Step 1's suite green, no edits. Confirm a non-member still gets **404, not
+- [x] **Step 5 — Verify.** Step 1's suite green, no edits. Confirm a non-member still gets **404, not
       403** — that is the whole point of this domain. `cargo make check`.
 
-- [ ] **Step 6 — Commit.** `git commit -m "authz: team read gate onto ScopedAuthority (NotFound domain)"`
+- [x] **Step 6 — Commit.** `git commit -m "authz: team read gate onto ScopedAuthority (NotFound domain)"`
 
 ---
 
@@ -273,21 +295,21 @@ mistake the note exists to prevent.
 **Interfaces — Produces:** `impl ScopedAuthority for ActorHistoryAuthority { type Subject = ProfileId; .. }`,
 arms `SelfActor | SystemAdmin | None`, `denial() -> ApiError::NotFound`.
 
-- [ ] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --test admin_ledger_test`
+- [x] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --test admin_ledger_test`
 
-- [ ] **Step 2 — CONFORM: read both checks.** `admin_ledger_service.rs:176` is `has_system_access` — a
+- [x] **Step 2 — CONFORM: read both checks.** `admin_ledger_service.rs:176` is `has_system_access` — a
       **standing** question. `:181` is `caller != actor && !is_system_admin` — the scoped one.
       **Only `:181` migrates.** Leave `:176` exactly where it is and do not fold it into the resolve.
 
-- [ ] **Step 3 — EXTEND: the impl.** `SelfActor` when `caller == subject`; `SystemAdmin` when the
+- [x] **Step 3 — EXTEND: the impl.** `SelfActor` when `caller == subject`; `SystemAdmin` when the
       governance probe holds; else `None`. Note the ordering: `caller == actor` is free (no query), so
       it goes first — a self-read must not cost a DB round-trip.
 
-- [ ] **Step 4 — Re-point `list_by_actor`'s second check** to `authorize::<ActorHistoryAuthority>`.
+- [x] **Step 4 — Re-point `list_by_actor`'s second check** to `authorize::<ActorHistoryAuthority>`.
 
-- [ ] **Step 5 — Verify.** Step 1's suite green, no edits. `cargo make check`.
+- [x] **Step 5 — Verify.** Step 1's suite green, no edits. `cargo make check`.
 
-- [ ] **Step 6 — Commit + open PR 1.**
+- [x] **Step 6 — Commit + open PR 1.**
       ```bash
       git commit -m "authz: ledger actor axis onto ScopedAuthority"
       cargo make check && cargo make test-db
