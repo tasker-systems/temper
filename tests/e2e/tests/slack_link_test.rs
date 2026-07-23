@@ -1689,7 +1689,7 @@ async fn callback_without_a_refresh_token_does_not_report_success(pool: PgPool) 
 /// the vault has nothing. The two endpoints must disagree in a way the agent can act on, which is
 /// why this is its own status rather than an error or a null token.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mint_reports_not_vaulted_distinctly_from_revoked(pool: PgPool) {
+async fn mint_reports_not_vaulted_distinctly_from_not_linked(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
     link_a_vaulted_principal(&app, &pool).await;
 
@@ -1717,36 +1717,22 @@ async fn mint_reports_not_vaulted_distinctly_from_revoked(pool: PgPool) {
         "no grant on file is not a transport error"
     );
     let body: serde_json::Value = res.json().await.expect("mint body");
-    assert_eq!(body["status"], "not_vaulted");
+    // The typed refusal: a 200 carrying `refused` with a `not_vaulted` reason — distinct from
+    // `not_linked` (no directory row) and from a `standing` refusal (not admitted).
+    assert_eq!(body["status"], "refused", "{body}");
+    assert_eq!(body["reason"], "not_vaulted", "{body}");
     assert!(
         body["access_token"].is_null(),
-        "no token may ride along on a not_vaulted answer: {body}",
+        "no token may ride along on a refusal: {body}",
     );
 }
 
-/// A revoked grant mints nothing, and is reported as `revoked` rather than `not_vaulted`.
-///
-/// The distinction matters to the human: `not_vaulted` means "finish linking", `revoked` means
-/// "this link was deliberately severed". Collapsing them would make one of those sentences a lie.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mint_reports_a_revoked_grant_as_revoked(pool: PgPool) {
-    let app = setup_slack_app(&pool).await;
-    link_a_vaulted_principal(&app, &pool).await;
-
-    sqlx::query("UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1")
-        .bind(SLACK_PRINCIPAL)
-        .execute(&pool)
-        .await
-        .expect("revoke the grant");
-
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
-    assert_eq!(res.status(), 200);
-    let body: serde_json::Value = res.json().await.expect("mint body");
-    assert_eq!(
-        body["status"], "revoked",
-        "a revoked grant must be distinguishable from one that was never vaulted: {body}",
-    );
-}
+// The former `mint_reports_a_revoked_grant_as_revoked` is deleted deliberately, not lost: the
+// `revoked_at` disjunct was dropped (spec §2.4) because soft-revoke was superseded by disconnect's
+// DELETE (commit `3a45b1ab`), so a flagged `revoked_at` no longer produces any mint outcome to
+// assert. The column's new inertness is pinned at the service layer by
+// `a_flagged_revoked_at_no_longer_blocks_minting`; a standing refusal at the wire is covered by the
+// end-to-end un-approved-link test.
 
 /// A malformed principal is refused at the route, on the same shape checks link-state applies.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
