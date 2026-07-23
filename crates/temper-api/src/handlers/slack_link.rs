@@ -11,10 +11,11 @@ use axum::Json;
 use jsonwebtoken::{decode, TokenData};
 
 use temper_auth::{build_authorize_url, generate_pkce_pair, AuthorizeParams};
+use temper_core::types::ids::ProfileId;
 use temper_services::auth::AuthenticatedProfile;
 use temper_services::auth::{AuthzError, RawJwtClaims};
 use temper_services::error::ApiError;
-use temper_services::services::{slack_grant_vault_service, slack_link_service};
+use temper_services::services::{slack_grant_vault_service, slack_link_service, standing_service};
 use temper_services::state::AppState;
 use temper_services::{link_provider, oauth_client};
 
@@ -163,9 +164,30 @@ pub struct CallbackQuery {
 /// credential and knows no channel.
 pub async fn callback(State(state): State<AppState>, Query(q): Query<CallbackQuery>) -> Response {
     match run_callback(&state, q).await {
-        Ok(slug) => connected_page(&slug),
+        Ok(CallbackOutcome::Connected { slug }) => connected_page(&slug),
+        Ok(CallbackOutcome::ConnectedPending { slug, reason }) => {
+            connected_pending_page(&slug, &reason)
+        }
         Err(message) => not_connected_page(&message),
     }
+}
+
+/// The two success shapes of a completed link. Both mean the identity row and grant are saved; they
+/// differ only in whether the human may act *yet*.
+///
+/// The third callback outcome — "not connected" — is the `Err(String)` channel of [`run_callback`],
+/// carrying a user-actionable sentence. It is not a variant here because every early return in that
+/// function already produces one, and folding them in would churn a dozen `return Err(..)` sites for
+/// no gain.
+enum CallbackOutcome {
+    /// Linked, vaulted, and admitted — the mention agent can act immediately.
+    Connected { slug: String },
+    /// Linked and vaulted, but the human's principal standing does not admit them yet (the modal
+    /// first-link case: every OAuth-provisioned human is born `Denied`). The link is saved and needs
+    /// no repeating; the remedy is an admin approval, which `reason` states. This is the page that
+    /// ends the born-`Denied` trap — the old flow rendered a bare "Account connected." here and then
+    /// failed every mention forever with a re-link prompt that could not help.
+    ConnectedPending { slug: String, reason: String },
 }
 
 /// The flow proper. Returns the linked profile's slug, or a user-actionable message.
@@ -175,7 +197,7 @@ pub async fn callback(State(state): State<AppState>, Query(q): Query<CallbackQue
 ///
 /// Every `Err` string here is shown to a human, so none of them may reveal whether a given
 /// profile exists.
-async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, String> {
+async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutcome, String> {
     if let Some(err) = q.error {
         tracing::warn!(error = %err, "slack link: IdP returned an error");
         return Err("The sign-in was cancelled or refused. Mention @temper again to retry.".into());
@@ -333,7 +355,27 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
 
     tracing::info!(profile_id = %profile.profile().id, "slack link: established and grant vaulted");
 
-    Ok(profile.profile().slug.clone())
+    // The link and grant are saved. Whether the human may ACT yet is a separate question, and the
+    // callback must answer it honestly rather than render a bare success: an OAuth-provisioned human
+    // is born `Denied` (D11), and the ungated callback lets a `Denied` principal complete the whole
+    // flow — so "connected" without qualification is the born-`Denied` trap. Decide it with the same
+    // `admit` the mint path uses (a shared predicate, never restated); a read failure collapses to a
+    // `NoStanding` refusal, which fails safe to the pending page (the link is saved regardless, and
+    // the next mention resolves standing for real).
+    let slug = profile.profile().slug.clone();
+    match standing_service::admit(&state.pool, ProfileId::from(profile.profile().id)).await {
+        Ok(_) => Ok(CallbackOutcome::Connected { slug }),
+        Err(refusal) => {
+            tracing::info!(
+                profile_id = %profile.profile().id,
+                "slack link: established but the principal is not yet admitted — pending page shown",
+            );
+            Ok(CallbackOutcome::ConnectedPending {
+                slug,
+                reason: refusal.reason(),
+            })
+        }
+    }
 }
 
 /// Verify the freshly-exchanged access token and resolve the profile it names — **lookup-only**.
@@ -503,6 +545,22 @@ fn connected_page(slug: &str) -> Response {
     render("temper · Slack", "Account <em>connected</em>.", &body)
 }
 
+/// Shown when the link is SAVED but the human is not admitted yet — the born-`Denied` case. It must
+/// say two true things the old bare-success page did not: the connection is complete (so they need
+/// not repeat it), and they cannot act until an admin approves (so a subsequent silent-failing
+/// mention is not a mystery). `slug` and `reason` are both escaped; `reason` is a
+/// [`temper_principal::Refusal::reason`] sentence, already free of any identifier.
+fn connected_pending_page(slug: &str, reason: &str) -> Response {
+    let body = format!(
+        "<p class=\"body\">Linked as <strong>@{}</strong> — the connection is saved, so you \
+         won't need to do this again.</p><p class=\"body\">You can't act through @temper just \
+         yet: {}. Once that's resolved, mention @temper again.</p>",
+        html_escape(slug),
+        html_escape(reason),
+    );
+    render("temper · Slack", "Almost <em>there</em>.", &body)
+}
+
 /// Shown for every non-success outcome. `message` is one of `run_callback`'s user-actionable
 /// sentences (already free of any secret) and is escaped before display.
 fn not_connected_page(message: &str) -> Response {
@@ -587,6 +645,11 @@ mod tests {
     async fn pages_request_no_external_assets() {
         for html in [
             body_html(connected_page("someone")).await,
+            body_html(connected_pending_page(
+                "someone",
+                "your access request is pending review",
+            ))
+            .await,
             body_html(not_connected_page("That link has expired.")).await,
         ] {
             assert!(
@@ -605,6 +668,45 @@ mod tests {
     #[tokio::test]
     async fn not_connected_page_escapes_the_message() {
         let html = body_html(not_connected_page("<script>alert(1)</script>")).await;
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("&lt;script&gt;"));
+    }
+
+    /// The pending page is NOT a bare success: it must acknowledge the link is saved AND state that
+    /// the human cannot act yet, carrying the refusal reason. This is the page that ends the
+    /// born-`Denied` trap — the old flow rendered "Account connected." here and then failed silently.
+    #[tokio::test]
+    async fn connected_pending_page_is_not_bare_success_and_names_the_reason() {
+        let html = body_html(connected_pending_page(
+            "j-cole-taylor",
+            "your access request is pending review",
+        ))
+        .await;
+        assert!(
+            !html.contains("Account <em>connected</em>."),
+            "the pending page must not render the plain success heading: {html}",
+        );
+        assert!(html.contains("@j-cole-taylor"), "the handle is still shown");
+        assert!(
+            html.contains("can't act through @temper just yet"),
+            "the page must say the human cannot act yet: {html}",
+        );
+        assert!(
+            html.contains("your access request is pending review"),
+            "the refusal reason must be shown: {html}",
+        );
+    }
+
+    /// The pending page's dynamic `reason` is escaped too — refusal sentences are static today, but
+    /// `Refusal::UnrecognizedStanding` interpolates a raw DB value, so the renderer must not depend
+    /// on a CHECK constraint in another table to stay safe.
+    #[tokio::test]
+    async fn connected_pending_page_escapes_the_reason() {
+        let html = body_html(connected_pending_page(
+            "someone",
+            "<script>alert(1)</script>",
+        ))
+        .await;
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(html.contains("&lt;script&gt;"));
     }
