@@ -34,8 +34,20 @@ dependencies = [
   "security-tripwires",
   "openapi-rb-drift",
   "openapi-ts-drift",
+  "ts-rs-drift",
   "ts-check"
 ]
+
+[tasks.ts-rs-drift]
+description = "Fail if any committed ts-rs generated type has drifted from the Rust that produces it"
+# The cross-LANGUAGE gate. Every other check here lives inside one language — clippy, tsc, biome —
+# so a Rust type and its TypeScript mirror can disagree while both sides stay green. That is not
+# hypothetical: PR #498 merged with tsc clean and 79/79 tests passing while the mention agent
+# spoke a mint contract the server had stopped emitting.
+#
+# Like openapi-ts-drift and unlike openapi-rb-drift, this NEVER skips: it needs only cargo, which
+# is already required by every other task in this list.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-ts-rs-drift.sh"]
 
 [tasks.security-tripwires]
 description = "Run the code-quality security tripwires (grant sinks, route auth, handler authz, signature secrets, credential Debug)"

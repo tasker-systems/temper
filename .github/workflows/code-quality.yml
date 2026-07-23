@@ -47,10 +47,13 @@ jobs:
         with:
           prefix-key: code-quality
 
-      - name: Install cargo-sqlx
+      - name: Install cargo-sqlx and cargo-make
         uses: taiki-e/install-action@v2
         with:
-          tool: sqlx-cli
+          # cargo-make is here for the ts-rs drift gate below, which invokes
+          # `cargo make generate-ts-types` — deliberately the same entry point a developer runs,
+          # so the gate cannot check a different generator than the one people use.
+          tool: sqlx-cli,cargo-make
 
       - name: Run migrations
         run: cargo sqlx migrate run
@@ -66,6 +69,13 @@ jobs:
 
       - name: Check every route is documented (OpenAPI route allowlist)
         run: bash .github/scripts/check-openapi-routes.sh
+
+      # The cross-LANGUAGE gate. Every other check in this job lives inside Rust, so a type and its
+      # generated TypeScript mirror can disagree while both languages stay green — which is exactly
+      # how PR #498 merged with tsc clean and 79/79 tests passing against a contract the server had
+      # stopped emitting. Its harness is in the guard-tests job; it runs here because it needs cargo.
+      - name: Check generated TypeScript types are up to date with the Rust (ts-rs drift)
+        run: bash .github/scripts/check-ts-rs-drift.sh
 
       # Security tripwires (docs/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
@@ -144,6 +154,11 @@ jobs:
 
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
+
+      # The gate itself needs cargo, so it runs in rust-quality; this harness stubs the generator
+      # and therefore stays pure bash, which is what lets it live in this job at all.
+      - name: Guard test — check-ts-rs-drift
+        run: bash .github/scripts/test-check-ts-rs-drift.sh
 
   typescript-quality:
     name: TypeScript Quality
