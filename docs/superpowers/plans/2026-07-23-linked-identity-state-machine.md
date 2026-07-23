@@ -67,11 +67,12 @@ Every task is tagged **CONFORM** / **EXTEND** / **AMEND**.
 
 ---
 
-## PR boundaries (spec §10)
+## PR boundaries (spec §10, revised at implementation)
 
-**PR 1** = Tasks 1–6 (the behavioural change). **PR 2** = Task 7 (the sealed proof).
-Then **#498 rebases and lands**. **PR 3** = Tasks 8–9 (generation + gate), last, because `mint.ts`
-exists only on #498's branch. Confirm with Pete before opening any.
+**PR 1** = Tasks 1–7 (the behavioural change **plus** the sealed proof — Task 7 folded in on Pete's
+call, since it shares `slack_mint.rs` with PR 1 and the anti-stack rule made a separate PR mean
+"wait for PR 1 to merge"). Then **#498 rebases and lands**. **PR 2** (was PR 3) = Tasks 8–9
+(generation + gate), last, because `mint.ts` exists only on #498's branch.
 
 ---
 
@@ -252,40 +253,35 @@ decision (`slack_link.rs:279-311`) and the rollback stays exactly as it is.
 
 ---
 
-### Task 7: The sealed `VerifiedSlackPrincipal` — PR 2
+### Task 7: The sealed `VerifiedSlackPrincipal` — DONE (folded into PR 1, commit `c4721ffd`)
 
-**Tag: EXTEND + AMEND** — spec §5. **Read §5.1 first: the verification moves into temper-services, or
-the seal is decorative.**
+**Tag: EXTEND + AMEND** — spec §5. Folded into PR 1 (not a separate PR 2) on Pete's call: it touches
+`slack_mint.rs` which PR 1 already changed, and the anti-stack rule made a separate PR mean "wait for
+PR 1 to merge." The authz change is the PR's headline; the rigor (trybuild + negative test + guards)
+held regardless.
 
-**Files:**
-- Modify: `crates/temper-services/src/auth/mod.rs` (or a sibling) — `verify_mint_request` + the type
-- Modify: `crates/temper-api/src/middleware/internal_auth.rs` — per-gate hook (`:39-92`, `:166-179`)
-- Modify: `crates/temper-api/src/handlers/slack_mint.rs` — proof extractor
-- Modify: `crates/temper-services/src/services/slack_mint_service.rs:32-37` — AMEND the comment
-- Modify: `.github/scripts/audit-signature-secrets.sh` — it reads gate/secret pairing **from source**
-- Create: `crates/temper-services/tests/compile_fail/forge_verified_slack_principal.rs` + `.stderr`
-
-- [ ] **Step 1: trybuild fixture**, shaped like `forge_system_admin.rs`. Generate the `.stderr` by
-  running, not by hand — the existing fixture's comment guesses `E0603` while its snapshot records
-  `E0423`.
-- [ ] **Step 2: Red.** `cargo make test-trybuild`
-- [ ] **Step 3: Implement `verify_mint_request` in temper-services** (spec §5.1) — it both verifies
-  the HMAC and mints the proof; passing the signature is the only way to obtain one. Private field,
-  accessor, no other constructor.
-- [ ] **Step 4: Per-gate hook in `require_signature_with`** (spec §5.2). The shared helper serves all
-  three gates; parsing-and-inserting inside it would mint the proof for `INTERNAL_RECONCILE_SECRET`
-  and `SLACK_LINK_SECRET` holders too. **Write the negative test**: a proof obtained behind the link
-  gate must fail.
-- [ ] **Step 5: Handler** takes the proof. `validate_slack_principal` moves onto this path and **must
-  keep returning `BadRequest`** — `mint_rejects_a_malformed_principal` (`slack_link_test.rs:1750-1761`)
-  asserts 400 while every other refusal here is `Unauthorized`.
-- [ ] **Step 6: AMEND the comment** at `slack_mint_service.rs:32-37`. Rewrite, do not delete — say
-  what is now true, why it changed, and keep §5.3's honest limit. A reader must not conclude this
-  closed more than it did.
-- [ ] **Step 7: Move the signature-secrets guard** with the verify, and run it.
-- [ ] **Step 8: Green** — trybuild, the Slack e2e suite, `bash .github/scripts/audit-route-auth.sh`
-  (per-builder, both `create_app` and `create_internal_app`).
-- [ ] **Step 9: Commit** after `cargo make check`.
+- [x] **`verify_mint_request` + `VerifiedSlackPrincipal` in `slack_mint_service`** (NOT `auth/mod.rs`
+  — co-located with the mint logic). Sole constructor, private field, does the FULL verify (spec §5.1
+  — the verify MOVED into temper-services).
+- [x] **Two design deviations from the plan text, both grounded:**
+  - **NOT a per-gate hook in `require_signature_with`** (the plan's Step 4). Putting the seal in the
+    shared helper is the F7 leak surface. Instead the mint gate has its OWN verify path; the other two
+    gates never call `verify_mint_request`, so cross-gate containment is **structural**, not a
+    discipline. The shared plumbing (header extract + body buffer) is factored into
+    `buffer_signed_request` so `require_signature_with` is not duplicated.
+  - **`audit-signature-secrets.sh` NOT modified** (the plan's Step 7 / files list). The mint gate
+    still reads `slack_mint_secret` (to pass it to `verify_mint_request`), so the guard's source scan
+    still finds it — the spec's assumption that moving the verify moves what the guard reads did not
+    hold under this design.
+- [x] **`validate_slack_principal` + constants + tests moved** to `slack_link_service`; still returns
+  `BadRequest` (400 distinct from a 401). Handler takes `Extension<VerifiedSlackPrincipal>`, drops
+  `Json<SlackMintRequest>`.
+- [x] **AMENDED** the stale comment at `slack_mint_service.rs` (the newtype-rejection), keeping §5.3's
+  honest limit.
+- [x] **Cross-gate containment proven three ways:** unit (`a_link_secret_signature_cannot_mint_a_proof`),
+  route-level e2e (`mint_refuses_the_link_state_key`), trybuild forgery (`E0451`).
+- [x] **Verified:** trybuild, e2e slack_link_test 22/22, reconcile gate (`internal_saml_test`) 4/4
+  unchanged (shared-helper refactor safe), `cargo make check` green.
 
 ---
 
