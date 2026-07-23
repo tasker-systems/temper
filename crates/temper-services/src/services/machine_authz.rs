@@ -180,6 +180,20 @@ fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
 /// from [`contain_reach`]. A system admin is exempt (Phase A D5) but still has the target team's
 /// existence checked — the D5 bypass is about authority, not about writing a `principal_id` that
 /// points at nothing.
+///
+/// **There is deliberately NO gating-team exclusion here**, unlike the two other two-sided gates
+/// (`cogmap_service::can_bind`, `context_service::can_share`), which both refuse the gating team as a
+/// target. The asymmetry is correct: those two guard acts that change what a *shared* object is
+/// subject to — a cogmap binding IS the admin-write-regime switch, and a context reassign transfers
+/// ownership into the root team. A reach grant does neither. It writes one `kb_access_grants` row
+/// (`subject_table = 'kb_connections'`) conferring READ on what the caller's own connection receives;
+/// it flips no regime, transfers no ownership, and exposes only the granter's data. Post-D11 the
+/// gating team confers neither standing nor admin-ness, so it is, for this act, an ordinary team.
+///
+/// Recorded as a decision rather than left to read as an oversight, and pinned by
+/// `connection_service::tests::reach_to_the_gating_team_is_allowed_for_a_non_admin`. Full
+/// reasoning for all three gates:
+/// `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1.
 pub(crate) async fn contain_target_team(
     pool: &PgPool,
     authority: MachineAuthority,

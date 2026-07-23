@@ -21,6 +21,7 @@ use temper_core::types::connection::{
 use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
+use crate::authz::{ConnectionAuthority, ConnectionScope};
 use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::InsertGrantParams;
@@ -411,13 +412,14 @@ pub async fn set_tool_manifest(
 /// `kb_access_grants` row (`subject_table = 'kb_connections'`) so the named team's members inherit
 /// READ on what the connection receives. Reach is read-only: no write, delete, or grant is conferred.
 ///
-/// Auth before writes, on **both** teams in play — they are different questions:
+/// Auth before writes, on **both** teams in play — they are different questions, and they are now
+/// one gate: `crate::authz::ConnectionAuthority`. It composes, rather than restates, the two:
 ///
-/// 1. *May you act on this connection?* — `machine_authz::authorize`, keyed on the connection's
-///    own owning team: a system admin, or the OWNER of that team; a teamless connection fails
-///    closed. The SAME policy as every other connection mutator, CALLED not restated. It
-///    deliberately does NOT route through `access_service::can_administer_grant`, whose
-///    `can_grant` seam has no bootstrap holder for a connection subject.
+/// 1. *May you act on this connection?* — `MachineAuthority`, keyed on the connection's own owning
+///    team: a system admin, or the OWNER of that team; a teamless connection fails closed. The SAME
+///    policy as every other connection mutator, CALLED not restated. It deliberately does NOT route
+///    through `access_service::can_administer_grant`, whose `can_grant` seam has no bootstrap
+///    holder for a connection subject.
 /// 2. *May you hand read-reach to THAT team?* — `machine_authz::contain_target_team`: a
 ///    manage-capable role on the RECEIVING team, system admins exempt. Without it, the owner of
 ///    one team could bind their connection's reach to any team UUID in the instance, including
@@ -425,6 +427,10 @@ pub async fn set_tool_manifest(
 ///    foreign key, a bogus UUID would persist a dangling grant row. This mirrors the machine
 ///    path's `machine_authz::contain_reach`, through the same `require_manage_on_team` seam so the
 ///    two cannot drift.
+///
+/// The connection's OWNING team is read from the row inside the gate, not passed in — so the pair
+/// the proof is about is (this connection, that team), and nothing the caller supplies decides
+/// which team its authority gets checked against.
 ///
 /// A connection whose reach is *declared* (`Connection::declares_reach`) carries a coarse remote
 /// reach that may exceed the granted team's temper reach — remote and temper scope are
@@ -448,8 +454,12 @@ pub async fn grant_reach(
     affirm_reach: Option<String>,
 ) -> ApiResult<Connection> {
     let connection = get(pool, connection_id).await?;
-    let authority = machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
-    machine_authz::contain_target_team(pool, authority, caller, team_id).await?;
+    crate::authz::authorize::<ConnectionAuthority>(
+        pool,
+        caller,
+        ConnectionScope::new(connection_id, team_id),
+    )
+    .await?;
 
     match (connection.declares_reach(), affirm_reach) {
         // Declared reach, unaffirmed: refuse, naming the declared reach and the fix. Write nothing.
@@ -1553,6 +1563,71 @@ mod tests {
         .expect_err("member != can_manage");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
         assert!(!reach_grant_exists(&pool, c.id, beta).await);
+    }
+
+    /// **The gating team is an ordinary target here, deliberately** — and this test exists to make
+    /// that a decision rather than an oversight.
+    ///
+    /// The two sibling two-sided gates both refuse it: `cogmap_service::can_bind` (a binding to the
+    /// gating team IS the `require_cogmap_write_admin` switch, and the same gate serves *unbind*)
+    /// and `context_service::can_share` (which also gates `reassign`, a transfer of ownership that
+    /// `context_reassign`'s plpgsql independently forbids). `contain_target_team` has no equivalent
+    /// reason: a reach grant writes one read-only `kb_access_grants` row over the caller's OWN
+    /// connection. It flips no regime and transfers no ownership. Post-D11 the gating team confers
+    /// neither standing (`has_system_access` reads `kb_principal_standing`) nor admin-ness
+    /// (`is_system_admin` reads `kb_principal_governance`), so for this act it is just a team.
+    ///
+    /// Spec §6.1, `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+    /// If a future change makes this red, that is a behaviour change to the asymmetry — read §6.1
+    /// before editing this test.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn reach_to_the_gating_team_is_allowed_for_a_non_admin(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+
+        // The target IS the gating team, and the caller manages it — the exact principal the two
+        // sibling gates refuse.
+        let gating = seed_managed_team(&pool, "temper-system", owner).await;
+
+        // Both halves of "the exact principal the siblings refuse" must be true, or this test
+        // pins nothing. A fixture where the gating slug went unconfigured, or where the caller
+        // happened to be an admin, would pass for the wrong reason.
+        let is_gating = sqlx::query_scalar!(
+            r#"SELECT EXISTS( SELECT 1 FROM kb_teams t
+                                JOIN kb_system_settings s ON t.slug = s.gating_team_slug
+                               WHERE t.id = $1 ) AS "e!: bool""#,
+            gating,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("gating check");
+        assert!(is_gating, "fixture must actually target the gating team");
+
+        let is_admin = sqlx::query_scalar!(r#"SELECT is_system_admin($1) AS "a!: bool""#, *owner)
+            .fetch_one(&pool)
+            .await
+            .expect("admin check");
+        assert!(
+            !is_admin,
+            "the caller must be a non-admin, or the D5 bypass carries this"
+        );
+
+        svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            gating,
+            Some("the root team reviews acme CI".into()),
+        )
+        .await
+        .expect("a reach grant to the gating team is not an escalation — spec §6.1");
+
+        assert!(
+            reach_grant_exists(&pool, c.id, gating).await,
+            "the grant must land; the gating team is an ordinary principal for reach"
+        );
     }
 
     /// `kb_access_grants.principal_id` carries NO foreign key, so an unvalidated `team_id` would
