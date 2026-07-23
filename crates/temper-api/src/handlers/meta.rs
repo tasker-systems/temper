@@ -32,7 +32,7 @@ pub async fn get_meta(
 ) -> ApiResult<Json<ResourceMetaResponse>> {
     temper_services::backend::substrate_read::get_meta_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         ResourceId::from(resource_id),
     )
     .await
@@ -78,7 +78,7 @@ pub async fn update_meta(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }

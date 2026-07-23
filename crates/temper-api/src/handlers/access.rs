@@ -64,7 +64,7 @@ pub async fn create_request(
     Json(body): Json<CreateRequestBody>,
 ) -> ApiResult<(StatusCode, Json<JoinRequest>)> {
     let params = access_service::CreateJoinRequestParams {
-        profile_id: ProfileId::from(auth.0.profile.id),
+        profile_id: ProfileId::from(auth.0.profile().id),
         message: body.message,
         source: body.source,
         accepted_terms_version: body.accepted_terms_version,
@@ -90,7 +90,7 @@ pub async fn get_own_request(
     auth: AuthUser,
 ) -> ApiResult<Json<Option<JoinRequest>>> {
     let request =
-        access_service::get_own_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+        access_service::get_own_request(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
     Ok(Json(request))
 }
 
@@ -110,7 +110,7 @@ pub async fn withdraw_request(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<StatusCode> {
-    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -139,7 +139,7 @@ pub async fn create_review_request(
     access_service::create_review_request(
         &state.pool,
         access_service::CreateReviewRequestParams {
-            profile_id: ProfileId::from(auth.0.profile.id),
+            profile_id: ProfileId::from(auth.0.profile().id),
             message: body.message,
         },
     )

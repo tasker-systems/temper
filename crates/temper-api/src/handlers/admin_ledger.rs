@@ -61,7 +61,7 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<AdminLedgerQuery>,
 ) -> ApiResult<Json<AdminLedgerResponse>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
 
