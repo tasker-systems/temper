@@ -308,7 +308,38 @@ and `…/agent/lib/mint.ts` (present only after #498).
 - [ ] **Step 3: Point `link.ts` and `mint.ts` at the generated types.**
 - [ ] **Step 4: Verify.** `cd packages/agent-workflows/mention && npm install && npm run typecheck && npm run test`
   — **from inside the agent dir**; a root `npm install` inherits the root's bun `overrides` and fails.
-- [ ] **Step 5: Commit the generated file — it must be tracked**, or Task 9's gate diffs nothing.
+- [x] **Step 5: Commit the generated file — it must be tracked**, or Task 9's gate diffs nothing.
+
+**DONE (commit `dc5059f4`). Three deviations from the plan text, each found by running it:**
+
+- [x] **The crate is temper-CORE, not temper-principal.** The plan's `-p temper-principal` export
+  emits `admission.ts` and **no `slack_link.ts`** — i.e. everything except `LinkRefusal`, the type
+  the agent branches on. It lives in `crates/temper-core/src/types/slack.rs:27`. The plan inherited
+  temper-principal from the `Refusal`-shaped framing of §6 and never checked which crate owns the
+  outer type.
+- [x] **The export is FILTERED to `export_bindings_linkrefusal`**, not a whole-crate run. ts-rs emits
+  one test per type and exports each type's TRANSITIVE CLOSURE, so the filter yields exactly
+  `slack_link.ts` + the `admission.ts` it imports. Unfiltered, `-p temper-core` deposits **36** files
+  into the agent — measured, not estimated. The closure is also why there is no hand-maintained file
+  list: a new dependency on `LinkRefusal` emits its file automatically.
+- [x] **`ts-rs/import-esm` enabled for that invocation only.** ts-rs otherwise emits
+  `from "./admission"`, which is error **TS2835** under the mention package's
+  `"moduleResolution": "NodeNext"`. Not enabled repo-wide: temper-ui resolves via its bundler, so a
+  global flip rewrites the import line of all 36 of its generated files to fix a problem only this
+  consumer has. The two trees therefore differ in import style **by design** — each is regenerated
+  and diffed against itself.
+- [x] **Step 3 is only half-done, and cannot be finished.** `mint.ts` now imports the generated
+  types; **`link.ts` does not and will not** — `LinkState` mirrors `SlackLinkStateResponse` in
+  temper-api, which has no ts-rs, so there is nothing generated to point it at. This is the residual
+  Step 7 files, and the plan's Step 3 overreached by naming `link.ts:35-37` as if a generated
+  counterpart existed.
+- [x] **Consequence not in the plan:** `standingReply` now takes the WHOLE generated `Refusal` (nine
+  variants), not a hand-narrowed six. The three transition-machine refusals route to the our-bug
+  reply and log, handled *explicitly* rather than by a `default:` so the switch stays exhaustive — a
+  tenth Rust variant is a compile error in that file.
+- [x] **Found in passing:** `packages/temper-ui/src/lib/types/generated/slack_link.ts` had never been
+  generated (Task 1 added the derives and deliberately did not regenerate). The gate would have gone
+  red on `main` for this alone.
 
 ---
 
@@ -337,7 +368,40 @@ and `…/agent/lib/mint.ts` (present only after #498).
   watch it red; restore.
 - [ ] **Step 7: File the residual** — the temper-api `status`-tag gap (spec §6, §9), with the evidence
   and the options. Do not imply coverage that does not exist.
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
+
+**DONE (commit `366547a8`). Deviations, all in the direction of covering more:**
+
+- [x] **The tree list is DERIVED, not written into the gate.** The plan said "over both output
+  trees"; hardcoding two paths would be the same two-copies-of-the-truth drift this gate exists to
+  stop, one level up. The gate greps main.toml's `TS_RS_EXPORT_DIR=…` lines, so a third consumer is
+  covered with no edit to the gate — and finding **zero** trees is a hard failure, because the loop
+  would otherwise run zero times and exit 0 having checked nothing.
+- [x] **`git status --porcelain`, not `git diff --exit-code`** (the model script's form). The diff
+  form reports only *tracked* changes, so a newly derived type — a `.ts` nobody has committed — is
+  invisible to it. That is exactly the state temper-ui's `slack_link.ts` was in. `status` covers
+  modified, deleted and untracked in one predicate.
+- [x] **The tracked-check is PER TREE**, not once: `git status` over a path git does not know about
+  reports nothing, so one gitignored tree would pass forever while checking nothing.
+- [x] **Harness case the plan did not ask for: a FAILING generator must fail the gate.** The
+  generator is a cargo build, and its most ordinary failure is a Rust compile error — precisely when
+  someone is midway through changing the types this gate protects. Exiting 0 there reports "up to
+  date" on the strength of files nothing regenerated, which is indistinguishable from a real pass.
+  Verified: the gate exits 105.
+- [x] **Two harness-only seams** (`TS_RS_DRIFT_REPO_ROOT`, `TS_RS_DRIFT_GENERATE_CMD`), following
+  `audit-signature-secrets.sh`'s `MIDDLEWARE_FILE` idiom. Stubbing the generator is precisely what
+  lets the harness stay pure-bash and live in `guard-tests` while the gate lives in `rust-quality` —
+  the tension the plan named but did not resolve. No CI job sets either.
+- [x] **`cargo-make` added to `rust-quality`'s existing `taiki-e/install-action` step.** The job runs
+  discrete `cargo` commands and had no cargo-make; the gate invokes `cargo make generate-ts-types`
+  deliberately — the same entry point a developer runs — so it cannot check a different generator
+  than the one people use.
+- [x] **Bite-verified on the real repo, not only on fixtures:** a one-word change to `LinkRefusal`'s
+  type-level doc comment turned the gate red and named BOTH trees; restoring turned it green. (A
+  first probe changed a *variant* doc comment and correctly did **not** trip it — ts-rs emits
+  type-level docs into a union, not per-variant ones.)
+- [x] **Step 7 residual filed** as temper task `019f910b-579b-74c2-bf05-702aaed0a011`, and cited in
+  the gate's own header so a reader hits the limit where they would otherwise infer coverage.
 
 ---
 
