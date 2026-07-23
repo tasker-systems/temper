@@ -177,6 +177,11 @@ impl GrantWarrant<'_> {
 **disappear**. Not "must match the gate"; there is nothing to match, because there is one spelling.
 Both primitives narrow `pub` → `pub(crate)` (verified: no caller outside temper-services).
 
+> **The table above is the INSERT axis only, and this section originally mistook that for all of it.**
+> `delete_grant` has its own two callers under their own two gates, both deliberately weaker than
+> their granting counterparts. `GrantWarrant` cannot seal it. See §2.5, added 2026-07-23 during PR 3
+> grounding.
+
 The `MachineReach` arm takes `&AuthorizedGrant`, not `&AuthorizedReach`, because a reach carries many
 grants and `apply_reach` loops over them (`machine_registration_service.rs:133`). Sealing each item
 individually — `AuthorizedReach::grants() -> &[AuthorizedGrant]`, each carrying its own cogmap id —
@@ -201,6 +206,57 @@ mint one for an existing id. What it buys is confinement and visibility — one 
 type, a name that reads as a claim, and a call-site-count test (§8) so a new construction site fails
 a test rather than passing review unnoticed. Bootstrapping a system is hard to model without
 exceptions; the code-risk is owned *somewhere*, and this is the smallest blast radius available.
+
+### 2.5 The revoke axis — a second warrant, because de-escalation is deliberately cheaper
+
+**Added 2026-07-23 (PR 3 grounding). §2.3 modelled insertion and assumed revocation was the same
+shape. It is not, on either of its two paths, and the difference is a stated principle rather than an
+oversight.**
+
+| Sink | Caller | Gate |
+|---|---|---|
+| `insert_grant` | `access_service::grant_capability` | `authorize_capability_grant` — authority arm **+ attenuation** |
+| `delete_grant` | `access_service::revoke_capability` | `can_administer_grant` — the arm **only** |
+| `insert_grant` | `connection_service::grant_reach` | `ConnectionAuthority` — the connection **and** the receiving team |
+| `delete_grant` | `connection_service::revoke_reach` | `MachineAuthority` on the connection **alone** |
+
+Both weakenings are load-bearing and both say so where they live:
+
+- *"Revocation is deliberately NOT attenuated: de-escalation must never be harder than escalation, or
+  a grant becomes unwithdrawable"* (`access_service.rs:343`).
+- *"Were revoke gated on the target team the way grant is, this grant would now be permanently
+  unrevokable — access stranded on a connection whose own owner can see the grant and cannot
+  withdraw it"* — the doc on `revoke_reach`, and the test
+  `revoke_reach_survives_losing_the_target_team_role`, which opens *"The grant/revoke asymmetry,
+  asserted so nobody 'fixes' it into symmetry."*
+
+So `revoke_reach` **cannot** produce an `Authorized<ConnectionAuthority>`: that proof requires the
+target-team role revocation must not demand. Forcing one warrant across both axes would therefore
+tighten `revoke_reach` — a behavior change an existing test forbids by name.
+
+```rust
+/// The COMPLETE set of ways a `kb_access_grants` row may be REMOVED. Parallel to `GrantWarrant`,
+/// and deliberately not the same enum: the gates are weaker on purpose, and one type spanning both
+/// axes would make an insertion arm mintable at a revocation site.
+pub(crate) enum RevokeWarrant<'a> {
+    /// Human/API grant administration. The arm WITHOUT attenuation — revocation is not attenuated.
+    Administered(&'a Authorized<GrantAuthority>),
+    /// Connection read-reach withdrawal — authority over the connection, and nothing about the
+    /// team losing the reach.
+    ConnectionControl(&'a Authorized<ConnectionControlAuthority>),
+}
+```
+
+`ConnectionControlAuthority` is **not new policy**. It is `ConnectionAuthority`'s *first* question —
+*"may you act on this connection?"*, `MachineAuthority` keyed on the connection's owning team —
+factored out under its own name, with `Subject = ConnectionId`. `ConnectionAuthority` then composes
+it rather than restating it, so the two cannot drift; that composition is the reason this factoring
+is a simplification and not an extra type.
+
+**Decision (Pete, 2026-07-23):** a separate `RevokeWarrant`, over sealing insertion alone. Sealing
+one primitive would leave D4's guarantee — *the effect cannot be produced unauthorized* — true for
+grants and false for revocations, and would leave the second spelling of the subject alive on the
+delete path, which is the thing §2.3 exists to remove.
 
 ---
 
@@ -239,6 +295,12 @@ stay distinguishable, the way `readable_event_types`' fail-closed default alread
 - **Conditional/parametric** — `team_service::create`'s `auto_join_role` (`:150`). A required proof
   would break the base scoped op that non-admins legitimately use. Stays a bool sub-check, as the
   enclosure spec's Bucket 3 concluded.
+- **Conditional/parametric** — `access_service::require_cogmap_write_admin`. **Added 2026-07-23:
+  Task 12's sweep found it, and this list had missed it.** It is Bucket 3 for the same reason as
+  `auto_join_role`: the admin requirement applies *only* when `cogmap_write_requires_admin` says the
+  map is in the reserved-L0-or-gating-team regime, so every write to an ordinary cogmap returns `Ok`
+  without consulting authority at all. A required proof would gate the base op that the whole
+  non-reserved corpus uses. Reported rather than migrated, per the plan's Task 12 Step 2 rule.
 - **`get_entitlements`** (`access_service.rs:1161`) — reports admin-ness; it is not a gate.
 
 ---

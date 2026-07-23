@@ -31,8 +31,8 @@ mod machine;
 mod read_gates;
 mod two_sided;
 
-pub(crate) use connection::{ConnectionAuthority, ConnectionScope};
-pub(crate) use grant::wire_subject;
+pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
+pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};
 pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};
 

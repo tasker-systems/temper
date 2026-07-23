@@ -188,12 +188,17 @@ impl From<&GrantCapabilityRequest> for RequestedCapabilities {
 ///   on this subject (`conferred ⊆ held`). Self-grant is neutralized by the same rule, since the
 ///   check never consults who the principal is.
 /// - **None** — denied, which is also where the L0/gating-map guard lands.
+///
+/// Returns the **proof**, not `()`: `grant_capability` needs it to mint
+/// `GrantWarrant::Administered`, and handing back the very proof this function decided on is what
+/// keeps the warrant's subject and the attenuated subject the same value by construction. Callers
+/// that only need the decision (`machine_authz::contain_reach`) discard it.
 pub(crate) async fn authorize_capability_grant(
     pool: &PgPool,
     caller: ProfileId,
     subject: RefTarget,
     caps: RequestedCapabilities,
-) -> ApiResult<()> {
+) -> ApiResult<crate::authz::Authorized<GrantAuthority>> {
     // The gate mints a proof bound to `subject`; denial is rendered by `GrantAuthority::denial()`
     // (`Forbidden`), so the refusal is the domain's, not this function's.
     let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
@@ -207,7 +212,7 @@ pub(crate) async fn authorize_capability_grant(
         // Unreachable: `authorize` refused it above. Enumerated rather than `_ =>` so a future
         // arm cannot land here silently permissive.
         GrantAuthority::None => Err(ApiError::Forbidden),
-        GrantAuthority::SystemAdmin => Ok(()),
+        GrantAuthority::SystemAdmin => Ok(proof),
         GrantAuthority::Delegated => {
             for (requested, action) in [
                 (caps.read, AccessAction::Read),
@@ -221,7 +226,7 @@ pub(crate) async fn authorize_capability_grant(
                     return Err(ApiError::Forbidden);
                 }
             }
-            Ok(())
+            Ok(proof)
         }
     }
 }
@@ -255,12 +260,17 @@ pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bo
     Ok(ok)
 }
 
-/// The columns of one `kb_access_grants` upsert. A params struct because the
-/// insert takes seven domain values (repo rule: >5 ⇒ struct).
+/// The columns of one `kb_access_grants` upsert **other than its subject**.
+///
+/// The subject is deliberately absent: it comes from the `GrantWarrant`, which is the only thing
+/// that can authorize the row in the first place. Carrying it here too would be a second spelling,
+/// and a second spelling is a transposition waiting to happen.
+///
+/// The `principal` fields stay — a principal is *who receives* the capability, not the scope the
+/// caller had to be authorized over, so it is genuinely caller-supplied data rather than something
+/// the proof knows.
 #[derive(Debug, Clone)]
 pub struct InsertGrantParams {
-    pub subject_table: String,
-    pub subject_id: Uuid,
     pub principal_table: String,
     pub principal_id: Uuid,
     pub can_read: bool,
@@ -270,14 +280,21 @@ pub struct InsertGrantParams {
     pub granted_by_profile_id: Uuid,
 }
 
-/// Raw upsert of one access grant, on a connection so it can join a transaction.
-/// **Performs no authorization** — every caller must gate first (auth before writes).
-/// Returns whether the row was freshly inserted (`xmax = 0`) rather than updated.
-pub async fn insert_grant(
+/// Upsert of one access grant, on a connection so it can join a transaction. Returns whether the row
+/// was freshly inserted (`xmax = 0`) rather than updated.
+///
+/// **This no longer performs no authorization — it requires the proof of it.** The `warrant` is
+/// constructible only by a gate that has already decided (`authz::GrantWarrant`), and the subject is
+/// read from it, so there is no way to reach this function with an unauthorized subject and no
+/// subject argument to get wrong. The doc comment that used to say *"every caller must gate first"*
+/// was the enforcement; now the type is.
+pub(crate) async fn insert_grant(
     conn: &mut sqlx::PgConnection,
+    warrant: &crate::authz::GrantWarrant<'_>,
     p: &InsertGrantParams,
     emitter: EntityId,
 ) -> ApiResult<bool> {
+    let subject = warrant.subject();
     // The upsert + `grant_created` event, one txn, via the SQL chokepoint `_admin_grant_created`
     // (migrations/20260718000010). `emitter` is the acting entity, resolved from the gated caller.
     // Correlation self-roots — there is no sibling event to fuse with in any grant path, and the
@@ -287,8 +304,8 @@ pub async fn insert_grant(
     Ok(sqlx::query_scalar!(
         r#"SELECT _admin_grant_created($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS "inserted!""#,
         emitter.uuid(),
-        p.subject_table,
-        p.subject_id,
+        subject.kind.as_str(),
+        subject.id,
         p.principal_table,
         p.principal_id,
         p.can_read,
@@ -301,18 +318,23 @@ pub async fn insert_grant(
     .await?)
 }
 
-/// Raw delete of one access grant by its `(subject, principal)` 4-tuple, on a connection so it can
-/// join a transaction. **Performs no authorization** — every caller must gate first (auth before
-/// writes). Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
-pub async fn delete_grant(
+/// Delete one access grant by its `(subject, principal)` 4-tuple, on a connection so it can join a
+/// transaction. Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
+///
+/// Takes a `RevokeWarrant` and reads the subject from it, for the same reason `insert_grant` takes a
+/// `GrantWarrant` — but a **different** warrant type, and that difference is the point. Revocation
+/// is deliberately weaker-gated than granting on both of its paths (spec §2.5); one warrant spanning
+/// both axes would let an insertion proof authorize a deletion and, worse, invite a later
+/// "consistency" pass to tighten revocation into unwithdrawability.
+pub(crate) async fn delete_grant(
     conn: &mut sqlx::PgConnection,
-    subject_table: &str,
-    subject_id: Uuid,
+    warrant: &crate::authz::RevokeWarrant<'_>,
     principal_table: &str,
     principal_id: Uuid,
     revoker: ProfileId,
     emitter: EntityId,
 ) -> ApiResult<bool> {
+    let subject = warrant.subject();
     // The DELETE + `grant_revoked` event, one txn, via the SQL chokepoint `_admin_grant_revoked`.
     // Emits ONLY when a row was actually removed — a no-op revoke is not an admin act, and the ledger
     // is append-only so a spurious event is immortal. `revoker` is the acting profile; `emitter` its
@@ -321,8 +343,8 @@ pub async fn delete_grant(
     Ok(sqlx::query_scalar!(
         r#"SELECT _admin_grant_revoked($1,$2,$3,$4,$5,$6) AS "deleted!""#,
         emitter.uuid(),
-        subject_table,
-        subject_id,
+        subject.kind.as_str(),
+        subject.id,
         principal_table,
         principal_id,
         revoker.uuid(),
@@ -345,16 +367,18 @@ pub async fn grant_capability(
     // grant becomes unwithdrawable.
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
-    authorize_capability_grant(pool, caller, subject, req.into()).await?;
+    let proof = authorize_capability_grant(pool, caller, subject, req.into()).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let granted = insert_grant(
         &mut conn,
+        // The subject travels in the warrant. `req.subject_table`/`req.subject_id` are NOT passed
+        // alongside it — they are what `wire_subject` typed into `subject` above, which is what the
+        // proof was minted over.
+        &crate::authz::GrantWarrant::Administered(&proof),
         &InsertGrantParams {
-            subject_table: req.subject_table.clone(),
-            subject_id: req.subject_id,
             principal_table: req.principal_table.clone(),
             principal_id: req.principal_id,
             can_read: req.can_read,
@@ -378,17 +402,18 @@ pub async fn revoke_capability(
 ) -> ApiResult<RevokeOutcome> {
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
-    if !can_administer_grant(pool, caller, subject).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // The proof, where this used to take the `can_administer_grant` bool. Same decision — that
+    // function IS a bool projection of this resolve — but revocation needs the proof itself to mint
+    // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
+    // attenuating a revocation is what would make a grant unwithdrawable.
+    let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
         &mut conn,
-        &req.subject_table,
-        req.subject_id,
+        &crate::authz::RevokeWarrant::Administered(&proof),
         &req.principal_table,
         req.principal_id,
         caller,
