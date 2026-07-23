@@ -14,20 +14,36 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # The principal itself is disabled.
+  class Deactivated < ApiModelBase
+    attr_accessor :kind
 
-    # Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on every other error.
-    attr_accessor :details
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
 
-    attr_accessor :message
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'kind' => :'kind'
       }
     end
 
@@ -44,16 +60,13 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'SystemAccessDetails',
-        :'message' => :'String'
+        :'kind' => :'String'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
       ])
     end
 
@@ -61,32 +74,22 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::Deactivated` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::Deactivated`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'kind')
+        self.kind = attributes[:'kind']
       else
-        self.code = nil
-      end
-
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
-      end
-
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
-      else
-        self.message = nil
+        self.kind = nil
       end
     end
 
@@ -95,12 +98,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
-      end
-
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @kind.nil?
+        invalid_properties.push('invalid value for "kind", kind cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +109,20 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @kind.nil?
+      kind_validator = EnumAttributeValidator.new('String', ["deactivated"])
+      return false unless kind_validator.valid?(@kind)
       true
     end
 
-    # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # Custom attribute writer method checking allowed values (enum).
+    # @param [Object] kind Object to be assigned
+    def kind=(kind)
+      validator = EnumAttributeValidator.new('String', ["deactivated"])
+      unless validator.valid?(kind)
+        fail ArgumentError, "invalid value for \"kind\", must be one of #{validator.allowable_values}."
       end
-
-      @code = code
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
-      end
-
-      @message = message
+      @kind = kind
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +130,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          kind == o.kind
     end
 
     # @see the `==` method
@@ -154,7 +142,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [kind].hash
     end
 
     # Builds the object from hash
