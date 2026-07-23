@@ -135,12 +135,12 @@ async fn apply_reach(
             &mut *conn,
             &InsertGrantParams {
                 subject_table: "kb_cogmaps".to_string(),
-                subject_id: grant.cogmap_id,
+                subject_id: grant.cogmap_id(),
                 principal_table: "kb_profiles".to_string(),
                 principal_id: profile_id,
                 // Write implies read — the DB's coherence CHECK enforces it anyway.
                 can_read: true,
-                can_write: grant.can_write,
+                can_write: grant.can_write(),
                 can_delete: false,
                 can_grant: false,
                 granted_by_profile_id: *caller,

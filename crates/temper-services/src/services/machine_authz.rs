@@ -84,15 +84,53 @@ pub(crate) async fn authorize(
     )
 }
 
+/// ONE authorized cogmap grant out of a reach.
+///
+/// Sealed the same way [`AuthorizedReach`] is — private field, no constructor outside this module —
+/// but at the **item** grain, and that grain is the point. `apply_reach` loops over the grants and
+/// writes one `kb_access_grants` row per item, so the subject of each row comes from the item, not
+/// from the reach. Handing the write primitive a `&AuthorizedGrant` therefore makes the per-row
+/// subject *structural*: there is no runtime "is this grant really a member of that reach?" check to
+/// write, because a caller cannot hold one that isn't.
+///
+/// A whole-reach proof would not do this. `&AuthorizedReach` plus a separately-named cogmap id is
+/// exactly the two-spellings shape `Authorized<A>` exists to remove, one level down.
+/// Holds the two authorized values directly rather than wrapping a `GrantSpec`: the spec is a
+/// deserialized wire type, and a proof should not be one field-addition away from carrying something
+/// nobody authorized.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AuthorizedGrant {
+    cogmap_id: Uuid,
+    can_write: bool,
+}
+
+impl AuthorizedGrant {
+    /// The map this grant is over — the subject of the row it authorizes, read from the proof.
+    pub(crate) fn cogmap_id(&self) -> Uuid {
+        self.cogmap_id
+    }
+
+    /// Whether the authorized reach included write. Read is implied (the DB coherence CHECK
+    /// enforces `write ⇒ read` anyway).
+    pub(crate) fn can_write(&self) -> bool {
+        self.can_write
+    }
+}
+
 /// Reach that has been authorized against a caller's authority (spec D3).
 ///
 /// The fields are private to this module and there is no public constructor, so an
 /// `AuthorizedReach` can only come from [`authorize_registration`]. `apply_reach` takes this
 /// type, which makes the unchecked path *unrepresentable* rather than merely discouraged.
+///
+/// `grants` is **owned** where `teams` is borrowed: each grant is re-wrapped as a sealed
+/// [`AuthorizedGrant`] at authorization time, which cannot be done through a borrow of the caller's
+/// `GrantSpec` slice. A reach carries a handful of grants on a path that runs once per machine
+/// registration, so the allocation is not worth contorting the type to avoid.
 #[derive(Debug)]
 pub(crate) struct AuthorizedReach<'a> {
     teams: &'a [TeamSpec],
-    grants: &'a [GrantSpec],
+    grants: Vec<AuthorizedGrant>,
 }
 
 impl<'a> AuthorizedReach<'a> {
@@ -100,8 +138,20 @@ impl<'a> AuthorizedReach<'a> {
         self.teams
     }
 
-    pub(crate) fn grants(&self) -> &'a [GrantSpec] {
-        self.grants
+    pub(crate) fn grants(&self) -> &[AuthorizedGrant] {
+        &self.grants
+    }
+
+    /// Seal a slice of specs. Private, and the ONLY way an `AuthorizedGrant` comes into existence —
+    /// co-located with the two `authorize_registration` arms that have earned the right to call it.
+    fn seal(grants: &[GrantSpec]) -> Vec<AuthorizedGrant> {
+        grants
+            .iter()
+            .map(|spec| AuthorizedGrant {
+                cogmap_id: spec.cogmap_id,
+                can_write: spec.can_write,
+            })
+            .collect()
     }
 }
 
@@ -149,10 +199,16 @@ pub(crate) async fn authorize_registration<'a>(
 
     match authority {
         // Phase A D5: a system admin may confer any reach on a machine.
-        MachineAuthority::SystemAdmin => Ok(AuthorizedReach { teams, grants }),
+        MachineAuthority::SystemAdmin => Ok(AuthorizedReach {
+            teams,
+            grants: AuthorizedReach::seal(grants),
+        }),
         MachineAuthority::TeamOwner => {
             contain_reach(pool, caller, teams, grants).await?;
-            Ok(AuthorizedReach { teams, grants })
+            Ok(AuthorizedReach {
+                teams,
+                grants: AuthorizedReach::seal(grants),
+            })
         }
         // Unreachable — `authorize` refuses a denial before returning. Enumerated rather than
         // `_ =>` so that a future arm cannot land here and fall into an authorizing branch.
