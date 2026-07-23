@@ -326,39 +326,61 @@ arms `SelfActor | SystemAdmin | None`, `denial() -> ApiError::NotFound`.
 
 ---
 
-### Task 6: Resolve the gating-team asymmetry — **the one genuine red-green task**
+### Task 6: Record the three reasons behind the gating-team asymmetry
+
+> **AMENDED 2026-07-23 — this was written as "the one genuine red-green task."** It is not one. PR 2
+> grounding (spec §6.1) found three sites whose gating-team relationship genuinely differs: `can_bind`'s
+> guard is structurally load-bearing via `cogmap_write_requires_admin` and its *unbind* direction is the
+> one nobody wrote down; `can_share`'s guard survives but its stated rationale was invalidated by D11
+> and the real footing is the `reassign` path's plpgsql twin; `contain_target_team` correctly has none.
+> Pete's call (2026-07-23): **no behaviour change at any of the three.** The deliverable is the reasons,
+> recorded where each gate lives, plus a test pinning the deliberate absence.
+>
+> **The plan now contains no behaviour-changing task.** The whole three-PR arc is behaviour-preserving.
 
 **Files:**
-- Modify: `crates/temper-services/src/services/machine_authz.rs:180` (`contain_target_team`)
-- Test: the connection-reach suite (locate with `rg -n "contain_target_team|grant_team_reach" --type rust crates/*/tests/`)
+- Modify: `crates/temper-services/src/services/cogmap_service.rs:9-13,58-61` (module header + `can_bind` doc)
+- Modify: `crates/temper-services/src/services/context_service.rs:364-369` (`can_share` doc)
+- Modify: `crates/temper-services/src/services/machine_authz.rs:172-181` (`contain_target_team` doc)
+- Test: the connection-reach suite (locate with `rg -n "contain_target_team|grant_reach" -g '*.rs' crates/*/tests/ tests/e2e/tests/`)
 
-**Read first:** spec §6 **in full**, including its instruction that this must be resolved *explicitly,
-in one direction, with a test pinning the choice*. Do not proceed to Task 7 until this is decided —
-collapsing first would silently pick a behavior for all three.
+**Read first:** spec §6 **in full** — §6.1 for the three reasons verbatim, §6.2 for the plpgsql fourth
+instance. Do not proceed to Task 7 until the comments are written; collapsing first is how the reasons
+get lost in the move.
 
-**This task changes behavior. It is the only one in the plan that does.**
+- [x] **Step 1 — ESCALATED and decided.** Presented 2026-07-23 with the live predicate bodies as
+      evidence. Outcome: option "no behaviour change; record three reasons." Recorded in spec §6.1.
 
-- [ ] **Step 1 — ESCALATE, do not decide alone.** Present to the user: `can_bind` and `can_share`
-      refuse binding into the gating team as *"an instance-level escalation"*; `contain_target_team`
-      does not. Under D11, gating-team ownership no longer confers admin-ness, which **widens** who
-      reaches this path. Ask which way it resolves. If the answer is "connections genuinely differ,"
-      that is a legitimate outcome — record the reason in the code comment.
+- [ ] **Step 2 — CONFORM: `can_bind`'s comment gains the unbind direction.** The existing text names
+      only binding ("binding there flips the map into the `require_cogmap_write_admin` regime"). Add
+      that `can_bind` also gates `unbind_team` (`:121`), so the guard's sharper purpose is preventing a
+      non-admin from **un**binding a protected map out of the admin-write regime. Both the module
+      header (`:9-13`) and the fn doc (`:58-61`) carry the claim; update both or they drift.
 
-- [ ] **Step 2 — Write the failing test** for whichever direction was chosen. If the choice is
-      "exclude gating team here too": a non-admin owner of a team who `can_manage` the gating team
-      attempts to grant connection reach to the gating team, and is refused. Run it; it must **FAIL**
-      against current `main` behavior. That red is the proof the asymmetry was real.
+- [ ] **Step 3 — AMEND: `can_share`'s rationale is replaced, not deleted.** Strike *"sharing into the
+      root team is an instance-level escalation"* — quote the live `has_system_access` /
+      `is_system_admin` bodies from spec §6.1 as the reason it is stale. Replace with the footing that
+      does hold: `can_share` also gates `reassign` (`:505`), a transfer of ownership into the root team
+      that `context_reassign`'s plpgsql independently forbids, so relaxing the Rust half would split the
+      two copies into different error paths. Cite spec §6.1 and §6.2.
 
-- [ ] **Step 3 — Implement** the chosen direction in `contain_target_team`, with a comment carrying the
-      *reason* and a pointer to spec §6.
+- [ ] **Step 4 — EXTEND: pin `contain_target_team`'s deliberate absence.** Its doc gains a paragraph
+      stating the absence is a decision (a reach grant confers READ on the granter's own connection
+      data; it flips no regime), and a test asserts it: a non-admin team owner grants connection reach
+      to the gating team and **succeeds**. This test must be **GREEN on first run** — it pins current
+      behaviour. A red here means the behaviour is not what §6.1 grounded; stop and escalate.
 
-- [ ] **Step 4 — Verify.** New test green. The existing machine/connection suites green, **no edits**.
-      If an existing test now fails, that test encoded the old asymmetry — stop and escalate rather
-      than editing it.
+- [ ] **Step 5 — Verify.** New test green. The three tests pinning the live exclusions
+      (`bind_cogmap_e2e.rs:424`, `context_share_e2e.rs:437`, `context_service.rs:946`) green,
+      **no edits** — needing to edit one is the signal the direction was wrong.
+      ```bash
+      cargo nextest run -p temper-services --features test-db --lib context_service
+      cargo make test-e2e   # bind_cogmap_e2e + context_share_e2e
+      ```
 
-- [ ] **Step 5 — If the test added a `query!` macro:** `cargo make prepare-services`.
+- [ ] **Step 6 — If the test added a `query!` macro:** `cargo make prepare-services`.
 
-- [ ] **Step 6 — Commit.** `git commit -m "authz: resolve the gating-team asymmetry across the two-sided gates"`
+- [ ] **Step 7 — Commit.** `git commit -m "authz: the three reasons behind the gating-team asymmetry"`
 
 ---
 
@@ -368,8 +390,14 @@ collapsing first would silently pick a behavior for all three.
 - Create: `crates/temper-services/src/authz/two_sided.rs`
 - Modify: `services/cogmap_service.rs:62` (`can_bind`), `services/context_service.rs:370` (`can_share`)
 
-**Read first:** spec §3 row 3 and §6's table. Then read **both** gates side by side —
+**Read first:** spec §3 row 3, §6's table, and **§6.2**. Then read **both** gates side by side —
 `cogmap_service.rs:58–81` and `context_service.rs:364–390`. They differ in exactly one probe.
+
+> **§6.2 bounds this task's claim.** `context_reassign`
+> (`migrations/20260715000010_context_reassign_fns.sql:77-93`) is a **fourth** copy of this policy, in
+> plpgsql, that the collapse cannot reach — deliberately, since it is the atomic enforcement behind the
+> Rust pre-check (`context_service.rs:629`). The commit message and PR body say **"one policy where
+> there were three, in Rust"**. Do not write "one copy".
 
 **Interfaces — Produces:** `impl ScopedAuthority for TwoSidedAuthority { type Subject = (RefTarget, Uuid); .. }`
 — the subject is the **pair**, which is what closes the transposition hazard (spec §2.2).

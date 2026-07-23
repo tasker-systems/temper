@@ -291,14 +291,76 @@ Surfaced by putting them side by side — which nothing in the codebase currentl
 | `machine_authz::contain_target_team` (`:180`) | caller's `MachineAuthority` | `require_manage_on_team` | **no** |
 
 Two of three treat binding into the root team as an instance-level escalation and keep it admin-only.
-The third does not. This is **not asserted to be a bug** — connections may genuinely differ, and D11
-changed what gating-team ownership confers (admin-ness now reads `kb_principal_governance`, so a
-gating-team owner is no longer automatically an admin, which *widens* who reaches this path).
+The third does not.
 
-**PR 2 must resolve it explicitly**, in one direction, with a test pinning the choice and a comment
-carrying the reason. What must not happen is the collapse landing while the asymmetry stays
-unexamined — a unification that silently picks one behavior for all three is how a deliberate
-exception gets deleted.
+### 6.1 Resolved (2026-07-23, Pete): the asymmetry is correct, for three distinct reasons
+
+**The framing above is wrong, and PR 2 grounding corrected it.** This is not one asymmetry with a
+direction to pick. It is three sites whose gating-team relationship genuinely differs, two of which
+carry a *reason that was never written down* and one of which carries a reason that **D11 invalidated
+while leaving the guard standing**. The resolution is therefore **no behaviour change at any of the
+three** — and the actual deliverable is the three reasons, recorded where each gate lives.
+
+**`can_bind` — structurally load-bearing, and the comment understates it.** The gating-team join is a
+direct input to the admin-write regime:
+
+```sql
+-- access_service.rs:434-458, cogmap_write_requires_admin
+SELECT EXISTS( SELECT 1 FROM kb_team_cogmaps tc
+   JOIN kb_teams t ON t.id = tc.team_id
+   JOIN kb_system_settings s ON t.slug = s.gating_team_slug
+  WHERE tc.cogmap_id = $1 )
+```
+
+`can_bind` gates **unbind** as well as bind (`cogmap_service.rs:121` — *"symmetric with bind — a
+principal who could bind may unbind"*). The exclusion's sharper direction is therefore the one the
+doc comment omits: without it, a non-admin holding `can_grant` on a map who also manages the gating
+team could **unbind a protected map**, dropping it out of the admin-write regime. Binding is a
+self-inflicted restriction; unbinding is a genuine escalation. Keep the guard; fix the comment.
+
+**`can_share` — the guard is right, the stated reason is stale.** The comment reads *"sharing into the
+root team is an instance-level escalation."* That held when gating-team membership **was** instance
+access. It no longer is — the live predicates consult the gating team for neither question:
+
+```sql
+-- has_system_access(p_profile_id)
+SELECT EXISTS (SELECT 1 FROM kb_principal_standing s
+                WHERE s.profile_id = p_profile_id AND s.state = 'approved')
+-- is_system_admin(p_profile_id)
+SELECT EXISTS (SELECT 1 FROM kb_principal_governance g WHERE g.profile_id = p_profile_id)
+```
+
+Post-D11 the gating team is the join-request target and the cogmap-regime marker, and confers no
+standing and no admin-ness. So the guard survives on a **different** and narrower footing: `can_share`
+also gates `reassign` (`context_service.rs:505`), which is a transfer of *ownership* into the root
+team, and that act is independently forbidden in plpgsql (§6.2). Relaxing the Rust half would put the
+two copies into different error paths for the same act. Keep the guard; replace the reason.
+
+**`contain_target_team` — no structural need for one, and that is deliberate.** A reach grant writes a
+`kb_access_grants` row (`subject_table = 'kb_connections'`) conferring READ on what the connection
+receives. It flips no regime, and what it exposes is the granter's own connection data. The absence is
+the correct policy, and PR 2 pins it with a test so it reads as a decision rather than an oversight.
+
+### 6.2 A fourth instance the table missed, and it is in SQL
+
+`context_reassign` (`migrations/20260715000010_context_reassign_fns.sql:77-93`) re-implements this
+entire policy in plpgsql — admin bypass, non-gating target team, owner/maintainer on it,
+administers-the-context — with its own gating-team `RAISE … ERRCODE '42501'`. **Task 7's Rust collapse
+cannot reach it**: after PR 2 the two-sided policy still exists twice, once in `TwoSidedAuthority` and
+once in the reassign function. That is not a defect introduced here (the SQL copy is the atomic
+enforcement behind a Rust pre-check, by design — `context_service.rs:629`), but it bounds the
+collapse's claim: **one policy where there were three, in Rust.** Do not describe PR 2 as leaving one
+copy.
+
+### 6.3 What PR 2 does about it
+
+Task 6 is **not** a red-green behaviour change. It is: correct `can_bind`'s comment to name the unbind
+direction; replace `can_share`'s D11-invalidated rationale with the reassign/plpgsql one; add a test
+pinning `contain_target_team`'s deliberate absence of a guard; and record §6.2 where the collapse
+happens. The three existing tests that pin the two live exclusions
+(`bind_cogmap_e2e.rs:424`, `context_share_e2e.rs:437`, `context_service.rs:946`) are **not touched** —
+under the plan's own rule, needing to edit them would have been the signal that the direction was
+wrong.
 
 ---
 
