@@ -7,11 +7,87 @@ use std::time::Duration;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 
 /// The `auth_provider` value for every Slack link row. One constant so the write and
 /// any future read can never disagree on the string.
 pub const SLACK_AUTH_PROVIDER: &str = "slack";
+
+/// Cap on `slack_principal_id`, matching `kb_profile_auth_links.auth_provider_user_id`'s
+/// `VARCHAR(128)`. The intents table is TEXT, so without this a too-long principal mints an
+/// intent, survives the exchange, BURNS the state, and only then fails at the final upsert.
+pub const MAX_SLACK_PRINCIPAL_LEN: usize = 128;
+
+/// The prefix every eve Slack principal carries, whatever its segment count.
+pub const SLACK_PRINCIPAL_PREFIX: &str = "slack:";
+
+/// Reject a malformed principal by SHAPE — non-empty, within the storage column's width, and
+/// carrying the `slack:` prefix. The principal is OPAQUE (2–4 segments), so it is deliberately
+/// never split on `:`; a prefix + length check is the whole of what is knowable without parsing
+/// something we have no business parsing.
+///
+/// **Lives here, in temper-services, not at the surface** (it was in `slack_link.rs`): the mint
+/// signature gate now seals a `VerifiedSlackPrincipal` in this crate
+/// (`slack_mint_service::verify_mint_request`, spec §5.2), and the shape check has to run there,
+/// before the proof is minted, in the same crate. The link-state and disconnect handlers call it
+/// from here too. It returns `BadRequest`, and that is load-bearing — a malformed principal must be
+/// a 400, distinct from the `Unauthorized` a bad signature yields (`mint_rejects_a_malformed_principal`).
+pub fn validate_slack_principal(principal: &str) -> Result<(), ApiError> {
+    if principal.is_empty() {
+        return Err(ApiError::BadRequest(
+            "slack_principal_id must not be empty".to_string(),
+        ));
+    }
+    if principal.len() > MAX_SLACK_PRINCIPAL_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "slack_principal_id exceeds the maximum length of {MAX_SLACK_PRINCIPAL_LEN} bytes"
+        )));
+    }
+    if !principal.starts_with(SLACK_PRINCIPAL_PREFIX) {
+        return Err(ApiError::BadRequest(format!(
+            "slack_principal_id must start with '{SLACK_PRINCIPAL_PREFIX}'"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_every_shape_of_real_principal() {
+        for p in [
+            "slack:T123:U456",
+            "slack:T123:bot:U456",
+            "slack:U456",
+            "slack:bot:U456",
+        ] {
+            assert!(validate_slack_principal(p).is_ok(), "rejected {p}");
+        }
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(validate_slack_principal("").is_err());
+    }
+
+    #[test]
+    fn rejects_a_principal_wider_than_the_storage_column() {
+        let at_limit = format!("slack:{}", "u".repeat(MAX_SLACK_PRINCIPAL_LEN - 6));
+        assert_eq!(at_limit.len(), MAX_SLACK_PRINCIPAL_LEN);
+        assert!(validate_slack_principal(&at_limit).is_ok());
+
+        let over = format!("slack:{}", "u".repeat(MAX_SLACK_PRINCIPAL_LEN));
+        assert!(validate_slack_principal(&over).is_err());
+    }
+
+    #[test]
+    fn rejects_a_foreign_prefix() {
+        assert!(validate_slack_principal("discord:T123:U456").is_err());
+        assert!(validate_slack_principal("U456").is_err());
+    }
+}
 
 /// What a successful consume yields: everything the callback needs to finish the exchange.
 #[derive(Debug, Clone)]

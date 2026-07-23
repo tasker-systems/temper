@@ -34,15 +34,6 @@ const INTENT_TTL: Duration = Duration::from_secs(15 * 60);
 /// both modes.
 const LINK_SCOPES: [&str; 4] = ["openid", "profile", "email", "offline_access"];
 
-/// Cap on `slack_principal_id`, matching `kb_profile_auth_links.auth_provider_user_id`'s
-/// `VARCHAR(128)`. The intents table is TEXT, so without this a too-long principal mints an
-/// intent, survives the exchange, BURNS the state, and only then fails at the final upsert —
-/// the user sees a save error and has to start over. Reject at the door instead.
-const MAX_SLACK_PRINCIPAL_LEN: usize = 128;
-
-/// The prefix every eve Slack principal carries, whatever its segment count.
-const SLACK_PRINCIPAL_PREFIX: &str = "slack:";
-
 #[derive(Debug, serde::Deserialize)]
 pub struct SlackLinkStateRequest {
     /// The WHOLE opaque principal from `attributes` — 2-4 segments, never split.
@@ -83,7 +74,7 @@ pub async fn slack_link_state(
     State(state): State<AppState>,
     Json(req): Json<SlackLinkStateRequest>,
 ) -> Result<Json<SlackLinkStateResponse>, ApiError> {
-    validate_slack_principal(&req.slack_principal_id)?;
+    slack_link_service::validate_slack_principal(&req.slack_principal_id)?;
 
     let cfg = state
         .config
@@ -122,32 +113,6 @@ pub async fn slack_link_state(
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(Json(SlackLinkStateResponse::Unlinked { authorize_url }))
-}
-
-/// Reject a malformed principal HERE, not at the final INSERT.
-///
-/// Three checks, all shape and none semantic: non-empty, within the storage column's width,
-/// and carrying the `slack:` prefix. The principal is OPAQUE — 2 to 4 segments depending on
-/// whether a team id is present and whether the author is a bot — so it is deliberately
-/// NEVER split on ':'. A prefix check plus a length check is the whole of what is knowable
-/// without parsing something we have no business parsing.
-pub(crate) fn validate_slack_principal(principal: &str) -> Result<(), ApiError> {
-    if principal.is_empty() {
-        return Err(ApiError::BadRequest(
-            "slack_principal_id must not be empty".to_string(),
-        ));
-    }
-    if principal.len() > MAX_SLACK_PRINCIPAL_LEN {
-        return Err(ApiError::BadRequest(format!(
-            "slack_principal_id exceeds the maximum length of {MAX_SLACK_PRINCIPAL_LEN} bytes"
-        )));
-    }
-    if !principal.starts_with(SLACK_PRINCIPAL_PREFIX) {
-        return Err(ApiError::BadRequest(format!(
-            "slack_principal_id must start with '{SLACK_PRINCIPAL_PREFIX}'"
-        )));
-    }
-    Ok(())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -578,43 +543,6 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// All four principal shapes eve emits (2-4 segments) pass. If any of these were
-    /// rejected the guard would be parsing, which is exactly what it must not do.
-    #[test]
-    fn accepts_every_shape_of_real_principal() {
-        for p in [
-            "slack:T123:U456",     // team + human
-            "slack:T123:bot:U456", // team + bot
-            "slack:U456",          // no team + human
-            "slack:bot:U456",      // no team + bot
-        ] {
-            assert!(validate_slack_principal(p).is_ok(), "rejected {p}");
-        }
-    }
-
-    #[test]
-    fn rejects_empty() {
-        assert!(validate_slack_principal("").is_err());
-    }
-
-    #[test]
-    fn rejects_a_principal_wider_than_the_storage_column() {
-        // 128 fits; 129 does not — the boundary is the VARCHAR(128) that would otherwise
-        // fail at the upsert, after the state was already burned.
-        let at_limit = format!("slack:{}", "u".repeat(MAX_SLACK_PRINCIPAL_LEN - 6));
-        assert_eq!(at_limit.len(), MAX_SLACK_PRINCIPAL_LEN);
-        assert!(validate_slack_principal(&at_limit).is_ok());
-
-        let over = format!("slack:{}", "u".repeat(MAX_SLACK_PRINCIPAL_LEN));
-        assert!(validate_slack_principal(&over).is_err());
-    }
-
-    #[test]
-    fn rejects_a_foreign_prefix() {
-        assert!(validate_slack_principal("discord:T123:U456").is_err());
-        assert!(validate_slack_principal("U456").is_err());
-    }
 
     /// Extract a rendered page's HTML body.
     async fn body_html(resp: Response) -> String {

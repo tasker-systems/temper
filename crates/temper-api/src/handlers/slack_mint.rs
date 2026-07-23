@@ -6,24 +6,14 @@
 //! credential.
 
 use axum::extract::State;
-use axum::Json;
-use serde::{Deserialize, Serialize};
+use axum::{Extension, Json};
+use serde::Serialize;
 
 use temper_core::types::slack::LinkRefusal;
 use temper_services::error::ApiResult;
 use temper_services::services::slack_grant_vault_service::MintOutcome;
-use temper_services::services::slack_mint_service;
+use temper_services::services::slack_mint_service::{self, VerifiedSlackPrincipal};
 use temper_services::state::AppState;
-
-use super::slack_link::validate_slack_principal;
-
-/// The mention agent's mint request: one opaque principal, exactly as
-/// [`crate::handlers::slack_link::SlackLinkStateRequest`] carries it.
-#[derive(Debug, Deserialize)]
-pub struct SlackMintRequest {
-    /// The WHOLE opaque principal (`slack:<team>:<user>`), never split.
-    pub slack_principal_id: String,
-}
 
 /// What the agent should do next, as a tagged union rather than a nullable token.
 ///
@@ -86,24 +76,21 @@ impl From<MintOutcome> for SlackMintResponse {
 
 /// `POST /internal/slack/mint` — mint an access token for a mentioning Slack user.
 ///
-/// **Gated by `require_slack_mint_signature`, on a key distinct from `SLACK_LINK_SECRET`.** That
-/// gate is not incidental: it is the whole of what enforces *"naming a principal must not be
-/// sufficient to mint its token."* The principal in the body is trusted precisely because only a
-/// holder of the mint secret could have put it there, and the sole holder derives it from eve's
-/// signature-verified `app_mention` rather than from anything a Slack user can type. See
-/// `slack_mint_service` for why this cannot instead be a predicate in the service layer.
+/// **The principal arrives as a sealed [`VerifiedSlackPrincipal`], not a request body.** The mint
+/// signature gate (`require_slack_mint_signature`) verifies the HMAC against `SLACK_MINT_SECRET`,
+/// validates the principal's shape, and seals the proof inside temper-services before this handler
+/// runs — so there is no client-supplied principal field here to trust or re-validate, and "naming
+/// a principal must not be sufficient to mint its token" is enforced structurally, not by a check
+/// this handler must remember. See `slack_mint_service::verify_mint_request` for the seal.
 ///
-/// Thin by intent (`temper-api` is transport): validate the principal's shape, dispatch to the
-/// service, map the outcome. No SQL, no cipher, no provider derivation here.
+/// Thin by intent (`temper-api` is transport): read the verified principal, dispatch to the
+/// service, map the outcome. No SQL, no cipher, no provider derivation, no validation here.
 pub async fn slack_mint(
     State(state): State<AppState>,
-    Json(req): Json<SlackMintRequest>,
+    Extension(principal): Extension<VerifiedSlackPrincipal>,
 ) -> ApiResult<Json<SlackMintResponse>> {
-    validate_slack_principal(&req.slack_principal_id)?;
-
     let outcome =
-        slack_mint_service::mint_for_mention(&state.pool, &state.config, &req.slack_principal_id)
-            .await?;
+        slack_mint_service::mint_for_mention(&state.pool, &state.config, principal.id()).await?;
 
     // Deliberately NOT logged with the principal at info level: a mint is per-mention, so an
     // info-per-mint would build a per-user activity trail in the platform log. The ledger is
