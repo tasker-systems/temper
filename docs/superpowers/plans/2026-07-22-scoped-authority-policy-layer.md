@@ -507,6 +507,37 @@ connection subject."* Preserve that; do not "unify" it into `GrantAuthority`.
 **Branch fresh off `main` after PR 2 merges.**
 **Coherence:** the enclosure spec's explicitly deferred write-primitive deepening, collected.
 
+> **Execution log (2026-07-23).** Branch `jct/scoped-authority-pr3`, four commits: the spec/plan
+> amendment, then Tasks 10, 11 (+9 folded), 11b (+12). `test-db` 2203/2203, `test-e2e` 256/256,
+> **zero test edits**.
+>
+> 1. **The spec was wrong about the delete axis, and this is the second time this arc's spec has
+>    mis-modelled a gate.** §2.3 enumerated *"the COMPLETE set of ways a row may be BORN"* and Task 11
+>    then said "same for `delete_grant`" — but revocation is deliberately weaker-gated on **both** its
+>    paths, and `revoke_reach` cannot mint an `Authorized<ConnectionAuthority>` without demanding a
+>    role an existing test forbids demanding. Escalated; Pete chose a separate `RevokeWarrant` over
+>    sealing insertion alone. Spec §2.5 + Task 11b. **Both times the tell was the same: a table in the
+>    spec that enumerated one axis and was read as enumerating all of it.**
+> 2. **Task 9 folded into Task 11.** `BornSubject` alone is dead code, and Global Constraints forbid a
+>    temporary `allow(dead_code)`. PR 1's log set this precedent for the trait and its first impl. The
+>    call-site-count test lands green at 1 rather than being written against 0 and bumped — writing a
+>    test to a number you intend to change immediately teaches the wrong lesson about that number.
+> 3. **`AuthorizedGrant` holds its two values, not a `GrantSpec`.** `GrantSpec` is a deserialized wire
+>    type and isn't `Copy`; wrapping it would leave a proof one field-addition away from carrying
+>    something nobody authorized. `AuthorizedReach.grants` became owned as a consequence — sealing
+>    each item cannot be done through a borrow of the caller's slice.
+> 4. **`audit-grant-sinks.sh` fired, and the fix was the guard, not the baseline.** Its
+>    definition-exclusion pattern was `pub async fn insert_grant`; narrowing the primitive to
+>    `pub(crate)` made its own definition count as a sink (`access_service.rs` 1 → 2) with no new
+>    write anywhere. Pattern fixed to be visibility-agnostic; baseline untouched; its 8 self-tests
+>    still pass. A false positive absorbed into a baseline is how a tripwire stops being read.
+> 5. **Task 12's sweep found a site spec §3 had missed** — `require_cogmap_write_admin`. Reported and
+>    documented as Bucket 3 rather than migrated, per Step 2's own instruction.
+>
+> The PR-1 rustdoc gate did not recur (plain code spans used from the start), but a **new** clippy
+> gate did: `doc_lazy_continuation` rejects a paragraph placed directly after a doc bullet list
+> without a blank `///` line. Cost one `cargo make check` cycle.
+
 ---
 
 ### Task 9: `BornSubject` and its call-site-count test
@@ -521,21 +552,21 @@ write a doc comment claiming it can.
 **Interfaces — Produces:** `pub(crate) struct BornSubject<S: Copy>` with private `subject: S`,
 accessor `subject(&self) -> S`, and one `pub(crate) fn` constructor whose name reads as a claim.
 
-- [ ] **Step 1 — EXTEND: the type.** Private field. The doc comment states the claim (*"the subject is
+- [x] **Step 1 — EXTEND: the type.** Private field. The doc comment states the claim (*"the subject is
       being born in this transaction; no prior authority over it can exist because it did not exist"*)
       **and** the limit (it cannot verify that claim).
 
-- [ ] **Step 2 — Write the call-site-count test.** Model it on
+- [x] **Step 2 — Write the call-site-count test.** Model it on
       `temper-principal/src/admission.rs:102–109` (`admit_reads_standing_and_nothing_else`) — read that
       test first; its value is entirely in the comment explaining why the number matters and that the
       fix is never "bump the number." Count constructions with
       `rg -c "BornSubject::<constructor-name>" crates/temper-services/src/`.
 
-- [ ] **Step 3 — Run it.** Expected: PASS at the count you just measured (1, after Task 11 wires
+- [x] **Step 3 — Run it.** Expected: PASS at the count you just measured (1, after Task 11 wires
       genesis). Until Task 11 lands the count is 0 — that is correct, not a failure; the test moves
       with the code.
 
-- [ ] **Step 4 — Commit.** `git commit -m "authz: BornSubject confines the genesis exception"`
+- [x] **Step 4 — Commit.** `git commit -m "authz: BornSubject confines the genesis exception"`
 
 ---
 
@@ -552,18 +583,18 @@ sealed proof and the model for everything in this PR.
 **Interfaces — Produces:** `AuthorizedReach::grants() -> &[AuthorizedGrant]` where `AuthorizedGrant`
 is sealed and carries its own `cogmap_id`.
 
-- [ ] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib machine_registration`
+- [x] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib machine_registration`
 
-- [ ] **Step 2 — CONFORM: read the loop.** `machine_registration_service.rs:133` — `for grant in
+- [x] **Step 2 — CONFORM: read the loop.** `machine_registration_service.rs:133` — `for grant in
       reach.grants()`. The per-row subject comes from the item, which is why sealing the item (rather
       than checking membership at runtime) makes it structural.
 
-- [ ] **Step 3 — AMEND: seal the item.** `AuthorizedGrant` with a private field, constructible only
+- [x] **Step 3 — AMEND: seal the item.** `AuthorizedGrant` with a private field, constructible only
       where `AuthorizedReach` is. `grants()` returns `&[AuthorizedGrant]`.
 
-- [ ] **Step 4 — Verify.** Suite green, no edits. `cargo make check`.
+- [x] **Step 4 — Verify.** Suite green, no edits. `cargo make check`.
 
-- [ ] **Step 5 — Commit.** `git commit -m "authz: seal each authorized grant, not just the reach"`
+- [x] **Step 5 — Commit.** `git commit -m "authz: seal each authorized grant, not just the reach"`
 
 ---
 
@@ -583,17 +614,17 @@ differing is correct rather than sloppy.
 **Interfaces — Produces:** `pub(crate) enum GrantWarrant<'a>` with exactly four arms (spec §2.3) and
 `fn subject(&self) -> RefTarget`.
 
-- [ ] **Step 1 — Baseline.** `cargo make test-db` (full workspace — this task touches five call sites
+- [x] **Step 1 — Baseline.** `cargo make test-db` (full workspace — this task touches five call sites
       across four services; a targeted run would miss a regression).
 
-- [ ] **Step 2 — EXTEND: the enum.** Four arms, each doc-commented with *which gate mints it*. The
+- [x] **Step 2 — EXTEND: the enum.** Four arms, each doc-commented with *which gate mints it*. The
       enum's own doc comment is the enumerable policy — quote spec §2.3's framing: *"The COMPLETE set of
       ways a `kb_access_grants` row may be born."*
 
-- [ ] **Step 3 — AMEND: `subject()` with no catchall.** Match all four arms. A `_ =>` here would defeat
+- [x] **Step 3 — AMEND: `subject()` with no catchall.** Match all four arms. A `_ =>` here would defeat
       the compile-error-on-a-fifth-way property (Global Constraints).
 
-- [ ] **Step 4 — AMEND: the primitive.** `insert_grant` takes the warrant and **drops
+- [x] **Step 4 — AMEND: the primitive.** `insert_grant` takes the warrant and **drops
       `subject_table`/`subject_id` from `InsertGrantParams`** — reading them from `warrant.subject()`.
       If you find yourself passing a subject *alongside* a warrant, stop: that reintroduces the second
       spelling this whole PR exists to remove.
@@ -604,14 +635,14 @@ differing is correct rather than sloppy.
       > `revoke_reach_survives_losing_the_target_team_role` proves it must not. `delete_grant` gets its
       > own `RevokeWarrant` in **Task 11b**. Leave it alone in this task.
 
-- [ ] **Step 5 — Migrate the five call sites**, each to its own arm per spec §2.3's table. The
+- [x] **Step 5 — Migrate the five call sites**, each to its own arm per spec §2.3's table. The
       `db_backend.rs:2225` genesis seed is the `Birth` arm — read `:2210–2224` first; the comment there
       explains the emitter and capability choices, which do not change.
 
-- [ ] **Step 6 — Verify.** `cargo make test-db` green, **no test edits**. Task 9's count test now
+- [x] **Step 6 — Verify.** `cargo make test-db` green, **no test edits**. Task 9's count test now
       expects 1. `cargo make check`.
 
-- [ ] **Step 7 — Commit.** `git commit -m "authz: kb_access_grants writes require a warrant"`
+- [x] **Step 7 — Commit.** `git commit -m "authz: kb_access_grants writes require a warrant"`
 
 ---
 
@@ -634,30 +665,30 @@ into symmetry"*, and it is the test that makes this a separate warrant rather th
 **Interfaces — Produces:** `ConnectionControlAuthority` (`type Subject = Uuid`, the connection),
 `pub(crate) enum RevokeWarrant<'a>` with exactly two arms and `fn subject(&self) -> RefTarget`.
 
-- [ ] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib connection`
+- [x] **Step 1 — Baseline.** `cargo nextest run -p temper-services --features test-db --lib connection`
       plus the access-grants suites. Record green.
 
-- [ ] **Step 2 — EXTEND: `ConnectionControlAuthority`.** It is `ConnectionAuthority`'s first question
+- [x] **Step 2 — EXTEND: `ConnectionControlAuthority`.** It is `ConnectionAuthority`'s first question
       under its own name. **Then make `ConnectionAuthority` compose it** — if the two end up asking
       the owning-team question separately, this factoring has cost a type and bought nothing.
 
-- [ ] **Step 3 — EXTEND: `RevokeWarrant`.** Two arms, each doc-commented with the gate that mints it
+- [x] **Step 3 — EXTEND: `RevokeWarrant`.** Two arms, each doc-commented with the gate that mints it
       **and the reason that gate is weaker than its insert counterpart** (spec §2.5's two quotes —
       carry them, do not summarise). No `_ =>` in `subject()`.
 
-- [ ] **Step 4 — AMEND: `delete_grant`** takes `RevokeWarrant` and drops `subject_table`/`subject_id`.
+- [x] **Step 4 — AMEND: `delete_grant`** takes `RevokeWarrant` and drops `subject_table`/`subject_id`.
 
-- [ ] **Step 5 — Migrate both call sites.** `revoke_capability` → `Administered`;
+- [x] **Step 5 — Migrate both call sites.** `revoke_capability` → `Administered`;
       `revoke_reach` → `ConnectionControl`. `revoke_capability` currently gates with the **bool**
       `can_administer_grant`; it needs the proof instead, so route it through
       `authorize::<GrantAuthority>` — that is the same decision, not a stronger one (attenuation lives
       in `authorize_capability_grant`, which revocation deliberately does not call).
 
-- [ ] **Step 6 — Verify.** Both suites green, **no test edits** —
+- [x] **Step 6 — Verify.** Both suites green, **no test edits** —
       `revoke_reach_survives_losing_the_target_team_role` passing unchanged is the proof the asymmetry
       survived. `cargo make check`.
 
-- [ ] **Step 7 — Commit.** `git commit -m "authz: kb_access_grants revocations require a warrant too"`
+- [x] **Step 7 — Commit.** `git commit -m "authz: kb_access_grants revocations require a warrant too"`
 
 ---
 
@@ -665,23 +696,23 @@ into symmetry"*, and it is the test that makes this a separate warrant rather th
 
 **Files:** `services/access_service.rs:289,320`; whole-crate sweep.
 
-- [ ] **Step 1 — Narrow `pub` → `pub(crate)`** on `insert_grant` and `delete_grant`. Verify no external
+- [x] **Step 1 — Narrow `pub` → `pub(crate)`** on `insert_grant` and `delete_grant`. Verify no external
       caller first: `rg -n "insert_grant|delete_grant" --type rust crates/ | grep -v temper-services`
       — expected: no hits.
 
-- [ ] **Step 2 — Sweep for restated policy.** `rg -n "is_system_admin" crates/temper-services/src/services/`
+- [x] **Step 2 — Sweep for restated policy.** `rg -n "is_system_admin" crates/temper-services/src/services/`
       and confirm every remaining production hit is one of the sites spec §3 lists as deliberately out
       of scope (filter-shaped, projection-shaped, conditional, `get_entitlements`). **Any hit not on
       that list is a site this plan missed** — report it, do not quietly migrate it.
 
-- [ ] **Step 3 — Full verification.**
+- [x] **Step 3 — Full verification.**
       ```bash
       cargo make check
       cargo make test-db
       cargo make test-e2e
       ```
 
-- [ ] **Step 4 — Commit + open PR 3.**
+- [x] **Step 4 — Commit + open PR 3.**
       ```bash
       gh pr create --title "ScopedAuthority: seal the grant write primitives" --base main
       ```
