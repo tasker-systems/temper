@@ -27,8 +27,10 @@
 
 mod grant;
 mod machine;
+mod read_gates;
 
 pub(crate) use grant::wire_subject;
+pub(crate) use read_gates::TeamReadAuthority;
 
 use async_trait::async_trait;
 use sqlx::PgPool;

@@ -278,11 +278,10 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
 /// return `NotFound` (not `Forbidden`) to avoid leaking team existence to
 /// non-members — team slugs are globally unique and used in share flows.
 pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> ApiResult<TeamDetail> {
-    // Auth (read gate): member (any role) or system admin.
-    let is_member = role_on_team(pool, team_id, caller).await?.is_some();
-    if !is_member && !access_service::is_system_admin(pool, caller).await? {
-        return Err(ApiError::NotFound);
-    }
+    // Auth (read gate): member (any role) or system admin. The `NotFound` above is rendered by
+    // `TeamReadAuthority::denial`, so the information-hiding decision lives with the policy rather
+    // than being re-made at each call site.
+    crate::authz::authorize::<crate::authz::TeamReadAuthority>(pool, caller, team_id).await?;
 
     let team = sqlx::query_as!(
         TeamRow,
