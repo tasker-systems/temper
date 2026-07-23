@@ -16,25 +16,48 @@ only, `POST /internal/slack/mint` asks for that person's access token. The four 
 | ---------- | ---- | ------ |
 | `unlinked` | not called | ephemeral authorize-URL prompt, **drop** |
 | `linked` | `token` | **dispatch** — `return { auth }` |
-| `linked` | `not_vaulted` | ephemeral "no stored credential, retrying won't fix it, re-link", **drop** |
-| `linked` | `revoked` | ephemeral "access was revoked, re-link to restore", **drop** |
+| `linked` | `refused` / `not_vaulted` | ephemeral "no stored credential, retrying won't fix it, re-link", **drop** |
+| `linked` | `refused` / `standing` | ephemeral "an admin has to approve your access" — **never** re-link, **drop** |
+| `linked` | `refused` / `not_linked` | ephemeral "mention me again for a fresh link" (the link vanished mid-mention), **drop** |
+
+> **The mint's refusal is TYPED, and the remedy splits on it.** `MintOutcome` is two arms
+> (`token` / `refused`), with the refusal carrying `reason` (`not_linked` / `not_vaulted` /
+> `standing`) and, under `standing`, the `kind` of the `temper_principal::Refusal`. Three nested
+> tags — `status`, `reason`, `kind` — distinct on purpose so they nest without collision.
+>
+> **Re-linking fixes `not_vaulted` and NOTHING else.** Every `standing` refusal is an admin
+> decision; `temper slack disconnect` cannot move principal standing, so offering it there is a
+> loop with no exit. The former flat `revoked` arm offered exactly that to everyone, which is the
+> false remedy the linked-identity state machine (PR #522) exists to end. `standingReply`
+> (`agent/lib/identity.ts`) is the one place the six admit-reachable kinds collapse onto three
+> remedies: admin-decides (`denied` / `no_standing` / `revoked` / `deactivated`), wait
+> (`requested`), and our-bug (`unrecognized_standing`, which also logs the raw value).
+>
+> The TS mirror of `Refusal` in `agent/lib/mint.ts` is **hand-written and ungated** — this package
+> is workspace-isolated and cannot import the ts-rs export in temper-ui. Emitting it here and
+> gating the drift is Task 8/9 of the linked-identity plan. Until then a `never` binding at each
+> switch is the only thing that notices a new Rust variant, and it only notices at compile time.
 
 **The mint is PRE-FLIGHTED in `onAppMention`, deliberately.** The connection's `getToken` mints
 too, so a successful turn mints twice — that is cheap on purpose: the server hands back the
 **cached** access token without touching the refresh token whenever it outlives a 5-minute skew
 (`slack_grant_vault_service.rs`, `mint_access_token`), so the second mint is a row read, never a
-second spend of the grant. What the pre-flight buys is the three distinct replies. If the first
+second spend of the grant. What the pre-flight buys is the distinct replies. If the first
 mint failure happened inside `getToken` it would be a **failed turn**, routed to the `turn.failed`
 handler, which says one deliberately detail-free sentence — collapsing "you were never vaulted",
-"your access was revoked" and "the network hiccuped" into a single generic error, when only the
-last is worth retrying. Do not move the mint into `getToken` alone.
+"an admin hasn't approved you" and "the network hiccuped" into a single generic error, when only
+the last is worth retrying. Do not move the mint into `getToken` alone.
 
-**The three failure replies must stay distinct**, and `tests/identity.test.ts` +
-`tests/slack-dispatch.test.ts` assert it (unlinked / not_vaulted / revoked must be three different
-strings, and only the unlinked one may carry a URL — the other two are reached from link-state's
-`linked` arm, which carries no `authorize_url`, so any URL in that copy is invented). The remedy
-they offer is `temper slack disconnect` followed by another mention, which routes the user back
-through the unlinked arm and its fresh URL.
+**The failure replies must stay distinct**, and `tests/identity.test.ts` +
+`tests/slack-dispatch.test.ts` assert it (unlinked and every mint refusal must be different
+strings, and only the unlinked one may carry a URL — every refusal is reached from link-state's
+`linked` arm, which carries no `authorize_url`, so any URL in that copy is invented).
+
+**Only `not_vaulted` may offer `temper slack disconnect`**, which routes the user back through the
+unlinked arm and its fresh URL. A standing refusal offers the admin instead, and
+`offers re-link ONLY where re-linking is the actual remedy` (`tests/identity.test.ts`) fails if
+that leaks back. The one other reply that says "mention me again" is the `not_linked` race — and
+there it is correct, because the user genuinely IS unlinked by then.
 
 **The endpoint answers "what do I say?", never "mint me a URL".** Asking for a URL unconditionally —
 which is what the first cut did — re-prompted an already-linked user to link again on **every**
@@ -123,13 +146,15 @@ is that "probably a read" is not a reason to grant. Two tests guard it: an exact
 a mutating-name-family scan that keeps biting even if someone "fixes" the first by pasting the new
 value.
 
-**`getToken` fails closed.** `not_vaulted` and `revoked` throw `ConnectionAuthorizationFailedError`
+**`getToken` fails closed.** Every `refused` arm throws `ConnectionAuthorizationFailedError`
 with `retryable: false` — **not** `ConnectionAuthorizationRequiredError`, which would tell eve to
 run an authorization flow and emit `authorization.required`, whose default handler posts a
 framework-owned **public** status line an override cannot reach (known constraint 1 below). There is
-no interactive flow to run: re-linking happens out of band. In practice the pre-flight means this
-path only fires for a grant revoked *between* the pre-flight and the tool call — it must still fail
-closed rather than call the MCP server with no credential.
+no interactive flow to run: re-linking and admin approval both happen out of band. In practice the
+pre-flight means this path only fires for a grant that stopped being mintable *between* the
+pre-flight and the tool call — it must still fail closed rather than call the MCP server with no
+credential. The thrown `reason` carries the refusal (`standing:denied`, not a flat `revoked`), so
+the distinction survives into the log even though the user-facing remedy is grouped.
 
 ## eve inbound identity contract (verified against eve@0.18.1)
 

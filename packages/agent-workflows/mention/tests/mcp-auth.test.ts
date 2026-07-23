@@ -71,21 +71,52 @@ describe("getTemperToken", () => {
   // asserted because a retryable failure invites eve to re-prompt for an interactive flow
   // that does not exist here.
   it("fails closed and terminally on not_vaulted", async () => {
-    requestMintedToken.mockResolvedValue({ status: "not_vaulted" });
+    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_vaulted" });
 
     await expect(
       getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
     ).rejects.toMatchObject({ reason: "not_vaulted", retryable: false });
   });
 
-  // FAILS IF: `revoked` fails open, or is collapsed onto the not_vaulted reason. The reason
-  // codes stay distinct because they surface on the stream event and the failed tool result.
-  it("fails closed and terminally on revoked, with its own reason code", async () => {
-    requestMintedToken.mockResolvedValue({ status: "revoked" });
+  // FAILS IF: a standing refusal fails open, or is collapsed onto the not_vaulted reason.
+  // The reason codes stay distinct because they surface on the stream event and the failed
+  // tool result — and because "re-link" and "an admin must approve you" are different
+  // instructions, which is the whole point of the typed refusal.
+  it("fails closed and terminally on a standing refusal, carrying the KIND in the reason", async () => {
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "standing",
+      refusal: { kind: "denied" },
+    });
 
     await expect(
       getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
-    ).rejects.toMatchObject({ reason: "revoked", retryable: false });
+    ).rejects.toMatchObject({ reason: "standing:denied", retryable: false });
+  });
+
+  // FAILS IF: the two standing kinds collapse to one reason code. A deactivated principal and
+  // a denied one are the same remedy for the USER (ask an admin) but different facts for
+  // whoever reads the log, and this is the only place that distinction survives.
+  it("keeps standing kinds distinct in the reason code", async () => {
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "standing",
+      refusal: { kind: "deactivated" },
+    });
+
+    await expect(
+      getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
+    ).rejects.toMatchObject({ reason: "standing:deactivated", retryable: false });
+  });
+
+  // FAILS IF: `not_linked` is treated as retryable, or as an error rather than a refusal. It
+  // is reachable here as a race — the link was removed between the pre-flight and this call.
+  it("fails closed and terminally on not_linked", async () => {
+    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_linked" });
+
+    await expect(
+      getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
+    ).rejects.toMatchObject({ reason: "not_linked", retryable: false });
   });
 
   // FAILS IF: the minted token escapes anywhere other than the returned `TokenResult`.

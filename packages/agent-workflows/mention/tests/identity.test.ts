@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   decideIdentity,
   isHumanPrincipal,
+  linkVanishedPrompt,
   notVaultedPrompt,
-  revokedPrompt,
+  pendingApprovalPrompt,
+  standingRefusedPrompt,
+  standingReply,
+  unknownStandingPrompt,
   unlinkedPrompt,
   type PrincipalLike,
 } from "../agent/lib/identity.js";
@@ -136,44 +140,106 @@ describe("unlinkedPrompt", () => {
   });
 });
 
-describe("the broken-credential prompts", () => {
-  it("each names the handle and offers the remedy", () => {
-    // FAILS IF: either reply becomes a bare error with nothing the user can act on. The
-    // handle is what makes it clear WHICH account is affected, and the remedy is the only
-    // reason a user reads past the first line.
-    for (const message of [notVaultedPrompt("j-cole-taylor"), revokedPrompt("j-cole-taylor")]) {
+/** Every reply reachable from link-state's `linked` arm — i.e. every mint refusal. */
+const refusalPrompts = (handle: string) => [
+  notVaultedPrompt(handle),
+  standingRefusedPrompt(handle),
+  pendingApprovalPrompt(handle),
+  unknownStandingPrompt(handle),
+  linkVanishedPrompt(handle),
+];
+
+describe("the refusal prompts", () => {
+  it("each names the handle", () => {
+    // FAILS IF: a reply becomes a bare error with nothing identifying in it. The handle is
+    // what makes it clear WHICH account is affected — a user with two Slack identities
+    // otherwise cannot tell which one the agent is refusing.
+    for (const message of refusalPrompts("j-cole-taylor")) {
       expect(message).toContain("@j-cole-taylor");
-      expect(message).toContain("temper slack disconnect");
     }
   });
 
-  it("are DISTINCT from each other", () => {
-    // FAILS IF: the two are collapsed into one shared string. "No credential is stored" and
-    // "your access was revoked" are different facts — one is an incomplete link, the other a
-    // deliberate withdrawal (possibly an admin deactivating the profile) — and a user who is
-    // told the wrong one goes looking in the wrong place.
-    expect(notVaultedPrompt("someone")).not.toBe(revokedPrompt("someone"));
-    expect(revokedPrompt("someone").toLowerCase()).toContain("revoked");
-    expect(notVaultedPrompt("someone").toLowerCase()).not.toContain("revoked");
+  it("are all DISTINCT from one another", () => {
+    // FAILS IF: any two are collapsed into a shared string. They are separate messages
+    // precisely because they carry separate REMEDIES; a shared "something went wrong" — the
+    // tempting simplification — trips this even though each reply still "says something".
+    const replies = refusalPrompts("someone");
+    expect(new Set(replies).size).toBe(replies.length);
   });
 
-  it("say plainly that retrying will not help", () => {
+  // THE REGRESSION GUARD FOR THE FALSE REMEDY. This is the bug the linked-identity state
+  // machine exists to end: the old flat `revoked` arm told every refused human to re-link,
+  // including ones whose standing an admin had denied. Re-linking cannot move principal
+  // standing, so that advice sent them round a loop with no exit.
+  //
+  // FAILS IF: the re-link remedy leaks back into any standing reply.
+  it("offers re-link ONLY where re-linking is the actual remedy", () => {
+    // The one state re-linking fixes: a link with no vaulted credential.
+    expect(notVaultedPrompt("someone")).toContain("temper slack disconnect");
+
+    // The states only an admin can fix. `disconnect` must appear in NEITHER, and the denial
+    // copy must say so out loud rather than merely omitting it.
+    for (const message of [standingRefusedPrompt("someone"), pendingApprovalPrompt("someone")]) {
+      expect(message).not.toContain("temper slack disconnect");
+    }
+    expect(standingRefusedPrompt("someone").toLowerCase()).toContain("reconnecting won't change");
+    expect(standingRefusedPrompt("someone").toLowerCase()).toContain("admin");
+  });
+
+  it("says plainly, where true, that retrying will not help", () => {
     // FAILS IF: the not_vaulted copy loses its finality. Without it the user mentions again,
     // gets the identical message, and concludes the agent is simply broken — which is the
     // exact experience the pre-flight fork exists to prevent.
     expect(notVaultedPrompt("someone").toLowerCase()).toMatch(/won't fix/);
+
+    // ...and the converse, which is not symmetry for its own sake: `not_linked` is the ONE
+    // refusal where mentioning again genuinely works, because the next link-state read takes
+    // the `unlinked` arm and hands out a fresh authorize URL.
+    expect(linkVanishedPrompt("someone").toLowerCase()).toContain("mention me again");
   });
 
   it("carry no URL, no task numbers and no dates", () => {
     // FAILS IF: someone "helpfully" pastes an authorize URL here. There is none to offer —
-    // both states are reached from link-state's `linked` arm, which carries no
+    // every one of these is reached from link-state's `linked` arm, which carries no
     // `authorize_url` — so any URL in this copy is invented. Also guards the copy rules: no
     // task numbers, no dates, no internal plans in user-facing text.
-    for (const message of [notVaultedPrompt("someone"), revokedPrompt("someone")]) {
+    for (const message of refusalPrompts("someone")) {
       expect(message).not.toContain("http");
       expect(message).not.toMatch(/\bT\d\b/);
       expect(message).not.toMatch(/\b20\d\d\b/);
     }
+  });
+});
+
+describe("standingReply maps the six admit refusals onto three remedies", () => {
+  // FAILS IF: a kind is re-pointed at the wrong remedy — the single decision this whole
+  // change turns on. Table-driven so a seventh kind added to the union without a decision
+  // here shows up as a compile error at `standingReply`, not a silently missing row.
+  it.each(["denied", "no_standing", "revoked", "deactivated"] as const)(
+    "routes %s to the admin-decision reply",
+    (kind) => {
+      expect(standingReply({ kind }, "someone")).toBe(standingRefusedPrompt("someone"));
+    },
+  );
+
+  it("routes requested to the do-nothing reply, NOT the go-ask-someone one", () => {
+    // FAILS IF: `requested` folds into the denied group. Telling a user whose request is
+    // already on file to "ask an admin to approve you" invites a duplicate request.
+    expect(standingReply({ kind: "requested" }, "someone")).toBe(pendingApprovalPrompt("someone"));
+    expect(pendingApprovalPrompt("someone").toLowerCase()).toContain("nothing more is needed");
+  });
+
+  it("routes an unrecognized standing to the our-fault reply, and LOGS the raw value", () => {
+    // FAILS IF: the raw value is swallowed. This state means temper stored a standing this
+    // build has never heard of — a version skew — and the raw string is the only evidence
+    // that says which one, so dropping it makes the skew undiagnosable from the outside.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const message = standingReply({ kind: "unrecognized_standing", raw: "quarantined" }, "someone");
+
+    expect(message).toBe(unknownStandingPrompt("someone"));
+    expect(spy).toHaveBeenCalledWith(expect.any(String), { raw: "quarantined" });
+    spy.mockRestore();
   });
 });
 

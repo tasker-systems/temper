@@ -2,6 +2,7 @@ import { ConnectionAuthorizationFailedError } from "eve/connections";
 import type { ConnectionPrincipal, TokenResult } from "eve/connections";
 
 import { requestMintedToken } from "./mint.js";
+import type { MintOutcome } from "./mint.js";
 
 /**
  * The credential seam for the `temper` MCP connection, and the read-only tool surface it is
@@ -91,19 +92,39 @@ export const TEMPER_READ_TOOLS = [
  *
  * ## Why FAILED-and-terminal, not REQUIRED
  *
- * `not_vaulted` and `revoked` throw `ConnectionAuthorizationFailedError` with
+ * Every `refused` arm throws `ConnectionAuthorizationFailedError` with
  * `retryable: false`, not `ConnectionAuthorizationRequiredError`. `Required` tells eve an
  * authorization flow should be run — it emits `authorization.required`, whose default handler
  * posts a framework-owned PUBLIC status line an override cannot reach (CLAUDE.md, known
  * constraint 1). There is no interactive flow to run: re-linking happens out of band through
  * the Slack link route, so eve would be prompting for a door that does not exist, in public.
- * Both states are terminal until the human re-links, which is precisely what `retryable:false`
- * means — the same shape the runtime itself uses for its own terminal `principal_required`.
+ * Every refusal is terminal until someone acts out of band — the human re-links, or an admin
+ * approves them — which is precisely what `retryable:false` means, and it is the same shape the
+ * runtime itself uses for its own terminal `principal_required`.
  *
- * In practice `onAppMention` pre-flights the mint and never dispatches on either of these, so
- * this path is the backstop for a grant revoked BETWEEN the pre-flight and the tool call. It
- * must still fail closed rather than call the MCP server with no credential.
+ * In practice `onAppMention` pre-flights the mint and never dispatches on a refusal, so this
+ * path is the backstop for a grant that stopped being mintable BETWEEN the pre-flight and the
+ * tool call. It must still fail closed rather than call the MCP server with no credential.
  */
+/**
+ * The OPERATOR-facing sentence for a refusal, carried on the thrown error.
+ *
+ * Deliberately not the Slack copy from `identity.ts`: that copy addresses the human in second
+ * person and offers a remedy they can act on, whereas this string lands in eve's error surface
+ * and this repo's logs. Two audiences, two registers — sharing one string would either put
+ * "ask an admin, then mention me again" into a log line or a bare state name in front of a user.
+ */
+function refusalMessage(refusal: Extract<MintOutcome, { status: "refused" }>): string {
+  switch (refusal.reason) {
+    case "not_linked":
+      return "No temper account is linked to this Slack identity.";
+    case "not_vaulted":
+      return "No temper credential is stored for this Slack identity; it must be re-linked.";
+    case "standing":
+      return `This Slack identity's temper principal is not admitted (${refusal.refusal.kind}); an admin must approve it.`;
+  }
+}
+
 export async function getTemperToken({
   principal,
 }: {
@@ -125,21 +146,20 @@ export async function getTemperToken({
   switch (outcome.status) {
     case "token":
       return { token: outcome.access_token, expiresAt: outcome.expires_at_ms };
-    case "not_vaulted":
+    case "refused":
+      // Every refusal is terminal and none is retryable, but the `reason` still rides the
+      // error: it is what distinguishes "re-link" from "an admin must approve you" in a log,
+      // and collapsing them here would rebuild the false remedy one layer down. `standing`
+      // additionally carries the `kind`, so a denied principal is separable from a deactivated
+      // one without reading the mint route's own logs.
       throw new ConnectionAuthorizationFailedError(TEMPER_CONNECTION_NAME, {
-        message: "No temper credential is stored for this Slack identity; it must be re-linked.",
-        reason: "not_vaulted",
-        retryable: false,
-      });
-    case "revoked":
-      throw new ConnectionAuthorizationFailedError(TEMPER_CONNECTION_NAME, {
-        message: "This Slack identity's temper access was revoked; it must be re-linked.",
-        reason: "revoked",
+        message: refusalMessage(outcome),
+        reason: outcome.reason === "standing" ? `standing:${outcome.refusal.kind}` : outcome.reason,
         retryable: false,
       });
 
     default: {
-      // A FOURTH mint status. Falling out of the switch would return `undefined`
+      // A THIRD mint status. Falling out of the switch would return `undefined`
       // where eve expects a `TokenResult` — the connection would then call the MCP
       // server with no credential, which is the one thing this function exists to
       // prevent. The `never` binding makes a new variant a COMPILE error; the

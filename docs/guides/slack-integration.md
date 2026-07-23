@@ -430,19 +430,42 @@ remaining life of any token temper vends** — every minted token is good for *a
 minutes — not a cap that limits a token to 5 minutes. Reading it as a ceiling makes the exposure
 window look twelve times smaller than it is.
 
-### The three mint outcomes
+### The mint outcomes, and why the refusal is typed
 
-Neither `revoked` nor `not_vaulted` is an error, so neither is an HTTP failure — a `200` carrying
-`not_vaulted` is the honest encoding of *"the request was fine; there is nothing to mint"*
-(`handlers/slack_mint.rs`). The agent must keep the three replies distinct;
-`tests/identity.test.ts` and `tests/slack-dispatch.test.ts` assert that unlinked / `not_vaulted` /
-`revoked` are three different strings and that **only** the unlinked one carries a URL.
+A refusal is not an error, so it is not an HTTP failure — a `200` carrying a refusal is the honest
+encoding of *"the request was fine; there is nothing to mint, and here is exactly why"*
+(`handlers/slack_mint.rs`). The response is two arms:
 
-Note `NotVaulted` is reachable for a user whom `link-state` calls `linked` — which is exactly why
-it is its own arm: the agent must not tell such a user things are working.
+```jsonc
+{ "status": "token",   "access_token": "…", "expires_at_ms": 1784505600000 }
+{ "status": "refused", "reason": "not_linked" }
+{ "status": "refused", "reason": "not_vaulted" }
+{ "status": "refused", "reason": "standing", "refusal": { "kind": "denied" } }
+```
 
-`mint_reports_not_vaulted_distinctly_from_revoked` (`slack_link_test.rs:1667`) and
-`mint_reports_a_revoked_grant_as_revoked` (`:1707`) pin this.
+**The reason exists because the remedies differ, and naming the wrong one is worse than saying
+nothing.** `not_vaulted` is fixed by re-linking. A `standing` refusal is fixed by an admin
+approving the human — re-linking cannot move principal standing, so telling a denied user to
+reconnect sends them round a loop that cannot terminate. That was a real shipped bug: the mint
+once answered a flat `revoked` for both, and the agent offered `temper slack disconnect` to
+everyone it hit.
+
+`reason` is `LinkRefusal` (`temper-core/src/types/slack.rs`); under `standing` it carries
+`temper_principal::Refusal` verbatim, so the ledger, the API and the agent cannot disagree about
+what a refusal means. Three nested tags — `status`, `reason`, `kind` — are distinct on purpose:
+a newtype variant under a shared tag emits a duplicate key and will not deserialize.
+
+`NotVaulted` is reachable for a user whom `link-state` calls `linked` — which is exactly why it is
+its own arm: the agent must not tell such a user things are working. Only the six refusals
+`temper_principal::admit` can produce are reachable here, pinned by
+`only_admit_reachable_refusals_ever_surface` (`slack_link_state.rs:173`).
+
+Pinned end to end by `mint_reports_not_vaulted_distinctly_from_not_linked`
+(`slack_link_test.rs:1761`) and `an_unapproved_principal_links_but_cannot_mint_until_approved`
+(`:1526`) — the latter asserting a born-Denied human is refused on **standing**, not told to
+re-link. On the agent side `tests/identity.test.ts` and `tests/slack-dispatch.test.ts` assert the
+replies stay distinct, that **only** the unlinked one carries a URL, and that the re-link remedy
+never leaks into a standing reply.
 
 ---
 
@@ -602,7 +625,9 @@ An operator should know which properties are enforced and which are conventions.
 | A transplanted ciphertext will not open (AEAD associated data) | `slack_grant_vault_service.rs:723` | unit |
 | A deactivated profile mints nothing | `slack_grant_vault_service.rs:687` | unit |
 | Minting disabled without its secret; linking unaffected | `slack_link_test.rs:1748` | e2e |
-| `revoked` vs `not_vaulted` stay distinct | `slack_link_test.rs:1667`, `:1707` | e2e |
+| `not_vaulted` vs `not_linked` stay distinct | `slack_link_test.rs:1761` | e2e |
+| A refused human is told the remedy that works (standing ⇒ admin, never re-link) | `slack_link_test.rs:1526` (server) · `tests/identity.test.ts` "offers re-link ONLY where re-linking is the actual remedy" (agent) | e2e + unit |
+| Only `admit`-reachable refusals surface on the mint | `slack_link_state.rs:173` | unit |
 | Link is lookup-only (no profile creation) | `slack_link_test.rs:455` | e2e |
 | State nonce is single-use | `slack_link_test.rs:505` | e2e |
 | No rebind to a different profile | `slack_link_test.rs:622` | e2e |

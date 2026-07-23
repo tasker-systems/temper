@@ -103,7 +103,7 @@ describe("onAppMention — the mint pre-flight", () => {
   // deliberately detail-free line instead of the one message that tells them what to do.
   it("never dispatches a not_vaulted user, and says something specific instead", async () => {
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
-    requestMintedToken.mockResolvedValue({ status: "not_vaulted" });
+    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_vaulted" });
     const { ctx, request, post } = fakeCtx();
 
     const result = await mention(ctx);
@@ -118,26 +118,31 @@ describe("onAppMention — the mint pre-flight", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  // FAILS IF: a revoked user is DISPATCHED. Same failure mode as above, and additionally the
-  // one where a revoked grant is treated as a transient error worth retrying.
-  it("never dispatches a revoked user, and says something specific instead", async () => {
+  // FAILS IF: a human refused on STANDING is DISPATCHED, or is told to re-link. Same
+  // dispatch failure mode as above, plus the false-remedy bug: re-linking cannot move
+  // principal standing, so `temper slack disconnect` here is advice that leads nowhere.
+  it("never dispatches a standing-refused user, and names the ADMIN remedy", async () => {
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
-    requestMintedToken.mockResolvedValue({ status: "revoked" });
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "standing",
+      refusal: { kind: "denied" },
+    });
     const { ctx, request, post } = fakeCtx();
 
     const result = await mention(ctx);
 
     expect(result).toBeNull();
     const [text] = ephemeralTexts(request);
-    expect(text).toMatch(/revoked/i);
-    expect(text).toContain("temper slack disconnect");
+    expect(text).toMatch(/admin/i);
+    expect(text).not.toContain("temper slack disconnect");
     expect(post).not.toHaveBeenCalled();
   });
 
-  // FAILS IF: the three failure replies are collapsed into one generic message. Each pair
-  // must differ, so a shared "something went wrong" string — the tempting simplification —
-  // trips this even though every individual reply still "says something".
-  it("gives unlinked, not_vaulted and revoked three DISTINCT replies", async () => {
+  // FAILS IF: the refusal replies are collapsed into one generic message. Each must differ,
+  // so a shared "something went wrong" string — the tempting simplification — trips this even
+  // though every individual reply still "says something".
+  it("gives unlinked and each mint refusal a DISTINCT reply", async () => {
     const replies: string[] = [];
 
     requestLinkState.mockResolvedValue({
@@ -148,17 +153,29 @@ describe("onAppMention — the mint pre-flight", () => {
     await mention(harness.ctx);
     replies.push(...ephemeralTexts(harness.request));
 
+    // One per REMEDY, which is the axis the copy splits on: re-link, admin-decides,
+    // wait, our-bug, and the link-vanished race.
+    const refusals = [
+      { status: "refused", reason: "not_vaulted" },
+      { status: "refused", reason: "standing", refusal: { kind: "denied" } },
+      { status: "refused", reason: "standing", refusal: { kind: "requested" } },
+      { status: "refused", reason: "standing", refusal: { kind: "unrecognized_standing", raw: "x" } },
+      { status: "refused", reason: "not_linked" },
+    ] as const;
+
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
-    for (const status of ["not_vaulted", "revoked"] as const) {
-      requestMintedToken.mockResolvedValue({ status });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const outcome of refusals) {
+      requestMintedToken.mockResolvedValue(outcome);
       harness = fakeCtx();
       await mention(harness.ctx);
       replies.push(...ephemeralTexts(harness.request));
     }
+    errorSpy.mockRestore();
 
-    expect(replies).toHaveLength(3);
-    expect(new Set(replies).size).toBe(3);
-    // And the unlinked one is the only one carrying a URL — the other two are reached from
+    expect(replies).toHaveLength(refusals.length + 1);
+    expect(new Set(replies).size).toBe(refusals.length + 1);
+    // And the unlinked one is the only one carrying a URL — every refusal is reached from
     // the `linked` arm, which has none to offer.
     expect(replies.filter((r) => r.includes("http"))).toHaveLength(1);
   });
@@ -167,7 +184,7 @@ describe("onAppMention — the mint pre-flight", () => {
   // moved after the dispatch (in which case it would not run at all on this path).
   it("mints for the WHOLE principal before deciding", async () => {
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
-    requestMintedToken.mockResolvedValue({ status: "not_vaulted" });
+    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_vaulted" });
 
     await mention(fakeCtx().ctx);
 
@@ -285,6 +302,27 @@ describe("onAppMention — an unrecognized mint status", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
     requestMintedToken.mockResolvedValue({ status: "quarantined" } as unknown as MintOutcome);
+    const { ctx, request } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toBeNull();
+    expect(ephemeralTexts(request)).toHaveLength(1);
+    expect(ephemeralTexts(request)[0]).toMatch(/try again/i);
+    expect(error).toHaveBeenCalled();
+  });
+
+  // FAILS IF: the INNER switch loses its `default:`. The outer one being covered proves
+  // nothing about the inner one — a refusal with an unknown `reason` gets past `case
+  // "refused"` and then falls out of the nested switch, which is the same silent-undefined
+  // death one level down. This is the arm a new Rust `LinkRefusal` variant lands in.
+  it("also covers an unrecognized refusal REASON, not just an unrecognized status", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "embargoed",
+    } as unknown as MintOutcome);
     const { ctx, request } = fakeCtx();
 
     const result = await mention(ctx);

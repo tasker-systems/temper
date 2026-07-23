@@ -2,7 +2,13 @@ import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
 import { deliverEphemeral } from "../lib/ephemeral.js";
-import { decideIdentity, notVaultedPrompt, revokedPrompt, unlinkedPrompt } from "../lib/identity.js";
+import {
+  decideIdentity,
+  linkVanishedPrompt,
+  notVaultedPrompt,
+  standingReply,
+  unlinkedPrompt,
+} from "../lib/identity.js";
 import { requestLinkState } from "../lib/link.js";
 import { requestMintedToken } from "../lib/mint.js";
 import { ephemeralEvents } from "../lib/events.js";
@@ -133,19 +139,45 @@ export default slackChannel({
           // this human and no one else.
           return { auth: decision.auth };
 
-        case "not_vaulted":
-          await deliverEphemeral(ctx, userId, notVaultedPrompt(link.handle));
-          // DROP: dispatching would fail in `getToken` and overwrite this specific,
-          // actionable message with the generic turn-failure line.
-          return null;
+        case "refused":
+          // The refusal's REASON picks the reply, because the reasons carry different
+          // remedies and a remedy is the only part of this the user can act on. Re-link
+          // fixes `not_vaulted` and nothing else; every `standing` refusal needs an admin.
+          // Saying "re-link" to a denied human — which the former flat `revoked` arm did —
+          // sends them round a loop that cannot terminate.
+          switch (mint.reason) {
+            case "not_linked":
+              await deliverEphemeral(ctx, userId, linkVanishedPrompt(link.handle));
+              return null;
 
-        case "revoked":
-          await deliverEphemeral(ctx, userId, revokedPrompt(link.handle));
-          // DROP, for the same reason.
-          return null;
+            case "not_vaulted":
+              await deliverEphemeral(ctx, userId, notVaultedPrompt(link.handle));
+              // DROP: dispatching would fail in `getToken` and overwrite this specific,
+              // actionable message with the generic turn-failure line.
+              return null;
+
+            case "standing":
+              await deliverEphemeral(ctx, userId, standingReply(mint.refusal, link.handle));
+              // DROP, for the same reason.
+              return null;
+
+            default: {
+              // A FOURTH refusal reason — same argument as the outer `never` below.
+              const unexpected: never = mint;
+              console.error("unexpected mint refusal reason", {
+                reason: (unexpected as { reason?: unknown }).reason,
+              });
+              await deliverEphemeral(
+                ctx,
+                userId,
+                "I couldn't check your temper account just now. Please try again in a moment.",
+              );
+              return null;
+            }
+          }
 
         default: {
-          // A FOURTH mint status. Without this arm the switch falls through and
+          // A THIRD mint status. Without this arm the switch falls through and
           // `onAppMention` returns `undefined` — which eve treats as a drop, so it
           // fails closed, but SILENTLY: no ephemeral, no log, indistinguishable
           // from a mention that never arrived.

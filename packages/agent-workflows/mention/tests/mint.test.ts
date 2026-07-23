@@ -40,7 +40,7 @@ describe("requestMintedToken", () => {
   // config.rs:32-48 is the whole reason `/internal/slack/mint` has its own router and layer.
   // temper's own e2e `mint_refuses_the_link_state_key` is the server-side half of this pair.
   it("signs with SLACK_MINT_SECRET, never SLACK_LINK_SECRET", async () => {
-    const fetchMock = stubFetch(200, { status: "not_vaulted" });
+    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted" });
 
     await requestMintedToken(PRINCIPAL);
 
@@ -60,7 +60,7 @@ describe("requestMintedToken", () => {
   // would sign happily instead of throwing, so this asserts the absence of that fallback.
   it("throws when SLACK_MINT_SECRET is missing rather than falling back", async () => {
     vi.stubEnv("SLACK_MINT_SECRET", "");
-    stubFetch(200, { status: "not_vaulted" });
+    stubFetch(200, { status: "refused", reason: "not_vaulted" });
 
     await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow("SLACK_MINT_SECRET");
   });
@@ -93,27 +93,40 @@ describe("requestMintedToken", () => {
     expect(outcome.access_token).toBe("at-abc");
   });
 
-  // FAILS IF: `revoked` is mapped onto an error, or collapsed with not_vaulted. It is a 200 and
-  // a distinct fact: the user must re-link, and retrying will never succeed.
-  it("returns the revoked arm as a value, not a throw", async () => {
-    stubFetch(200, { status: "revoked" });
+  // FAILS IF: a refusal is mapped onto an error. Every one of these is a 200 — "the request
+  // was fine; there is nothing to mint, and here is why" — so throwing would collapse a fact
+  // the user needs a specific sentence for into the generic retry line.
+  //
+  // FAILS ALSO IF: the nested tags are flattened or dropped on the way through. `status`,
+  // `reason` and `kind` are three DISTINCT discriminators precisely so they nest without
+  // collision (`temper-core/src/types/slack.rs`, on why `Standing` is a struct variant under a
+  // `reason` tag rather than a newtype under `kind`), and the `standing` arm is the only one
+  // that carries a payload — so it is the one a careless re-shape would silently lose.
+  it.each([
+    [{ status: "refused", reason: "not_linked" }],
+    [{ status: "refused", reason: "not_vaulted" }],
+    [{ status: "refused", reason: "standing", refusal: { kind: "denied" } }],
+    [{ status: "refused", reason: "standing", refusal: { kind: "requested" } }],
+    [{ status: "refused", reason: "standing", refusal: { kind: "revoked" } }],
+    [{ status: "refused", reason: "standing", refusal: { kind: "deactivated" } }],
+    [{ status: "refused", reason: "standing", refusal: { kind: "no_standing" } }],
+    [
+      {
+        status: "refused",
+        reason: "standing",
+        refusal: { kind: "unrecognized_standing", raw: "quarantined" },
+      },
+    ],
+  ])("returns %j as a value, not a throw, and preserves every tag", async (body) => {
+    stubFetch(200, body);
 
-    await expect(requestMintedToken(PRINCIPAL)).resolves.toEqual({ status: "revoked" });
-  });
-
-  // FAILS IF: `not_vaulted` is collapsed into revoked or into an error. It is reachable for a
-  // user whom link-state calls `linked` (slack_mint.rs:52-56), so the agent must be able to
-  // tell this apart and not claim things are working.
-  it("returns the not_vaulted arm as a value, not a throw", async () => {
-    stubFetch(200, { status: "not_vaulted" });
-
-    await expect(requestMintedToken(PRINCIPAL)).resolves.toEqual({ status: "not_vaulted" });
+    await expect(requestMintedToken(PRINCIPAL)).resolves.toEqual(body);
   });
 
   // FAILS IF: the principal is split/reordered, the route path drifts from /internal/slack/mint
   // (e.g. copied as link-state), or the base URL's trailing slash is doubled up.
   it("posts the WHOLE principal to the mint route with no trailing-slash dupe", async () => {
-    const fetchMock = stubFetch(200, { status: "not_vaulted" });
+    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted" });
 
     await requestMintedToken(PRINCIPAL);
 
