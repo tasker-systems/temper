@@ -562,13 +562,10 @@ mod tests {
         handle: &str,
         team_slug: &str,
     ) -> (ProfileId, Uuid) {
-        sqlx::query!(
-            "UPDATE kb_system_settings \
-                SET access_mode = 'invite_only', gating_team_slug = 'temper-system'"
-        )
-        .execute(pool)
-        .await
-        .expect("invite_only with a configured gating team");
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(pool)
+            .await
+            .expect("invite_only with a configured gating team");
 
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -776,15 +773,13 @@ mod tests {
     async fn provision_enrolls_the_agent_in_the_gating_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         // Mirror prod's real invite_only shape: a configured gating team. A fresh test DB
-        // seeds gating_team_slug NULL, and `update_system_settings` rejects invite_only with
-        // no slug precisely because it would lock everyone out — so a bare access_mode flip is
-        // not a state the product ever reaches.
-        sqlx::query!(
-            "UPDATE kb_system_settings SET access_mode = 'invite_only', gating_team_slug = 'temper-system'"
-        )
-        .execute(&pool)
-        .await
-        .expect("flip to invite_only");
+        // seeds gating_team_slug NULL, and `update_system_settings` rejects a gate with no slug
+        // precisely because it would lock everyone out — so a configured gating team is the real
+        // invite-only shape (access_mode was retired as a control in Phase 2).
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(&pool)
+            .await
+            .expect("configure the gating team");
 
         let client = svc::provision(&pool, admin, &req("gated-agent"))
             .await

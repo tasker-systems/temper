@@ -4,8 +4,8 @@
 
 use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
-use temper_core::types::AuthenticatedProfile;
 use temper_services::auth::require_system_admin;
+use temper_services::auth::AuthenticatedProfile;
 use temper_services::error::ApiError;
 use temper_services::test_support;
 
@@ -24,8 +24,8 @@ async fn authed(pool: &PgPool, handle: &str) -> AuthenticatedProfile {
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn admin_gets_a_proof_carrying_its_actor(pool: PgPool) {
     let a = authed(&pool, "admin").await;
-    let id = ProfileId::from(a.profile.id);
-    test_support::grant_governance(&pool, a.profile.id).await;
+    let id = ProfileId::from(a.profile().id);
+    test_support::grant_governance(&pool, a.profile().id).await;
 
     let proof = require_system_admin(&pool, &a)
         .await

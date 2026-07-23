@@ -58,7 +58,7 @@ pub async fn create(
     RequestSurface(surface): RequestSurface,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<IngestCreateResponse> {
-    let profile_id = ProfileId::from(auth.0.profile.id);
+    let profile_id = ProfileId::from(auth.0.profile().id);
     // Segmented-begin metadata is consumed AFTER create lands block 0 (below); take it now so the
     // rest of the function can move `payload` field-by-field into the CreateResource command.
     let segmented = payload.segmented.clone();
@@ -148,7 +148,7 @@ pub async fn create(
         origin: surface,
     };
 
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
 
     let Some(seg) = segmented else {
         // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
@@ -229,7 +229,7 @@ pub async fn update(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }

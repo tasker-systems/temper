@@ -11,7 +11,7 @@ use axum::Json;
 use jsonwebtoken::{decode, TokenData};
 
 use temper_auth::{build_authorize_url, generate_pkce_pair, AuthorizeParams};
-use temper_core::types::AuthenticatedProfile;
+use temper_services::auth::AuthenticatedProfile;
 use temper_services::auth::{AuthzError, RawJwtClaims};
 use temper_services::error::ApiError;
 use temper_services::services::{slack_grant_vault_service, slack_link_service};
@@ -243,7 +243,7 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
     // refused rather than moved — see `link_slack_principal` and spec D4.
     let outcome = slack_link_service::link_slack_principal(
         &mut tx,
-        profile.profile.id,
+        profile.profile().id,
         &intent.slack_principal_id,
     )
     .await
@@ -251,7 +251,7 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
 
     if outcome == slack_link_service::SlackLinkOutcome::AlreadyLinkedToAnotherProfile {
         tracing::warn!(
-            profile_id = %profile.profile.id,
+            profile_id = %profile.profile().id,
             "slack link: refused (principal already bound to a different profile)",
         );
         // DELIBERATE, BOUNDED DISCLOSURE. This message admits the principal IS linked, which
@@ -297,7 +297,7 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
         // UNLINKED, which is the one state the flow can recover from on its own: they mention
         // @temper, get a fresh intent, and try again once the operator fixes the client.
         tracing::warn!(
-            profile_id = %profile.profile.id,
+            profile_id = %profile.profile().id,
             "slack link: NO refresh token returned -- link rolled back rather than left inert; \
              check the link client's offline_access / refresh-token-rotation settings",
         );
@@ -314,7 +314,7 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
         &mut tx,
         &cfg.vault_key,
         slack_grant_vault_service::NewGrant {
-            profile_id: profile.profile.id,
+            profile_id: profile.profile().id,
             slack_principal_id: &intent.slack_principal_id,
             refresh_token,
             access_token: &tokens.access_token,
@@ -331,9 +331,9 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
         "Something went wrong saving your connection. Mention @temper again.".to_string()
     })?;
 
-    tracing::info!(profile_id = %profile.profile.id, "slack link: established and grant vaulted");
+    tracing::info!(profile_id = %profile.profile().id, "slack link: established and grant vaulted");
 
-    Ok(profile.profile.slug.clone())
+    Ok(profile.profile().slug.clone())
 }
 
 /// Verify the freshly-exchanged access token and resolve the profile it names — **lookup-only**.

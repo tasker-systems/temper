@@ -47,7 +47,7 @@ pub async fn create(
     };
     let inv = invitation_service::create_invitation(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         team_id,
         params,
     )
@@ -72,7 +72,7 @@ pub async fn list(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<TeamInvitation>>> {
-    invitation_service::list_invitations(&state.pool, ProfileId::from(auth.0.profile.id), team_id)
+    invitation_service::list_invitations(&state.pool, ProfileId::from(auth.0.profile().id), team_id)
         .await
         .map(Json)
 }
@@ -90,7 +90,7 @@ pub async fn list_mine(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<InviteeInvitation>>> {
-    invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile.id))
+    invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
 }
@@ -113,7 +113,7 @@ pub async fn accept(
     auth: AuthUser,
     Path(token): Path<String>,
 ) -> ApiResult<Json<AcceptInvitationResponse>> {
-    invitation_service::accept_invitation(&state.pool, ProfileId::from(auth.0.profile.id), &token)
+    invitation_service::accept_invitation(&state.pool, ProfileId::from(auth.0.profile().id), &token)
         .await
         .map(Json)
 }
@@ -135,7 +135,11 @@ pub async fn decline(
     auth: AuthUser,
     Path(token): Path<String>,
 ) -> ApiResult<StatusCode> {
-    invitation_service::decline_invitation(&state.pool, ProfileId::from(auth.0.profile.id), &token)
-        .await
-        .map(|()| StatusCode::NO_CONTENT)
+    invitation_service::decline_invitation(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        &token,
+    )
+    .await
+    .map(|()| StatusCode::NO_CONTENT)
 }

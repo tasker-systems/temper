@@ -733,13 +733,10 @@ mod tests {
         team_slug: &str,
         role: TeamRole,
     ) -> (ProfileId, Uuid) {
-        sqlx::query!(
-            "UPDATE kb_system_settings \
-                SET access_mode = 'invite_only', gating_team_slug = 'temper-system'"
-        )
-        .execute(pool)
-        .await
-        .expect("invite_only with a configured gating team");
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(pool)
+            .await
+            .expect("configure the gating team");
 
         let id = Uuid::now_v7();
         sqlx::query!(

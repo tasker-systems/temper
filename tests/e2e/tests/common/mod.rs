@@ -358,7 +358,7 @@ pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
     .expect("add admin to temper-system team");
 
     sqlx::query(
-        "UPDATE kb_system_settings SET access_mode = 'invite_only', gating_team_slug = 'temper-system', updated = now()",
+        "UPDATE kb_system_settings SET gating_team_slug = 'temper-system', updated = now()",
     )
     .execute(pool)
     .await

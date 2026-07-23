@@ -225,7 +225,7 @@
       ]
     },
     "SystemAccess": {
-      "description": "The `system_access` PG enum — a profile's platform-wide access tier. Typed\nin the YAML model so an invalid value fails at deserialization rather than at\nthe `$n::system_access` cast after the load transaction opens.",
+      "description": "A profile's declared platform-wide access tier in the scenario YAML. Typed in\nthe model so an invalid value fails at deserialization rather than at load\ntime. (Phase 2 dropped the `system_access` PG column + enum; the loaders now\nmap this tier onto the authoritative `kb_principal_standing` — see `as_sql`.)",
       "type": "string",
       "enum": [
         "none",

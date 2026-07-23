@@ -19,7 +19,7 @@ async fn admin_proof(pool: &sqlx::PgPool) -> temper_services::auth::SystemAdmin 
 async fn reset_settings(pool: &sqlx::PgPool) {
     sqlx::query(
         "UPDATE kb_system_settings \
-         SET access_mode='open', gating_team_slug=NULL, instance_name=NULL, \
+         SET gating_team_slug=NULL, instance_name=NULL, \
              terms_version=NULL, terms_resource_uri=NULL WHERE id=1",
     )
     .execute(pool)
@@ -188,12 +188,10 @@ async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .expect("other auto-join team");
-    sqlx::query(
-        "UPDATE kb_system_settings SET access_mode='invite_only', gating_team_slug='temper-system' WHERE id=1",
-    )
-    .execute(&pool)
-    .await
-    .expect("invite_only");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug='temper-system' WHERE id=1")
+        .execute(&pool)
+        .await
+        .expect("invite_only");
 
     let joiner = common::fixtures::create_test_profile(&pool, "joiner@test.example.com").await;
 

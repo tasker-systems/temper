@@ -24,6 +24,7 @@ lib/temper/generated/api_model_base.rb
 lib/temper/generated/configuration.rb
 lib/temper/generated/models/accept_invitation_response.rb
 lib/temper/generated/models/act_input.rb
+lib/temper/generated/models/actor_authority.rb
 lib/temper/generated/models/add_member_request.rb
 lib/temper/generated/models/advance_watermark_ack.rb
 lib/temper/generated/models/advance_watermark_request.rb
@@ -67,7 +68,9 @@ lib/temper/generated/models/create_cogmap_request.rb
 lib/temper/generated/models/create_invitation_request.rb
 lib/temper/generated/models/create_request_body.rb
 lib/temper/generated/models/create_review_body.rb
+lib/temper/generated/models/deactivated.rb
 lib/temper/generated/models/delete_response.rb
+lib/temper/generated/models/denied.rb
 lib/temper/generated/models/device_overrides.rb
 lib/temper/generated/models/dispatch_tick_request.rb
 lib/temper/generated/models/dispatch_tick_response.rb
@@ -93,12 +96,14 @@ lib/temper/generated/models/health_response.rb
 lib/temper/generated/models/home_cogmap.rb
 lib/temper/generated/models/home_context.rb
 lib/temper/generated/models/idp_revocation.rb
+lib/temper/generated/models/illegal_transition.rb
 lib/temper/generated/models/ingest_create_response.rb
 lib/temper/generated/models/ingest_delta.rb
 lib/temper/generated/models/ingest_payload.rb
 lib/temper/generated/models/ingest_state.rb
 lib/temper/generated/models/inherited_read_grant.rb
 lib/temper/generated/models/inherited_share.rb
+lib/temper/generated/models/insufficient_authority.rb
 lib/temper/generated/models/invitation_status.rb
 lib/temper/generated/models/invitee_invitation.rb
 lib/temper/generated/models/invocation_ack.rb
@@ -116,6 +121,8 @@ lib/temper/generated/models/materialize_delta.rb
 lib/temper/generated/models/materialize_request.rb
 lib/temper/generated/models/merge_policy.rb
 lib/temper/generated/models/meta_update_payload.rb
+lib/temper/generated/models/no_prior_standing.rb
+lib/temper/generated/models/no_standing.rb
 lib/temper/generated/models/node_home.rb
 lib/temper/generated/models/open_invocation_request.rb
 lib/temper/generated/models/orphan_node.rb
@@ -141,8 +148,10 @@ lib/temper/generated/models/reconcile_outcome.rb
 lib/temper/generated/models/reconcile_telos.rb
 lib/temper/generated/models/reconcile_telos_block.rb
 lib/temper/generated/models/reconcile_tombstone.rb
+lib/temper/generated/models/refusal.rb
 lib/temper/generated/models/relationship_ack.rb
 lib/temper/generated/models/remove_member_outcome.rb
+lib/temper/generated/models/requested.rb
 lib/temper/generated/models/residual_bucket.rb
 lib/temper/generated/models/residual_context.rb
 lib/temper/generated/models/residual_groups.rb
@@ -162,6 +171,7 @@ lib/temper/generated/models/resource_sort_field.rb
 lib/temper/generated/models/resource_update_request.rb
 lib/temper/generated/models/retype_relationship_request.rb
 lib/temper/generated/models/revoke_outcome.rb
+lib/temper/generated/models/revoked.rb
 lib/temper/generated/models/reweight_relationship_request.rb
 lib/temper/generated/models/search_diagnostics.rb
 lib/temper/generated/models/search_params.rb
@@ -179,8 +189,10 @@ lib/temper/generated/models/slack_disconnected_principal.rb
 lib/temper/generated/models/slice_request.rb
 lib/temper/generated/models/sort_order.rb
 lib/temper/generated/models/standing_shape.rb
+lib/temper/generated/models/standing.rb
 lib/temper/generated/models/subscription.rb
 lib/temper/generated/models/subscription_override.rb
+lib/temper/generated/models/system_access_details.rb
 lib/temper/generated/models/team_create_request.rb
 lib/temper/generated/models/team_detail.rb
 lib/temper/generated/models/team_invitation.rb
@@ -195,6 +207,7 @@ lib/temper/generated/models/territory_kind.rb
 lib/temper/generated/models/territory_overview.rb
 lib/temper/generated/models/unbind_team_outcome.rb
 lib/temper/generated/models/unified_search_result_row.rb
+lib/temper/generated/models/unrecognized_standing.rb
 lib/temper/generated/models/unshare_context_outcome.rb
 lib/temper/generated/models/vault_config.rb
 lib/temper/generated/version.rb

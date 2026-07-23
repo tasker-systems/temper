@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use super::profile::Profile;
-
 /// Identity provider configuration — Neon Auth default, swappable for enterprise.
 ///
 /// The provider is configuration, not code. The JWT verification middleware
@@ -55,15 +53,15 @@ pub struct AuthClaims {
     pub iat: i64,
 }
 
-/// The authenticated identity for the current request.
-///
-/// Extracted by axum middleware via JWT verification → auth link lookup → profile load.
-/// Available to all route handlers as an axum extractor.
-#[derive(Debug, Clone)]
-pub struct AuthenticatedProfile {
-    pub profile: Profile,
-    pub claims: AuthClaims,
-}
+// `AuthenticatedProfile` used to live here, with public fields. It moved to
+// `temper_services::auth` so it could be SEALED: its only legitimate constructor is the Level-1
+// gate, which lives in temper-services, and a type cannot have private fields in one crate and be
+// built in another. Keeping it here meant every crate in the workspace could forge proof of
+// authentication by struct literal — the enforcement its doc comment claimed but did not have.
+//
+// `AuthClaims` and `Profile` stay here on purpose: they are shared data, not proof of anything.
+// A forged `AuthClaims` is inert (see the seam's module docs) precisely because it has nowhere
+// to go once the thing that *carries authority* is out of reach.
 
 /// Wire payload for the internal SAML membership-reconcile call (AS → temper-api).
 ///

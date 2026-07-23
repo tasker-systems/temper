@@ -116,6 +116,25 @@ Temper::Error
 
 Every exception carries `#status`, `#code`, `#message`, and `#details`.
 
+`SystemAccessRequired` adds `#refusal` — a **typed** reason the server refused,
+which is what lets a worker tell "never granted" from "granted and then revoked"
+without matching on the message string:
+
+```ruby
+rescue Temper::SystemAccessRequired => e
+  case e.refusal
+  when Temper::Generated::Denied    then request_access!  # never granted — ask
+  when Temper::Generated::Requested then wait             # asked, pending review
+  when Temper::Generated::Revoked   then alert_operator!  # had it, lost it
+  else log.warn("refused: #{e.refusal_kind}")             # a reason newer than this gem
+  end
+```
+
+Data-bearing refusals carry their payload: an `IllegalTransition` names the `act`
+it refused and the standing it refused it `from`. `#refusal` is `nil` when the
+reason is one this gem was not generated against — `#refusal_kind` still returns
+the name the server used, so an unfamiliar refusal is logged rather than lost.
+
 The split is load-bearing, not decorative: Sidekiq retries a job whose exception
 escapes, so a 409 classified transient would spin forever and a 503 classified
 permanent would be silently dropped.

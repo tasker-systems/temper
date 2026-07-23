@@ -59,7 +59,7 @@ pub async fn open(
         parent_cogmap: req.parent_cogmap.map(CogmapId::from),
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.open_invocation(cmd).await.map_err(ApiError::from)?;
     Ok(Json(InvocationAck {
         id: out.value,
@@ -95,7 +95,7 @@ pub async fn close(
         outcome: req.outcome,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     backend
         .close_invocation(cmd)
         .await
@@ -120,10 +120,13 @@ pub async fn show(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<InvocationView>> {
     // Deny and absent are indistinguishable (readback returns None for both) — both 404.
-    let view =
-        substrate_read::invocation_show_select(&state.pool, ProfileId::from(auth.0.profile.id), id)
-            .await?
-            .ok_or(ApiError::NotFound)?;
+    let view = substrate_read::invocation_show_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        id,
+    )
+    .await?
+    .ok_or(ApiError::NotFound)?;
     Ok(Json(view))
 }
 
@@ -148,7 +151,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<InvocationSummary>>> {
     let rows = substrate_read::invocation_list_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         q.cogmap,
         q.status,
     )

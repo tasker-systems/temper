@@ -35,7 +35,7 @@ pub async fn reassign_resource(
 ) -> ApiResult<Json<ReassignAck>> {
     reassign_service::reassign_resource(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         resource_id,
         body.to_profile_id,
     )
@@ -66,7 +66,7 @@ pub async fn reassign_team(
 ) -> ApiResult<Json<BulkReassignAck>> {
     let ids = reassign_service::reassign_team_resources(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         team_id,
         body.from_profile_id,
         body.to_profile_id,

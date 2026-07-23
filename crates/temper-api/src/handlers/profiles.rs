@@ -33,9 +33,9 @@ pub async fn get(
     auth: AuthUser,
 ) -> ApiResult<Json<ProfileWithEntitlements>> {
     let profile =
-        profile_service::get_by_id(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+        profile_service::get_by_id(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
     let entitlements =
-        access_service::get_entitlements(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+        access_service::get_entitlements(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
 
     Ok(Json(ProfileWithEntitlements {
         profile,
@@ -66,7 +66,7 @@ pub async fn update(
     // (synthesized on read), so there is nothing to persist.
     profile_service::update(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         req.display_name.as_deref(),
         req.preferences.as_ref(),
     )
@@ -88,7 +88,7 @@ pub async fn list_auth_links(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<ProfileAuthLink>>> {
-    profile_service::list_auth_links(&state.pool, ProfileId::from(auth.0.profile.id))
+    profile_service::list_auth_links(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
 }

@@ -29,7 +29,7 @@ use temper_services::state::AppState;
     )
 )]
 pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Json<Vec<TeamRow>>> {
-    team_service::list_teams(&state.pool, ProfileId::from(auth.0.profile.id))
+    team_service::list_teams(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
 }
@@ -53,7 +53,7 @@ pub async fn create(
     Json(body): Json<TeamCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<TeamRow>)> {
     let row =
-        team_service::create_team(&state.pool, ProfileId::from(auth.0.profile.id), &body).await?;
+        team_service::create_team(&state.pool, ProfileId::from(auth.0.profile().id), &body).await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -78,7 +78,7 @@ pub async fn add_member(
 ) -> ApiResult<(StatusCode, Json<TeamMemberRow>)> {
     let row = team_service::add_member(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         team_id,
         &body,
     )
@@ -102,7 +102,7 @@ pub async fn detail(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<TeamDetail>> {
-    team_service::team_detail(&state.pool, ProfileId::from(auth.0.profile.id), team_id)
+    team_service::team_detail(&state.pool, ProfileId::from(auth.0.profile().id), team_id)
         .await
         .map(Json)
 }
@@ -129,7 +129,7 @@ pub async fn update(
 ) -> ApiResult<Json<TeamRow>> {
     team_service::update_team(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         team_id,
         &body,
     )
@@ -156,7 +156,7 @@ pub async fn delete(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    team_service::delete_team(&state.pool, ProfileId::from(auth.0.profile.id), team_id).await?;
+    team_service::delete_team(&state.pool, ProfileId::from(auth.0.profile().id), team_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -183,7 +183,7 @@ pub async fn remove_member(
 ) -> ApiResult<Json<RemoveMemberOutcome>> {
     let outcome = team_service::remove_member(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         team_id,
         profile_id,
     )
@@ -217,7 +217,7 @@ pub async fn change_role(
 ) -> ApiResult<Json<TeamMemberRow>> {
     team_service::change_role(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         team_id,
         profile_id,
         body.role,

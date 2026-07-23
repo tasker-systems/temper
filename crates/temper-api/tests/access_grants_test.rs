@@ -41,21 +41,14 @@ async fn mint_profile(pool: &PgPool, handle: &str) -> Uuid {
 
 /// Mint an admin that passes `is_system_admin`. The canonical seed leaves `gating_team_slug` NULL
 /// (open mode), and `is_system_admin` resolves through that slug — so we first configure it to
-/// `temper-system`, then `system_access='admin'` enrolls the profile as an `owner` of temper-system
-/// via the auto-join trigger (the production-shaped config, mirroring `cogmap_authz_test`).
+/// `temper-system`, then grant real admin-ness (D11: `approved` standing + a `kb_principal_governance`
+/// grant — neither the Phase-2-retired `system_access` column nor gating ownership confers it).
 async fn mint_admin(pool: &PgPool, handle: &str) -> Uuid {
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1")
         .execute(pool)
         .await
         .expect("configure gating team");
     let id = mint_profile(pool, handle).await;
-    sqlx::query("UPDATE kb_profiles SET system_access = 'admin' WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .expect("promote admin");
-    // D11: `system_access='admin'` + gating ownership confer neither has_system_access nor
-    // is_system_admin now. Grant governance + approved standing so this profile is a real admin.
     common::fixtures::make_test_admin(pool, id).await;
     id
 }

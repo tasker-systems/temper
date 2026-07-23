@@ -39,7 +39,7 @@ pub async fn search(
 ) -> ApiResult<(HeaderMap, Json<Vec<UnifiedSearchResultRow>>)> {
     let response = temper_services::backend::substrate_read::search_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         params,
     )
     .await?;

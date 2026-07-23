@@ -55,7 +55,15 @@ impl ErrorBody {
 pub struct ErrorDetail {
     code: &'static str,
     message: String,
+    /// Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on
+    /// every other error.
+    // Held as a `Value` because `IntoResponse` erases the variant before serializing, but declared
+    // to the generators as what it actually is: `SystemAccessRequired` is the ONLY arm that ever
+    // populates this (every other arm, and `ErrorBody::new`, sends `None`), so an untyped `details`
+    // described nothing while costing the SDKs their typed refusal. Should a second variant ever
+    // carry details, this becomes a `oneOf` — widen it then, deliberately.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<temper_core::types::access_gate::SystemAccessDetails>)]
     details: Option<serde_json::Value>,
 }
 
