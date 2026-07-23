@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 /// Five states plus absence. **Absence is not a variant** — a principal with no standing row is
 /// denied structurally (spec §7 obligation 1), which is what makes D7's connection-profile safety
 /// hold by construction rather than by a check someone can forget.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admission.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Standing {

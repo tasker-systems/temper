@@ -5871,6 +5871,8 @@ name = "temper-principal"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "ts-rs",
+ "utoipa",
 ]
 
 [[package]]

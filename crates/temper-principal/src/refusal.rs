@@ -10,34 +10,52 @@ use serde::{Deserialize, Serialize};
 /// Spec §12: "Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at
 /// the act is that the actor learns why; a test that only checks 'not admitted' would pass on a
 /// silent denial."
+// The per-variant `schema(title = …)` below are NOT decoration, and a new variant needs one too.
+// An internally-tagged enum becomes an anonymous `oneOf` in OpenAPI, and openapi-generator names
+// anonymous branches positionally — without the titles the Ruby gem ships `RefusalOneOf` …
+// `RefusalOneOf8`, names that silently renumber the day a variant is inserted rather than appended.
+// The title is what pins each generated branch to its Rust variant name. Kept out of the doc
+// comment on purpose: this is generator plumbing, and doc comments land in the published spec.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admission.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Refusal {
     /// No standing row. Absence denies (spec §7 obligation 1) — this is what makes D7 structural.
+    #[cfg_attr(feature = "web-api", schema(title = "NoStanding"))]
     NoStanding,
     /// The column held a value this binary does not know (spec §7 obligation 2).
+    #[cfg_attr(feature = "web-api", schema(title = "UnrecognizedStanding"))]
     UnrecognizedStanding { raw: String },
     /// Provisioned but never granted. The refusal says *"you may request access."*
+    #[cfg_attr(feature = "web-api", schema(title = "Denied"))]
     Denied,
     /// Asked, not yet decided. The refusal says *"your request is pending."*
+    #[cfg_attr(feature = "web-api", schema(title = "Requested"))]
     Requested,
     /// Was granted and lost it. A different sentence, and a different audit signal, than `Denied`.
+    #[cfg_attr(feature = "web-api", schema(title = "Revoked"))]
     Revoked,
     /// The principal itself is disabled.
+    #[cfg_attr(feature = "web-api", schema(title = "Deactivated"))]
     Deactivated,
     /// The act is not legal from this state (spec §6 — every unlisted cell).
     ///
     /// `act` is an owned `String` rather than `&'static str` so `Refusal` is `DeserializeOwned`: it
     /// rides the 403 wire, and a borrowed-`'static` field would make the whole enum undeserializable
     /// from a short-lived `serde_json` input. The value is still one of a fixed set of act literals.
+    #[cfg_attr(feature = "web-api", schema(title = "IllegalTransition"))]
     IllegalTransition { from: Option<Standing>, act: String },
     /// The actor lacks the authority this act requires.
+    #[cfg_attr(feature = "web-api", schema(title = "InsufficientAuthority"))]
     InsufficientAuthority {
         required: ActorAuthority,
         actual: ActorAuthority,
     },
     /// `Reactivate` with no recoverable prior state. The backfill's genesis pass (spec §11) exists
     /// so this is unreachable for pre-existing rows; the machine still refuses rather than guesses.
+    #[cfg_attr(feature = "web-api", schema(title = "NoPriorStanding"))]
     NoPriorStanding,
 }
 
