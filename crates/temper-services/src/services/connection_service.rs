@@ -574,7 +574,16 @@ pub async fn revoke_reach(
     team_id: Uuid,
 ) -> ApiResult<Connection> {
     let connection = get(pool, connection_id).await?;
-    machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
+    // `ConnectionControlAuthority`, NOT `ConnectionAuthority` — the whole asymmetry in one line.
+    // This asks only "may you act on this connection?"; it deliberately does not ask whether the
+    // caller still manages the team losing the reach, which is what
+    // `revoke_reach_survives_losing_the_target_team_role` exists to hold in place.
+    let proof = crate::authz::authorize::<crate::authz::ConnectionControlAuthority>(
+        pool,
+        caller,
+        connection_id,
+    )
+    .await?;
 
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
@@ -582,8 +591,7 @@ pub async fn revoke_reach(
     let mut conn = pool.acquire().await?;
     access_service::delete_grant(
         &mut conn,
-        "kb_connections",
-        connection_id,
+        &crate::authz::RevokeWarrant::ConnectionControl(&proof),
         "kb_teams",
         team_id,
         caller,

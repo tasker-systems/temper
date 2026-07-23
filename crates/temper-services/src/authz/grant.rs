@@ -12,7 +12,7 @@ use uuid::Uuid;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 
-use super::{Authorized, ConnectionAuthority, ScopedAuthority};
+use super::{Authorized, ConnectionAuthority, ConnectionControlAuthority, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{
     cogmap_write_requires_admin, is_system_admin, profile_can_grant, GrantAuthority,
@@ -146,6 +146,47 @@ impl GrantWarrant<'_> {
                 id: proof.subject().connection_id,
             },
             GrantWarrant::Birth(born) => born.subject(),
+        }
+    }
+}
+
+/// The **COMPLETE set of ways a `kb_access_grants` row may be removed.**
+///
+/// Deliberately **not** `GrantWarrant`, and not extra arms on it. Revocation is weaker-gated than
+/// granting on both of its paths, on purpose, and one type spanning both axes would make an
+/// insertion arm mintable at a revocation site — and, worse, invite someone to "unify" the gates and
+/// silently tighten revocation. Spec §2.5.
+///
+/// Why each gate is weaker than its granting counterpart, carried from the sites that decided it:
+///
+/// - `revoke_capability` gates on the authority arm **without attenuation**, because
+///   *"de-escalation must never be harder than escalation, or a grant becomes unwithdrawable"*.
+/// - `revoke_reach` asks only about the connection, never about the team losing the reach, because
+///   otherwise *"this grant would now be permanently unrevokable — access stranded on a connection
+///   whose own owner can see the grant and cannot withdraw it"*.
+#[derive(Debug)]
+pub(crate) enum RevokeWarrant<'a> {
+    /// Human/API grant administration. Minted by `authorize::<GrantAuthority>` — the same authority
+    /// decision `GrantWarrant::Administered` rests on, **minus** the attenuation pass, which
+    /// revocation deliberately does not run.
+    Administered(&'a Authorized<GrantAuthority>),
+    /// Connection read-reach withdrawal. Minted by `ConnectionControlAuthority`: authority over the
+    /// connection, and nothing at all about the team losing the reach.
+    ConnectionControl(&'a Authorized<ConnectionControlAuthority>),
+}
+
+impl RevokeWarrant<'_> {
+    /// The subject of the row this warrant authorizes removing. No `_ =>`, same reason as
+    /// `GrantWarrant::subject`.
+    pub(crate) fn subject(&self) -> RefTarget {
+        match self {
+            RevokeWarrant::Administered(proof) => proof.subject(),
+            // `ConnectionControlAuthority`'s subject IS the connection — that is the whole reason it
+            // is a separate authority from `ConnectionAuthority`, whose subject is a pair.
+            RevokeWarrant::ConnectionControl(proof) => RefTarget {
+                kind: AnchorTable::Connections,
+                id: proof.subject(),
+            },
         }
     }
 }

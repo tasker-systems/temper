@@ -47,6 +47,59 @@ impl ConnectionScope {
     }
 }
 
+/// May this caller act on this connection at all?
+///
+/// The **first** of `ConnectionAuthority`'s two questions, under its own name and its own subject —
+/// the connection, not a (connection, team) pair. It exists because revocation legitimately asks
+/// only this one: `revoke_reach` withdraws reach from a team the caller may no longer manage, and
+/// must still succeed (spec §2.5).
+///
+/// `ConnectionAuthority` **composes** this rather than re-asking, so there is exactly one place that
+/// knows the owning team is read from the row and handed to `MachineAuthority`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectionControlAuthority {
+    /// A system admin.
+    SystemAdmin,
+    /// Owner of the team that owns this connection.
+    OwnerOfOwningTeam,
+    /// Neither — including a teamless connection, which fails closed (spec D2).
+    None,
+}
+
+#[async_trait]
+impl ScopedAuthority for ConnectionControlAuthority {
+    /// The connection itself. Its owning team is derived, never supplied.
+    type Subject = Uuid;
+
+    async fn resolve(pool: &PgPool, caller: ProfileId, connection_id: Uuid) -> ApiResult<Self> {
+        // Read from the row, never from the caller — see `ConnectionScope`'s doc for why this
+        // derivation is what gives the proof its meaning.
+        let connection = connection_service::get(pool, connection_id).await?;
+
+        Ok(
+            match <MachineAuthority as ScopedAuthority>::resolve(
+                pool,
+                caller,
+                connection.owner_team_id,
+            )
+            .await?
+            {
+                MachineAuthority::SystemAdmin => ConnectionControlAuthority::SystemAdmin,
+                MachineAuthority::TeamOwner => ConnectionControlAuthority::OwnerOfOwningTeam,
+                MachineAuthority::None => ConnectionControlAuthority::None,
+            },
+        )
+    }
+
+    fn is_denial(&self) -> bool {
+        matches!(self, ConnectionControlAuthority::None)
+    }
+
+    fn denial() -> ApiError {
+        ApiError::Forbidden
+    }
+}
+
 /// Who may confer a team's read-reach on a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionAuthority {
@@ -78,17 +131,29 @@ impl ScopedAuthority for ConnectionAuthority {
     /// Both are **called, not restated** — question 2 in particular routes through the shared
     /// `require_manage_on_team` seam expressly so it cannot drift from `contain_reach`'s team loop.
     async fn resolve(pool: &PgPool, caller: ProfileId, scope: ConnectionScope) -> ApiResult<Self> {
-        // The owning team comes from the row, never from the caller. This is the extra read that
-        // buys the proof its meaning: a caller who could name the team its authority is checked
-        // against could name one it happens to own.
-        let connection = connection_service::get(pool, scope.connection_id).await?;
-
-        let machine =
-            <MachineAuthority as ScopedAuthority>::resolve(pool, caller, connection.owner_team_id)
-                .await?;
-        if machine.is_denial() {
+        // Question 1, asked through `ConnectionControlAuthority` rather than restated — that type
+        // exists precisely because revocation asks this one alone, and two copies of "resolve the
+        // owning team, then MachineAuthority" is exactly the drift this layer removes.
+        let control = <ConnectionControlAuthority as ScopedAuthority>::resolve(
+            pool,
+            caller,
+            scope.connection_id,
+        )
+        .await?;
+        if control.is_denial() {
             return Ok(ConnectionAuthority::None);
         }
+
+        // `contain_target_team` still takes a `MachineAuthority`, so map back for the one call. The
+        // mapping is total and lossless — the two enums are the same three cases under two names,
+        // which is the cost of `contain_target_team` being shared with the machine path.
+        let machine = match control {
+            ConnectionControlAuthority::SystemAdmin => MachineAuthority::SystemAdmin,
+            ConnectionControlAuthority::OwnerOfOwningTeam => MachineAuthority::TeamOwner,
+            // Unreachable — the denial arm returned above. Enumerated rather than `_ =>` so a
+            // future arm cannot land here and be silently authorized.
+            ConnectionControlAuthority::None => return Ok(ConnectionAuthority::None),
+        };
 
         // `contain_target_team` answers with `Ok`, a `Forbidden` refusal, or a `NotFound` when the
         // receiving team does not exist. Only the refusal becomes an arm: `NotFound` is a
@@ -97,12 +162,12 @@ impl ScopedAuthority for ConnectionAuthority {
         // pinned by `granting_reach_to_a_nonexistent_team_writes_no_dangling_row`.
         match machine_authz::contain_target_team(pool, machine, caller, scope.target_team_id).await
         {
-            Ok(()) => Ok(match machine {
-                MachineAuthority::SystemAdmin => ConnectionAuthority::SystemAdmin,
-                MachineAuthority::TeamOwner => ConnectionAuthority::OwnerAndTargetManager,
-                // Unreachable — the denial arm returned above. Enumerated rather than `_ =>` so a
-                // future `MachineAuthority` arm cannot land here and be silently authorized.
-                MachineAuthority::None => ConnectionAuthority::None,
+            Ok(()) => Ok(match control {
+                ConnectionControlAuthority::SystemAdmin => ConnectionAuthority::SystemAdmin,
+                ConnectionControlAuthority::OwnerOfOwningTeam => {
+                    ConnectionAuthority::OwnerAndTargetManager
+                }
+                ConnectionControlAuthority::None => ConnectionAuthority::None,
             }),
             Err(ApiError::Forbidden) => Ok(ConnectionAuthority::None),
             Err(other) => Err(other),

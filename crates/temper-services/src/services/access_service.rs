@@ -318,18 +318,23 @@ pub(crate) async fn insert_grant(
     .await?)
 }
 
-/// Raw delete of one access grant by its `(subject, principal)` 4-tuple, on a connection so it can
-/// join a transaction. **Performs no authorization** — every caller must gate first (auth before
-/// writes). Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
-pub async fn delete_grant(
+/// Delete one access grant by its `(subject, principal)` 4-tuple, on a connection so it can join a
+/// transaction. Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
+///
+/// Takes a `RevokeWarrant` and reads the subject from it, for the same reason `insert_grant` takes a
+/// `GrantWarrant` — but a **different** warrant type, and that difference is the point. Revocation
+/// is deliberately weaker-gated than granting on both of its paths (spec §2.5); one warrant spanning
+/// both axes would let an insertion proof authorize a deletion and, worse, invite a later
+/// "consistency" pass to tighten revocation into unwithdrawability.
+pub(crate) async fn delete_grant(
     conn: &mut sqlx::PgConnection,
-    subject_table: &str,
-    subject_id: Uuid,
+    warrant: &crate::authz::RevokeWarrant<'_>,
     principal_table: &str,
     principal_id: Uuid,
     revoker: ProfileId,
     emitter: EntityId,
 ) -> ApiResult<bool> {
+    let subject = warrant.subject();
     // The DELETE + `grant_revoked` event, one txn, via the SQL chokepoint `_admin_grant_revoked`.
     // Emits ONLY when a row was actually removed — a no-op revoke is not an admin act, and the ledger
     // is append-only so a spurious event is immortal. `revoker` is the acting profile; `emitter` its
@@ -338,8 +343,8 @@ pub async fn delete_grant(
     Ok(sqlx::query_scalar!(
         r#"SELECT _admin_grant_revoked($1,$2,$3,$4,$5,$6) AS "deleted!""#,
         emitter.uuid(),
-        subject_table,
-        subject_id,
+        subject.kind.as_str(),
+        subject.id,
         principal_table,
         principal_id,
         revoker.uuid(),
@@ -397,17 +402,18 @@ pub async fn revoke_capability(
 ) -> ApiResult<RevokeOutcome> {
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
-    if !can_administer_grant(pool, caller, subject).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // The proof, where this used to take the `can_administer_grant` bool. Same decision — that
+    // function IS a bool projection of this resolve — but revocation needs the proof itself to mint
+    // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
+    // attenuating a revocation is what would make a grant unwithdrawable.
+    let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
         &mut conn,
-        &req.subject_table,
-        req.subject_id,
+        &crate::authz::RevokeWarrant::Administered(&proof),
         &req.principal_table,
         req.principal_id,
         caller,

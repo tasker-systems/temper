@@ -295,6 +295,12 @@ stay distinguishable, the way `readable_event_types`' fail-closed default alread
 - **Conditional/parametric** — `team_service::create`'s `auto_join_role` (`:150`). A required proof
   would break the base scoped op that non-admins legitimately use. Stays a bool sub-check, as the
   enclosure spec's Bucket 3 concluded.
+- **Conditional/parametric** — `access_service::require_cogmap_write_admin`. **Added 2026-07-23:
+  Task 12's sweep found it, and this list had missed it.** It is Bucket 3 for the same reason as
+  `auto_join_role`: the admin requirement applies *only* when `cogmap_write_requires_admin` says the
+  map is in the reserved-L0-or-gating-team regime, so every write to an ordinary cogmap returns `Ok`
+  without consulting authority at all. A required proof would gate the base op that the whole
+  non-reserved corpus uses. Reported rather than migrated, per the plan's Task 12 Step 2 rule.
 - **`get_entitlements`** (`access_service.rs:1161`) — reports admin-ness; it is not a gate.
 
 ---
