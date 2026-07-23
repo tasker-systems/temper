@@ -9,6 +9,13 @@
 
 pub mod auth;
 pub mod auth_config;
+/// Scoped authorization (`ScopedAuthority` + the sealed `Authorized` proof).
+///
+/// Deliberately **not** `pub`: every item in it is `pub(crate)`, because no surface holds a scoped
+/// proof — gates and the acts they authorize both live in this crate. A `pub mod` here would
+/// advertise a contract nothing outside can use, and would make widening it later look like a
+/// non-event rather than the decision it would be.
+mod authz;
 pub mod backend;
 pub mod broker;
 pub mod config;

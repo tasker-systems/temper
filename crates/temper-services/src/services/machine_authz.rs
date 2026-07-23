@@ -222,8 +222,10 @@ async fn contain_reach(
         access_service::authorize_capability_grant(
             pool,
             caller,
-            "kb_cogmaps",
-            grant.cogmap_id,
+            temper_substrate::payloads::RefTarget {
+                kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                id: grant.cogmap_id,
+            },
             access_service::RequestedCapabilities {
                 read: true,
                 write: grant.can_write,

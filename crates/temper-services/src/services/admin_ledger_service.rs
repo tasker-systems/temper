@@ -86,8 +86,9 @@ async fn readable_event_types(
     // grant_created / grant_revoked → mirrors access_service::can_administer_grant, by CALLING it.
     // (is_system_admin is already OR-ed inside it; we short-circuited above, so this is the
     // can_grant arm doing the work.)
-    if access_service::can_administer_grant(pool, caller, subject.kind.as_str(), subject.id).await?
-    {
+    // `subject` is already a typed `RefTarget`; it used to be flattened to `(&str, Uuid)` here
+    // purely because the gate took strings. It no longer does.
+    if access_service::can_administer_grant(pool, caller, subject).await? {
         readable.push("grant_created");
         readable.push("grant_revoked");
     }
