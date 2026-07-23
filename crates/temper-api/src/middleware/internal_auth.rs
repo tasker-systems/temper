@@ -15,8 +15,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
+use axum::http::request::Parts;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -30,19 +31,24 @@ use temper_services::state::AppState;
 /// under a kilobyte, so 64 KiB is generous while bounding the read.
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
-/// The shared gate: fresh timestamp + valid HMAC over the exact bytes received.
-///
-/// `secret` is passed in rather than read from state because three gates use this scheme with
-/// three different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`), the mention agent's
-/// link-state call (`SLACK_LINK_SECRET`), and its mint call (`SLACK_MINT_SECRET`). One scheme,
-/// one implementation, three keys; a shared key would let any holder forge another's calls.
-async fn require_signature_with(
-    secret: &str,
-    label: &'static str,
+/// The current unix time in seconds, saturating to 0 before the epoch (unreachable in practice).
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Pull the signature headers and buffer the body — the transport plumbing every signature gate
+/// shares. Returns the parts (to rebuild the request), the timestamp, the signature, and the
+/// buffered bytes. It does **not** verify: freshness and HMAC are the caller's, so each gate
+/// verifies how it must. `require_signature_with` checks them inline for the two report gates; the
+/// mint gate hands the result to `verify_mint_request`, which verifies AND seals a proof inside
+/// temper-services — the split that makes that proof un-forgeable in this crate (spec §5.1).
+async fn buffer_signed_request(
     request: Request<Body>,
-    next: Next,
-) -> Result<Response, ApiError> {
-    // Pull the signature headers before consuming the body.
+    label: &str,
+) -> Result<(Parts, i64, String, Bytes), ApiError> {
     let (parts, body) = request.into_parts();
     let timestamp = parts
         .headers
@@ -62,22 +68,36 @@ async fn require_signature_with(
         ));
     };
 
-    // Reject replays: the timestamp must be within the allowed skew of now.
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    if !timestamp_is_fresh(timestamp, now) {
-        tracing::warn!(timestamp, now, "{label}: rejected (stale timestamp)");
+    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
+        .await
+        .map_err(|_| ApiError::Unauthorized(format!("{label} body too large")))?;
+
+    Ok((parts, timestamp, signature, bytes))
+}
+
+/// The shared gate for the two signature surfaces that guard a *report*: fresh timestamp + valid
+/// HMAC over the exact bytes received.
+///
+/// `secret` is passed in rather than read from state because these gates use one scheme with
+/// different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`) and the mention agent's
+/// link-state call (`SLACK_LINK_SECRET`). A shared key would let any holder forge another's calls.
+/// The **mint** gate deliberately does NOT use this helper: it seals a proof via
+/// `verify_mint_request` instead (see `require_slack_mint_signature`), which is why no proof can be
+/// minted behind this path.
+async fn require_signature_with(
+    secret: &str,
+    label: &'static str,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let (parts, timestamp, signature, bytes) = buffer_signed_request(request, label).await?;
+
+    if !timestamp_is_fresh(timestamp, now_secs()) {
+        tracing::warn!(timestamp, "{label}: rejected (stale timestamp)");
         return Err(ApiError::Unauthorized(
             "stale internal signature".to_string(),
         ));
     }
-
-    // Buffer the body so we can MAC the exact bytes received, then hand them downstream.
-    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
-        .await
-        .map_err(|_| ApiError::Unauthorized(format!("{label} body too large")))?;
 
     if !verify(secret.as_bytes(), timestamp, &bytes, &signature) {
         tracing::warn!("{label}: rejected (signature mismatch)");
@@ -86,7 +106,7 @@ async fn require_signature_with(
         ));
     }
 
-    // Rebuild the request with the buffered body for the handler's `Json` extractor.
+    // Rebuild the request with the buffered body for the handler's extractor.
     let request = Request::from_parts(parts, Body::from(bytes));
     Ok(next.run(request).await)
 }
@@ -175,5 +195,24 @@ pub async fn require_slack_mint_signature(
             return Err(ApiError::Unauthorized("slack mint disabled".to_string()));
         }
     };
-    require_signature_with(&secret, "slack mint", request, next).await
+
+    let (mut parts, timestamp, signature, bytes) =
+        buffer_signed_request(request, "slack mint").await?;
+
+    // Verify AND seal in temper-services — the ONLY place a `VerifiedSlackPrincipal` is constructed,
+    // so this gate is the only one that can produce one, and it can only produce one for a request
+    // that verifies against the mint secret. The verify lives THERE, not here, which is what makes
+    // the proof un-forgeable by temper-api (spec §5.1). A malformed principal surfaces as a 400, a
+    // bad signature or stale timestamp as a 401 — both before the handler runs.
+    let verified = temper_services::services::slack_mint_service::verify_mint_request(
+        &secret,
+        timestamp,
+        now_secs(),
+        &bytes,
+        &signature,
+    )?;
+    parts.extensions.insert(verified);
+
+    let request = Request::from_parts(parts, Body::from(bytes));
+    Ok(next.run(request).await)
 }

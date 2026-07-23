@@ -62,44 +62,17 @@ pub struct JoinRequestWithProfile {
     pub email: Option<String>,
 }
 
-/// The system access gate mode — the `kb_system_settings.access_mode` set.
-///
-/// Stored as a `VARCHAR(16)` CHECK column (not a PG enum), so it is parsed at
-/// the logic boundary via [`Self::from_db_str`] rather than decoded by sqlx.
-/// Typing the gate decision removes the stringly `== "open"` branch and makes a
-/// new mode a compile error at every match site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccessMode {
-    Open,
-    InviteOnly,
-}
-
-impl AccessMode {
-    /// Canonical DB string form (the `access_mode` CHECK values).
-    pub fn as_db_str(self) -> &'static str {
-        match self {
-            AccessMode::Open => "open",
-            AccessMode::InviteOnly => "invite_only",
-        }
-    }
-
-    /// Parse the `access_mode` column value. Returns `None` for any value
-    /// outside the CHECK set (which the DB constraint should make impossible).
-    pub fn from_db_str(s: &str) -> Option<Self> {
-        match s {
-            "open" => Some(AccessMode::Open),
-            "invite_only" => Some(AccessMode::InviteOnly),
-            _ => None,
-        }
-    }
-}
+// The `AccessMode` enum was retired with the `access_mode` control (spec §14 / D18): standing now
+// answers per-principal what a global mode switch answered instance-wide, so no code branches on the
+// mode any more. Phase 2 finishes the retirement — the `access_mode` wire field is gone from both
+// settings structs below, and the `kb_system_settings.access_mode` column drops in Phase 2's
+// operator-run migration. Re-introducing a typed mode here would be the first step of re-coupling
+// admission to a global switch — which is exactly what standing replaced.
 
 /// Instance-wide system settings (singleton row).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SystemSettings {
     pub id: i32,
-    pub access_mode: String,
     pub gating_team_slug: Option<String>,
     pub terms_version: Option<String>,
     pub terms_resource_uri: Option<String>,
@@ -113,7 +86,6 @@ pub struct SystemSettings {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicSystemSettings {
-    pub access_mode: String,
     pub terms_version: Option<String>,
     pub terms_resource_uri: Option<String>,
     pub instance_name: Option<String>,
@@ -122,7 +94,6 @@ pub struct PublicSystemSettings {
 impl From<SystemSettings> for PublicSystemSettings {
     fn from(s: SystemSettings) -> Self {
         Self {
-            access_mode: s.access_mode,
             terms_version: s.terms_version,
             terms_resource_uri: s.terms_resource_uri,
             instance_name: s.instance_name,
@@ -158,12 +129,20 @@ pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \
 /// user's information. Do not add fields that reveal other users' data.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
-    pub access_mode: String,
-    pub join_request_status: Option<JoinRequestStatus>,
+    /// Why this principal was refused, typed (spec §7). The sole refusal signal on the 403 since
+    /// Phase 2 retired the legacy `join_request_status` field new clients never branched on. The
+    /// typed refusal distinguishes "never granted" (`denied`) from "granted and revoked" (`revoked`)
+    /// — a distinction that matters to the user and in an audit.
+    ///
+    /// Carried as `temper_principal::Refusal` so every surface branches on it exhaustively — the
+    /// Rust ones through the enum, the generated temper-ts / temper-rb clients through the
+    /// discriminated `kind` union that crate's feature-gated derives now emit.
+    pub refusal: temper_principal::Refusal,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,
 }

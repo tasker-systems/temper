@@ -15,6 +15,13 @@ struct CreateRequestBody<'a> {
     accepted_terms_version: Option<&'a str>,
 }
 
+/// Request body for a review request (D15 — a revoked principal asking for reconsideration).
+#[derive(serde::Serialize)]
+struct CreateReviewBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'a str>,
+}
+
 /// Sub-client for system access operations.
 pub struct AccessClient<'a> {
     http: &'a HttpClient,
@@ -70,6 +77,17 @@ impl<'a> AccessClient<'a> {
                 req,
                 Some(&token),
             )
+            .await?;
+        Ok(())
+    }
+
+    /// Ask an admin to reconsider a revocation (D15). Does not restore access by itself.
+    pub async fn create_review_request(&self, message: Option<&str>) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let body = CreateReviewBody { message };
+        let req = self.http.post("/api/access/reviews").json(&body);
+        self.http
+            .send(&Method::POST, "/api/access/reviews", req, Some(&token))
             .await?;
         Ok(())
     }

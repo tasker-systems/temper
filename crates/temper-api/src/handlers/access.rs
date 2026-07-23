@@ -9,12 +9,12 @@ use uuid::Uuid;
 use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, SystemSettings,
 };
-use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
+use temper_core::types::admin::{DemoteAdminRequest, PromoteAdminRequest, UpdateSettingsRequest};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::TeamMemberRow;
 
 use crate::middleware::auth::AuthUser;
-use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::access_service;
 use temper_services::state::AppState;
 
@@ -27,6 +27,11 @@ pub struct CreateRequestBody {
     pub message: Option<String>,
     pub source: String,
     pub accepted_terms_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CreateReviewBody {
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +53,8 @@ pub struct ReviewRequestBody {
     security(("bearer_auth" = [])),
     responses(
         (status = 201, description = "Join request created", body = JoinRequest),
-        (status = 400, description = "System is in open mode — no request needed", body = ErrorBody),
+        (status = 400, description = "The request is not legal from the caller's standing", body = ErrorBody),
+        (status = 409, description = "A request is already pending, or access is already granted", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -58,7 +64,7 @@ pub async fn create_request(
     Json(body): Json<CreateRequestBody>,
 ) -> ApiResult<(StatusCode, Json<JoinRequest>)> {
     let params = access_service::CreateJoinRequestParams {
-        profile_id: ProfileId::from(auth.0.profile.id),
+        profile_id: ProfileId::from(auth.0.profile().id),
         message: body.message,
         source: body.source,
         accepted_terms_version: body.accepted_terms_version,
@@ -84,7 +90,7 @@ pub async fn get_own_request(
     auth: AuthUser,
 ) -> ApiResult<Json<Option<JoinRequest>>> {
     let request =
-        access_service::get_own_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+        access_service::get_own_request(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
     Ok(Json(request))
 }
 
@@ -104,8 +110,41 @@ pub async fn withdraw_request(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<StatusCode> {
-    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
+///
+/// On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access
+/// gate, and being able to ask for reconsideration is the whole point. The review is an inbox
+/// signal only — it never feeds the admission decision.
+#[utoipa::path(
+    post,
+    path = "/api/access/reviews",
+    tag = "Access",
+    request_body = CreateReviewBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 201, description = "Review request recorded"),
+        (status = 400, description = "Only a revoked principal may request review", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
+pub async fn create_review_request(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateReviewBody>,
+) -> ApiResult<StatusCode> {
+    access_service::create_review_request(
+        &state.pool,
+        access_service::CreateReviewRequestParams {
+            profile_id: ProfileId::from(auth.0.profile().id),
+            message: body.message,
+        },
+    )
+    .await?;
+    Ok(StatusCode::CREATED)
 }
 
 /// GET /api/access/settings — read public system settings.
@@ -126,7 +165,7 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
 }
 
 // ---------------------------------------------------------------------------
-// Admin endpoints (gated router, handler-level admin check)
+// Admin endpoints (gated router)
 //
 // These five handlers (`list_pending`, `review_request`, `get_admin_settings`,
 // `update_settings`, `promote_admin`) are DELIBERATELY left without
@@ -134,6 +173,13 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
 // the documented client API. A library caller requesting access to their own
 // instance uses the four self-service handlers above; the operator surface is
 // intentionally excluded from the OpenAPI spec.
+//
+// Their authz is the `&SystemAdmin` proof each dispatches with (admin-authz
+// enclosure, spec §3): the handler mints it once via `require_system_admin` and
+// the service fn requires it in its signature. There is no handler-side
+// `is_system_admin` any more — the requirement lives in the service type, so
+// both surfaces enforce it identically (the F-3 posture; see
+// `audit-handler-authz-drift`).
 // ---------------------------------------------------------------------------
 
 /// GET /api/access/admin/requests — list pending join requests (admin only).
@@ -141,13 +187,8 @@ pub async fn list_pending(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<JoinRequestWithProfile>>> {
-    let is_admin =
-        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
-    if !is_admin {
-        return Err(ApiError::Forbidden);
-    }
-
-    access_service::list_pending_requests(&state.pool)
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::list_pending_requests(&state.pool, &admin)
         .await
         .map(Json)
 }
@@ -159,20 +200,14 @@ pub async fn review_request(
     Path(request_id): Path<Uuid>,
     Json(body): Json<ReviewRequestBody>,
 ) -> ApiResult<Json<JoinRequest>> {
-    let is_admin =
-        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
-    if !is_admin {
-        return Err(ApiError::Forbidden);
-    }
-
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
     let params = access_service::ReviewRequestParams {
         request_id,
-        reviewer_profile_id: ProfileId::from(auth.0.profile.id),
         decision: body.status,
         decision_note: body.decision_note,
     };
 
-    access_service::review_request(&state.pool, params)
+    access_service::review_request(&state.pool, &admin, params)
         .await
         .map(Json)
 }
@@ -185,12 +220,8 @@ pub async fn get_admin_settings(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<SystemSettings>> {
-    let is_admin =
-        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
-    if !is_admin {
-        return Err(ApiError::Forbidden);
-    }
-    access_service::get_system_settings(&state.pool)
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_get_settings(&state.pool, &admin)
         .await
         .map(Json)
 }
@@ -201,12 +232,8 @@ pub async fn update_settings(
     auth: AuthUser,
     Json(body): Json<UpdateSettingsRequest>,
 ) -> ApiResult<Json<SystemSettings>> {
-    let is_admin =
-        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
-    if !is_admin {
-        return Err(ApiError::Forbidden);
-    }
-    access_service::update_system_settings(&state.pool, &body)
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::update_system_settings(&state.pool, &admin, &body)
         .await
         .map(Json)
 }
@@ -219,12 +246,95 @@ pub async fn promote_admin(
     auth: AuthUser,
     Json(body): Json<PromoteAdminRequest>,
 ) -> ApiResult<Json<TeamMemberRow>> {
-    let is_admin =
-        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
-    if !is_admin {
-        return Err(ApiError::Forbidden);
-    }
-    access_service::promote_admin(&state.pool, body.profile_id, body.team_id)
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::promote_admin(&state.pool, &admin, body.profile_id, body.team_id)
         .await
         .map(Json)
+}
+
+/// POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
+///
+/// The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in
+/// `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries
+/// NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the
+/// `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+pub async fn demote_admin(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<DemoteAdminRequest>,
+) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::demote_admin(&state.pool, &admin, ProfileId::from(body.profile_id)).await?;
+    Ok(StatusCode::OK)
+}
+
+// ---------------------------------------------------------------------------
+// The admin standing acts (Task 13) — operator-only, UNDOCUMENTED like their
+// neighbours above (plain `.route()`, no `#[utoipa::path]`, allowlisted in
+// `.github/scripts/check-openapi-routes.sh`).
+//
+// Their authz IS the service signature: each dispatches to an `access_service`
+// fn that requires a `&SystemAdmin` proof (admin-authz enclosure, spec §3),
+// minted here by `require_system_admin`. Because the requirement lives in the
+// service type — not a handler-side `is_system_admin` — both surfaces enforce it
+// identically and a future MCP tool cannot bypass it (the F-3 posture; see
+// `audit-handler-authz-drift`). The handler mints the proof, then dispatches.
+// ---------------------------------------------------------------------------
+
+/// Body for `POST /api/access/admin/principals/{id}/revoke`.
+#[derive(Deserialize)]
+pub struct RevokePrincipalBody {
+    /// Required. It rides the log and the ledger, and a later review's reviewer needs it (D15).
+    pub reason: String,
+}
+
+/// POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+pub async fn approve_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_approve(&state.pool, &admin, ProfileId::from(profile_id)).await?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+pub async fn revoke_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+    Json(body): Json<RevokePrincipalBody>,
+) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_revoke(
+        &state.pool,
+        &admin,
+        ProfileId::from(profile_id),
+        body.reason,
+    )
+    .await?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+pub async fn deactivate_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_deactivate(&state.pool, &admin, ProfileId::from(profile_id)).await?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+pub async fn reactivate_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_reactivate(&state.pool, &admin, ProfileId::from(profile_id)).await?;
+    Ok(StatusCode::OK)
 }

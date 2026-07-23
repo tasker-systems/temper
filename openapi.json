@@ -54,7 +54,7 @@
             }
           },
           "400": {
-            "description": "System is in open mode — no request needed",
+            "description": "The request is not legal from the caller's standing",
             "content": {
               "application/json": {
                 "schema": {
@@ -65,6 +65,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A request is already pending, or access is already granted",
             "content": {
               "application/json": {
                 "schema": {
@@ -160,6 +170,71 @@
           },
           "404": {
             "description": "No pending join request to withdraw",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/access/reviews": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Access"
+        ],
+        "summary": "POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).",
+        "description": "On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access\ngate, and being able to ask for reconsideration is the whole point. The review is an inbox\nsignal only — it never feeds the admission decision.",
+        "operationId": "create_review_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Review request recorded"
+          },
+          "400": {
+            "description": "Only a revoked principal may request review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -4368,6 +4443,78 @@
         ]
       }
     },
+    "/api/resources/{id}/evidence": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Resources"
+        ],
+        "operationId": "resource_evidence",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resource evidential-standing shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingShape"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/resources/{id}/finalize": {
       "parameters": [
         {
@@ -6115,6 +6262,15 @@
           }
         }
       },
+      "ActorAuthority": {
+        "type": "string",
+        "description": "Who is acting. Three authorities (spec §6).",
+        "enum": [
+          "credential",
+          "self_principal",
+          "admin"
+        ]
+      },
       "AddMemberRequest": {
         "type": "object",
         "description": "Request body for `POST /api/teams/{id}/members`.",
@@ -7222,6 +7378,17 @@
           }
         }
       },
+      "CreateReviewBody": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "DeleteResponse": {
         "type": "object",
         "description": "Response body for resource deletion.",
@@ -7510,7 +7677,17 @@
           "code": {
             "type": "string"
           },
-          "details": {},
+          "details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SystemAccessDetails",
+                "description": "Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on\nevery other error."
+              }
+            ]
+          },
           "message": {
             "type": "string"
           }
@@ -8819,14 +8996,13 @@
       },
       "Profile": {
         "type": "object",
-        "description": "Profile — the temper-domain identity.\n\nBridges external auth identity to everything temper cares about:\nteam membership, resource ownership, preferences, vault configuration.\nA profile is \"who I am in temper\" regardless of which provider I\nauthenticated through. No auth provider fields — those live in\n`ProfileAuthLink`.\n\nAuto-provisioned on first authenticated request. Soft-deleted via\n`is_active = false` for referential integrity and GDPR compliance.",
+        "description": "Profile — the temper-domain identity.\n\nBridges external auth identity to everything temper cares about:\nteam membership, resource ownership, preferences, vault configuration.\nA profile is \"who I am in temper\" regardless of which provider I\nauthenticated through. No auth provider fields — those live in\n`ProfileAuthLink`.\n\nAuto-provisioned on first authenticated request. Deactivation is a\nprincipal-standing state (`kb_principal_standing.state = 'deactivated'`),\nnot a column on this row — the legacy `is_active` flag was dropped in\nprincipal-admission Phase 2.",
         "required": [
           "id",
           "display_name",
           "slug",
           "preferences",
           "vault_config",
-          "is_active",
           "created",
           "updated"
         ],
@@ -8853,9 +9029,6 @@
           "id": {
             "type": "string",
             "format": "uuid"
-          },
-          "is_active": {
-            "type": "boolean"
           },
           "preferences": {},
           "slug": {
@@ -9026,13 +9199,7 @@
       "PublicSystemSettings": {
         "type": "object",
         "description": "Public-facing system settings (no gating_team_slug — prevents info leakage).",
-        "required": [
-          "access_mode"
-        ],
         "properties": {
-          "access_mode": {
-            "type": "string"
-          },
           "instance_name": {
             "type": [
               "string",
@@ -9346,6 +9513,181 @@
             "format": "uuid"
           }
         }
+      },
+      "Refusal": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "NoStanding",
+            "description": "No standing row. Absence denies (spec §7 obligation 1) — this is what makes D7 structural.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_standing"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "UnrecognizedStanding",
+            "description": "The column held a value this binary does not know (spec §7 obligation 2).",
+            "required": [
+              "raw",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unrecognized_standing"
+                ]
+              },
+              "raw": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Denied",
+            "description": "Provisioned but never granted. The refusal says *\"you may request access.\"*",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "denied"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Requested",
+            "description": "Asked, not yet decided. The refusal says *\"your request is pending.\"*",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "requested"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Revoked",
+            "description": "Was granted and lost it. A different sentence, and a different audit signal, than `Denied`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "revoked"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Deactivated",
+            "description": "The principal itself is disabled.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "deactivated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "IllegalTransition",
+            "description": "The act is not legal from this state (spec §6 — every unlisted cell).\n\n`act` is an owned `String` rather than `&'static str` so `Refusal` is `DeserializeOwned`: it\nrides the 403 wire, and a borrowed-`'static` field would make the whole enum undeserializable\nfrom a short-lived `serde_json` input. The value is still one of a fixed set of act literals.",
+            "required": [
+              "act",
+              "kind"
+            ],
+            "properties": {
+              "act": {
+                "type": "string"
+              },
+              "from": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Standing"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "illegal_transition"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "InsufficientAuthority",
+            "description": "The actor lacks the authority this act requires.",
+            "required": [
+              "required",
+              "actual",
+              "kind"
+            ],
+            "properties": {
+              "actual": {
+                "$ref": "#/components/schemas/ActorAuthority"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "insufficient_authority"
+                ]
+              },
+              "required": {
+                "$ref": "#/components/schemas/ActorAuthority"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "NoPriorStanding",
+            "description": "`Reactivate` with no recoverable prior state. The backfill's genesis pass (spec §11) exists\nso this is unreachable for pre-existing rows; the machine still refuses rather than guesses.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_prior_standing"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Why a principal was refused, typed.\n\nThis replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose\ntests asserted a sentinel `\"join_request\"` that was never a real mode\n(`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).\n\nSpec §12: \"Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at\nthe act is that the actor learns why; a test that only checks 'not admitted' would pass on a\nsilent denial.\""
       },
       "RegionId": {
         "type": "string",
@@ -10494,6 +10836,71 @@
           "asc"
         ]
       },
+      "Standing": {
+        "type": "string",
+        "description": "The one authoritative standing state for a principal (spec D2).\n\nFive states plus absence. **Absence is not a variant** — a principal with no standing row is\ndenied structurally (spec §7 obligation 1), which is what makes D7's connection-profile safety\nhold by construction rather than by a check someone can forget.",
+        "enum": [
+          "denied",
+          "requested",
+          "approved",
+          "revoked",
+          "deactivated"
+        ]
+      },
+      "StandingShape": {
+        "type": "object",
+        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"",
+        "required": [
+          "finding_id",
+          "indep_breadth",
+          "adversarial_survival",
+          "challenge_count",
+          "contradiction_balance",
+          "freshness",
+          "r_parent",
+          "band"
+        ],
+        "properties": {
+          "adversarial_survival": {
+            "type": "number",
+            "format": "double",
+            "description": "N challenges withstood (`resource_adversarial_survival`); 0 when there have been no\nchallenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`)."
+          },
+          "band": {
+            "type": "string",
+            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over\nthe shape above. Carried WITH the shape, never presented instead of it (spec §1.1)."
+          },
+          "challenge_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of adversarial challenges raised against the finding, so a consumer can distinguish\n\"0 challenges\" from \"N challenges, 0 withstood.\""
+          },
+          "contradiction_balance": {
+            "type": "number",
+            "format": "double",
+            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount."
+          },
+          "finding_id": {
+            "$ref": "#/components/schemas/ResourceId",
+            "description": "`kb_resources.id` of the finding this shape describes."
+          },
+          "freshness": {
+            "type": "number",
+            "format": "double",
+            "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment."
+          },
+          "indep_breadth": {
+            "type": "number",
+            "format": "double",
+            "description": "Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence\ndefault: an unasserted pair is assumed correlated, not independent."
+          },
+          "r_parent": {
+            "type": "number",
+            "format": "double",
+            "description": "Reinforcement breadth: count of uncorrected provenance over the finding's live blocks."
+          }
+        }
+      },
       "Subscription": {
         "type": "object",
         "description": "A sync subscription — scopes which resources materialize locally.\n\nEach subscription is self-contained with its own sync and merge settings.\n`local_paths` and `repos` enable CWD-to-context inference.",
@@ -10580,6 +10987,43 @@
               {
                 "$ref": "#/components/schemas/MergePolicy"
               }
+            ]
+          }
+        }
+      },
+      "SystemAccessDetails": {
+        "type": "object",
+        "description": "Details included in the SystemAccessRequired error response.\n\nSECURITY NOTE: The `email` and `display_name` fields are safe to include\nbecause the caller already proved ownership of this identity through OAuth.\nWe are reflecting the caller's own profile back — not disclosing another\nuser's information. Do not add fields that reveal other users' data.",
+        "required": [
+          "refusal"
+        ],
+        "properties": {
+          "cli_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/Refusal",
+            "description": "Why this principal was refused, typed (spec §7). The sole refusal signal on the 403 since\nPhase 2 retired the legacy `join_request_status` field new clients never branched on. The\ntyped refusal distinguishes \"never granted\" (`denied`) from \"granted and revoked\" (`revoked`)\n— a distinction that matters to the user and in an audit.\n\nCarried as `temper_principal::Refusal` so every surface branches on it exhaustively — the\nRust ones through the enum, the generated temper-ts / temper-rb clients through the\ndiscriminated `kind` union that crate's feature-gated derives now emit."
+          },
+          "request_url": {
+            "type": [
+              "string",
+              "null"
             ]
           }
         }

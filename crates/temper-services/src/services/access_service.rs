@@ -10,11 +10,19 @@
 
 use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
+use temper_substrate::payloads::RefTarget;
 use uuid::Uuid;
 
+use crate::auth::SystemAdmin;
+// In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
+// enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
+use crate::authz::ScopedAuthority;
+use crate::services::standing_service::{self, ApplyStandingParams};
+use temper_principal::{Act, ActorAuthority};
+
 use temper_core::types::access_gate::{
-    AccessMode, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
-    PublicSystemSettings, SystemSettings,
+    Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
+    SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -30,8 +38,9 @@ use crate::error::{ApiError, ApiResult};
 // ---------------------------------------------------------------------------
 
 /// Check if a profile has system-level access.
-/// In `open` mode this always returns true.
-/// In `invite_only` mode the profile must be a member of the gating team.
+///
+/// Reads the SQL `has_system_access` predicate, which since Task 7's repoint answers from the
+/// principal's **standing** (`approved`), not from an `access_mode`/gating-team-membership check.
 pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
     let result = sqlx::query_scalar!("SELECT has_system_access($1)", *profile_id,)
         .fetch_one(pool)
@@ -71,58 +80,31 @@ pub(crate) enum GrantAuthority {
     None,
 }
 
-/// Bool projection of [`grant_authority`], kept as the seam `admin_ledger_service`'s read gate calls
-/// (spec 2026-07-16 §5) — it only needs "could you perform the act", not which arm allowed it.
+/// Bool projection of `GrantAuthority`'s [`ScopedAuthority`] resolve, kept as the seam
+/// `admin_ledger_service`'s read gate calls (spec 2026-07-16 §5) — it only needs "could you perform
+/// the act", not which arm allowed it.
 pub(crate) async fn can_administer_grant(
     pool: &PgPool,
     caller: ProfileId,
-    subject_table: &str,
-    subject_id: Uuid,
+    subject: RefTarget,
 ) -> ApiResult<bool> {
-    Ok(grant_authority(pool, caller, subject_table, subject_id).await? != GrantAuthority::None)
+    Ok(GrantAuthority::resolve(pool, caller, subject).await? != GrantAuthority::None)
 }
 
-/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
-/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
-/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
-/// `can_grant` holder) and repair stay operable.
-///
-/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
-/// through [`can_administer_grant`] (spec 2026-07-16 §5): if you could perform the act, you may read
-/// the record of it. Restating the predicate there would be a second copy of the policy that drifts
-/// from the gate it exists to mirror — tighten this fn and the ledger's read gate tightens with it.
-///
-/// Note this answers *may you administer grants here at all*. It does NOT bound WHICH capabilities
-/// may be conferred — that is attenuation, and both belong to one decision:
-/// [`authorize_capability_grant`]. Every grant sink should call that, not this.
-pub(crate) async fn grant_authority(
-    pool: &PgPool,
-    caller: ProfileId,
-    subject_table: &str,
-    subject_id: Uuid,
-) -> ApiResult<GrantAuthority> {
-    if is_system_admin(pool, caller).await? {
-        return Ok(GrantAuthority::SystemAdmin);
-    }
-    // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` exists to keep the
-    // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never consulted
-    // it — so a non-admin `can_grant` holder could mint `can_write` on the kernel, reaching by the
-    // grant axis exactly what the write axis forbids. `machine_authz`'s own tests seed such a row,
-    // so the state is reachable, not hypothetical. Admins already returned above, so a map in the
-    // admin-only regime denies here regardless of any `can_grant` the caller holds.
-    if subject_table == "kb_cogmaps"
-        && cogmap_write_requires_admin(pool, CogmapId(subject_id)).await?
-    {
-        return Ok(GrantAuthority::None);
-    }
-    Ok(
-        if profile_can_grant(pool, caller, subject_table, subject_id).await? {
-            GrantAuthority::Delegated
-        } else {
-            GrantAuthority::None
-        },
-    )
-}
+// The grant-administration gate itself — a system admin OR a holder of `can_grant` on the subject
+// (the general `can(...,'grant',...)` seam) — now lives as `GrantAuthority`'s
+// [`crate::authz::ScopedAuthority`] impl in `authz/grant.rs`. It is a DIFFERENT axis from authoring:
+// authoring stays wholly explicit (D3b §3.E), while grant-administration admits admins so
+// pre-existing maps (no seeded `can_grant` holder) and repair stay operable.
+//
+// The read gate in `admin_ledger_service` mirrors this WRITE gate by CALLING it through
+// [`can_administer_grant`] (spec 2026-07-16 §5): if you could perform the act, you may read the
+// record of it. Restating the predicate there would be a second copy of the policy that drifts from
+// the gate it exists to mirror — tighten the resolve and the ledger's read gate tightens with it.
+//
+// Resolving answers *may you administer grants here at all*. It does NOT bound WHICH capabilities
+// may be conferred — that is attenuation, and both belong to one decision:
+// [`authorize_capability_grant`]. Every grant sink should call that, not the bare resolve.
 
 /// The four capabilities a grant can carry. A closed set with a fixed SQL spelling — an enum rather
 /// than bare `&str` literals so a typo is a compile error and the set cannot silently grow.
@@ -206,16 +188,31 @@ impl From<&GrantCapabilityRequest> for RequestedCapabilities {
 ///   on this subject (`conferred ⊆ held`). Self-grant is neutralized by the same rule, since the
 ///   check never consults who the principal is.
 /// - **None** — denied, which is also where the L0/gating-map guard lands.
+///
+/// Returns the **proof**, not `()`: `grant_capability` needs it to mint
+/// `GrantWarrant::Administered`, and handing back the very proof this function decided on is what
+/// keeps the warrant's subject and the attenuated subject the same value by construction. Callers
+/// that only need the decision (`machine_authz::contain_reach`) discard it.
 pub(crate) async fn authorize_capability_grant(
     pool: &PgPool,
     caller: ProfileId,
-    subject_table: &str,
-    subject_id: Uuid,
+    subject: RefTarget,
     caps: RequestedCapabilities,
-) -> ApiResult<()> {
-    match grant_authority(pool, caller, subject_table, subject_id).await? {
+) -> ApiResult<crate::authz::Authorized<GrantAuthority>> {
+    // The gate mints a proof bound to `subject`; denial is rendered by `GrantAuthority::denial()`
+    // (`Forbidden`), so the refusal is the domain's, not this function's.
+    let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
+
+    // Read the scope from the PROOF, not from the parameter. They are the same value today —
+    // and that is precisely the point: attenuation must probe the subject that was authorized,
+    // so there is no second spelling for a later edit to diverge.
+    let subject = proof.subject();
+
+    match proof.authority() {
+        // Unreachable: `authorize` refused it above. Enumerated rather than `_ =>` so a future
+        // arm cannot land here silently permissive.
         GrantAuthority::None => Err(ApiError::Forbidden),
-        GrantAuthority::SystemAdmin => Ok(()),
+        GrantAuthority::SystemAdmin => Ok(proof),
         GrantAuthority::Delegated => {
             for (requested, action) in [
                 (caps.read, AccessAction::Read),
@@ -224,12 +221,12 @@ pub(crate) async fn authorize_capability_grant(
                 (caps.grant, AccessAction::Grant),
             ] {
                 if requested
-                    && !profile_can(pool, caller, action, subject_table, subject_id).await?
+                    && !profile_can(pool, caller, action, subject.kind.as_str(), subject.id).await?
                 {
                     return Err(ApiError::Forbidden);
                 }
             }
-            Ok(())
+            Ok(proof)
         }
     }
 }
@@ -263,12 +260,17 @@ pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bo
     Ok(ok)
 }
 
-/// The columns of one `kb_access_grants` upsert. A params struct because the
-/// insert takes seven domain values (repo rule: >5 ⇒ struct).
+/// The columns of one `kb_access_grants` upsert **other than its subject**.
+///
+/// The subject is deliberately absent: it comes from the `GrantWarrant`, which is the only thing
+/// that can authorize the row in the first place. Carrying it here too would be a second spelling,
+/// and a second spelling is a transposition waiting to happen.
+///
+/// The `principal` fields stay — a principal is *who receives* the capability, not the scope the
+/// caller had to be authorized over, so it is genuinely caller-supplied data rather than something
+/// the proof knows.
 #[derive(Debug, Clone)]
 pub struct InsertGrantParams {
-    pub subject_table: String,
-    pub subject_id: Uuid,
     pub principal_table: String,
     pub principal_id: Uuid,
     pub can_read: bool,
@@ -278,14 +280,21 @@ pub struct InsertGrantParams {
     pub granted_by_profile_id: Uuid,
 }
 
-/// Raw upsert of one access grant, on a connection so it can join a transaction.
-/// **Performs no authorization** — every caller must gate first (auth before writes).
-/// Returns whether the row was freshly inserted (`xmax = 0`) rather than updated.
-pub async fn insert_grant(
+/// Upsert of one access grant, on a connection so it can join a transaction. Returns whether the row
+/// was freshly inserted (`xmax = 0`) rather than updated.
+///
+/// **This no longer performs no authorization — it requires the proof of it.** The `warrant` is
+/// constructible only by a gate that has already decided (`authz::GrantWarrant`), and the subject is
+/// read from it, so there is no way to reach this function with an unauthorized subject and no
+/// subject argument to get wrong. The doc comment that used to say *"every caller must gate first"*
+/// was the enforcement; now the type is.
+pub(crate) async fn insert_grant(
     conn: &mut sqlx::PgConnection,
+    warrant: &crate::authz::GrantWarrant<'_>,
     p: &InsertGrantParams,
     emitter: EntityId,
 ) -> ApiResult<bool> {
+    let subject = warrant.subject();
     // The upsert + `grant_created` event, one txn, via the SQL chokepoint `_admin_grant_created`
     // (migrations/20260718000010). `emitter` is the acting entity, resolved from the gated caller.
     // Correlation self-roots — there is no sibling event to fuse with in any grant path, and the
@@ -295,8 +304,8 @@ pub async fn insert_grant(
     Ok(sqlx::query_scalar!(
         r#"SELECT _admin_grant_created($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS "inserted!""#,
         emitter.uuid(),
-        p.subject_table,
-        p.subject_id,
+        subject.kind.as_str(),
+        subject.id,
         p.principal_table,
         p.principal_id,
         p.can_read,
@@ -309,18 +318,23 @@ pub async fn insert_grant(
     .await?)
 }
 
-/// Raw delete of one access grant by its `(subject, principal)` 4-tuple, on a connection so it can
-/// join a transaction. **Performs no authorization** — every caller must gate first (auth before
-/// writes). Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
-pub async fn delete_grant(
+/// Delete one access grant by its `(subject, principal)` 4-tuple, on a connection so it can join a
+/// transaction. Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
+///
+/// Takes a `RevokeWarrant` and reads the subject from it, for the same reason `insert_grant` takes a
+/// `GrantWarrant` — but a **different** warrant type, and that difference is the point. Revocation
+/// is deliberately weaker-gated than granting on both of its paths (spec §2.5); one warrant spanning
+/// both axes would let an insertion proof authorize a deletion and, worse, invite a later
+/// "consistency" pass to tighten revocation into unwithdrawability.
+pub(crate) async fn delete_grant(
     conn: &mut sqlx::PgConnection,
-    subject_table: &str,
-    subject_id: Uuid,
+    warrant: &crate::authz::RevokeWarrant<'_>,
     principal_table: &str,
     principal_id: Uuid,
     revoker: ProfileId,
     emitter: EntityId,
 ) -> ApiResult<bool> {
+    let subject = warrant.subject();
     // The DELETE + `grant_revoked` event, one txn, via the SQL chokepoint `_admin_grant_revoked`.
     // Emits ONLY when a row was actually removed — a no-op revoke is not an admin act, and the ledger
     // is append-only so a spurious event is immortal. `revoker` is the acting profile; `emitter` its
@@ -329,8 +343,8 @@ pub async fn delete_grant(
     Ok(sqlx::query_scalar!(
         r#"SELECT _admin_grant_revoked($1,$2,$3,$4,$5,$6) AS "deleted!""#,
         emitter.uuid(),
-        subject_table,
-        subject_id,
+        subject.kind.as_str(),
+        subject.id,
         principal_table,
         principal_id,
         revoker.uuid(),
@@ -351,17 +365,20 @@ pub async fn grant_capability(
     // the machine path (`machine_authz::contain_reach`), so the two sinks cannot drift. Revocation
     // is deliberately NOT attenuated: de-escalation must never be harder than escalation, or a
     // grant becomes unwithdrawable.
-    authorize_capability_grant(pool, caller, &req.subject_table, req.subject_id, req.into())
-        .await?;
+    let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
+        .ok_or(ApiError::Forbidden)?;
+    let proof = authorize_capability_grant(pool, caller, subject, req.into()).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let granted = insert_grant(
         &mut conn,
+        // The subject travels in the warrant. `req.subject_table`/`req.subject_id` are NOT passed
+        // alongside it — they are what `wire_subject` typed into `subject` above, which is what the
+        // proof was minted over.
+        &crate::authz::GrantWarrant::Administered(&proof),
         &InsertGrantParams {
-            subject_table: req.subject_table.clone(),
-            subject_id: req.subject_id,
             principal_table: req.principal_table.clone(),
             principal_id: req.principal_id,
             can_read: req.can_read,
@@ -383,17 +400,20 @@ pub async fn revoke_capability(
     caller: ProfileId,
     req: &RevokeCapabilityRequest,
 ) -> ApiResult<RevokeOutcome> {
-    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
+        .ok_or(ApiError::Forbidden)?;
+    // The proof, where this used to take the `can_administer_grant` bool. Same decision — that
+    // function IS a bool projection of this resolve — but revocation needs the proof itself to mint
+    // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
+    // attenuating a revocation is what would make a grant unwithdrawable.
+    let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
         &mut conn,
-        &req.subject_table,
-        req.subject_id,
+        &crate::authz::RevokeWarrant::Administered(&proof),
         &req.principal_table,
         req.principal_id,
         caller,
@@ -471,7 +491,7 @@ pub(crate) async fn cogmap_write_requires_admin(
 pub async fn get_system_settings(pool: &PgPool) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
         SystemSettings,
-        "SELECT id, access_mode, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
+        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
@@ -486,59 +506,45 @@ pub async fn get_public_settings(pool: &PgPool) -> ApiResult<PublicSystemSetting
         .map(PublicSystemSettings::from)
 }
 
+/// Admin-authority read of the FULL settings (admin-authz enclosure, spec §3.4). The proof goes on
+/// this admin *act*, never on the shared `get_system_settings` reader — that reader also backs the
+/// public route and internal callers (`promote_admin`, `update_system_settings`), so gating it would
+/// deny the public path. The `_admin` param is the capability; the body just delegates.
+pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<SystemSettings> {
+    get_system_settings(pool).await
+}
+
 /// Admin-only partial update of the singleton `kb_system_settings` row.
 ///
 /// COALESCE semantics: each `Some` field overwrites its column; each `None`
-/// leaves the column unchanged. `access_mode` is validated against
-/// `{open, invite_only}`. Guards against the lockout footgun: an effective
-/// `invite_only` mode with no `gating_team_slug` would make `has_system_access`
-/// false for everyone, so it is rejected.
+/// leaves the column unchanged. `access_mode` is no longer writable — it was
+/// retired as a control (spec §14 / D18); the column survives read-only until
+/// Phase 2 drops it, so this function never touches it.
+///
+/// One guard survives, decoupled from the retired mode: if a `gating_team_slug`
+/// is being set, the team must exist. That slug's ownership confers a system
+/// admin (`is_system_admin` reads governance keyed on it), so pointing it at a
+/// nonexistent team would silently break admin resolution. This is *not* the old
+/// lockout guard — under Task 7's repoint `has_system_access` reads standing, so
+/// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
     pool: &PgPool,
+    _admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
-    // Validate access_mode (parse-don't-validate against the DB CHECK).
-    if let Some(mode) = req.access_mode.as_deref() {
-        if AccessMode::from_db_str(mode).is_none() {
+    // If a gating team is being set, it must name a real team.
+    if let Some(ref slug) = req.gating_team_slug {
+        let exists: bool = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+            slug
+        )
+        .fetch_one(pool)
+        .await?
+        .unwrap_or(false);
+        if !exists {
             return Err(ApiError::BadRequest(format!(
-                "invalid access_mode {mode:?} (expected 'open' or 'invite_only')"
+                "gating_team_slug '{slug}' does not exist — create the team first"
             )));
-        }
-    }
-
-    // Compute the EFFECTIVE post-update mode + gating slug to guard lockout.
-    let current = get_system_settings(pool).await?;
-    let effective_mode = req
-        .access_mode
-        .clone()
-        .unwrap_or(current.access_mode.clone());
-    let effective_gating = req
-        .gating_team_slug
-        .clone()
-        .or(current.gating_team_slug.clone());
-    if effective_mode == "invite_only" && effective_gating.is_none() {
-        return Err(ApiError::BadRequest(
-            "invite_only mode requires a gating_team_slug (set --gating-team in the same call \
-             or beforehand) — otherwise no one can access the instance"
-                .to_string(),
-        ));
-    }
-    // Guard: if the effective gating slug names a team that doesn't exist,
-    // enabling invite_only would lock everyone out.
-    if effective_mode == "invite_only" {
-        if let Some(ref slug) = effective_gating {
-            let exists: bool = sqlx::query_scalar!(
-                "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
-                slug
-            )
-            .fetch_one(pool)
-            .await?
-            .unwrap_or(false);
-            if !exists {
-                return Err(ApiError::BadRequest(format!(
-                    "gating_team_slug '{slug}' does not exist — create the team before enabling invite_only"
-                )));
-            }
         }
     }
 
@@ -546,17 +552,15 @@ pub async fn update_system_settings(
         SystemSettings,
         r#"
         UPDATE kb_system_settings
-           SET access_mode        = COALESCE($1, access_mode),
-               gating_team_slug   = COALESCE($2, gating_team_slug),
-               instance_name      = COALESCE($3, instance_name),
-               terms_version      = COALESCE($4, terms_version),
-               terms_resource_uri = COALESCE($5, terms_resource_uri),
+           SET gating_team_slug   = COALESCE($1, gating_team_slug),
+               instance_name      = COALESCE($2, instance_name),
+               terms_version      = COALESCE($3, terms_version),
+               terms_resource_uri = COALESCE($4, terms_resource_uri),
                updated            = now()
          WHERE id = 1
-        RETURNING id, access_mode, gating_team_slug, terms_version,
+        RETURNING id, gating_team_slug, terms_version,
                   terms_resource_uri, instance_name, updated
         "#,
-        req.access_mode,
         req.gating_team_slug,
         req.instance_name,
         req.terms_version,
@@ -573,9 +577,11 @@ pub async fn update_system_settings(
 /// `team_id == None` resolves to the configured gating team — system-admin ≡
 /// owner of the gating team, so this mints a second system admin. Decoupled
 /// from `kb_profiles.system_access` (the auth gate reads gating-team ownership,
-/// not the enum). Auth is enforced by the caller (handler `is_system_admin`).
+/// not the enum). Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3); the promoting
+/// admin (`admin.actor()`) is recorded as the actor on the governance grant and standing transition.
 pub async fn promote_admin(
     pool: &PgPool,
+    admin: &SystemAdmin,
     profile_id: Uuid,
     team_id: Option<Uuid>,
 ) -> ApiResult<TeamMemberRow> {
@@ -623,6 +629,11 @@ pub async fn promote_admin(
         )));
     }
 
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
     let row = sqlx::query_as!(
         TeamMemberRow,
         r#"
@@ -634,10 +645,163 @@ pub async fn promote_admin(
         target_team,
         profile_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
+    // D11: admin-ness IS a governance grant, and the invariant "admin implies Approved" is
+    // maintained here, at promotion (is_system_admin never ANDs standing in at read time). So a
+    // promotion writes both, atomically with the team row: the governance grant that makes
+    // `is_system_admin` true, and — unless the profile is already `approved` — the standing that
+    // makes `has_system_access` true. Without the standing half a promoted admin would pass the
+    // admin predicate yet fail the front door.
+    sqlx::query_scalar!(
+        "SELECT principal_governance_set($1, true, $2, 'system admin promotion')",
+        profile_id,
+        Some(*admin.actor()),
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let current: Option<String> = sqlx::query_scalar!(
+        "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+        profile_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current.as_deref() != Some("approved") {
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1,'approve','approved',$2,'system admin promotion')",
+            profile_id,
+            Some(*admin.actor()),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
+
     Ok(row)
+}
+
+// ---------------------------------------------------------------------------
+// The admin standing acts (Task 13)
+//
+// The five admin-authority acts of the machine, one thin service wrapper each. Every one routes
+// through `standing_service::apply`, so it inherits the transition table (a refused act — Revoke on
+// a never-approved principal, Reactivate on a live one — is rejected there with a reason, never here)
+// and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
+// it is a join-request decision, handled atomically inside `review_request` (D14).
+//
+// The gate is the `&SystemAdmin` proof each act requires (admin-authz enclosure, spec §3.2): its
+// presence in the signature IS the authorization requirement, minted once by `require_system_admin`
+// at the surface and read via `admin.actor()`. The old private
+// `require_system_admin(pool, actor) -> ApiResult<()>` per-act gate is gone — an ungated call path is
+// now a compile error, not a forgotten `.await?`. Both surfaces (temper-api today, temper-mcp when
+// parity lands) inherit the gate by construction, and a service caller can never reach
+// `ActorAuthority::Admin` without holding the proof. That is the F-3 posture the
+// `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
+// ---------------------------------------------------------------------------
+
+/// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
+/// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
+/// enrolls a *human requester* into the auto-join pool; a direct grant confers standing only.
+pub async fn admin_approve(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Approve,
+            actor: Some(admin.actor()),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Revoke a principal's admission. Legal only from `Approved` (§6). `reason` rides the log and the
+/// ledger, and a later `RequestReview`'s reviewer needs it (D15) — which is why it is required.
+pub async fn admin_revoke(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+    reason: String,
+) -> ApiResult<()> {
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Revoke { reason },
+            actor: Some(admin.actor()),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Deactivate a principal from any live state (§6).
+pub async fn admin_deactivate(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Deactivate,
+            actor: Some(admin.actor()),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Reactivate a deactivated principal, restoring its prior standing (§5). `prior: None` — the seam
+/// reads the prior state from the log and refuses rather than guesses.
+pub async fn admin_reactivate(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Reactivate { prior: None },
+            actor: Some(admin.actor()),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Demote a system admin — revoke the governance grant (D10 / §9). The manual twin of `promote`, and
+/// the deliberate counterpart to demotion-by-transition (Revoke/Deactivate demote automatically in
+/// `standing_service::apply`). Unlike `promote` it is **not** team-scoped: governance is keyed on the
+/// profile alone, so it takes no team. Idempotent — a no-op on a profile that holds no grant.
+///
+/// Governance-only: it never touches standing. A demoted admin keeps its access; it just may no
+/// longer change the rules. The `&SystemAdmin` proof is the gate (F-3), so both surfaces enforce it
+/// identically.
+pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId) -> ApiResult<()> {
+    sqlx::query_scalar!(
+        "SELECT principal_governance_set($1, false, $2, 'system admin demotion')",
+        *subject,
+        *admin.actor(),
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -654,38 +818,41 @@ pub struct CreateJoinRequestParams {
 
 /// Submit a join request for the gating team.
 ///
-/// Returns `BadRequest` if the system is in `open` mode (no request needed).
-/// The partial unique index on `kb_join_requests` prevents duplicate pending requests.
+/// Fires `Act::Request` (Denied → Requested) before writing the request row, so an illegal request
+/// (from Revoked or Approved) is refused first. `requested` standing is now the duplicate guard
+/// (D12); the old open-mode rejection is gone — under D11 a request is legitimate in any mode.
 pub async fn create_join_request(
     pool: &PgPool,
     params: CreateJoinRequestParams,
 ) -> ApiResult<JoinRequest> {
+    // Resolve the request's target FIRST. These are READS, so doing them before any standing write
+    // keeps auth-before-writes honest: an unconfigured gating team must fail BEFORE standing moves,
+    // or a Denied principal would land in `Requested` with no request row and no legal retry
+    // (Request from Requested is illegal). Under D11/D18 the request is legitimate in any mode — the
+    // old open-mode rejection made an `open` instance a dead end; `access_mode` is not consulted.
     let settings = get_system_settings(pool).await?;
-
-    let access_mode = AccessMode::from_db_str(&settings.access_mode).ok_or_else(|| {
-        ApiError::Internal(format!(
-            "unrecognized access_mode {:?} in kb_system_settings",
-            settings.access_mode
-        ))
-    })?;
-    match access_mode {
-        AccessMode::Open => {
-            return Err(ApiError::BadRequest(
-                "System is in open mode — no access request needed".to_string(),
-            ));
-        }
-        AccessMode::InviteOnly => {}
-    }
-
-    let gating_slug = settings.gating_team_slug.ok_or_else(|| {
-        ApiError::Internal("System is invite_only but no gating team configured".to_string())
-    })?;
-
+    let gating_slug = settings
+        .gating_team_slug
+        .ok_or_else(|| ApiError::Internal("System has no gating team configured".to_string()))?;
     // Resolve team ID from slug (substrate `kb_teams` has no `is_active`).
     let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", gating_slug,)
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| ApiError::Internal(format!("Gating team '{gating_slug}' not found")))?;
+
+    // Now the standing transition — the first write. An illegal Request (from Revoked, from
+    // Approved) refuses here, before the request row exists (auth before writes). The refusal rides
+    // `standing_service::apply`'s interim `BadRequest` (Task 17 upgrades it to a typed 403).
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject: params.profile_id,
+            act: Act::Request,
+            actor: Some(params.profile_id),
+            authority: ActorAuthority::SelfPrincipal,
+        },
+    )
+    .await?;
 
     let request_id = Uuid::now_v7();
     let accepted_terms_at = params
@@ -760,6 +927,19 @@ pub async fn get_own_request(
 
 /// Withdraw the pending join request for this profile.
 pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult<()> {
+    // Standing first (auth before writes): Withdraw is legal only from `Requested` (§6), so a
+    // principal with nothing pending is refused here rather than reaching the row UPDATE.
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject: profile_id,
+            act: Act::Withdraw,
+            actor: Some(profile_id),
+            authority: ActorAuthority::SelfPrincipal,
+        },
+    )
+    .await?;
+
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -789,8 +969,52 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
     }
 }
 
-/// List pending join requests with profile info (admin view).
-pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWithProfile>> {
+/// Parameters for a review request (spec D15 — a revoked principal asking for reconsideration).
+pub struct CreateReviewRequestParams {
+    pub profile_id: ProfileId,
+    pub message: Option<String>,
+}
+
+/// Ask an admin to reconsider a revocation (spec D15). Fires `Act::RequestReview`, which validates
+/// the principal is `Revoked` and MOVES NOTHING, then records the review as an inbox signal in
+/// `kb_principal_review_requests`. The review is NEVER read by the admission decision — a revoked
+/// principal is refused whether or not one is pending. Its own partial unique index
+/// (`idx_principal_review_one_open`) guards against duplicate open reviews (D15 obligation 2).
+pub async fn create_review_request(
+    pool: &PgPool,
+    params: CreateReviewRequestParams,
+) -> ApiResult<()> {
+    // Standing gate first (auth before writes): RequestReview is legal only from `Revoked` (§6).
+    // It moves nothing — the marker's whole point is that reconsideration cannot launder a
+    // revocation (D15). An illegal call refuses before any review row exists.
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject: params.profile_id,
+            act: Act::RequestReview,
+            actor: Some(params.profile_id),
+            authority: ActorAuthority::SelfPrincipal,
+        },
+    )
+    .await?;
+
+    sqlx::query!(
+        "INSERT INTO kb_principal_review_requests (profile_id, message) VALUES ($1, $2)",
+        *params.profile_id,
+        params.message,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// List pending join requests with profile info (admin view). The `_admin` proof is the capability
+/// (admin-authz enclosure, spec §3.2).
+pub async fn list_pending_requests(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+) -> ApiResult<Vec<JoinRequestWithProfile>> {
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -822,10 +1046,11 @@ pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWi
     Ok(rows)
 }
 
-/// Parameters for reviewing (approving/rejecting) a join request.
+/// Parameters for reviewing (approving/rejecting) a join request. The reviewer is no longer carried
+/// here: it is the authorizing admin (`admin.actor()` on [`review_request`]), so a caller can no
+/// longer supply a reviewer id that disagrees with who actually authorized the decision.
 pub struct ReviewRequestParams {
     pub request_id: Uuid,
-    pub reviewer_profile_id: ProfileId,
     pub decision: JoinRequestStatus,
     pub decision_note: Option<String>,
 }
@@ -833,7 +1058,14 @@ pub struct ReviewRequestParams {
 /// Approve or reject a join request. On approval, atomically insert the
 /// substrate-shaped team membership row (no `id`/`joined_at`/`invited_by_profile_id`;
 /// reviewer attribution survives on `kb_join_requests.reviewed_by_profile_id`).
-pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiResult<JoinRequest> {
+///
+/// Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3.2); the reviewer recorded on the
+/// decision and the standing transition is `admin.actor()`.
+pub async fn review_request(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    params: ReviewRequestParams,
+) -> ApiResult<JoinRequest> {
     if params.decision != JoinRequestStatus::Approved
         && params.decision != JoinRequestStatus::Rejected
     {
@@ -866,15 +1098,32 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         "#,
         params.request_id,
         params.decision as JoinRequestStatus,
-        *params.reviewer_profile_id,
+        *admin.actor(),
         params.decision_note,
     )
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(ApiError::NotFound)?;
 
-    // On approval, insert substrate-shaped team membership.
+    // On approval, grant the requester access. Under D11 access IS an `approved`
+    // `kb_principal_standing` row (`has_system_access` reads nothing else), so the decision and the
+    // standing it confers must be one transaction. `Approve` is legal from the requester's born
+    // `Denied` state (transition.rs, D14); the raw committer on the tx is the machine-door pattern —
+    // it keeps the standing write atomic with the decision, which `standing_service::apply` (a
+    // `&PgPool` call) could not. `has_system_access` is now true, so `ensure_auto_join_memberships`
+    // below (ordered after) does its enrollment rather than no-op.
     if params.decision == JoinRequestStatus::Approved {
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1,'approve','approved',$2,$3)",
+            row.requesting_profile_id,
+            *admin.actor(),
+            params.decision_note,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        // Retain the gating-team membership the pre-D11 model wrote (harmless team-role churn now
+        // that access rides standing, not this row) so team-scoped visibility is unchanged.
         sqlx::query!(
             r#"
             INSERT INTO kb_team_members (team_id, profile_id, role)
@@ -887,14 +1136,26 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         .execute(&mut *tx)
         .await?;
 
-        // Now that gating-team membership establishes access, enroll the
-        // profile into the rest of the auto-join "everyone" pool (Chunk 1's
-        // deferred call site). No-op if has_system_access is still false.
+        // Enroll the now-approved profile into the rest of the auto-join "everyone" pool.
         sqlx::query!(
             "SELECT ensure_auto_join_memberships($1)",
             row.requesting_profile_id,
         )
         .execute(&mut *tx)
+        .await?;
+    } else {
+        // Rejection returns standing to `Denied` so the principal may re-request (spec §5;
+        // `join_request_rejection_allows_resubmit` pins this). Raw on the tx (machine-door pattern),
+        // atomic with the decision, matching Approve; `Reject` is legal from the requester's
+        // `Requested` state (transition.rs). Rejection is deliberately NOT a standing state of its
+        // own — the request record keeps the `decision_note`.
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1,'reject','denied',$2,$3)",
+            row.requesting_profile_id,
+            *admin.actor(),
+            params.decision_note,
+        )
+        .fetch_one(&mut *tx)
         .await?;
     }
 

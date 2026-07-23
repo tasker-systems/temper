@@ -66,7 +66,7 @@ pub async fn reconcile(
     // Auth before writes (Global Constraints): the root-team-cogmap write gate.
     access_service::require_cogmap_write_admin(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         CogmapId::from(cogmap_id),
     )
     .await?;
@@ -81,7 +81,7 @@ pub async fn reconcile(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .reconcile_cognitive_map(cmd)
         .await
@@ -110,7 +110,7 @@ pub async fn genesis(
     // Genesis is open to any authenticated profile. The reserved-id guard and the creator-grant live
     // in the backend command (`create_cognitive_map`): a caller-supplied id is honored only for a
     // system-admin, and the creator is granted read+write+grant on the new map.
-    let profile_id = ProfileId::from(auth.0.profile.id);
+    let profile_id = ProfileId::from(auth.0.profile().id);
 
     let cmd = CreateCognitiveMap {
         request,
@@ -146,7 +146,7 @@ pub async fn shape(
 ) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
     temper_services::backend::substrate_read::anchor_shape_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         q.lens,
     )
@@ -182,7 +182,7 @@ pub async fn materialize_delta(
 ) -> ApiResult<Json<MaterializeDelta>> {
     let delta = materialize_service::materialize_delta(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         CogmapId::from(cogmap_id),
         q.threshold,
     )
@@ -216,7 +216,7 @@ pub async fn materialize(
         threshold: req.threshold,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .materialize_on_threshold(cmd)
         .await
@@ -246,7 +246,7 @@ pub async fn region_metrics(
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
     temper_services::backend::substrate_read::anchor_region_metrics_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         q.lens,
     )
@@ -273,7 +273,7 @@ pub async fn analytics(
 ) -> ApiResult<Json<CogmapAnalyticsRow>> {
     temper_services::backend::substrate_read::cogmap_analytics_select(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         cogmap_id,
     )
     .await?
@@ -303,7 +303,7 @@ pub async fn bind_team(
     // surface — which calls the service directly — is gated identically.
     let outcome = cogmap_service::bind_team(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         cogmap_id,
         &body,
     )
@@ -332,7 +332,7 @@ pub async fn unbind_team(
 ) -> ApiResult<Json<UnbindTeamOutcome>> {
     let outcome = cogmap_service::unbind_team(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         cogmap_id,
         team_id,
     )
@@ -372,7 +372,7 @@ pub async fn grant(
         can_grant: body.can_grant,
     };
     let outcome =
-        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile().id), &req)
             .await?;
     Ok(Json(outcome))
 }
@@ -403,7 +403,7 @@ pub async fn revoke(
         principal_id: body.principal_id,
     };
     let outcome =
-        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile().id), &req)
             .await?;
     Ok(Json(outcome))
 }

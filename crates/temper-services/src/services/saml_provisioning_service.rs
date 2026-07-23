@@ -11,20 +11,9 @@ use temper_core::types::TeamRole;
 
 use crate::error::ApiResult;
 
-/// Numeric rank for the strict hierarchy Owner > Maintainer > Member > Watcher.
-/// TeamRole is not `Ord` (its derive order would rank Owner lowest), so rank explicitly.
-fn role_rank(role: TeamRole) -> u8 {
-    match role {
-        TeamRole::Owner => 3,
-        TeamRole::Maintainer => 2,
-        TeamRole::Member => 1,
-        TeamRole::Watcher => 0,
-    }
-}
-
 /// The stronger of two roles (used when two asserted groups map to the same team).
 fn max_role(a: TeamRole, b: TeamRole) -> TeamRole {
-    if role_rank(a) >= role_rank(b) {
+    if a.rank() >= b.rank() {
         a
     } else {
         b

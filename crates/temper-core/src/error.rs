@@ -9,8 +9,9 @@ use thiserror::Error;
 pub struct CliAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
-    pub access_mode: String,
-    pub join_request_status: Option<String>,
+    /// The typed refusal the server sent on the 403. `Option` only because the client error chain
+    /// reconstructs it defensively; every current server populates it.
+    pub refusal: Option<temper_principal::Refusal>,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,
 }

@@ -99,6 +99,15 @@ const INPUT_TABLES: &[&str] = &[
     // grant_created/grant_revoked walk arms are no-ops (see the match below) precisely because the
     // final grant state rides in here — spec 2026-07-16 §7, Task 5 Step 5.
     "kb_access_grants",
+    // Standing is INPUT for exactly the reason grants are (spec 2026-07-20 §10). The backfill
+    // (20260720000050) mints a row per pre-existing principal, and those rows are pre-epoch in the
+    // same sense the 5 pre-epoch grants are: no `provision` event precedes them, so rebuilding
+    // standing from events would leave every migrated principal with NO ROW — and absence denies
+    // (spec §7 obligation 1). Replay would therefore lock every existing principal, including
+    // every admin, out of the instance. The governance table rides along for the same reason.
+    "kb_principal_standing",
+    "kb_principal_standing_events",
+    "kb_principal_governance",
     "kb_topics",
     "kb_event_types",
     "kb_events",
@@ -198,7 +207,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::AdminLedgerOpened
             | EventKind::GrantCreated
             | EventKind::GrantRevoked
-            | EventKind::SlackPrincipalDisconnected => None,
+            | EventKind::SlackPrincipalDisconnected
+            // Principal-admission acts (spec 2026-07-20): authority acts, not knowledge. Same
+            // NULL-anchored, content-free shape as the ledger events above.
+            | EventKind::PrincipalStandingChanged
+            | EventKind::PrincipalGovernanceChanged => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -538,7 +551,13 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             EventKind::AdminLedgerOpened
             | EventKind::GrantCreated
             | EventKind::GrantRevoked
-            | EventKind::SlackPrincipalDisconnected => {}
+            | EventKind::SlackPrincipalDisconnected
+            // Principal-admission acts (spec 2026-07-20 §10): same posture as the ledger events
+            // above — they ride kb_events but touch no _project_* cognition half, so the walk is a
+            // no-op. Standing STATE is replayed from the kb_principal_standing / _events /
+            // kb_principal_governance input tables, not rebuilt from these events.
+            | EventKind::PrincipalStandingChanged
+            | EventKind::PrincipalGovernanceChanged => {}
         }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;

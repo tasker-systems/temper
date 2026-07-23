@@ -893,6 +893,57 @@ pub async fn anchor_shape(
         .collect())
 }
 
+/// One finding's evidential-standing shape, as returned by `resource_standing_shape` (Set 3,
+/// migration `20260721000010`). Substrate-local: the `temper-services` wrapper maps this to the
+/// `StandingShape` wire type (Phase C, later PR). Standing is shape-primary (spec §1.1) — `band` is
+/// a lossy read-time chip carried WITH the shape, never in place of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StandingShapeRow {
+    pub finding_id: ResourceId,
+    pub indep_breadth: f64,
+    pub adversarial_survival: f64,
+    pub challenge_count: i32,
+    pub contradiction_balance: f64,
+    pub freshness: f64,
+    pub r_parent: f64,
+    pub band: String,
+}
+
+/// Access-gated read of a finding's evidential-standing shape (SQL `resource_standing_shape`). The
+/// gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`): a principal who cannot read
+/// the finding gets ZERO rows, never an error — surfaced here as `None`. Components are recomputed
+/// live (never read from the `kb_resource_standing` memo) so `freshness` reflects the current
+/// moment; the memo/refresh exists for the write-path clock, not as this read's authority.
+///
+/// Runtime `sqlx::query` (NOT the `query!` macro) — the SQL is unqualified and self-gating; see the
+/// module-level note. Read-only.
+pub async fn resource_standing(
+    pool: &PgPool,
+    principal: ProfileId,
+    finding: ResourceId,
+) -> Result<Option<StandingShapeRow>> {
+    let row = sqlx::query(
+        "SELECT finding_id, indep_breadth, adversarial_survival, challenge_count,
+                contradiction_balance, freshness, r_parent, band
+           FROM resource_standing_shape($1, 'profile', $2)",
+    )
+    .bind(finding)
+    .bind(principal)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| StandingShapeRow {
+        finding_id: r.get("finding_id"),
+        indep_breadth: r.get("indep_breadth"),
+        adversarial_survival: r.get("adversarial_survival"),
+        challenge_count: r.get("challenge_count"),
+        contradiction_balance: r.get("contradiction_balance"),
+        freshness: r.get("freshness"),
+        r_parent: r.get("r_parent"),
+        band: r.get("band"),
+    }))
+}
+
 /// One act folded under an invocation envelope's show projection: a `kb_events` row stamped with this
 /// invocation's id (`kb_events.invocation_id`). Substrate-local because `temper-substrate` cannot depend
 /// on `temper-core`; the `temper-api` wrapper maps this to the `InvocationActRow` wire type.

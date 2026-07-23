@@ -45,6 +45,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/access/reviews": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
+         * @description On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access
+         *     gate, and being able to ask for reconsideration is the whole point. The review is an inbox
+         *     signal only — it never feeds the admission decision.
+         */
+        post: operations["create_review_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/access/settings": {
         parameters: {
             query?: never;
@@ -1019,6 +1044,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/{id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["resource_evidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/finalize": {
         parameters: {
             query?: never;
@@ -1416,6 +1460,11 @@ export interface components {
             /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
             reasoning?: string | null;
         };
+        /**
+         * @description Who is acting. Three authorities (spec §6).
+         * @enum {string}
+         */
+        ActorAuthority: "credential" | "self_principal" | "admin";
         /** @description Request body for `POST /api/teams/{id}/members`. */
         AddMemberRequest: {
             /** Format: uuid */
@@ -1986,6 +2035,9 @@ export interface components {
             message?: string | null;
             source: string;
         };
+        CreateReviewBody: {
+            message?: string | null;
+        };
         /** @description Response body for resource deletion. */
         DeleteResponse: {
             deleted: boolean;
@@ -2177,7 +2229,7 @@ export interface components {
         };
         ErrorDetail: {
             code: string;
-            details?: unknown;
+            details?: null | components["schemas"]["SystemAccessDetails"];
             message: string;
         };
         /**
@@ -2946,8 +2998,10 @@ export interface components {
          *     authenticated through. No auth provider fields — those live in
          *     `ProfileAuthLink`.
          *
-         *     Auto-provisioned on first authenticated request. Soft-deleted via
-         *     `is_active = false` for referential integrity and GDPR compliance.
+         *     Auto-provisioned on first authenticated request. Deactivation is a
+         *     principal-standing state (`kb_principal_standing.state = 'deactivated'`),
+         *     not a column on this row — the legacy `is_active` flag was dropped in
+         *     principal-admission Phase 2.
          */
         Profile: {
             avatar_url?: string | null;
@@ -2957,7 +3011,6 @@ export interface components {
             email?: string | null;
             /** Format: uuid */
             id: string;
-            is_active: boolean;
             preferences: unknown;
             slug: string;
             /** Format: date-time */
@@ -3026,7 +3079,6 @@ export interface components {
         };
         /** @description Public-facing system settings (no gating_team_slug — prevents info leakage). */
         PublicSystemSettings: {
-            access_mode: string;
             instance_name?: string | null;
             terms_resource_uri?: string | null;
             terms_version?: string | null;
@@ -3171,6 +3223,50 @@ export interface components {
         ReconcileTombstone: {
             /** Format: uuid */
             id: string;
+        };
+        /**
+         * @description Why a principal was refused, typed.
+         *
+         *     This replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose
+         *     tests asserted a sentinel `"join_request"` that was never a real mode
+         *     (`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).
+         *
+         *     Spec §12: "Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at
+         *     the act is that the actor learns why; a test that only checks 'not admitted' would pass on a
+         *     silent denial."
+         */
+        Refusal: {
+            /** @enum {string} */
+            kind: "no_standing";
+        } | {
+            /** @enum {string} */
+            kind: "unrecognized_standing";
+            raw: string;
+        } | {
+            /** @enum {string} */
+            kind: "denied";
+        } | {
+            /** @enum {string} */
+            kind: "requested";
+        } | {
+            /** @enum {string} */
+            kind: "revoked";
+        } | {
+            /** @enum {string} */
+            kind: "deactivated";
+        } | {
+            act: string;
+            from?: null | components["schemas"]["Standing"];
+            /** @enum {string} */
+            kind: "illegal_transition";
+        } | {
+            actual: components["schemas"]["ActorAuthority"];
+            /** @enum {string} */
+            kind: "insufficient_authority";
+            required: components["schemas"]["ActorAuthority"];
+        } | {
+            /** @enum {string} */
+            kind: "no_prior_standing";
         };
         /**
          * Format: uuid
@@ -3821,6 +3917,64 @@ export interface components {
          */
         SortOrder: "desc" | "asc";
         /**
+         * @description The one authoritative standing state for a principal (spec D2).
+         *
+         *     Five states plus absence. **Absence is not a variant** — a principal with no standing row is
+         *     denied structurally (spec §7 obligation 1), which is what makes D7's connection-profile safety
+         *     hold by construction rather than by a check someone can forget.
+         * @enum {string}
+         */
+        Standing: "denied" | "requested" | "approved" | "revoked" | "deactivated";
+        /**
+         * @description A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are
+         *     non-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),
+         *     so an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side
+         *     read returns `Option<StandingShape>`, `None` for "not readable."
+         */
+        StandingShape: {
+            /**
+             * Format: double
+             * @description N challenges withstood (`resource_adversarial_survival`); 0 when there have been no
+             *     challenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`).
+             */
+            adversarial_survival: number;
+            /**
+             * @description Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over
+             *     the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
+             */
+            band: string;
+            /**
+             * Format: int32
+             * @description Count of adversarial challenges raised against the finding, so a consumer can distinguish
+             *     "0 challenges" from "N challenges, 0 withstood."
+             */
+            challenge_count: number;
+            /**
+             * Format: double
+             * @description Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
+             */
+            contradiction_balance: number;
+            /** @description `kb_resources.id` of the finding this shape describes. */
+            finding_id: components["schemas"]["ResourceId"];
+            /**
+             * Format: double
+             * @description Reversible time-decay off the finding's most recent uncorrected reinforcement; computed
+             *     live at read (never from the memo) because it must reflect the current moment.
+             */
+            freshness: number;
+            /**
+             * Format: double
+             * @description Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence
+             *     default: an unasserted pair is assumed correlated, not independent.
+             */
+            indep_breadth: number;
+            /**
+             * Format: double
+             * @description Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.
+             */
+            r_parent: number;
+        };
+        /**
          * @description A sync subscription — scopes which resources materialize locally.
          *
          *     Each subscription is self-contained with its own sync and merge settings.
@@ -3849,6 +4003,31 @@ export interface components {
             auto_sync?: boolean | null;
             local_paths?: string[] | null;
             merge_policy?: null | components["schemas"]["MergePolicy"];
+        };
+        /**
+         * @description Details included in the SystemAccessRequired error response.
+         *
+         *     SECURITY NOTE: The `email` and `display_name` fields are safe to include
+         *     because the caller already proved ownership of this identity through OAuth.
+         *     We are reflecting the caller's own profile back — not disclosing another
+         *     user's information. Do not add fields that reveal other users' data.
+         */
+        SystemAccessDetails: {
+            cli_command?: string | null;
+            display_name?: string | null;
+            email?: string | null;
+            /**
+             * @description Why this principal was refused, typed (spec §7). The sole refusal signal on the 403 since
+             *     Phase 2 retired the legacy `join_request_status` field new clients never branched on. The
+             *     typed refusal distinguishes "never granted" (`denied`) from "granted and revoked" (`revoked`)
+             *     — a distinction that matters to the user and in an audit.
+             *
+             *     Carried as `temper_principal::Refusal` so every surface branches on it exhaustively — the
+             *     Rust ones through the enum, the generated temper-ts / temper-rb clients through the
+             *     discriminated `kind` union that crate's feature-gated derives now emit.
+             */
+            refusal: components["schemas"]["Refusal"];
+            request_url?: string | null;
         };
         /**
          * @description Request body for `POST /api/teams`.
@@ -4110,7 +4289,7 @@ export interface operations {
                     "application/json": components["schemas"]["JoinRequest"];
                 };
             };
-            /** @description System is in open mode — no request needed */
+            /** @description The request is not legal from the caller's standing */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4121,6 +4300,15 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A request is already pending, or access is already granted */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4192,6 +4380,49 @@ export interface operations {
             };
             /** @description No pending join request to withdraw */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_review_request: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Review request recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Only a revoked principal may request review */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6676,6 +6907,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GraphEdgeRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    resource_evidence: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource evidential-standing shape */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandingShape"];
                 };
             };
             /** @description Unauthorized */

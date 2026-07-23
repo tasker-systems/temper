@@ -1144,6 +1144,46 @@ impl DbBackend {
         }
     }
 
+    /// Tick the evidential-standing memo after a resource write (Set 3, Phase B). Recomputes the
+    /// touched finding's standing components and UPSERTs its `kb_resource_standing` memo row via the
+    /// shipped SQL (Task 5's [`temper_substrate::write::refresh_resource_standing`]).
+    ///
+    /// **Never fails the write**, exactly as [`Self::tick_region_clocks`] does not — the resource has
+    /// already committed. A refresh failure is therefore logged and swallowed; the `kb_resource_standing`
+    /// memo stays stale only until the next write over this finding re-drives it. Escalating would trade
+    /// a self-healing staleness for a user-visible 500.
+    ///
+    /// **What the read actually recomputes live.** `resource_standing_shape` recomputes FIVE of the six
+    /// components from live rows at read (`r_parent`, `contradiction_balance`, `adversarial_survival`,
+    /// `challenge_count`, `freshness`), so for those the `kb_resource_standing` memo is a write-cost
+    /// optimization + parity anchor, never the read's authority. The exception is `indep_breadth`:
+    /// `resource_independence_breadth` sums the `kb_independence_pairs` memo, and that pairs memo is
+    /// (re)built ONLY here (via `refresh_independence_pairs` inside the shipped SQL), NOT at read and NOT
+    /// on edge writes. So an `independent-of` edge asserted/folded among a finding's bases would leave
+    /// `indep_breadth` stale until the next resource create/update over that finding re-drives it.
+    ///
+    /// Why that is safe in Set 3, and what Set 5 owes. Wired onto the resource create/update paths only,
+    /// NOT the edge paths (`assert_relationship` / `fold_relationship`). Set 3 ships NO `independent-of`
+    /// edge writer (that is Set 5's), so `kb_independence_pairs` is always empty today and `indep_breadth`
+    /// is always the live silence-default — the staleness above is unreachable, not merely rare. The
+    /// deferral of edge-incident refresh is therefore correct now but conditional:
+    /// **TODO(Set 5): when the independence/scar edge writer lands, it MUST drive edge-incident
+    /// `refresh_independence_pairs` (both resource endpoints) — or `indep_breadth` will read stale after
+    /// an independence-edge assert/fold.**
+    async fn tick_resource_standing(&self, finding: ResourceId) {
+        match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
+            Ok(()) => tracing::debug!(
+                finding = %finding.uuid(),
+                "resource standing memo refreshed"
+            ),
+            Err(e) => tracing::warn!(
+                finding = %finding.uuid(),
+                error = %e,
+                "resource standing refresh failed; memo is stale until the next write re-drives it"
+            ),
+        }
+    }
+
     /// Per-act correlation-integrity gate. When an authored act carries an `invocation_id`, the caller
     /// must be able to read the invocation's originating cogmap (absent OR unreadable → uniform 404, no
     /// existence oracle — matching the `invocation_show`/`close_invocation` deny→NotFound contract), and
@@ -1357,6 +1397,12 @@ impl DbBackend {
         // T6 — tick the two region clocks (spec §3.5). The resource has committed; region geometry is
         // a projection over it, so a clock failure is logged, never escalated (see `region_clocks`).
         self.tick_region_clocks(cmd.home, emitter).await;
+
+        // Set 3 — refresh the new finding's evidential-standing memo. Same self-healing posture as the
+        // region clocks above: the resource has committed, the memo is a write-cost optimization over
+        // it, and a failure is logged not escalated.
+        self.tick_resource_standing(ResourceId::from(new_id.uuid()))
+            .await;
 
         let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
             .await?;
@@ -1604,6 +1650,11 @@ impl Backend for DbBackend {
                 "could not resolve home anchor; region clocks not ticked"
             ),
         }
+
+        // Set 3 — refresh the revised finding's evidential-standing memo (same self-healing posture as
+        // the region clocks above). Unlike the region tick this needs no home anchor: the memo keys on
+        // the finding itself, so it always fires on a resource update.
+        self.tick_resource_standing(ResourceId::from(new_id)).await;
 
         let row =
             native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
@@ -2171,11 +2222,20 @@ impl Backend for DbBackend {
         // always a freshly-minted id that cannot already carry a grant. The conflict arm is
         // unreachable, and the event is always a fresh `grant_created` with no `previous`.
         let creator = uuid::Uuid::from(self.profile_id);
+        // The `Birth` warrant, and the ONLY `BornSubject` in the crate — the paragraph above is its
+        // justification: `born_cogmap` is minted in this very transaction, so there is no prior
+        // authority over it that any gate could have checked. `BornSubject` cannot verify that; the
+        // call-site-count test in `authz/grant.rs` is what keeps this the only place claiming it.
+        let born = crate::authz::BornSubject::minted_in_this_transaction(
+            temper_substrate::payloads::RefTarget {
+                kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                id: uuid::Uuid::from(born_cogmap),
+            },
+        );
         crate::services::access_service::insert_grant(
             &mut tx,
+            &crate::authz::GrantWarrant::Birth(&born),
             &crate::services::access_service::InsertGrantParams {
-                subject_table: "kb_cogmaps".to_string(),
-                subject_id: uuid::Uuid::from(born_cogmap),
                 principal_table: "kb_profiles".to_string(),
                 principal_id: creator,
                 can_read: true,

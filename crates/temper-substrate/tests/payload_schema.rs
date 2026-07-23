@@ -44,6 +44,8 @@ fn payload_schemas_match_snapshots() {
     check::<p::GrantCreated>("grant_created");
     check::<p::GrantRevoked>("grant_revoked");
     check::<p::SlackPrincipalDisconnected>("slack_principal_disconnected");
+    check::<p::PrincipalStandingChanged>("principal_standing_changed");
+    check::<p::PrincipalGovernanceChanged>("principal_governance_changed");
 }
 
 #[test]

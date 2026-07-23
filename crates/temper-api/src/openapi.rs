@@ -69,6 +69,13 @@ use temper_workflow::types::resource::{
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
         temper_core::types::access_gate::Entitlements,
+        // The admission 403's payload, reachable from any route because the gate is middleware.
+        // `Refusal` and the two enums it embeds come from temper-principal under its feature-gated
+        // derives, so the generated SDKs get the discriminated union rather than an opaque object.
+        temper_core::types::access_gate::SystemAccessDetails,
+        temper_principal::Refusal,
+        temper_principal::Standing,
+        temper_principal::ActorAuthority,
         crate::handlers::profiles::ProfileWithEntitlements,
         temper_core::types::relationship_requests::AssertRelationshipRequest,
         temper_core::types::relationship_requests::RetypeRelationshipRequest,

@@ -51,6 +51,8 @@ async fn provision_profile(app: &common::TestApp) -> String {
         .await
         .expect("profile fetch failed");
     assert_eq!(resp.status().as_u16(), 200, "auto-provision must succeed");
+    // D11: born Denied. Approve so the gated ingest/update endpoints admit this caller.
+    common::fixtures::approve_standing_by_email(&app.pool, &email).await;
     token
 }
 

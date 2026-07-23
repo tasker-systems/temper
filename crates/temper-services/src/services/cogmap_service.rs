@@ -6,17 +6,21 @@
 //! same precedent as `context_service`). Only cogmap *genesis* got a Backend
 //! command.
 //!
-//! Bind/unbind gate is TWO-SIDED (`can_bind`, at the TOP of each fn, BEFORE any write):
-//! `is_system_admin`, OR the caller administers the MAP (`can_grant` on it) AND may manage the TEAM
-//! (`can_manage` = owner/maintainer, direct membership) AND the team is NOT the gating/root team
-//! (binding there flips the map into the `require_cogmap_write_admin` regime — an escalation kept
-//! admin-only).
+//! Bind/unbind gate is TWO-SIDED (at the TOP of each fn, BEFORE any write): `is_system_admin`, OR
+//! the caller administers the MAP (`can_grant` on it) AND may manage the TEAM (`can_manage` =
+//! owner/maintainer, direct membership) AND the team is NOT the gating/root team.
+//!
+//! That policy is no longer written here. It is `crate::authz::TwoSidedAuthority`, shared with
+//! `context_service`'s share/unshare/reassign — the two were the same gate twice, differing only in
+//! how authority over the object is established. **The gating-team exclusion cuts both ways and the
+//! UNBIND direction is the load-bearing one**; the reason lives on that impl's `resolve`, since
+//! that is where a future reader would go to relax it.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::{ApiError, ApiResult};
-use crate::services::{access_service, team_service};
+use crate::authz::{TwoSidedAuthority, TwoSidedScope};
+use crate::error::ApiResult;
 use temper_core::types::cognitive_maps::{BindTeamOutcome, BindTeamRequest, UnbindTeamOutcome};
 use temper_core::types::ids::{CogmapId, ProfileId};
 
@@ -31,9 +35,12 @@ pub async fn bind_team(
     req: &BindTeamRequest,
 ) -> ApiResult<BindTeamOutcome> {
     // Auth before writes: system-admin, OR a team manager who administers the map (non-root team).
-    if !can_bind(pool, caller, cogmap_id, req.team_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    crate::authz::authorize::<TwoSidedAuthority>(
+        pool,
+        caller,
+        TwoSidedScope::cogmap(cogmap_id, req.team_id),
+    )
+    .await?;
 
     let inserted = sqlx::query_scalar!(
         r#"
@@ -53,32 +60,6 @@ pub async fn bind_team(
         team_id: req.team_id,
         bound: inserted.is_some(),
     })
-}
-
-/// Two-sided bind/unbind gate. Allowed IFF `is_system_admin`, OR the caller can administer the MAP
-/// (`can_grant` on it) AND may manage the TEAM (`can_manage` = Owner|Maintainer, direct membership)
-/// AND the team is NOT the gating/root team. Binding to the gating team flips the map into the
-/// `require_cogmap_write_admin` regime, so that stays admin-only (escalation guard).
-async fn can_bind(
-    pool: &PgPool,
-    caller: ProfileId,
-    cogmap_id: Uuid,
-    team_id: Uuid,
-) -> ApiResult<bool> {
-    if access_service::is_system_admin(pool, caller).await? {
-        return Ok(true);
-    }
-    if access_service::is_gating_team(pool, team_id).await? {
-        return Ok(false);
-    }
-    let team_ok = matches!(
-        team_service::role_on_team(pool, team_id, caller).await?,
-        Some(role) if team_service::can_manage(role)
-    );
-    if !team_ok {
-        return Ok(false);
-    }
-    access_service::profile_can_grant(pool, caller, "kb_cogmaps", cogmap_id).await
 }
 
 /// Producer write gate: can `profile` author a resource homed in `cogmap`?
@@ -117,10 +98,15 @@ pub async fn unbind_team(
     cogmap_id: Uuid,
     team_id: Uuid,
 ) -> ApiResult<UnbindTeamOutcome> {
-    // Auth before writes: symmetric with bind — a principal who could bind may unbind.
-    if !can_bind(pool, caller, cogmap_id, team_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Auth before writes: symmetric with bind — a principal who could bind may unbind. That
+    // symmetry is exactly why the shared gate excludes the gating team (see `TwoSidedAuthority`):
+    // it is unbinding a gating-team-joined map, not binding one, that would be an escalation.
+    crate::authz::authorize::<TwoSidedAuthority>(
+        pool,
+        caller,
+        TwoSidedScope::cogmap(cogmap_id, team_id),
+    )
+    .await?;
 
     let result = sqlx::query!(
         "DELETE FROM kb_team_cogmaps WHERE cogmap_id = $1 AND team_id = $2",

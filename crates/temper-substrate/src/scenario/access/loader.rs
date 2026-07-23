@@ -140,15 +140,37 @@ async fn insert_profiles(
 ) -> Result<()> {
     for p in &world.profiles {
         let id = sqlx::query_scalar!(
-            "INSERT INTO kb_profiles (handle, display_name, system_access) \
-             VALUES ($1,$2,$3::system_access) RETURNING id",
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$2) RETURNING id",
             p.handle,
             p.display_name,
-            p.system_access.as_sql() as _,
         )
         .fetch_one(&mut *tx)
         .await?;
         profiles.insert(p.handle.clone(), id);
+
+        // Mint the now-authoritative standing row from the declared tier (see loader.rs for the
+        // fuller rationale; Phase 2 A4 dropped the `system_access` projection write). Emitter falls
+        // back to the `system` actor that seed_system creates before any access scenario loads.
+        let (standing, admin) = match p.system_access.as_sql() {
+            "admin" => ("approved", true),
+            "approved" => ("approved", false),
+            _ => ("denied", false),
+        };
+        sqlx::query!(
+            "SELECT principal_standing_apply($1,'provision',$2,NULL,'scenario load')",
+            id,
+            standing
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if admin {
+            sqlx::query!(
+                "SELECT principal_governance_set($1,true,NULL,'scenario load')",
+                id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        }
     }
     Ok(())
 }

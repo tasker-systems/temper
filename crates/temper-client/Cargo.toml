@@ -6,6 +6,7 @@ description = "Auth-aware HTTP client for the temper cloud API"
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+temper-principal = { path = "../temper-principal" }
 temper-workflow = { path = "../temper-workflow" }
 temper-auth = { path = "../temper-auth" }
 reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "cookies"], default-features = false }

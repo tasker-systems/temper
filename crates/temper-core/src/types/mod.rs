@@ -47,6 +47,7 @@ pub mod relationship_requests;
 pub mod resource_grant;
 pub mod search;
 pub mod slack;
+pub mod standing;
 pub mod steward;
 pub mod team;
 pub mod upload;
@@ -60,7 +61,7 @@ pub use access_gate::{
 };
 pub use api::{HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow};
 pub use audit::ResourceAuditRow;
-pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile, PrincipalKind, ReconcileRequest};
+pub use auth::{AuthClaims, AuthProvider, PrincipalKind, ReconcileRequest};
 pub use authorship::{ActContext, ActInput, AgentAuthorship, ConfidenceBand};
 pub use config::{
     expand_tilde, global_config_path, load_config, load_config_from, AuthConfig, CloudConfig,
@@ -93,6 +94,7 @@ pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignRe
 pub use slack::{
     IdpRevocation, SlackDisconnectRequest, SlackDisconnectResponse, SlackDisconnectedPrincipal,
 };
+pub use standing::StandingShape;
 pub use steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta, StewardAdvanceWatermarkInput,
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,

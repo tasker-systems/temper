@@ -4,7 +4,7 @@ mod common;
 
 use sqlx::PgPool;
 
-/// A deactivated profile (`kb_profiles.is_active = false`) must be rejected on
+/// A deactivated profile (principal standing `'deactivated'`) must be rejected on
 /// every subsequent authenticated request, even with an otherwise-valid JWT.
 ///
 /// This is the general-purpose account-deactivation gate — a sibling to (not
@@ -34,18 +34,16 @@ async fn test_deactivated_profile_returns_401(pool: PgPool) {
         resp.text().await.unwrap_or_default()
     );
 
-    // Deactivate the profile directly in the database.
-    // Runtime query (not the query! macro) — a trivial test-fixture write needs no .sqlx cache
-    // entry, so it compiles under SQLX_OFFLINE in `cargo make check`.
+    // Deactivate the profile directly in the database — a `deactivated` principal standing (Phase 2
+    // dropped `is_active`; the Level-1 gate reads standing). Runtime query (not the query! macro) —
+    // a trivial test-fixture write needs no .sqlx cache entry, so it compiles under SQLX_OFFLINE.
     sqlx::query(
         r#"
-        UPDATE kb_profiles
-           SET is_active = false
-         WHERE id = (
-             SELECT profile_id
-               FROM kb_profile_auth_links
-              WHERE auth_provider_user_id = $1
-         )
+        INSERT INTO kb_principal_standing (profile_id, state)
+        SELECT profile_id, 'deactivated'
+          FROM kb_profile_auth_links
+         WHERE auth_provider_user_id = $1
+        ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'
         "#,
     )
     .bind(sub)

@@ -1,0 +1,32 @@
+[package]
+name = "temper-principal"
+version = "0.1.0"
+edition = "2021"
+description = "The pure principal-admission and standing-transition machines. No I/O, no database."
+
+# DELIBERATELY EMPTY OF WORKSPACE DEPENDENCIES.
+#
+# Spec D3 requires no `sqlx` here, "purity enforced by the compiler, not by convention". That
+# rules out `temper-core`: its sqlx dependency is NON-OPTIONAL (temper-core/Cargo.toml:22) and
+# `define_id!` emits sqlx Type/Encode/Decode impls ungated (temper-core/src/types/ids.rs:6-108),
+# so taking `ProfileId` would pull sqlx straight back in and D3 would hold only by wishful
+# thinking. This crate therefore takes NO ids at all — it judges assembled evidence and the
+# seam in temper-services owns every identifier (spec §4).
+#
+# The two OPTIONAL schema-generator deps below are the one sanctioned exception, and they do not
+# weaken D3: neither is a workspace crate, both are off by default (so `cargo tree -p
+# temper-principal` stays sqlx-free), and both are pure derive-macro surface — they add
+# descriptions of these types, never behavior. They exist because `Refusal` rides the admission
+# 403 wire, and leaving it opaque to the generators made the temper-ts / temper-rb clients see an
+# untyped object where the Rust surfaces branch exhaustively. Mirroring the enum in temper-core
+# instead would buy purity with drift between two hand-synced copies of the same contract.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+ts-rs = { version = "10", optional = true }
+utoipa = { version = "5", optional = true }
+
+[features]
+# Named to match temper-core's, because they are switched together: temper-core's `typescript` /
+# `web-api` forward to these, so a generator enabled at the boundary is enabled here too.
+typescript = ["ts-rs"]
+web-api = ["utoipa"]

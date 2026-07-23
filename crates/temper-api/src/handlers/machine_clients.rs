@@ -36,7 +36,7 @@ pub async fn provision(
     auth: AuthUser,
     Json(body): Json<ProvisionMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     let client = machine_registration_service::provision(&state.pool, caller, &body).await?;
     Ok(Json(client))
 }
@@ -47,10 +47,12 @@ pub async fn rebind(
     Path(id): Path<Uuid>,
     Json(mut body): Json<RebindMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    // rebind is system-admin-only (B2): the &SystemAdmin proof is the gate (admin-authz enclosure,
+    // spec §3), minted here. Team ownership cannot bound the reach a rebind inherits.
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
     // The path segment is authoritative for which client is being rotated away from.
     body.from_machine_client_id = id;
-    let client = machine_registration_service::rebind(&state.pool, caller, &body).await?;
+    let client = machine_registration_service::rebind(&state.pool, &admin, &body).await?;
     Ok(Json(client))
 }
 
@@ -59,7 +61,7 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<MachineClient>>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         machine_client_service::list(&state.pool, caller, q.include_revoked).await?,
     ))
@@ -70,7 +72,7 @@ pub async fn get(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         machine_client_service::get_for_caller(&state.pool, caller, id).await?,
     ))
@@ -81,7 +83,7 @@ pub async fn revoke(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
         machine_client_service::revoke(&state.pool, id, caller).await?,
     ))
@@ -92,7 +94,7 @@ pub async fn issue(
     auth: AuthUser,
     Json(body): Json<IssueMachineRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     let cred = machine_registration_service::issue(&state.pool, caller, &body).await?;
     Ok(Json(cred))
 }
@@ -103,7 +105,7 @@ pub async fn rotate_secret(
     Path(id): Path<Uuid>,
     Json(body): Json<RotateSecretRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let caller = ProfileId::from(auth.0.profile.id);
+    let caller = ProfileId::from(auth.0.profile().id);
     let cred =
         machine_client_service::rotate_secret(&state.pool, caller, id, body.grace_seconds).await?;
     Ok(Json(cred))

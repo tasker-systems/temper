@@ -68,7 +68,7 @@ principal" true by construction rather than by convention.
 - `authenticate` runs `resolve_from_claims` (which JIT-provisions a *human* profile on first
   sight, and is **lookup-or-reject** for a machine — see the
   [machine-token contract](./machine-token-contract.md)) then the `is_active` gate. It
-  yields `AuthenticatedProfile { profile, claims }`.
+  yields an `AuthenticatedProfile`, read through `.profile()` / `.claims()`.
 - `require_system_access` runs `access_service::has_system_access` (approved member of the
   gating team). It yields `SystemAuthorized(AuthenticatedProfile)`.
 
@@ -79,6 +79,17 @@ unauthenticated principal. This is parse-don't-validate: a call site that needs 
 access asks for `SystemAuthorized`, and possessing that value *is* the proof the gate ran.
 It is deliberately lightweight (`SystemAuthorized` is a thin newtype wrapping the already-
 existing `AuthenticatedProfile`), not a heavyweight typestate framework.
+
+**All three proofs are sealed.** `AuthenticatedProfile`, `SystemAuthorized` and `SystemAdmin`
+all live in `temper_services::auth` with private fields, so the only way to hold one is to
+call the gate that mints it — a struct-literal forgery elsewhere in the workspace is a
+compile error, pinned by the `compile_fail` trybuild fixtures.
+
+That is newer than the paragraph above it. `AuthenticatedProfile` sat in temper-core with
+public fields until 2026-07-22, so "only produced by `authenticate`" described intent rather
+than enforcement, and sealing the two proofs above it was decorative: you could forge Level 1
+and walk the real Level 2 and Level 3 gates with it. Sealing the bottom rung is what makes
+the sentence true.
 
 ## Why two levels, not one monolith
 

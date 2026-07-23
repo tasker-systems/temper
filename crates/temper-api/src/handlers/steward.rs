@@ -54,7 +54,7 @@ pub async fn delta(
 ) -> ApiResult<Json<IngestDelta>> {
     let delta = steward_service::ingest_delta(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         CogmapId::from(cogmap),
         q.threshold,
     )
@@ -88,7 +88,7 @@ pub async fn advance(
         event_id: req.event_id,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .advance_steward_watermark(cmd)
         .await
@@ -112,9 +112,12 @@ pub async fn sweep(
     auth: AuthUser,
     Query(q): Query<DeltaQuery>,
 ) -> ApiResult<Json<Vec<DriftSweepRow>>> {
-    let rows =
-        steward_service::drift_sweep(&state.pool, ProfileId::from(auth.0.profile.id), q.threshold)
-            .await?;
+    let rows = steward_service::drift_sweep(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        q.threshold,
+    )
+    .await?;
     Ok(Json(rows))
 }
 
@@ -129,8 +132,8 @@ pub async fn candidates(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<Uuid>>> {
-    let ids =
-        steward_service::candidate_cogmaps(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    let ids = steward_service::candidate_cogmaps(&state.pool, ProfileId::from(auth.0.profile().id))
+        .await?;
     Ok(Json(ids))
 }
 
@@ -185,7 +188,7 @@ pub async fn dispatch(
         correlation,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend
         .steward_dispatch_tick(cmd)
         .await

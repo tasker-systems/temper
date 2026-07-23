@@ -31,6 +31,7 @@ fn auth_only_routes() -> OpenApiRouter<AppState> {
             handlers::access::get_own_request,
             handlers::access::withdraw_request
         ))
+        .routes(routes!(handlers::access::create_review_request))
         .routes(routes!(handlers::access::get_settings))
         .routes(routes!(handlers::invitations::list_mine))
         .routes(routes!(handlers::invitations::accept))
@@ -62,6 +63,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
+        .routes(routes!(handlers::evidence::evidence))
         .routes(routes!(handlers::edges::lineage))
         .routes(routes!(handlers::edges::assert))
         .routes(routes!(handlers::edges::retype))
@@ -166,6 +168,29 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .route(
             "/api/access/admin/promote",
             post(handlers::access::promote_admin),
+        )
+        .route(
+            "/api/access/admin/demote",
+            post(handlers::access::demote_admin),
+        )
+        // The admin standing acts (Task 13). Same operator-only convention as their neighbours:
+        // plain `.route()`, out of the OpenAPI contract, allowlisted in
+        // `.github/scripts/check-openapi-routes.sh`. The admin gate is in each handler.
+        .route(
+            "/api/access/admin/principals/{id}/approve",
+            post(handlers::access::approve_principal),
+        )
+        .route(
+            "/api/access/admin/principals/{id}/revoke",
+            post(handlers::access::revoke_principal),
+        )
+        .route(
+            "/api/access/admin/principals/{id}/deactivate",
+            post(handlers::access::deactivate_principal),
+        )
+        .route(
+            "/api/access/admin/principals/{id}/reactivate",
+            post(handlers::access::reactivate_principal),
         )
         // The admin ledger's read surface — operator-only, so plain `.route()` and OUT of the
         // OpenAPI contract like its neighbours above. Authorization is in

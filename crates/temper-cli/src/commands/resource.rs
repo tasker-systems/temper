@@ -1438,6 +1438,34 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Show a resource's evidential-standing shape.
+///
+/// Cloud-only and context-free: the ref resolves to a `ResourceId` (trailing-UUID-only,
+/// via `parse_ref`, exactly as `show` does), the `StandingShape` is fetched by id from
+/// `GET /api/resources/{id}/evidence`, and the whole struct is rendered through the
+/// shared `format`/`output` helpers. The struct carries both the shape vector AND the
+/// lossy `band` chip, so serializing it whole emits the band alongside the shape (spec
+/// §1.1) — never in place of it. An unreadable/absent finding is a NotFound error.
+pub fn evidence(_config: &Config, r#ref: &str, format: crate::format::OutputFormat) -> Result<()> {
+    use crate::actions::runtime;
+
+    let id = temper_workflow::operations::parse_ref(r#ref)?;
+
+    let shape = runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .evidence(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let rendered = crate::format::render(&shape, format)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// `show --meta-only`: the full `show` view **minus the body**.
 ///
 /// Fetches the same `ResourceDetail` the default path does (the row flattened

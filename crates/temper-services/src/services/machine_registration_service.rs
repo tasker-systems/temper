@@ -17,8 +17,9 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
+use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service::{self, insert_grant, InsertGrantParams};
+use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
@@ -26,28 +27,19 @@ use crate::services::profile_service;
 /// Enroll `profile_id` in the configured gating team as `watcher` — **but only if `caller`,
 /// the minter, is a member of that gating team themselves.**
 ///
-/// D14 is why the enrollment exists at all: `trg_sync_system_membership` auto-joins new profiles
-/// ONLY while `access_mode = 'open'`, because `has_system_access` short-circuits true under that
-/// mode. Under `invite_only` it enrolls nothing, and an unenrolled machine authenticates and then
-/// 403s at `require_system_access`. So we enroll explicitly, exactly as
-/// `access_service::review_request` does for an approved human. Never depend on the trigger: its
-/// behavior is a function of a setting that is about to change.
+/// This predates the standing cutover. Its original rationale was access-conferring: gating-team
+/// membership WAS system access (the old `has_system_access` read gating-team ownership/membership),
+/// so a machine had to be enrolled to authenticate past `require_system_access`, and the caller
+/// check contained a minter from conferring access they did not hold. That rationale is retired:
+/// under D11 every principal is born `Denied` and `has_system_access` reads **standing** (Task 7's
+/// repoint), so gating-team membership now confers no system access at all — a machine's access
+/// comes from its standing, granted by an admin, never from this enrollment.
 ///
-/// The caller check is why it is CONTAINED. This was the one piece of a machine's reach that
-/// escaped B2's containment rule — every other piece passes through `machine_authz`, which bounds
-/// a non-admin minter to reach they could confer on a human. Gating-team membership is system
-/// access, so an unconditional enrollment lets a minter confer access they may not hold.
-///
-/// Today that is unobservable and stays so: `temper-system` carries `auto_join_role = 'watcher'`
-/// and prod runs `open`, so the trigger has already made EVERY profile — every minter — a
-/// gating-team member, and every machine still enrolls. The check binds the day that stops
-/// (auto_join_role cleared, or the instance moved off open mode): from then on a machine can only
-/// hold system access if the human who minted it did. An admin is by definition an OWNER of the
-/// gating team (`is_system_admin` IS that ownership), so an admin-minted machine always enrolls
-/// and D14 is preserved on the path that matters most.
-///
-/// Note the predicate is MEMBERSHIP, not admin-ness: the ordinary minter is a plain human whom
-/// auto-join made a `watcher`, and their machines must keep enrolling.
+/// What survives is ordinary team hygiene: the gating team keeps its usual membership, the caller
+/// check keeps a non-admin minter from adding rows to a team they are not on, and admins (owners of
+/// the gating team) always enroll. It confers nothing on the access gate; whether machine
+/// enrollment is still wanted at all under the standing model is a question for the machine-principal
+/// follow-up, not this change — which only removes the `access_mode`-based reasoning above.
 async fn enroll_in_gating_team(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
@@ -141,14 +133,15 @@ async fn apply_reach(
     for grant in reach.grants() {
         insert_grant(
             &mut *conn,
+            // Per-ROW warrant: the subject is this grant's own cogmap, read from the sealed item
+            // rather than named again here.
+            &crate::authz::GrantWarrant::MachineReach(grant),
             &InsertGrantParams {
-                subject_table: "kb_cogmaps".to_string(),
-                subject_id: grant.cogmap_id,
                 principal_table: "kb_profiles".to_string(),
                 principal_id: profile_id,
                 // Write implies read — the DB's coherence CHECK enforces it anyway.
                 can_read: true,
-                can_write: grant.can_write,
+                can_write: grant.can_write(),
                 can_delete: false,
                 can_grant: false,
                 granted_by_profile_id: *caller,
@@ -274,6 +267,18 @@ pub async fn provision(
     .await
     .map_err(|e| map_duplicate(e, &req.client_id))?;
 
+    // D11 — every mint door births Denied; even a machine minted by an admin gets no access.
+    // Containment is retired, not relocated: a minter who cannot confer access is moot when minting
+    // never confers any. Raw principal_standing_apply on the transaction, NOT
+    // standing_service::provision — that takes &PgPool and would write outside this tx, risking an
+    // orphaned standing row if the registration rolls back.
+    sqlx::query_scalar!(
+        "SELECT principal_standing_apply($1,'provision','denied',NULL,'machine registration')",
+        profile_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
     tx.commit()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
@@ -345,6 +350,16 @@ pub async fn issue(
     .await
     .map_err(|e| map_duplicate(e, &client_id))?;
 
+    // D11 — the temper-minted machine door births Denied too. `issue` is `provision`'s structural
+    // twin (a second mint door), so it carries the same born-Denied standing; leaving it unwired is
+    // exactly the carelessly-added door the whole-surface property guards against.
+    sqlx::query_scalar!(
+        "SELECT principal_standing_apply($1,'provision','denied',NULL,'machine issue')",
+        profile_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
     tx.commit()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
@@ -369,16 +384,13 @@ pub async fn issue(
 /// path (`auth0-m2m`); a team owner rotating a temper-issued credential uses `rotate_secret`.
 pub async fn rebind(
     pool: &PgPool,
-    caller: ProfileId,
+    admin: &SystemAdmin,
     req: &RebindMachineRequest,
 ) -> ApiResult<MachineClient> {
+    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a rebind
+    // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
+    // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
-
-    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a
-    // rebind inherits.
-    if !access_service::is_system_admin(pool, caller).await? {
-        return Err(ApiError::Forbidden);
-    }
 
     // A revoked credential is dead; it must be re-created by a fresh `provision`, never
     // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
@@ -419,7 +431,7 @@ pub async fn rebind(
         req.label,
         old.profile_id,
         old.team_id,
-        *caller,
+        *admin.actor(),
     )
     .fetch_one(&mut *tx)
     .await
@@ -431,7 +443,7 @@ pub async fn rebind(
                   SET revoked_at = now(), revoked_by_profile_id = $2
                 WHERE id = $1 AND revoked_at IS NULL"#,
             old.id,
-            *caller,
+            *admin.actor(),
         )
         .execute(&mut *tx)
         .await?;
@@ -461,12 +473,14 @@ mod tests {
     ///
     /// B2 D3 moved authorization out of the handler and into `provision`/`issue`, so these
     /// tests can no longer stand in a bare profile and rely on an upstream gate: the service
-    /// itself now resolves the caller's authority. `is_system_admin` IS ownership of the
-    /// gating team, so being an admin means being seeded as one — configure the gating team
-    /// and join this profile to it as `owner`.
+    /// itself now resolves the caller's authority. Under D11 an admin is a `kb_principal_governance`
+    /// grant (`is_system_admin`) with an `approved` `kb_principal_standing` (`has_system_access`),
+    /// not gating-team ownership — so the profile is seeded with both.
     ///
-    /// The `temper-system` root team already exists in a migrated database (the L0 kernel
-    /// migration creates it), so the team write is an upsert, not an insert.
+    /// The gating-team upsert below is retained because `enroll_in_gating_team` reads the minter's
+    /// membership (the machine inherits the minter's gating-team access) — not because it confers
+    /// admin-ness, which it no longer does. `temper-system` already exists in a migrated database
+    /// (the L0 kernel migration creates it), so the team write is an upsert, not an insert.
     async fn seed_admin(pool: &PgPool) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -511,7 +525,19 @@ mod tests {
         .await
         .expect("join gating team as owner");
 
+        // What confers admin-ness now: approved standing (front door) + a governance grant.
+        crate::test_support::approved_admin(pool, id).await;
+
         ProfileId::from(id)
+    }
+
+    /// Mint the sealed `SystemAdmin` proof for a seeded admin — `rebind` now requires it (admin-authz
+    /// enclosure). Provision/issue/revoke still take a bare `ProfileId` caller, so this is rebind-only.
+    async fn admin_proof(pool: &PgPool, admin: ProfileId) -> crate::auth::SystemAdmin {
+        let authed = crate::test_support::authenticated_profile_for(pool, *admin).await;
+        crate::auth::require_system_admin(pool, &authed)
+            .await
+            .expect("admin proof")
     }
 
     /// Seed a plain team owner who is NOT a system admin and holds NO gating-team membership,
@@ -537,13 +563,10 @@ mod tests {
         handle: &str,
         team_slug: &str,
     ) -> (ProfileId, Uuid) {
-        sqlx::query!(
-            "UPDATE kb_system_settings \
-                SET access_mode = 'invite_only', gating_team_slug = 'temper-system'"
-        )
-        .execute(pool)
-        .await
-        .expect("invite_only with a configured gating team");
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(pool)
+            .await
+            .expect("invite_only with a configured gating team");
 
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -737,34 +760,58 @@ mod tests {
         assert_eq!(emitters, Some(4), "one emitter per Surface::ALL variant");
     }
 
-    /// D14: the trigger auto-joins only while access_mode='open'. provision must not
-    /// depend on it, or every machine 403s the day the instance flips to invite_only.
+    /// D14: the trigger auto-joins only while access_mode='open'. provision must not depend on it,
+    /// so it enrolls the machine in the gating team explicitly — the behavior this test's name
+    /// guards, still exercised below by asserting the membership directly.
+    ///
+    /// Under D11 that enrollment no longer confers system access: `has_system_access` reads an
+    /// `approved` standing, and the mint door births every machine `Denied`. So provision enrolls
+    /// the machine AND leaves it born-Denied; access is a separate axis, granted only by approval.
+    /// (`enroll_in_gating_team`'s own rationale — "an unenrolled machine 403s at
+    /// require_system_access" — is now stale for the same reason; the function is a candidate to
+    /// retire with the rest of the gating-team access model in the access_mode work.)
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provision_enrolls_the_agent_in_the_gating_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         // Mirror prod's real invite_only shape: a configured gating team. A fresh test DB
-        // seeds gating_team_slug NULL, and `update_system_settings` rejects invite_only with
-        // no slug precisely because it would lock everyone out — so a bare access_mode flip is
-        // not a state the product ever reaches.
-        sqlx::query!(
-            "UPDATE kb_system_settings SET access_mode = 'invite_only', gating_team_slug = 'temper-system'"
-        )
-        .execute(&pool)
-        .await
-        .expect("flip to invite_only");
+        // seeds gating_team_slug NULL, and `update_system_settings` rejects a gate with no slug
+        // precisely because it would lock everyone out — so a configured gating team is the real
+        // invite-only shape (access_mode was retired as a control in Phase 2).
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(&pool)
+            .await
+            .expect("configure the gating team");
 
         let client = svc::provision(&pool, admin, &req("gated-agent"))
             .await
             .expect("provision");
 
+        // D14 behavior preserved: provision enrolled the machine in the gating team explicitly,
+        // not via the (invite_only-inert) auto-join trigger.
+        let enrolled = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id
+                  WHERE t.slug = 'temper-system' AND m.profile_id = $1) AS "e!: bool""#,
+            client.profile_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("enrollment");
+        assert!(
+            enrolled,
+            "provision must enroll the machine in the gating team explicitly under invite_only (D14)"
+        );
+
+        // D11: enrollment is not access — the machine is born Denied and holds no system access
+        // until it is approved.
         let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", client.profile_id)
             .fetch_one(&pool)
             .await
             .expect("has_system_access");
         assert_eq!(
             has_access,
-            Some(true),
-            "a provisioned machine must pass the system gate under invite_only (D14)"
+            Some(false),
+            "a freshly provisioned machine is born Denied (D11); gating enrollment confers no access"
         );
     }
 
@@ -862,9 +909,10 @@ mod tests {
             .await
             .expect("provision");
 
+        let proof = admin_proof(&pool, admin).await;
         let new = svc::rebind(
             &pool,
-            admin,
+            &proof,
             &RebindMachineRequest {
                 client_id: "new-client".to_string(),
                 from_machine_client_id: old.id,
@@ -896,9 +944,10 @@ mod tests {
             .await
             .expect("provision");
 
+        let proof = admin_proof(&pool, admin).await;
         svc::rebind(
             &pool,
-            admin,
+            &proof,
             &RebindMachineRequest {
                 client_id: "overlap-new".to_string(),
                 from_machine_client_id: old.id,
@@ -957,22 +1006,25 @@ mod tests {
             .expect("provision");
 
         // Alice owns the machine's team — she can revoke it (tested elsewhere) — but she may NOT
-        // rebind it onto a client_id she controls and inherit its identity.
-        let err = svc::rebind(
-            &pool,
-            ProfileId::from(alice),
-            &RebindMachineRequest {
-                client_id: "alice-controls-this".to_string(),
-                from_machine_client_id: old.id,
-                label: "hijack".to_string(),
-                keep_old_active: false,
-            },
-        )
-        .await
-        .expect_err("a non-admin team owner must not rebind");
+        // rebind it onto a client_id she controls and inherit its identity. Post-enclosure the bar is
+        // structural: rebind requires a `&SystemAdmin`, and a non-admin cannot mint one. The refusal
+        // now happens at the proof gate, before rebind is even reachable.
+        let alice_authed = crate::test_support::authenticated_profile_for(&pool, alice).await;
+        let err = crate::auth::require_system_admin(&pool, &alice_authed)
+            .await
+            .expect_err("a non-admin team owner cannot mint an admin proof");
         assert!(
             matches!(err, crate::error::ApiError::Forbidden),
             "got {err:?}"
+        );
+
+        // And the machine is untouched — the refusal happened before any rebind write.
+        let still = crate::services::machine_client_service::get(&pool, old.id)
+            .await
+            .expect("old row");
+        assert!(
+            still.revoked_at.is_none(),
+            "the refused caller changed nothing"
         );
     }
 
@@ -989,9 +1041,10 @@ mod tests {
             .await
             .expect("revoke");
 
+        let proof = admin_proof(&pool, admin).await;
         let err = svc::rebind(
             &pool,
-            admin,
+            &proof,
             &RebindMachineRequest {
                 client_id: "resurrected".to_string(),
                 from_machine_client_id: old.id,

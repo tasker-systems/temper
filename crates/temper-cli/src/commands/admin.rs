@@ -33,6 +33,23 @@ pub async fn settings_remote(
     Ok(())
 }
 
+/// Demote a system admin — revoke its governance grant. The manual twin of `promote`; not
+/// team-scoped (governance is keyed on the profile alone). Prints `{profile_id} demoted` on success,
+/// mirroring the standing acts.
+pub async fn demote_remote(client: &temper_client::TemperClient, profile: &str) -> Result<()> {
+    let profile_id = uuid::Uuid::parse_str(profile)
+        .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))?;
+
+    client
+        .admin()
+        .demote(profile_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+    println!("{profile_id} demoted");
+    Ok(())
+}
+
 /// Promote a profile to owner on a team (defaults to the gating team).
 pub async fn promote_remote(
     client: &temper_client::TemperClient,
@@ -61,6 +78,60 @@ pub async fn promote_remote(
 
     let rendered = crate::format::render(&row, fmt)?;
     println!("{rendered}");
+    Ok(())
+}
+
+/// The admin standing acts (Task 13): approve / revoke / deactivate / reactivate a principal.
+/// Each is a POST that returns `200 OK` with no body, so success is reported as a line rather than
+/// a rendered payload.
+pub async fn access_remote(
+    client: &temper_client::TemperClient,
+    action: &crate::cli::AdminAccessAction,
+) -> Result<()> {
+    use crate::cli::AdminAccessAction;
+
+    let parse = |profile: &str| {
+        uuid::Uuid::parse_str(profile)
+            .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))
+    };
+    let admin = client.admin();
+
+    let (profile_id, verb) = match action {
+        AdminAccessAction::Approve { profile } => {
+            let id = parse(profile)?;
+            admin
+                .approve_principal(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "approved")
+        }
+        AdminAccessAction::Revoke { profile, reason } => {
+            let id = parse(profile)?;
+            admin
+                .revoke_principal(id, reason)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "revoked")
+        }
+        AdminAccessAction::Deactivate { profile } => {
+            let id = parse(profile)?;
+            admin
+                .deactivate_principal(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "deactivated")
+        }
+        AdminAccessAction::Reactivate { profile } => {
+            let id = parse(profile)?;
+            admin
+                .reactivate_principal(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "reactivated")
+        }
+    };
+
+    println!("{profile_id} {verb}");
     Ok(())
 }
 

@@ -554,6 +554,14 @@ pub enum ResourceAction {
         #[arg(long, value_delimiter = ',')]
         fields: Vec<String>,
     },
+    /// Show a resource's evidential-standing shape — the maturity vector
+    /// (independence-discounted breadth, adversarial survival, contradiction
+    /// balance, freshness) plus a lossy read-time `band` chip carried WITH the
+    /// shape, never in place of it. Calls GET /evidence.
+    Evidence {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
     /// Update a resource's frontmatter and/or body
     ///
     /// Mutates frontmatter from flag args. Optionally rewrites the body — the
@@ -895,6 +903,12 @@ pub enum AuthAction {
     },
     /// Withdraw your pending system-access request.
     WithdrawRequest,
+    /// Ask an admin to reconsider a revocation. Does not restore access by itself.
+    RequestReview {
+        /// Message for the admin reviewing the revocation (e.g. why you should be reinstated).
+        #[arg(long)]
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1024,10 +1038,7 @@ pub enum TeamAction {
 pub enum AdminAction {
     /// Show system settings, or update them when any flag is provided
     Settings {
-        /// Access mode: open | invite_only
-        #[arg(long = "access-mode")]
-        access_mode: Option<String>,
-        /// Gating team slug (the team that gates invite_only access)
+        /// Gating team slug (the team whose ownership confers a system admin)
         #[arg(long = "gating-team")]
         gating_team_slug: Option<String>,
         /// Human-facing instance name
@@ -1047,6 +1058,16 @@ pub enum AdminAction {
         /// Team ref (`+slug`, bare slug, or UUID); defaults to the gating team
         #[arg(long)]
         team: Option<String>,
+    },
+    /// Demote a system admin — revoke its governance grant (the manual twin of `promote`)
+    Demote {
+        /// Profile ID (UUID) to demote
+        profile: String,
+    },
+    /// Admit, revoke, deactivate, or reactivate a principal's system access
+    Access {
+        #[command(subcommand)]
+        action: AdminAccessAction,
     },
     /// Review pending join requests
     Requests {
@@ -1129,7 +1150,8 @@ pub enum AdminMachineAction {
         /// Team recorded as this machine's OWNER. Not its reach.
         #[arg(long = "owner-team")]
         owner_team: Option<String>,
-        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (role defaults to `member`).
+        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (`member` by default, and the
+        /// highest a machine may hold — `maintainer`/`owner` are refused).
         /// Repeatable. Reach is plural and never inferred from --owner-team.
         #[arg(long = "team")]
         teams: Vec<String>,
@@ -1161,7 +1183,8 @@ pub enum AdminMachineAction {
         /// Team recorded as this machine's OWNER. Not its reach.
         #[arg(long = "owner-team")]
         owner_team: Option<String>,
-        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (role defaults to `member`). Repeatable.
+        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (`member` by default, and the highest
+        /// a machine may hold — `maintainer`/`owner` are refused). Repeatable.
         #[arg(long = "team")]
         teams: Vec<String>,
         /// Cogmap to grant, as `<ref>` or `<ref>:ro` (defaults to read+write). Repeatable.
@@ -1403,6 +1426,35 @@ pub enum AdminRequestsAction {
         /// Optional decision note
         #[arg(long)]
         note: Option<String>,
+    },
+}
+
+/// The admin standing acts (Task 13). `approve` admits a principal directly (a machine, or a
+/// reinstatement) — reviewing a join *request* is `admin requests review` instead.
+#[derive(Subcommand)]
+pub enum AdminAccessAction {
+    /// Admit a principal directly (legal from denied, revoked, or requested)
+    Approve {
+        /// Profile ID (UUID) to approve
+        profile: String,
+    },
+    /// Revoke a principal's admission (legal only from approved)
+    Revoke {
+        /// Profile ID (UUID) to revoke
+        profile: String,
+        /// Why — recorded on the ledger; a later review's reviewer needs it
+        #[arg(long)]
+        reason: String,
+    },
+    /// Deactivate a principal (legal from any live state)
+    Deactivate {
+        /// Profile ID (UUID) to deactivate
+        profile: String,
+    },
+    /// Reactivate a deactivated principal, restoring its prior standing
+    Reactivate {
+        /// Profile ID (UUID) to reactivate
+        profile: String,
     },
 }
 

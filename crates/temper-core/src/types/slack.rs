@@ -1,6 +1,60 @@
 //! Wire types for the Slack account-link surface.
 
 use serde::{Deserialize, Serialize};
+use temper_principal::Refusal;
+
+/// Why a linked-identity mint or link-state read was refused, typed.
+///
+/// The Slack surface's analogue of [`temper_principal::Refusal`], and it carries that type
+/// **verbatim** in its `Standing` arm rather than restating the standing reasons — the same
+/// shared-types-at-boundaries move [`super::access_gate::SystemAccessDetails`] makes with its
+/// `refusal` field. `temper_principal::admit` is the sole producer of the embedded `Refusal`, so
+/// only its reachable variants ever appear here (pinned by a test beside the resolver in
+/// temper-services).
+///
+/// **The tag is `reason`, not `kind`, and `Standing` is a struct variant — both load-bearing.**
+/// `Refusal` is itself `#[serde(tag = "kind")]`; a newtype `Standing(Refusal)` under a `kind` tag
+/// would flatten two internal tags into one object and emit a duplicate `kind` key that fails to
+/// deserialize (and an uninhabitable `never` in the generated TypeScript). A distinct tag plus a
+/// named `refusal` field nests it cleanly: `{"reason":"standing","refusal":{"kind":"denied"}}`.
+///
+// NOT `web-api`/`utoipa`, deliberately: this rides the two internal Slack routes
+// (`/internal/slack/{link-state,mint}`), which are allow-listed OUT of openapi.json
+// (`check-openapi-routes.sh`). Deriving `ToSchema` would imply a public contract that does not
+// exist and would tempt registration into the spec. `ts_rs` is present because the mention agent
+// branches on this exhaustively; the drift gate (a later task) is what keeps that honest.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "slack_link.ts"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "reason")]
+pub enum LinkRefusal {
+    /// No `kb_profile_auth_links` row — this Slack principal is not linked to any temper profile.
+    NotLinked,
+    /// Linked, but no mintable grant is vaulted (a pre-T3 link). Re-linking is the remedy.
+    NotVaulted,
+    /// Linked and vaulted, but the human's principal standing does not admit them. The remedy is an
+    /// admin approving them — **not** re-linking, which is exactly why this is distinct from
+    /// `NotVaulted`. Collapsing the two is the false-remedy bug this whole type exists to end.
+    Standing { refusal: Refusal },
+}
+
+impl LinkRefusal {
+    /// A non-empty human-facing reason for every variant, mirroring [`Refusal::reason`]. The
+    /// `Standing` arm delegates to the embedded refusal so a `denied` human and a `revoked` one get
+    /// the sentence `admit` already distinguishes.
+    pub fn reason(&self) -> String {
+        match self {
+            LinkRefusal::NotLinked => {
+                "no temper account is linked to this Slack identity".to_string()
+            }
+            LinkRefusal::NotVaulted => {
+                "no stored credential is available for this link; reconnect to restore it"
+                    .to_string()
+            }
+            LinkRefusal::Standing { refusal } => refusal.reason(),
+        }
+    }
+}
 
 /// What happened to the stored grant at the identity provider.
 ///

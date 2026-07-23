@@ -23,11 +23,15 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
         .send()
         .await
         .expect("profile request failed");
-    resp.json::<serde_json::Value>().await.unwrap()["id"]
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door
+    // and the ENDPOINT authz (ownership, admin-only, grants) is what the test exercises.
+    let __pid: Uuid = resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .unwrap()
         .parse()
-        .unwrap()
+        .unwrap();
+    common::approve(&app.pool, __pid).await;
+    __pid
 }
 
 /// A profile-owned context plus the one genesis event its seeded resources/edges hang their

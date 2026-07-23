@@ -79,7 +79,7 @@ impl TemperMcpService {
             .await
             .map_err(map_authz_error)?;
 
-        tracing::debug!(profile_id = %authed.profile.id, sub = %claims.sub, "Profile resolved");
+        tracing::debug!(profile_id = %authed.profile().id, sub = %claims.sub, "Profile resolved");
 
         // Level 2: system-access gate (shared seam).
         temper_services::auth::require_system_access(&self.api_state.pool, &authed)
@@ -87,7 +87,7 @@ impl TemperMcpService {
             .map_err(map_authz_error)?;
 
         let mut guard = self.profile.lock().await;
-        *guard = Some(authed.profile);
+        *guard = Some(authed.into_profile());
         Ok(())
     }
 
@@ -888,12 +888,12 @@ impl rmcp::ServerHandler for TemperMcpService {
                     .map_err(map_authz_error)?;
 
             tracing::info!(
-                profile_id = %authed.profile.id,
+                profile_id = %authed.profile().id,
                 sub = %claims.sub,
                 "MCP session initialized"
             );
             let mut guard = self.profile.lock().await;
-            *guard = Some(authed.profile);
+            *guard = Some(authed.into_profile());
         }
 
         Ok(self.get_info())

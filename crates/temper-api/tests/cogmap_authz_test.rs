@@ -28,15 +28,11 @@ async fn set_gating_team(pool: &PgPool) {
         .expect("set gating team slug");
 }
 
-/// Mint an admin profile: a fresh profile whose `system_access = 'admin'` makes it an `owner` of
-/// `temper-system` via the `sync_system_membership` trigger.
+/// Mint an admin profile under D11: admin-ness is `approved` standing + a `kb_principal_governance`
+/// grant — neither the Phase-2-retired `system_access` column nor gating ownership confers it.
 async fn admin_profile(pool: &PgPool, email: &str) -> Uuid {
     let id = common::fixtures::create_test_profile(pool, email).await;
-    sqlx::query("UPDATE kb_profiles SET system_access = 'admin' WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .expect("promote to admin");
+    common::fixtures::make_test_admin(pool, id).await;
     id
 }
 

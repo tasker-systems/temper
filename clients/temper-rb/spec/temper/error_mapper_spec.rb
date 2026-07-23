@@ -32,6 +32,48 @@ RSpec.describe Temper::ErrorMapper do
     expect(err).not_to be_a(Temper::SystemAccessRequired)
   end
 
+  # The refusal is what makes the 403 actionable rather than merely final. The envelope arrives
+  # with STRING keys and the generated oneOf dispatcher matches on symbols, so a raw hand-off
+  # resolves to nil silently -- #refusal absorbs that, and these prove it stays absorbed.
+  describe 'the typed refusal on SystemAccessRequired' do
+    def refused(refusal)
+      described_class.call(
+        api_error(403, envelope('SYSTEM_ACCESS_REQUIRED', 'grant needed', { 'refusal' => refusal }))
+      )
+    end
+
+    it 'resolves the string-keyed envelope into a named model' do
+      err = refused({ 'kind' => 'revoked' })
+      expect(err.refusal).to be_a(Temper::Generated::Revoked)
+      expect(err.refusal_kind).to eq('revoked')
+    end
+
+    it 'separates never-granted from granted-and-lost' do
+      expect(refused({ 'kind' => 'denied' }).refusal).to be_a(Temper::Generated::Denied)
+      expect(refused({ 'kind' => 'revoked' }).refusal).to be_a(Temper::Generated::Revoked)
+    end
+
+    it 'carries the payload of a data-bearing refusal' do
+      err = refused({ 'kind' => 'illegal_transition', 'act' => 'approve', 'from' => 'denied' })
+      expect(err.refusal).to be_a(Temper::Generated::IllegalTransition)
+      expect(err.refusal.act).to eq('approve')
+      expect(err.refusal.from).to eq('denied')
+    end
+
+    # A server newer than the gem. Losing the name entirely would leave the operator with nothing.
+    it 'still reports the kind of a refusal it cannot resolve' do
+      err = refused({ 'kind' => 'something_new' })
+      expect(err.refusal).to be_nil
+      expect(err.refusal_kind).to eq('something_new')
+    end
+
+    it 'is nil, not an error, when the server sent no refusal at all' do
+      err = described_class.call(api_error(403, envelope('SYSTEM_ACCESS_REQUIRED', 'grant needed')))
+      expect(err.refusal).to be_nil
+      expect(err.refusal_kind).to be_nil
+    end
+  end
+
   it 'surfaces error.details' do
     err = described_class.call(api_error(400, envelope('BAD_REQUEST', 'bad', { 'field' => 'title' })))
     expect(err).to be_a(Temper::BadRequest)

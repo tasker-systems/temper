@@ -8,14 +8,16 @@
 # surfaces — because temper-mcp and temper-api share that layer, an authz check that sits in ONE
 # surface's handler is a hole for the other surface, and a check that sits in a handler at all is a
 # check the service itself does not enforce. The 2026-07-18 audit found exactly this (finding F-3):
-# `promote_admin`'s `is_system_admin` gate lives in the handler (access.rs), while the service
-# `access_service::promote_admin` performs none — so a future second caller of the service would
-# grant admin with no check.
+# `promote_admin`'s `is_system_admin` gate lived in the handler (access.rs) while the service
+# `access_service::promote_admin` performed none — so a future second caller of the service would
+# grant admin with no check. The admin-authz enclosure (2026-07-22, the sealed `SystemAdmin` proof)
+# resolved that whole class: every pure-admin service fn now REQUIRES a `&SystemAdmin` param, so the
+# check IS the signature and both surfaces inherit it — those handler gates are gone (see below).
 #
-# This does NOT forbid handler-side authz outright (a few admin routes legitimately gate in the
-# handler today). It PINS the current set against a reviewed baseline, so a NEW handler-side authz
-# call fails CI until a reviewer answers: should this predicate move into the service? See
-# docs/development/security-audit-playbook.md § 2 and the F-3 finding.
+# This does NOT forbid handler-side authz outright (the cognitive_maps route legitimately composes a
+# gate in the handler today). It PINS the current set against a reviewed baseline, so a NEW
+# handler-side authz call fails CI until a reviewer answers: should this predicate move into the
+# service? See docs/development/security-audit-playbook.md § 2 and the F-3 finding.
 #
 # USAGE
 #   .github/scripts/audit-handler-authz-drift.sh          # verify (CI mode)
@@ -29,14 +31,15 @@ cd "$(git rev-parse --show-toplevel)"
 # surface (handlers/ or an mcp tool) is drift worth a second look.
 PREDICATES='is_system_admin|has_system_access|can_administer_grant|grant_authority|require_cogmap_write_admin|machine_authz::authorize|attenuates_to_caller|profile_can_grant'
 
-# Reviewed baseline: <count> <path> for each surface file that calls an authz predicate. These are
-# the handler-side gates accepted as of the 2026-07-18 audit (the admin surface in access.rs, the
-# operator reembed trigger in embed.rs, and one cognitive_maps gate). F-3 tracks moving access.rs's
-# gates into access_service::promote_admin et al.; until then they are baselined, not silently ok'd.
+# Reviewed baseline: <count> <path> for each surface file that STILL gates in a handler. The
+# admin-authz enclosure (2026-07-22) moved access.rs's five admin gates and embed.rs's reembed gate
+# INTO the service as `&SystemAdmin` params, so F-3 is resolved for them and they leave this baseline.
+# What remains is the one cognitive_maps gate: a COMPOSITIONAL (Bucket-2) check where `is_system_admin`
+# is one branch of a disjunction (admin OR gating-team OR scoped grant), not the gate — deliberately
+# NOT enclosed (forcing it behind the proof would deny the scoped actors it exists to admit; see the
+# enclosure spec's audit inventory). A NEW handler-side predicate still reds CI here.
 read -r -d '' BASELINE <<'EOF' || true
-5 crates/temper-api/src/handlers/access.rs
 1 crates/temper-api/src/handlers/cognitive_maps.rs
-1 crates/temper-api/src/handlers/embed.rs
 EOF
 
 current() {

@@ -10,6 +10,7 @@ use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
+use temper_core::types::standing::StandingShape;
 use temper_workflow::types::graph::GraphEdgeRow;
 use temper_workflow::types::managed_meta::{
     MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
@@ -184,6 +185,17 @@ impl<'a> ResourceClient<'a> {
     pub async fn provenance(&self, resource_id: Uuid) -> Result<Vec<BlockProvenanceRow>> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{resource_id}/provenance");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// Read a resource's evidential-standing shape (the shape vector + lossy band chip),
+    /// access-gated. GET /api/resources/{id}/evidence.
+    pub async fn evidence(&self, resource_id: Uuid) -> Result<StandingShape> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{resource_id}/evidence");
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))

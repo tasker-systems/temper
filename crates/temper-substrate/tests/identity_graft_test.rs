@@ -15,27 +15,35 @@
 
 mod common;
 
-/// Seed a clean artifact (01+02), the singleton `kb_system_settings (access_mode='open')`, and one
-/// profile; assert the two grafted system-access functions evaluate (open mode grants any profile),
+/// Seed a clean artifact (01+02), the `kb_system_settings` singleton, and one profile; assert the
+/// two grafted system-access functions evaluate (an `approved` standing row grants access under D11),
 /// `kb_profiles` carries `email`/`preferences`, and each of the 6 grafted infra tables is queryable.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn identity_graft_resolves(pool: sqlx::PgPool) {
     // Reset to clean 01+02 baseline — L0 kernel migration seeds kb_system_settings(id=1).
     common::reset_schema(&pool).await;
-    // The instance-access singleton in 'open' mode, plus one profile to gate.
-    sqlx::query("INSERT INTO kb_system_settings (id, access_mode) VALUES (1, 'open')")
+    // The instance-access singleton row (access_mode retired in Phase 2), plus one profile to gate.
+    sqlx::query("INSERT INTO kb_system_settings (id) VALUES (1)")
         .execute(&pool)
         .await
         .expect("seed kb_system_settings");
     let profile = common::insert_profile(&pool, "ada").await;
 
     // The two grafted system-access functions evaluate; open mode grants any profile.
+    // D11: access is an `approved` kb_principal_standing row now, not an open-mode ambient. Grant
+    // it, then the grafted `has_system_access` function resolves TRUE — proving the graft wired the
+    // function through (the point of this test), on the standing axis the cutover repointed it to.
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'approved')")
+        .bind(profile)
+        .execute(&pool)
+        .await
+        .expect("approve standing");
     let has: bool = sqlx::query_scalar("SELECT has_system_access($1)")
         .bind(profile)
         .fetch_one(&pool)
         .await
         .expect("has_system_access runs");
-    assert!(has, "open access_mode grants access to any profile");
+    assert!(has, "an approved principal has system access (D11)");
 
     // is_system_admin resolves (false here — no gating team / owner membership seeded).
     let _is_admin: bool = sqlx::query_scalar("SELECT is_system_admin($1)")

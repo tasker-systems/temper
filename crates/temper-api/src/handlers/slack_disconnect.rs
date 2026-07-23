@@ -69,13 +69,13 @@ pub async fn disconnect_me(
         .as_ref()
         .ok_or_else(|| ApiError::Unauthorized("slack link disabled".to_string()))?;
 
-    let profile_id = ProfileId::from(auth.0.profile.id);
+    let profile_id = ProfileId::from(auth.0.profile().id);
     let provider = link_provider::derive(&state.config.auth, cfg);
 
     // Derive the principals from the caller's OWN link rows. This is the whole
     // authorization story for the self-serve arm: there is no input to forge.
     let principals =
-        slack_link_service::lookup_slack_principals_for_profile(&state.pool, auth.0.profile.id)
+        slack_link_service::lookup_slack_principals_for_profile(&state.pool, auth.0.profile().id)
             .await?;
 
     tracing::info!(
@@ -136,7 +136,9 @@ pub async fn admin_disconnect(
         .as_ref()
         .ok_or_else(|| ApiError::Unauthorized("slack link disabled".to_string()))?;
 
-    crate::handlers::slack_link::validate_slack_principal(&body.slack_principal_id)?;
+    temper_services::services::slack_link_service::validate_slack_principal(
+        &body.slack_principal_id,
+    )?;
 
     let provider = link_provider::derive(&state.config.auth, cfg);
     // The admin gate lives in the SERVICE, not here — see
@@ -152,7 +154,7 @@ pub async fn admin_disconnect(
             client_id: &cfg.client_id,
             // The operator, not the subject. The service gates on this field
             // and carries it into the disconnect.
-            actor: ProfileId::from(auth.0.profile.id),
+            actor: ProfileId::from(auth.0.profile().id),
         },
     )
     .await?;

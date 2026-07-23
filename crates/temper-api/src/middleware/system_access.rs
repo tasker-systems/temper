@@ -12,10 +12,10 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use temper_core::types::ids::ProfileId;
-use temper_core::types::AuthenticatedProfile;
+use temper_services::auth::AuthenticatedProfile;
 
 use temper_services::error::ApiError;
-use temper_services::services::access_service;
+use temper_services::services::standing_service;
 use temper_services::state::AppState;
 
 /// Axum middleware that checks system-level access after authentication.
@@ -39,18 +39,22 @@ pub async fn require_system_access(
         Ok(_authorized) => {}
         Err(temper_services::auth::AuthzError::SystemAccessDenied { .. }) => {
             // Surface-side presentation: build the CLI-facing details payload.
-            let settings = access_service::get_public_settings(&state.pool).await?;
-            let own_request =
-                access_service::get_own_request(&state.pool, ProfileId::from(authed.profile.id))
-                    .await?;
+            let profile_id = ProfileId::from(authed.profile().id);
+            // The typed reason comes straight from the standing machine — no `access_mode` read.
+            // `admit` returns `Err(Refusal)` for exactly the state that just failed the gate; the
+            // `Ok` arm is only reachable on a race (approved between the gate check and here), in
+            // which case a generic denial is the safe fallback.
+            let refusal = standing_service::admit(&state.pool, profile_id)
+                .await
+                .err()
+                .unwrap_or(temper_principal::Refusal::NoStanding);
             // SECURITY NOTE: email and display_name are safe to return here because
             // the caller already proved ownership of this identity through OAuth.
             // We are reflecting their own profile data back to them.
             let details = temper_core::types::access_gate::SystemAccessDetails {
-                email: authed.profile.email.clone(),
-                display_name: Some(authed.profile.display_name.clone()),
-                access_mode: settings.access_mode,
-                join_request_status: own_request.map(|r| r.status),
+                email: authed.profile().email.clone(),
+                display_name: Some(authed.profile().display_name.clone()),
+                refusal,
                 request_url: Some("https://temperkb.io/request-access".to_string()),
                 cli_command: Some(
                     temper_core::types::access_gate::REQUEST_ACCESS_COMMAND.to_string(),

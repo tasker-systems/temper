@@ -2065,6 +2065,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5596,6 +5602,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "target-triple"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
+
+[[package]]
 name = "temp-env"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5628,6 +5640,7 @@ dependencies = [
  "sqlx",
  "temper-auth",
  "temper-core",
+ "temper-principal",
  "temper-services",
  "temper-substrate",
  "temper-workflow",
@@ -5683,6 +5696,7 @@ dependencies = [
  "temper-client",
  "temper-core",
  "temper-ingest",
+ "temper-principal",
  "temper-workflow",
  "tempfile",
  "tokio",
@@ -5711,6 +5725,7 @@ dependencies = [
  "temp-env",
  "temper-auth",
  "temper-core",
+ "temper-principal",
  "temper-workflow",
  "tempfile",
  "thiserror 2.0.18",
@@ -5753,6 +5768,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
+ "temper-principal",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
@@ -5851,6 +5867,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-principal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "ts-rs",
+ "utoipa",
+]
+
+[[package]]
 name = "temper-services"
 version = "0.1.0"
 dependencies = [
@@ -5872,11 +5897,13 @@ dependencies = [
  "temper-auth",
  "temper-core",
  "temper-ingest",
+ "temper-principal",
  "temper-substrate",
  "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "trybuild",
  "utoipa",
  "uuid",
  "wiremock",
@@ -6439,6 +6466,21 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "trybuild"
+version = "1.0.118"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06649c6f63d86604ba0c8950d5a1829fc9a17afd70fc6629f481d75b6a624c78"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "target-triple",
+ "termcolor",
+ "toml 1.1.2+spec-1.1.0",
+]
 
 [[package]]
 name = "ts-rs"

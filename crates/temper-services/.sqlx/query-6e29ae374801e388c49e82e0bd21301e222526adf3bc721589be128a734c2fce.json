@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS( SELECT 1 FROM kb_teams t\n                                JOIN kb_system_settings s ON t.slug = s.gating_team_slug\n                               WHERE t.id = $1 ) AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6e29ae374801e388c49e82e0bd21301e222526adf3bc721589be128a734c2fce"
+}

@@ -32,7 +32,11 @@ async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("preflight");
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.expect("json");
-    body["id"].as_str().expect("id").parse().expect("uuid")
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door
+    // and the ENDPOINT authz (ownership, admin-only, grants) is what the test exercises.
+    let __pid: Uuid = body["id"].as_str().expect("id").parse().expect("uuid");
+    common::approve(&app.pool, __pid).await;
+    __pid
 }
 
 /// The irreducible operator root step: configure gating + mint first admin.
@@ -48,11 +52,9 @@ async fn root_bootstrap_first_admin(pool: &sqlx::PgPool, admin_id: Uuid) {
         .execute(pool)
         .await
         .expect("gating");
-    sqlx::query("UPDATE kb_profiles SET system_access='admin' WHERE id=$1")
-        .bind(admin_id)
-        .execute(pool)
-        .await
-        .expect("promote first admin"); // trigger mints owner of temper-system
+    // D11: admin-ness is `approved` standing + a `kb_principal_governance` grant. Neither the
+    // Phase-2-retired `system_access` column nor gating ownership confers it.
+    common::approved_admin(pool, admin_id).await;
 }
 
 /// `POST /api/ingest` homed in `context_id` (a bare UUID `context_ref`) as `token`; returns

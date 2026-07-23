@@ -11,7 +11,10 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::slack::LinkRefusal;
+
 use super::grant_crypto::VaultKey;
+use super::slack_link_state::{resolve, LinkEvidence};
 use crate::error::{ApiError, ApiResult};
 use crate::oauth_client;
 
@@ -69,21 +72,21 @@ pub enum MintOutcome {
         access_token: String,
         expires_at: DateTime<Utc>,
     },
-    /// A vault row exists but is not mintable — explicitly revoked, or its profile deactivated.
-    /// Mints nothing. (A live token handed out earlier still survives to its own `exp` — see the
-    /// migration's note on honest revocation semantics.)
-    Revoked,
-    /// No grant is vaulted for this principal — the user linked before T3 shipped, or never
-    /// completed a link. The caller should route them back through the link flow.
-    NotVaulted,
+    /// No token was minted, and the typed reason why — carried verbatim from
+    /// [`super::slack_link_state::resolve`]. This replaces the former `Revoked` / `NotVaulted`
+    /// pair, which collapsed seven distinct facts (six standing reasons plus a dead soft-revoke
+    /// flag) into two arms and shipped a re-link remedy that could not work for a standing refusal.
+    /// (A live token handed out earlier still survives to its own `exp` — honest revocation
+    /// semantics are unchanged.)
+    Refused(LinkRefusal),
 }
 
 impl std::fmt::Debug for MintOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Token { expires_at, .. } => write!(f, "Token(redacted, expires_at={expires_at})"),
-            Self::Revoked => f.write_str("Revoked"),
-            Self::NotVaulted => f.write_str("NotVaulted"),
+            // `LinkRefusal` carries no secret, so its derived `Debug` is safe to surface.
+            Self::Refused(reason) => write!(f, "Refused({reason:?})"),
         }
     }
 }
@@ -222,9 +225,11 @@ pub async fn store_grant(
 /// **leeway** (a grace window that tolerates a brief RT reuse), and treat a bricked grant as a
 /// re-link prompt. See the T3 spec's "grant vault" section.
 ///
-/// A profile that has been **deactivated** (`kb_profiles.is_active = false`) mints nothing — the
-/// deactivation kill-switch reaches the vault here, mirroring the link path's rejection of a
-/// deactivated profile. It is reported as [`MintOutcome::Revoked`] (not mintable).
+/// A principal whose standing does not admit them mints nothing — the decision is delegated to
+/// [`super::slack_link_state::resolve`] (which calls `temper_principal::admit`), so a `deactivated`
+/// / `revoked` / `denied` / absent / unrecognized standing each reports as
+/// [`MintOutcome::Refused`] carrying the matching [`LinkRefusal::Standing`] reason, and the mention
+/// agent names the remedy that fits (an admin approval), never the false "re-link".
 ///
 /// `token_url` / `client_id` come from `link_provider::derive` at the call site — the same public
 /// client that minted the grant. They are NOT stored on the row: the instance's config is
@@ -243,28 +248,62 @@ pub async fn mint_access_token(
 ) -> ApiResult<MintOutcome> {
     let mut tx = pool.begin().await?;
 
+    // Rooted at the IDENTITY, not the vault, so a link with no vaulted grant is `NotLinked` vs
+    // `NotVaulted` distinctly, and standing is reachable even when no vault row exists (spec §2.3).
+    // The lock lives in the `locked` CTE because `FOR UPDATE` cannot be applied to the nullable
+    // side of an outer join — verified against the live database, and its row lock proven by a
+    // two-session test. `ON v.profile_id = l.profile_id` is the fail-closed correlation: if the
+    // vault and link rows disagree on the owner (an account-merge skew), the vault reads as absent
+    // rather than minting one profile's grant under another's standing. `vaulted` is event-carried
+    // as `v.id IS NOT NULL`; every `v.*` column is nullable on the outer-join side and annotated `?`.
     let row = sqlx::query!(
         r#"
-        SELECT v.rt_nonce, v.rt_ciphertext, v.at_nonce, v.at_ciphertext,
-               v.access_expires_at, v.revoked_at, p.is_active
-          FROM kb_slack_grant_vault v
-          JOIN kb_profiles p ON p.id = v.profile_id
-         WHERE v.slack_principal_id = $1
-         FOR UPDATE OF v
+        WITH locked AS (
+            SELECT * FROM kb_slack_grant_vault WHERE slack_principal_id = $1 FOR UPDATE
+        )
+        SELECT v.rt_nonce          AS "rt_nonce?",
+               v.rt_ciphertext     AS "rt_ciphertext?",
+               v.at_nonce          AS "at_nonce?",
+               v.at_ciphertext     AS "at_ciphertext?",
+               v.access_expires_at AS "access_expires_at?",
+               (v.id IS NOT NULL)  AS "vaulted!",
+               s.state             AS "standing?"
+          FROM kb_profile_auth_links l
+          LEFT JOIN locked v                ON v.profile_id = l.profile_id
+          LEFT JOIN kb_principal_standing s ON s.profile_id = l.profile_id
+         WHERE l.auth_provider = 'slack' AND l.auth_provider_user_id = $1
         "#,
         slack_principal_id,
     )
     .fetch_optional(&mut *tx)
     .await?;
 
+    // No link row at all → not linked. The vault is unreachable without a link, so this is the one
+    // refusal the query answers purely by absence.
     let Some(row) = row else {
-        return Ok(MintOutcome::NotVaulted);
+        return Ok(MintOutcome::Refused(LinkRefusal::NotLinked));
     };
-    // Not-mintable checks first, before any cached token is decrypted or the RT is spent: an
-    // explicit revocation, OR a deactivated profile (the kill-switch must reach the vault).
-    if row.revoked_at.is_some() || !row.is_active {
-        return Ok(MintOutcome::Revoked);
+
+    // Decide before any decrypt or RT spend (auth before writes). `resolve` delegates standing to
+    // `admit` and orders NotLinked → Standing → NotVaulted, so a refused human is told the remedy
+    // that works: a standing refusal names "ask an admin", never the false "re-link". Dropping the
+    // former `revoked_at.is_some()` disjunct is deliberate — soft-revoke was superseded by
+    // disconnect's DELETE (commit `3a45b1ab`); the column is retained but inert.
+    if let Err(refusal) = resolve(LinkEvidence {
+        linked: true,
+        vaulted: row.vaulted,
+        standing: row.standing.as_deref(),
+    }) {
+        return Ok(MintOutcome::Refused(refusal));
     }
+
+    // `resolve` returned `Ok`, so the row is vaulted and its NOT-NULL refresh columns are present;
+    // a missing one is an internal inconsistency (a torn row), not a user-facing refusal.
+    let (Some(rt_nonce), Some(rt_ciphertext)) = (&row.rt_nonce, &row.rt_ciphertext) else {
+        return Err(ApiError::Internal(
+            "a vaulted grant is missing its refresh ciphertext".to_string(),
+        ));
+    };
 
     // Cached access token still comfortably valid? Hand it back — no refresh, no RT rotation.
     if let (Some(at_nonce), Some(at_ciphertext), Some(expires_at)) =
@@ -288,8 +327,8 @@ pub async fn mint_access_token(
     // The cached token is gone or stale: spend the RT, then rotate everything the response gave.
     let refresh_token = decrypt_to_string(
         key,
-        &row.rt_nonce,
-        &row.rt_ciphertext,
+        rt_nonce,
+        rt_ciphertext,
         &aad(slack_principal_id, FIELD_RT),
     )?;
     let tokens = oauth_client::refresh_grant(token_url, client_id, &refresh_token).await?;
@@ -425,6 +464,7 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
+    use temper_principal::Refusal;
 
     const PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
 
@@ -445,11 +485,32 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+        // Mint is gated on `approved` standing (D-A), so a mintable fixture is an approved one.
+        set_standing(pool, id, "approved").await;
         id
     }
 
-    /// Seal a grant under the test key. Wraps the [`NewGrant`] construction the tests would
-    /// otherwise repeat.
+    /// Upsert a principal's standing directly — the test-side analogue of the state machine, used
+    /// to drive the mint gate across `approved`/`revoked`/`deactivated` without an admin actor.
+    async fn set_standing(pool: &PgPool, profile: Uuid, state: &str) {
+        sqlx::query(
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,$2) \
+             ON CONFLICT (profile_id) DO UPDATE SET state = EXCLUDED.state",
+        )
+        .bind(profile)
+        .bind(state)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Seal a grant under the test key AND write the identity row that production always writes
+    /// alongside it. Wraps the [`NewGrant`] construction the tests would otherwise repeat.
+    ///
+    /// The link row is load-bearing since the re-root (spec §2.3): `mint_access_token` now roots at
+    /// `kb_profile_auth_links`, so a vault row with no link reads as `NotLinked`. A real grant is
+    /// never linkless — the callback writes both in one transaction — so a faithful fixture links
+    /// and vaults the same profile+principal (which also keeps them correlated, never skewed).
     ///
     /// `store_grant` takes `&mut PgConnection` (so the link callback can run it in the same
     /// transaction as the directory write); these tests need no such atomicity, so they hand it a
@@ -462,6 +523,7 @@ mod tests {
         at: &str,
         ttl: Option<u64>,
     ) {
+        link(pool, profile, principal).await;
         let mut conn = pool.acquire().await.expect("acquire");
         store_grant(
             &mut conn,
@@ -474,6 +536,23 @@ mod tests {
                 access_ttl_secs: ttl,
             },
         )
+        .await
+        .unwrap();
+    }
+
+    /// Write the `kb_profile_auth_links` directory row binding a Slack principal to a profile —
+    /// the identity fact the re-rooted mint query starts from. Idempotent, so a test may link
+    /// without vaulting (to exercise the `NotVaulted` arm) and `store` may call it unconditionally.
+    async fn link(pool: &PgPool, profile: Uuid, principal: &str) {
+        sqlx::query(
+            "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id) \
+             VALUES ($1, $2, 'slack', $3) \
+             ON CONFLICT (auth_provider, auth_provider_user_id) DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(profile)
+        .bind(principal)
+        .execute(pool)
         .await
         .unwrap();
     }
@@ -647,22 +726,89 @@ mod tests {
         );
     }
 
+    /// An unknown principal has no identity row, so the re-rooted query returns nothing → the mint
+    /// is `NotLinked`, distinct from `NotVaulted`. Before the re-root this arm could not exist: the
+    /// vault-rooted query conflated "never linked" with "linked, not vaulted".
     #[sqlx::test(migrations = "../../migrations")]
-    async fn mint_reports_not_vaulted_for_an_unknown_principal(pool: PgPool) {
+    async fn mint_reports_not_linked_for_an_unknown_principal(pool: PgPool) {
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
             .await
             .unwrap();
-        assert_eq!(out, MintOutcome::NotVaulted);
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotLinked));
     }
 
-    /// After revoke, mint reports Revoked and never reaches the (unreachable) token endpoint.
+    /// A link with no vaulted grant (a pre-T3 row) is `NotVaulted` — genuinely distinct from
+    /// `NotLinked`. This is the cell the whole re-root exists to separate.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn mint_reports_revoked_and_does_not_refresh(pool: PgPool) {
+    async fn mint_reports_not_vaulted_for_a_link_without_a_grant(pool: PgPool) {
+        let profile = insert_profile(&pool).await; // approved
+        link(&pool, profile, PRINCIPAL).await; // linked, but no `store` → no vault row
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
+    }
+
+    /// The ordering fix: a linked human whose standing refuses is told the STANDING reason, even
+    /// when there is also no vaulted grant. Before the re-root, "no vault" won and the human was
+    /// told to re-link — the false remedy, since only an admin approval helps.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mint_prefers_the_standing_refusal_over_a_missing_vault(pool: PgPool) {
         let profile = insert_profile(&pool).await;
-        // Store with an already-expired cached AT so, absent the revocation, mint WOULD refresh.
-        store(&pool, profile, PRINCIPAL, "rt", "at", Some(0)).await;
-        // Flip the flag directly — the write-side `revoke` fn is gone (disconnect now deletes
-        // the row instead), but mint must still honour a row flagged before that change.
+        set_standing(&pool, profile, "denied").await;
+        link(&pool, profile, PRINCIPAL).await; // linked, denied, NOT vaulted
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            MintOutcome::Refused(LinkRefusal::Standing {
+                refusal: Refusal::Denied
+            }),
+            "standing must win over vault state so the remedy named is the one that works",
+        );
+    }
+
+    /// Fail-closed correlation (spec §2.3): when the link row and the vault row are owned by
+    /// DIFFERENT profiles (an account-merge skew), the join finds no vault for the link's owner, so
+    /// the mint reads as `NotVaulted` rather than decrypting one profile's grant under another's
+    /// standing. There is no production path that produces this today; the seed is manual.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_vault_owned_by_a_different_profile_than_the_link_reads_as_not_vaulted(pool: PgPool) {
+        let link_owner = insert_profile(&pool).await; // approved
+        let grant_owner = insert_profile(&pool).await; // approved
+        link(&pool, link_owner, PRINCIPAL).await;
+        // Vault the SAME principal, but owned by the OTHER profile — the skew.
+        store(&pool, grant_owner, PRINCIPAL, "rt", "at", Some(3600)).await;
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            MintOutcome::Refused(LinkRefusal::NotVaulted),
+            "a link/vault owner skew must fail closed, never mint across profiles",
+        );
+    }
+
+    /// The former `revoked_at` disjunct is dropped (spec §2.4): a flagged `revoked_at` no longer
+    /// blocks minting, because soft-revoke was superseded by disconnect's DELETE (commit
+    /// `3a45b1ab`). The column is retained but inert; this pins that so a regression re-adding the
+    /// disjunct fails. A comfortably-valid cached AT keeps this off the (irrelevant) refresh path.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_flagged_revoked_at_no_longer_blocks_minting(pool: PgPool) {
+        let profile = insert_profile(&pool).await; // approved
+        store(
+            &pool,
+            profile,
+            PRINCIPAL,
+            "rt",
+            "still-valid-at",
+            Some(3600),
+        )
+        .await;
         sqlx::query!(
             "UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1",
             PRINCIPAL,
@@ -674,19 +820,19 @@ mod tests {
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
             .await
             .unwrap();
-        assert_eq!(
-            out,
-            MintOutcome::Revoked,
-            "a revoked grant must mint nothing and must not spend the RT",
-        );
+        match out {
+            MintOutcome::Token { access_token, .. } => assert_eq!(access_token, "still-valid-at"),
+            other => panic!("a flagged revoked_at must no longer block minting, got {other:?}"),
+        }
     }
 
-    /// The deactivation kill-switch reaches the vault: a grant whose profile is deactivated mints
-    /// nothing, even with a still-valid cached token and without ever being explicitly revoked.
+    /// The deactivation kill-switch reaches the vault: a grant whose principal standing is
+    /// `deactivated` mints nothing, even with a still-valid cached token and without ever being
+    /// explicitly revoked.
     #[sqlx::test(migrations = "../../migrations")]
     async fn mint_refuses_a_deactivated_profile(pool: PgPool) {
         let profile = insert_profile(&pool).await;
-        // A comfortably-valid cached AT — absent the is_active gate, mint would hand it straight back.
+        // A comfortably-valid cached AT — absent the standing gate, mint would hand it straight back.
         store(
             &pool,
             profile,
@@ -696,21 +842,75 @@ mod tests {
             Some(3600),
         )
         .await;
-        sqlx::query!(
-            "UPDATE kb_profiles SET is_active = false WHERE id = $1",
-            profile
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        set_standing(&pool, profile, "deactivated").await;
 
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
             .await
             .unwrap();
         assert_eq!(
             out,
-            MintOutcome::Revoked,
+            MintOutcome::Refused(LinkRefusal::Standing {
+                refusal: Refusal::Deactivated
+            }),
             "a deactivated profile must not mint — the kill-switch must reach the vault",
+        );
+    }
+
+    /// D-A: a `Revoke` stops minting immediately. This is the Phase-2 policy call — the mint gate is
+    /// `standing = 'approved'`, not the behaviour-preserving `<> 'deactivated'` — so a revoked
+    /// principal (whose cached token is otherwise still valid) mints nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mint_refuses_a_revoked_profile(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile,
+            PRINCIPAL,
+            "rt",
+            "still-valid-at",
+            Some(3600),
+        )
+        .await;
+        set_standing(&pool, profile, "revoked").await;
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            MintOutcome::Refused(LinkRefusal::Standing {
+                refusal: Refusal::Revoked
+            }),
+            "a revoked principal must not mint (D-A: mint requires an approved standing)",
+        );
+    }
+
+    /// D-A / §8: a Slack-linked human born `Denied` (or with no standing row at all) cannot mint —
+    /// being born denied *is* the access control. Here the profile is left without an approved
+    /// standing, and even a fresh cached token is withheld.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mint_refuses_a_profile_without_approved_standing(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile,
+            PRINCIPAL,
+            "rt",
+            "still-valid-at",
+            Some(3600),
+        )
+        .await;
+        set_standing(&pool, profile, "denied").await;
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            MintOutcome::Refused(LinkRefusal::Standing {
+                refusal: Refusal::Denied
+            }),
+            "a born-Denied principal must not mint until approved (§8)",
         );
     }
 
@@ -808,7 +1008,8 @@ mod tests {
         }
     }
 
-    /// The principal is the key, WHOLE. A different principal must not read another's grant.
+    /// The principal is the key, WHOLE. A different principal has its own (here absent) identity
+    /// row, so it reads as `NotLinked` — it never reaches, let alone reads, PRINCIPAL's grant.
     #[sqlx::test(migrations = "../../migrations")]
     async fn mint_does_not_match_a_different_principal(pool: PgPool) {
         let profile = insert_profile(&pool).await;
@@ -823,7 +1024,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(out, MintOutcome::NotVaulted);
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotLinked));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -278,11 +278,10 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
 /// return `NotFound` (not `Forbidden`) to avoid leaking team existence to
 /// non-members — team slugs are globally unique and used in share flows.
 pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> ApiResult<TeamDetail> {
-    // Auth (read gate): member (any role) or system admin.
-    let is_member = role_on_team(pool, team_id, caller).await?.is_some();
-    if !is_member && !access_service::is_system_admin(pool, caller).await? {
-        return Err(ApiError::NotFound);
-    }
+    // Auth (read gate): member (any role) or system admin. The `NotFound` above is rendered by
+    // `TeamReadAuthority::denial`, so the information-hiding decision lives with the policy rather
+    // than being re-made at each call site.
+    crate::authz::authorize::<crate::authz::TeamReadAuthority>(pool, caller, team_id).await?;
 
     let team = sqlx::query_as!(
         TeamRow,
@@ -953,29 +952,10 @@ mod lifecycle_tests {
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        // Make `admin` a system admin: OWNER of the `temper-system` gating team (born of
-        // migration 20260625000001) with `gating_team_slug` pointed at it — the same
-        // admin-minting idiom as `context_service`'s test seed. `admin` is NOT a member
-        // of `acme`, so this exercises the `is_system_admin` branch of the read gate.
-        let sys: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
-             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner'",
-        )
-        .bind(sys)
-        .bind(admin)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        // Make `admin` a system admin. Under D11 that is a `kb_principal_governance` grant, not
+        // gating-team ownership — `is_system_admin` reads governance. `admin` is NOT a member of
+        // `acme`, so this exercises the `is_system_admin` branch of the read gate.
+        crate::test_support::grant_governance(&pool, admin).await;
 
         let detail = team_detail(&pool, ProfileId::from(admin), team)
             .await

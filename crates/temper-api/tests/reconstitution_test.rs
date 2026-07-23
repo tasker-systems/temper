@@ -25,6 +25,8 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
         .await
         .expect("profile request failed");
     assert_eq!(profile_resp.status().as_u16(), 200);
+    // D11: born Denied. Approve so the gated ingest/reconstitution endpoints admit this caller.
+    common::fixtures::approve_standing_by_email(&app.pool, &email).await;
 
     // Build chunks that simulate what the CLI chunker produces for:
     //   "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here."

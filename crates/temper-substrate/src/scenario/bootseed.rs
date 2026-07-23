@@ -28,8 +28,10 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
     let boot: BootSeed = serde_yaml::from_str(&std::fs::read_to_string(SYSTEM_SEED)?)?;
 
     // The canonical system actor (events require a NOT NULL emitter). handle is UNIQUE; entity name is not.
+    // Admin-ness rides standing + governance below (F6), NOT the `system_access` column — Phase 2 A4
+    // stopped writing that doomed projection.
     let profile: Uuid = sqlx::query_scalar!(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) VALUES ('system','System','admin') \
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('system','System') \
          ON CONFLICT (handle) DO UPDATE SET display_name=EXCLUDED.display_name RETURNING id"
     )
     .fetch_one(pool)
@@ -87,6 +89,39 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
     }
+
+    // THE ONE DELIBERATE EXCEPTION to D11 (F6). On a fresh instance no admin exists, so nobody
+    // could ever be approved and the instance would be permanently unusable. Accepted, not worked
+    // around: bootstrapping temper already requires database write access. The `system` profile is
+    // born Approved AND governing. Placed after the event-type registry loop so the ledger events
+    // these functions emit have their type registered; the emitter (the `system` entity above)
+    // already exists.
+    //
+    // seed_system is idempotent (its own test re-runs it expecting a no-op), so the standing mint
+    // is GUARDED on first-seed: principal_standing_apply appends a log event every call (the log is
+    // append-only), so an unconditional call would stack a duplicate `provision` event on every
+    // re-seed. principal_governance_set is already no-op-on-repeat (ON CONFLICT DO NOTHING, emits
+    // only on change), so it needs no guard.
+    let has_standing: Option<Uuid> = sqlx::query_scalar!(
+        "SELECT profile_id FROM kb_principal_standing WHERE profile_id = $1",
+        profile
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_standing.is_none() {
+        sqlx::query!(
+            "SELECT principal_standing_apply($1,'provision','approved',NULL,'boot-seed genesis')",
+            profile
+        )
+        .fetch_one(pool)
+        .await?;
+    }
+    sqlx::query!(
+        "SELECT principal_governance_set($1,true,NULL,'boot-seed genesis admin')",
+        profile
+    )
+    .fetch_one(pool)
+    .await?;
 
     // Global system lenses (cogmap_id NULL), idempotent on (NULL, name).
     for l in &boot.lenses {

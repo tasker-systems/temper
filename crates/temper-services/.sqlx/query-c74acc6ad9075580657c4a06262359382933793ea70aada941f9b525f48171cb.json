@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'deactivated')\n             ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c74acc6ad9075580657c4a06262359382933793ea70aada941f9b525f48171cb"
+}

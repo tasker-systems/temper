@@ -88,6 +88,14 @@ pub enum EventKind {
     /// A Slack principal unbound from a temper profile. Fires from the SQL chokepoint
     /// `_admin_slack_disconnected`, on both the self-serve and admin arms.
     SlackPrincipalDisconnected,
+    /// One principal-admission transition (spec 2026-07-20 §10, D4). Fires from the per-act
+    /// transition functions in `20260720000030`. One kind for all nine acts — the act rides in
+    /// the payload; the type boundary worth drawing is standing-vs-governance (spec §2).
+    PrincipalStandingChanged,
+    /// A principal gained or lost the authority to change the rules (spec 2026-07-20 D10). Fires
+    /// from the same transition functions, paired with a standing change when a demote is a
+    /// consequence of `Revoke`/`Deactivate`.
+    PrincipalGovernanceChanged,
 }
 
 impl EventKind {
@@ -121,6 +129,8 @@ impl EventKind {
             EventKind::GrantCreated => "grant_created",
             EventKind::GrantRevoked => "grant_revoked",
             EventKind::SlackPrincipalDisconnected => "slack_principal_disconnected",
+            EventKind::PrincipalStandingChanged => "principal_standing_changed",
+            EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
         }
     }
 
@@ -159,6 +169,8 @@ impl EventKind {
             "grant_created" => EventKind::GrantCreated,
             "grant_revoked" => EventKind::GrantRevoked,
             "slack_principal_disconnected" => EventKind::SlackPrincipalDisconnected,
+            "principal_standing_changed" => EventKind::PrincipalStandingChanged,
+            "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             _ => return None,
         })
     }

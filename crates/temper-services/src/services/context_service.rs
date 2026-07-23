@@ -12,8 +12,8 @@
 
 use sqlx::PgPool;
 
+use crate::authz::{TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service;
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
@@ -360,42 +360,18 @@ async fn ensure_context_and_team_exist(
     Ok(())
 }
 
-/// Two-sided share/unshare gate — the context-share analogue of
-/// `cogmap_service::can_bind`. Allowed IFF `is_system_admin`, OR the caller administers the
-/// CONTEXT (see [`caller_administers_context`]) AND may manage the TARGET TEAM (`can_manage`
-/// = Owner|Maintainer, direct membership) AND that team is NOT the gating/root team.
-///
-/// The gating-team exclusion mirrors `can_bind`: sharing into the root team is an
-/// instance-level escalation, kept admin-only.
-async fn can_share(
-    pool: &PgPool,
-    caller: ProfileId,
-    context_id: uuid::Uuid,
-    team_id: uuid::Uuid,
-) -> ApiResult<bool> {
-    if access_service::is_system_admin(pool, caller).await? {
-        return Ok(true);
-    }
-    if access_service::is_gating_team(pool, team_id).await? {
-        return Ok(false);
-    }
-    let team_ok = matches!(
-        team_service::role_on_team(pool, team_id, caller).await?,
-        Some(role) if team_service::can_manage(role)
-    );
-    if !team_ok {
-        return Ok(false);
-    }
-    caller_administers_context(pool, caller, context_id).await
-}
-
 /// Does `caller` administer the context — i.e. own it, or manage its owning team?
 ///
 /// A context is owned by `(owner_table, owner_id)`: a profile owns it directly (caller ==
 /// owner), while a team-owned context is administered by anyone who `can_manage` that owning
 /// team (Owner|Maintainer). A missing context resolves to `false` — the subsequent
 /// [`ensure_context_and_team_exist`] check turns that into a clean `NotFound`.
-async fn caller_administers_context(
+///
+/// `pub(crate)` for one consumer: it is the **object-side probe** of
+/// `crate::authz::TwoSidedAuthority` — the single question that gate's context arm asks and its
+/// cogmap arm does not. It stays defined here, next to the ownership shape it reads, and is called
+/// from there rather than restated.
+pub(crate) async fn caller_administers_context(
     pool: &PgPool,
     caller: ProfileId,
     context_id: uuid::Uuid,
@@ -422,9 +398,9 @@ async fn caller_administers_context(
 
 /// Share a context into a team's read-reach (write a `kb_team_contexts` row).
 ///
-/// Auth before writes: the two-sided `can_share` gate — system-admin, OR the caller
-/// administers the context AND manages the target team (owner/maintainer), the same shape
-/// as `cogmap_service::can_bind` (its structural sibling; issue #367 landed the relaxation
+/// Auth before writes: the two-sided `crate::authz::TwoSidedAuthority` gate — system-admin, OR
+/// the caller administers the context AND manages the target team (owner/maintainer), the same
+/// gate `cogmap_service` binds through (its structural sibling; issue #367 landed the relaxation
 /// the interim admin-only gate had deferred). Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
 /// `shared: false` when it already existed.
 pub async fn share(
@@ -433,9 +409,12 @@ pub async fn share(
     context_id: uuid::Uuid,
     req: &ShareContextRequest,
 ) -> ApiResult<ShareContextOutcome> {
-    if !can_share(pool, caller, context_id, req.team_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    crate::authz::authorize::<TwoSidedAuthority>(
+        pool,
+        caller,
+        TwoSidedScope::context(context_id, req.team_id),
+    )
+    .await?;
     ensure_context_and_team_exist(pool, context_id, req.team_id).await?;
     let inserted = sqlx::query_scalar!(
         r#"
@@ -459,16 +438,19 @@ pub async fn share(
 /// Unshare a context from a team (delete the `kb_team_contexts` row). No-op safe.
 ///
 /// Auth before writes: symmetric with [`share`] — a principal who could share may unshare
-/// (the same `can_share` gate).
+/// (the same `crate::authz::TwoSidedAuthority` gate).
 pub async fn unshare(
     pool: &PgPool,
     caller: ProfileId,
     context_id: uuid::Uuid,
     team_id: uuid::Uuid,
 ) -> ApiResult<UnshareContextOutcome> {
-    if !can_share(pool, caller, context_id, team_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    crate::authz::authorize::<TwoSidedAuthority>(
+        pool,
+        caller,
+        TwoSidedScope::context(context_id, team_id),
+    )
+    .await?;
     ensure_context_and_team_exist(pool, context_id, team_id).await?;
     let result = sqlx::query!(
         "DELETE FROM kb_team_contexts WHERE context_id = $1 AND team_id = $2",
@@ -491,20 +473,26 @@ pub async fn unshare(
 /// author its resources via the container-write cascade. The owner change is event-sourced
 /// (`context_reassigned`) through the substrate writes layer.
 ///
-/// Auth before writes: the two-sided `can_share` gate — system-admin, OR the caller
-/// administers the context AND manages the target team (owner/maintainer), and the target is
-/// not the gating/root team. Idempotent: a context already owned by `to_team_id` returns
-/// `reassigned: false` without emitting. A slug collision under the new owner is a `Conflict`
-/// (the `UNIQUE(owner_table, owner_id, slug)` constraint is the backstop).
+/// Auth before writes: the two-sided `crate::authz::TwoSidedAuthority` gate — system-admin, OR
+/// the caller administers the context AND manages the target team (owner/maintainer), and the
+/// target is not the gating/root team. **This call site is why that last clause survives**: a
+/// reassign into the root team is a transfer of ownership, and `context_reassign` forbids it in
+/// plpgsql independently, so the Rust gate must refuse it too or one act gets two error paths.
+/// Idempotent: a context already owned by `to_team_id` returns `reassigned: false` without
+/// emitting. A slug collision under the new owner is a `Conflict` (the
+/// `UNIQUE(owner_table, owner_id, slug)` constraint is the backstop).
 pub async fn reassign(
     pool: &PgPool,
     caller: ProfileId,
     context_id: uuid::Uuid,
     to_team_id: uuid::Uuid,
 ) -> ApiResult<ReassignContextOutcome> {
-    if !can_share(pool, caller, context_id, to_team_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    crate::authz::authorize::<TwoSidedAuthority>(
+        pool,
+        caller,
+        TwoSidedScope::context(context_id, to_team_id),
+    )
+    .await?;
     ensure_context_and_team_exist(pool, context_id, to_team_id).await?;
 
     // Current owner — for the audit fields, idempotency, and the slug-collision check.
@@ -651,11 +639,11 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    /// Seed two profiles, a team, and a context owned by profile 1. Profile 1 is made an
-    /// `owner` of the `temper-system` gating team (with `kb_system_settings.gating_team_slug`
-    /// pointed at it), so `is_system_admin` resolves true for it — mirroring the admin-minting
-    /// idiom in `cogmap_authz_test.rs`. Fixture inserts use runtime `sqlx::query(...)`, not the
-    /// compile-time macro, per project convention for test-fixture writes.
+    /// Seed two profiles, a team, and a context owned by profile 1. Profile 1 is made a system
+    /// admin — under D11 a `kb_principal_governance` grant (`is_system_admin` reads governance, not
+    /// gating-team ownership). The gating-team config is retained because other tests on this
+    /// fixture exercise the `is_gating_team` target guard. Fixture inserts use runtime
+    /// `sqlx::query(...)`, not the compile-time macro, per project convention for test-fixture writes.
     async fn seed_admin_team_context(pool: &PgPool) -> (ProfileId, ProfileId, Uuid, ContextId) {
         let admin: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_profiles (handle, display_name) VALUES ('admin', 'Admin') \
@@ -691,9 +679,8 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        // The auto-join trigger may already have enrolled the profile as `watcher`
-        // (open-mode auto-join on temper-system) — promote it to `owner` so
-        // `is_system_admin` (OWNER of the gating team) resolves true.
+        // Promote to `owner` of the gating team (kept for the `is_gating_team` target-guard tests
+        // that share this fixture) and point the gating slug at it.
         sqlx::query(
             "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
              ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner'",
@@ -709,6 +696,8 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+        // What confers admin-ness under D11: a governance grant (`is_system_admin`).
+        crate::test_support::grant_governance(pool, admin).await;
 
         let context_id: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \

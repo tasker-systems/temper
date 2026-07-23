@@ -17,6 +17,7 @@ module Temper::Generated
   class ErrorDetail < ApiModelBase
     attr_accessor :code
 
+    # Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on every other error.
     attr_accessor :details
 
     attr_accessor :message
@@ -44,7 +45,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'code' => :'String',
-        :'details' => :'Object',
+        :'details' => :'SystemAccessDetails',
         :'message' => :'String'
       }
     end

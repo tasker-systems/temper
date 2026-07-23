@@ -12,7 +12,7 @@
 
 use temper_client::auth::{AuthStatus, DiskTokenStore, TokenStore};
 use temper_client::TemperClient;
-use temper_core::types::access_gate::{AccessMode, JoinRequestStatus};
+use temper_core::types::access_gate::JoinRequestStatus;
 
 use crate::actions::runtime;
 use crate::error::Result;
@@ -237,28 +237,9 @@ struct AuthStatusReport {
 /// degrades to `unknown` so `auth status` still reports the local auth state
 /// offline.
 async fn resolve_system_access(client: &TemperClient) -> SystemAccessReport {
-    let settings = match client.access().get_settings().await {
-        Ok(s) => s,
-        Err(_) => {
-            return SystemAccessReport {
-                state: "unknown",
-                detail: Some("could not reach server".to_string()),
-            };
-        }
-    };
-
-    // Open mode grants everyone system access; no request needed.
-    if matches!(
-        AccessMode::from_db_str(&settings.access_mode),
-        Some(AccessMode::Open)
-    ) {
-        return SystemAccessReport {
-            state: "granted",
-            detail: Some("open access".to_string()),
-        };
-    }
-
-    // invite_only (or unrecognized): the join request carries the state.
+    // There is no ambient "open mode grants everyone" case any more: under D11 every principal is
+    // born denied and access is per-principal standing, not a global mode switch (spec §14 / D18).
+    // So the caller's own join request carries the state directly — no settings read is needed.
     match client.access().get_own_request().await {
         Ok(Some(req)) => match req.status {
             JoinRequestStatus::Approved => SystemAccessReport {
@@ -371,6 +352,24 @@ pub fn withdraw_request() -> Result<()> {
                     }
                 },
             }
+            Ok(())
+        })
+    })
+}
+
+/// Ask an admin to reconsider a revocation (D15). Does not restore access by itself.
+pub fn request_review(message: Option<&str>) -> Result<()> {
+    let message = message.map(|s| s.to_string());
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .access()
+                .create_review_request(message.as_deref())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            output::success_err("Review request submitted.");
+            output::plain_err("  An admin will reconsider the revocation.");
+            output::hint("  Run `temper auth status` to check your access.");
             Ok(())
         })
     })

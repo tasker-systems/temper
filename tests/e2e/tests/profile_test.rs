@@ -22,10 +22,8 @@ async fn profile_auto_provision(pool: sqlx::PgPool) {
         profile.display_name, "e2e",
         "auto-provisioned display_name should be the email prefix"
     );
-    assert!(
-        profile.is_active,
-        "auto-provisioned profile should be active"
-    );
+    // `is_active` was dropped from Profile in principal-admission Phase 2; deactivation is a
+    // standing state now, gated at Level 1 (see deactivation_test / auth_seam_parity_e2e).
 }
 
 /// Update display_name, then get again and verify the change persisted.

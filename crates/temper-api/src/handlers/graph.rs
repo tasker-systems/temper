@@ -41,7 +41,7 @@ pub async fn cogmap_neighborhood_slice(
 ) -> ApiResult<Json<AtlasSubgraph>> {
     graph_service::cogmap_neighborhood_slice(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         cogmap_id,
         req,
     )
@@ -76,7 +76,7 @@ pub async fn cogmap_panorama(
 ) -> ApiResult<Json<TerritoryOverview>> {
     graph_service::cogmap_panorama(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         cogmap_id,
         q.lens_id,
     )
@@ -120,7 +120,7 @@ pub async fn region_composition(
         .map_err(|e| ApiError::BadRequest(format!("invalid region id: {e}")))?;
     graph_service::region_composition_slice(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
+        ProfileId::from(auth.0.profile().id),
         &ids,
         q.depth.unwrap_or(1),
     )
@@ -140,7 +140,7 @@ pub async fn atlas_home(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<AtlasHome>> {
-    graph_service::atlas_home(&state.pool, ProfileId::from(auth.0.profile.id))
+    graph_service::atlas_home(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
 }
@@ -252,7 +252,7 @@ pub async fn context_panorama(
 
     // Auth before reads: resolve gates visibility, yielding NotFound (404) — never a
     // Forbidden that would leak the context's existence — for a context the caller cannot see.
-    let principal = ProfileId::from(auth.0.profile.id);
+    let principal = ProfileId::from(auth.0.profile().id);
     let context_id = resolve_context_ref(&state.pool, principal, &cref).await?;
 
     let group_by = q.group_by.as_deref().unwrap_or("doc_type");
@@ -315,7 +315,7 @@ pub async fn context_composition(
         parse_context_ref(&q.context_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Auth before reads — same deny-as-absence gate as the panorama.
-    let principal = ProfileId::from(auth.0.profile.id);
+    let principal = ProfileId::from(auth.0.profile().id);
     let context_id = resolve_context_ref(&state.pool, principal, &cref).await?;
 
     let target = parse_composition_target(q.container, q.group.as_deref())?;

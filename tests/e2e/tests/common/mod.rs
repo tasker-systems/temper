@@ -293,6 +293,11 @@ pub fn generate_second_user_jwt() -> String {
     generate_test_jwt("e2e-second-user", "second@test.example.com")
 }
 
+/// Generate a JWT for a third test user (distinct from the primary and second e2e users).
+pub fn generate_third_user_jwt() -> String {
+    generate_test_jwt("e2e-third-user", "third@test.example.com")
+}
+
 /// Sign a JWT with the test Ed25519 private key (EdDSA). Valid for 1 hour.
 ///
 /// Mirrors `generate_test_jwt` exactly (same claims shape, same issuer) but
@@ -353,11 +358,15 @@ pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
     .expect("add admin to temper-system team");
 
     sqlx::query(
-        "UPDATE kb_system_settings SET access_mode = 'invite_only', gating_team_slug = 'temper-system', updated = now()",
+        "UPDATE kb_system_settings SET gating_team_slug = 'temper-system', updated = now()",
     )
     .execute(pool)
     .await
     .expect("enable invite_only mode");
+
+    // D11: the admin keeps access + admin-ness through the mode flip via standing + governance, not
+    // the gating-team ownership written above (which no longer confers either).
+    approved_admin(pool, admin_profile_id).await;
 }
 
 /// Configure the gating team and make `profile_id` its OWNER — i.e. a system admin.
@@ -368,6 +377,9 @@ pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
 /// (Contrast [`enable_invite_only`], which also flips the mode.)
 pub async fn make_system_admin(pool: &PgPool, profile_id: uuid::Uuid) {
     add_to_gating_team(pool, profile_id, "owner").await;
+    // Under D11 gating-team ownership no longer confers admin-ness; the governance grant + approved
+    // standing do. The gating-team membership above is retained for topology parity only.
+    approved_admin(pool, profile_id).await;
 }
 
 /// Ensure the `temper-system` gating team exists, is configured as the gating team, and holds
@@ -426,6 +438,107 @@ pub async fn grant_cogmap_write(pool: &PgPool, cogmap: uuid::Uuid, profile: uuid
     .execute(pool)
     .await
     .expect("grant cogmap write");
+}
+
+/// Grant `profile_id` an `approved` `kb_principal_standing` — the D11 front door
+/// (`has_system_access`). A fresh principal is born `Denied`, so any second/third-user test whose
+/// actor must act on a gated route approves it with this first.
+pub async fn approve(pool: &PgPool, profile_id: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state)
+         VALUES ($1, 'approved')
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'approved', updated = now()",
+    )
+    .bind(profile_id)
+    .execute(pool)
+    .await
+    .expect("approve standing");
+}
+
+/// Approve then revoke `subject`, leaving standing `revoked` — a fixture for the D15 paths
+/// (re-request refusal, review markers). It moves through `approved` first so the illegal
+/// `denied -> revoked` transition is never simulated. Stays direct-SQL even though Task 13's admin
+/// `revoke` endpoint now exists: this fixture has no admin *token* to call it with (the app
+/// principal holds standing but not governance), so `_admin` remains the intended-but-unused actor.
+pub async fn approve_then_revoke(app: &E2eTestApp, _admin: uuid::Uuid, subject: uuid::Uuid) {
+    approve(&app.pool, subject).await;
+    sqlx::query(
+        "UPDATE kb_principal_standing SET state = 'revoked', updated = now() WHERE profile_id = $1",
+    )
+    .bind(subject)
+    .execute(&app.pool)
+    .await
+    .expect("revoke standing");
+}
+
+/// Configure `temper-system` as the gating team WITHOUT touching `access_mode`. A join request has
+/// to attach to the gating team (spec D9: `create_join_request` resolves `gating_team_slug` and
+/// errors if none is set), so a request test needs one configured even while the instance is
+/// nominally `open` — which is exactly the interim state that proves the *mode* no longer gates.
+pub async fn configure_gating_team(pool: &PgPool) {
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+        .execute(pool)
+        .await
+        .expect("configure gating team");
+}
+
+/// Provision the standard second user (`generate_second_user_jwt`) via the real auth path and grant
+/// it `approved` standing, so it clears the front door and a test exercises the ENDPOINT authz
+/// (visibility, ownership) rather than the system-access gate. Returns its profile id.
+pub async fn provision_and_approve_second(app: &E2eTestApp) -> uuid::Uuid {
+    let token = generate_second_user_jwt();
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("provision second user");
+    let body: serde_json::Value = resp.json().await.expect("second-user profile json");
+    let id: uuid::Uuid = body["id"].as_str().expect("id").parse().expect("uuid");
+    approve(&app.pool, id).await;
+    id
+}
+
+/// Make `profile_id` a system admin under D11: an `approved` standing (front door) plus a
+/// `kb_principal_governance` grant (`is_system_admin`). Gating-team ownership confers neither now.
+pub async fn approved_admin(pool: &PgPool, profile_id: uuid::Uuid) {
+    approve(pool, profile_id).await;
+    sqlx::query(
+        "INSERT INTO kb_principal_governance (profile_id) VALUES ($1)
+         ON CONFLICT (profile_id) DO NOTHING",
+    )
+    .bind(profile_id)
+    .execute(pool)
+    .await
+    .expect("grant governance");
+}
+
+/// Restore, under D11, the ambient access open-mode used to confer on the app principal centrally.
+///
+/// The principal is now born `Denied` on its first authenticated request, so a gated route would
+/// 403. Two steps: (1) a warm-up request drives the REAL auth path, which JIT-provisions the profile
+/// in `require_auth` middleware — correct handle, per-surface emitters, default context, and a
+/// genuinely JIT-created auth link (behaviors the provisioning tests assert), regardless of the
+/// response status; (2) grant it an `approved` standing so every subsequent gated request is
+/// admitted. Deliberately NOT governance: under open mode the app principal held the front door but
+/// was not a system admin (the gating slug was empty), and admin-deny tests depend on that.
+async fn approve_app_principal(addr: std::net::SocketAddr, token: &str, pool: &PgPool) {
+    // `/api/profile` is on the auth-only router; `require_auth` provisions before any gate.
+    let _ = reqwest::Client::new()
+        .get(format!("http://{addr}/api/profile"))
+        .bearer_auth(token)
+        .send()
+        .await;
+    // The app principal's email is constant across every setup variant.
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state)
+         SELECT id, 'approved' FROM kb_profiles WHERE email = 'e2e@test.example.com'
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'approved', updated = now()",
+    )
+    .execute(pool)
+    .await
+    .expect("approve app principal standing");
 }
 
 /// No-op: `#[sqlx::test(migrator = "temper_api::MIGRATOR")]` already provisions
@@ -487,6 +600,10 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 
     // --- Config + client setup (no disk reads) ---
     let token = generate_test_jwt("e2e-test-user", "e2e@test.example.com");
+
+    // D11: the app principal is born Denied on first auth. Provision it via the real path and grant
+    // approved standing so the tests' gated requests are admitted (open-mode's ambient, restored).
+    approve_app_principal(addr, &token, &pool).await;
 
     let vault_dir = TempDir::new().expect("Failed to create temp vault");
     std::fs::create_dir_all(vault_dir.path().join(".temper"))
@@ -592,6 +709,9 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
 
     // --- Config + client setup (no disk reads) ---
     let token = generate_test_jwt_eddsa("e2e-test-user", "e2e@test.example.com");
+
+    // D11: provision + approve the app principal via the real path (see `approve_app_principal`).
+    approve_app_principal(addr, &token, &pool).await;
 
     let vault_dir = TempDir::new().expect("Failed to create temp vault");
     std::fs::create_dir_all(vault_dir.path().join(".temper"))

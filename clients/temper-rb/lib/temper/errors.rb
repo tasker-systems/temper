@@ -34,7 +34,40 @@ module Temper
 
   class Unauthorized < PermanentError; end
   class Forbidden < PermanentError; end
-  class SystemAccessRequired < Forbidden; end
+
+  # The one error whose `#details` is a typed payload rather than a free-form blob: the server
+  # says *why* it refused, so a worker can tell "never granted" from "granted and then revoked"
+  # without matching on the message string.
+  class SystemAccessRequired < Forbidden
+    # The refusal as a generated model — `Denied`, `Revoked`, `IllegalTransition`, and so on.
+    #
+    # `nil` means this build cannot name the refusal: either the server sent none (it predates the
+    # typed 403) or it sent a kind added after this gem was generated. Reach for #refusal_kind in
+    # that case — a name we cannot resolve is still worth logging.
+    def refusal
+      raw = refusal_hash
+      # The generated oneOf dispatcher matches on SYMBOL keys, because the ApiClient deserializes
+      # with symbolize_names. #details comes off the error envelope with string keys, and feeding
+      # those in resolves to nil SILENTLY — so the symbolize belongs here, once, not in every
+      # caller. The refusal payload is flat, so shallow is sufficient.
+      raw && Temper::Generated::Refusal.build(raw.transform_keys(&:to_sym))
+    end
+
+    # The refusal's discriminator as the server sent it, resolvable or not.
+    def refusal_kind
+      refusal_hash&.fetch('kind', nil)
+    end
+
+    private
+
+    def refusal_hash
+      return nil unless details.is_a?(Hash)
+
+      raw = details['refusal']
+      raw.is_a?(Hash) ? raw : nil
+    end
+  end
+
   class NotFound < PermanentError; end
   class Conflict < PermanentError; end
   class BadRequest < PermanentError; end

@@ -23,15 +23,10 @@ const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "opener@example.com").await;
-    // Approve the profile: the `sync_system_membership` trigger then joins it to the `temper-system`
-    // root team, which owns L0 (`kb_team_cogmaps`) — so the kernel map becomes readable. This is the
-    // production "approval auto-joins the root" path, not a special-case grant.
-    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
-        .bind(profile)
-        .execute(&pool)
-        .await
-        .expect("approve test profile");
-    // Self-attributed open now requires WRITE on the originating map (F2) — root-join confers read only.
+    // Grant `approved` standing (D11 front door). L0 is the public kernel map, so it is readable
+    // regardless of membership; the principal is still read-only on L0 until granted write below.
+    common::fixtures::approve_standing(&pool, profile).await;
+    // Self-attributed open now requires WRITE on the originating map (F2) — read alone is not enough.
     common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
     let profile_id = ProfileId::from(profile);
     let backend = DbBackend::new(pool.clone(), profile_id);
@@ -154,11 +149,7 @@ async fn open_on_unreadable_cogmap_is_forbidden(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn self_attributed_open_requires_write(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "reader@example.com").await;
-    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
-        .bind(profile)
-        .execute(&pool)
-        .await
-        .expect("approve test profile");
+    common::fixtures::approve_standing(&pool, profile).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
 
     // Read-only (root-joined) profile → self-attributed open denied.
@@ -194,11 +185,7 @@ async fn self_attributed_open_requires_write(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn delegated_open_needs_only_read(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "delegate@example.com").await;
-    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
-        .bind(profile)
-        .execute(&pool)
-        .await
-        .expect("approve test profile");
+    common::fixtures::approve_standing(&pool, profile).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
 
     // Read-only principal, but delegated (parent set) → read gate suffices → succeeds.
