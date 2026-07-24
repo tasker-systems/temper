@@ -105,8 +105,21 @@ pub async fn system_admin_proof(pool: &PgPool) -> crate::auth::SystemAdmin {
     .await
     .expect("seed operator profile");
     approved_admin(pool, id).await;
-    let authed = authenticated_profile_for(pool, id).await;
+    system_admin_proof_for(pool, id).await
+}
+
+/// Mint a sealed `SystemAdmin` proof for an **already-seeded** profile.
+///
+/// The variant to reach for when a test asserts on WHICH profile acted — on the ledger row it
+/// authors, say. [`system_admin_proof`] seeds its own operator, so it cannot serve a test that
+/// already holds the admin's id, and every such test was otherwise re-deriving these three lines
+/// privately (there were three near-identical copies before this existed).
+///
+/// The profile must already satisfy `is_system_admin`; this runs the real gate, so a fixture that
+/// forgot [`grant_governance`] panics here rather than silently acting unauthorized.
+pub async fn system_admin_proof_for(pool: &PgPool, profile_id: Uuid) -> crate::auth::SystemAdmin {
+    let authed = authenticated_profile_for(pool, profile_id).await;
     crate::auth::require_system_admin(pool, &authed)
         .await
-        .expect("mint system admin proof")
+        .expect("the seeded profile must satisfy is_system_admin to mint a proof")
 }

@@ -531,15 +531,6 @@ mod tests {
         ProfileId::from(id)
     }
 
-    /// Mint the sealed `SystemAdmin` proof for a seeded admin — `rebind` now requires it (admin-authz
-    /// enclosure). Provision/issue/revoke still take a bare `ProfileId` caller, so this is rebind-only.
-    async fn admin_proof(pool: &PgPool, admin: ProfileId) -> crate::auth::SystemAdmin {
-        let authed = crate::test_support::authenticated_profile_for(pool, *admin).await;
-        crate::auth::require_system_admin(pool, &authed)
-            .await
-            .expect("admin proof")
-    }
-
     /// Seed a plain team owner who is NOT a system admin and holds NO gating-team membership,
     /// with the instance in the `invite_only` shape the containment guard exists for.
     ///
@@ -909,7 +900,7 @@ mod tests {
             .await
             .expect("provision");
 
-        let proof = admin_proof(&pool, admin).await;
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
         let new = svc::rebind(
             &pool,
             &proof,
@@ -944,7 +935,7 @@ mod tests {
             .await
             .expect("provision");
 
-        let proof = admin_proof(&pool, admin).await;
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
         svc::rebind(
             &pool,
             &proof,
@@ -1041,7 +1032,7 @@ mod tests {
             .await
             .expect("revoke");
 
-        let proof = admin_proof(&pool, admin).await;
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
         let err = svc::rebind(
             &pool,
             &proof,

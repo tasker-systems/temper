@@ -429,6 +429,28 @@ async fn post_admin_disconnect(
         .expect("post admin disconnect")
 }
 
+/// How many `slack_principal_disconnected` rows the ledger holds.
+///
+/// Shared by the refusal test (which asserts 0) and the admitted test (which asserts 1) on
+/// purpose: a count-is-zero assertion standing alone is vacuously green if the event name or the
+/// join is ever wrong, and this is the auth-before-writes assertion — the one that most needs to
+/// fail when it should. The positive case is what proves the query matches anything at all.
+///
+/// The service tier had that corroboration for free (`slack_disconnect_service`'s
+/// `disconnect_events` helper backs both count==0 and count==1 assertions); the assertion moved
+/// out here when the enclosure made the service-level non-admin test unwritable, and this
+/// restores it.
+async fn count_disconnect_events(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e \
+           JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'slack_principal_disconnected'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("count disconnect events")
+}
+
 async fn count_intents(pool: &PgPool) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM kb_slack_link_intents")
         .fetch_one(pool)
@@ -1162,6 +1184,19 @@ async fn admin_disconnect_refuses_a_non_admin_and_leaves_the_link_intact(pool: P
          deletes would pass a status-only assertion while doing the exact damage the gate exists \
          to prevent",
     );
+
+    // Auth before writes, the ledger half. This assertion moved here from
+    // `slack_disconnect_service`'s own non-admin test, which the admin-authz enclosure made
+    // unwritable: with the service taking a sealed `&SystemAdmin`, a non-admin can no longer
+    // construct the call, so the service layer has nothing left to assert on. This is now the
+    // only layer where a real non-admin actually attempts the act — and `kb_events` is
+    // append-only, so a disconnect filed for an act that was refused could never be retracted.
+    assert_eq!(
+        count_disconnect_events(&pool).await,
+        0,
+        "a refused act must write no audit row: the gate runs before the service is entered at \
+         all, so any row here means the refusal happened downstream of an emission",
+    );
 }
 
 /// The admin arm actually unbinds — asserted by absence of the row, not by the response's claim.
@@ -1217,6 +1252,15 @@ async fn admin_disconnect_unbinds_the_named_principal(pool: PgPool) {
     .await
     .expect("count grants");
     assert_eq!(grants, 0, "the sealed grant must be destroyed too");
+
+    // The positive control for the refusal test's count-is-zero assertion — same query, same
+    // helper. Without this, a wrong event name or a wrong join would make that assertion pass
+    // while proving nothing.
+    assert_eq!(
+        count_disconnect_events(&pool).await,
+        1,
+        "an ADMITTED admin disconnect files exactly one audit row",
+    );
 }
 
 /// A malformed principal is a 400, and it is the VALIDATOR that says so.

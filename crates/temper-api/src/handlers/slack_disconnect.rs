@@ -88,15 +88,15 @@ pub async fn disconnect_me(
     for principal in principals {
         let outcome = disconnect_slack_principal(
             &state.pool,
+            // Self-serve: the actor IS the subject. The principals were derived
+            // from this profile's own link rows.
+            profile_id,
             DisconnectRequest {
                 slack_principal_id: &principal,
                 key: &cfg.vault_key,
                 mode: state.config.auth.mode,
                 revoke_url: provider.revoke_url.clone(),
                 client_id: &cfg.client_id,
-                // Self-serve: the actor IS the subject. The principals were
-                // derived from this profile's own link rows.
-                actor: profile_id,
             },
         )
         .await?;
@@ -141,20 +141,22 @@ pub async fn admin_disconnect(
     )?;
 
     let provider = link_provider::derive(&state.config.auth, cfg);
-    // The admin gate lives in the SERVICE, not here — see
-    // `admin_disconnect_slack_principal`. A gate in this handler would be one the
-    // planned `@temper disconnect` Slack surface has to remember to re-add.
+
+    // The admin requirement lives in the SERVICE's signature, not in this handler — see
+    // `admin_disconnect_slack_principal`. A gate written here would be one the planned
+    // `@temper disconnect` Slack surface has to remember to re-add; a `&SystemAdmin`
+    // parameter is one it cannot compile without.
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+
     let outcome = admin_disconnect_slack_principal(
         &state.pool,
+        &admin,
         DisconnectRequest {
             slack_principal_id: &body.slack_principal_id,
             key: &cfg.vault_key,
             mode: state.config.auth.mode,
             revoke_url: provider.revoke_url,
             client_id: &cfg.client_id,
-            // The operator, not the subject. The service gates on this field
-            // and carries it into the disconnect.
-            actor: ProfileId::from(auth.0.profile().id),
         },
     )
     .await?;
