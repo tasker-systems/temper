@@ -81,8 +81,10 @@
 -- ("this is deliberately left for a future reaper pass... scoping and building it will likely evolve
 -- the auditor persona itself, and it is out of scope here").
 --
--- ADDITIVE: one new function; nothing altered.
-
+-- NOT ADDITIVE-ONLY ANY MORE. This file used to say "one new function; nothing altered" — it now also
+-- carries the QUEUE-side half of the same principal scoping (see the section below the sweep):
+-- an `ALTER TABLE kb_workflow_jobs`, a DROP+CREATE of `workflow_job_claim`, and one new completion
+-- primitive. Scoping the sweep without scoping the claim was the whole defect.
 CREATE FUNCTION audit_drift_sweep(p_principal uuid, p_limit int)
 RETURNS TABLE(cogmap_id uuid, finding_id uuid, uncovered int)
 LANGUAGE sql STABLE AS $$
@@ -109,4 +111,102 @@ LANGUAGE sql STABLE AS $$
        AND s.coverage < s.magnitude
      ORDER BY uncovered DESC
      LIMIT p_limit;
+$$;
+
+-- ── AND THE CLAIM MUST BE SCOPED TOO, or the sweep's scoping buys nothing ─────────────────────
+-- The tick is reap -> sweep -> enqueue -> claim. Everything above scopes the SWEEP. The CLAIM
+-- (`workflow_job_claim`, `20260705000001_workflow_jobs.sql:68-89`, re-created with a correlation
+-- argument by `20260710000010_steward_tick_correlation.sql:59-83`) filtered on
+-- `(persona, dispatch_type, status)` and NOTHING ELSE — no cogmap, no principal, no reach predicate.
+-- So the tick enqueued this principal's work and then claimed ANYONE'S, and `claim_audit` returns
+-- each claimed row's payload verbatim: the `cogmap_id` and the FULL finding-id list of cogmaps the
+-- caller cannot read. Two failures at once, from an ordinary authenticated account:
+--   * cross-tenant enumeration of cogmap and finding ids, and
+--   * permanent theft of the audit pipeline — the stolen jobs go `in_progress` under a claimant that
+--     never completes them, the real auditor's hourly tick finds nothing claimable, and after
+--     `max_attempts` reap cycles the rows go `dead`.
+-- This section closes it at the queue, not at one surface, so every future dispatch persona inherits
+-- the scoping instead of re-deriving it. The endpoint-level half (the auditor's dispatch tick admits
+-- only a registered, unrevoked machine principal) lives in `authz`, and neither half is sufficient
+-- alone: the gate stops a human from ticking at all, the scoping stops one machine principal from
+-- claiming another tenant's work.
+--
+-- NOT ADDITIVE-ONLY: this file now also alters `kb_workflow_jobs` and replaces `workflow_job_claim`.
+-- The DROP+CREATE follows `20260710000010`'s mechanics exactly — the new parameter is appended LAST
+-- with a DEFAULT, so the deployed 5-argument positional call site keeps resolving through the
+-- migrate->deploy window (memory: drop_function_non_additive_breaks_deploy_skew). `p_principal IS
+-- NULL` reproduces the previous behavior byte-for-byte, which is what keeps the steward's own
+-- unscoped claim working unchanged while the auditor's is scoped.
+
+ALTER TABLE kb_workflow_jobs ADD COLUMN claimed_by_profile_id uuid REFERENCES kb_profiles(id);
+
+COMMENT ON COLUMN kb_workflow_jobs.claimed_by_profile_id IS
+    'The principal that CLAIMED this job, set at claim alongside correlation_id (NULL when the claimer '
+    'passed no principal — the steward''s unscoped claim). Unlike correlation_id, this one IS consulted: '
+    'workflow_job_complete_claimed refuses to complete a job the caller did not claim.';
+
+-- Claim, scoped. Body verbatim from `20260710000010:64-83` with two additions: the reach constraint
+-- and the claimant stamp.
+DROP FUNCTION workflow_job_claim(text, text, int, int, uuid);
+CREATE FUNCTION workflow_job_claim(
+    p_persona text, p_dispatch_type text, p_limit int, p_lease_seconds int,
+    p_correlation uuid DEFAULT NULL, p_principal uuid DEFAULT NULL
+) RETURNS TABLE(id uuid, cogmap_id uuid, attempts int, payload jsonb)
+LANGUAGE sql AS $$
+    UPDATE kb_workflow_jobs j
+       SET status = 'in_progress',
+           leased_at = now(),
+           lease_expires_at = now() + make_interval(secs => p_lease_seconds),
+           attempts = j.attempts + 1,
+           correlation_id = p_correlation,
+           claimed_by_profile_id = p_principal
+     WHERE j.id IN (
+         SELECT c.id
+           FROM kb_workflow_jobs c
+          WHERE c.persona = p_persona
+            AND c.dispatch_type = p_dispatch_type
+            AND c.status IN ('pending', 'waiting_for_retry')
+            AND c.next_visible_at <= now()
+            -- The reach constraint. `steward_candidate_cogmaps` is the SAME predicate the sweep above
+            -- gates on, so a principal can only ever claim work over cogmaps its own sweep could have
+            -- enqueued. NULL means "unscoped", preserving the pre-Set-5 behavior for callers that
+            -- pass no principal.
+            AND (p_principal IS NULL
+                 OR c.cogmap_id IN (SELECT m.cogmap_id FROM steward_candidate_cogmaps(p_principal) m))
+          ORDER BY c.enqueued_at
+          LIMIT p_limit
+          FOR UPDATE SKIP LOCKED
+     )
+    RETURNING j.id, j.cogmap_id, j.attempts, j.payload;
+$$;
+
+-- Complete, but only the job this principal is actually holding.
+--
+-- A SEPARATE function rather than a widening of `workflow_job_complete`: that one is the steward's,
+-- it rides `steward_advance_watermark`, and its `status IN ('pending','in_progress','waiting_for_retry')`
+-- transition is load-bearing there. Changing it would change the steward's pipeline for a fix that is
+-- entirely the auditor's.
+--
+-- Two narrowings against `workflow_job_complete` (`20260705000001:94-104`), each named by what it
+-- prevents:
+--   * `status = 'in_progress'` — the shipped form also completes a **pending** job, i.e. one that has
+--     never been dispatched. A caller polling this endpoint could terminate every job the moment it
+--     appeared and suppress a cogmap's auditing indefinitely, with nothing anywhere recording it.
+--   * `claimed_by_profile_id = p_principal` — completing someone else's IN-FLIGHT job frees the
+--     single-flight slot while their session is still running, so the next tick enqueues and claims a
+--     second concurrent audit session over the same finding list, both appending to a trail that by
+--     design cannot retract (`20260723000010_citation_audits.sql:12-17`).
+-- No match is NULL, not an error: an already-completed job, a reaped lease, or a manual audit outside
+-- the dispatch loop are all "nothing to complete", and the session's written verdicts stand either way.
+CREATE FUNCTION workflow_job_complete_claimed(
+    p_cogmap uuid, p_persona text, p_dispatch_type text, p_principal uuid
+) RETURNS uuid LANGUAGE sql AS $$
+    UPDATE kb_workflow_jobs
+       SET status = 'done', completed_at = now()
+     WHERE cogmap_id = p_cogmap
+       AND persona = p_persona
+       AND dispatch_type = p_dispatch_type
+       AND status = 'in_progress'
+       AND claimed_by_profile_id = p_principal
+    RETURNING id;
 $$;

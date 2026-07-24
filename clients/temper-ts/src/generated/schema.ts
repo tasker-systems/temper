@@ -1729,7 +1729,9 @@ export interface components {
         };
         /**
          * @description Request body for `POST /api/auditor/dispatch`. Optional — the server default applies
-         *     ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]).
+         *     ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]); a supplied value is clamped into
+         *     `[1, MAX_AUDITOR_DISPATCH_CAP]` ([`crate::types::workflow_job::clamp_auditor_cap`]) and a value
+         *     below 1 is refused at the surface with 400.
          *
          *     There is no `threshold` twin of the steward's request: the auditor's selection predicate is
          *     structural (`coverage < magnitude`, spec §6.3), not a tunable count, so there is nothing for a
@@ -1757,9 +1759,13 @@ export interface components {
         /**
          * @description Acknowledgement of an auditor session completing its dispatch job.
          *
-         *     `job_id` is `None` when no job was active for the cogmap — a manual audit outside the dispatch
-         *     loop, or a job the reaper already expired. That is an outcome, not an error: the session's
-         *     verdicts stand either way, and the coverage sweep is what decides whether the finding comes back.
+         *     `job_id` is `None` when nothing OF THE CALLER'S was in flight for the cogmap — a manual audit
+         *     outside the dispatch loop, an already-completed job, or a lease the reaper expired. That is an
+         *     outcome, not an error: the session's verdicts stand either way, and the coverage sweep is what
+         *     decides whether the finding comes back. A caller that never claimed the job also lands here,
+         *     which is deliberate: completion is restricted to the claimant's own in-flight job (spec §6.5),
+         *     so a non-claimant's call is a guaranteed no-op rather than a refusal that would turn "there is
+         *     no job" into an error for the legitimate session.
          */
         AuditorJobCompleteAck: {
             /** Format: uuid */
@@ -4757,6 +4763,20 @@ export interface operations {
                     "application/json": components["schemas"]["AuditorDispatchTickResponse"];
                 };
             };
+            /** @description cap below 1 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not a registered, unrevoked machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     auditor_sweep: {
@@ -4783,6 +4803,13 @@ export interface operations {
                     "application/json": components["schemas"]["AuditSweepRow"][];
                 };
             };
+            /** @description cap below 1 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     complete_auditor_job: {
@@ -4800,7 +4827,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The active citation-audit job was completed (or none was active) */
+            /** @description The caller's in-flight citation-audit job was completed (job_id null when nothing of the caller's was in flight) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4809,7 +4836,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditorJobCompleteAck"];
                 };
             };
-            /** @description Cogmap not found, or not readable by the caller (uniform — no existence oracle) */
+            /** @description Cogmap not found, not readable by the caller, or the caller is not a registered machine principal (uniform — no existence oracle) */
             404: {
                 headers: {
                     [name: string]: unknown;

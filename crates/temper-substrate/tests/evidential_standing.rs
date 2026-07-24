@@ -843,6 +843,45 @@ async fn a_negative_audit_yields_disputed(pool: sqlx::PgPool) {
     );
 }
 
+/// LOAD-BEARING. **The `quality == 0.0` boundary.** Two sources, both audited, verdicts that
+/// exactly cancel: `coverage == magnitude == 2`, `quality == 0.0`. Under the strict `< 0.0` arm this
+/// fell through every band to `provisional` — byte-identical to a finding nobody has ever opened —
+/// and `audit_drift_sweep` selects on `coverage < magnitude`, so it could never be re-queued to
+/// escape. That state is ordinary, not a corner: `0.0` is an explicit anchor on the auditor's own
+/// scale and the persona is told to prefer it when a citation is undecidable.
+///
+/// Asserts the two preconditions first (`coverage == magnitude`, `quality == 0.0`) so the band
+/// assertion cannot pass for some other reason — and change the arm back to `< 0.0` and only the
+/// band line reds.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn cancelling_verdicts_read_disputed_not_provisional(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-net-zero").await;
+    let (finding, bases) = seed_finding_with_n_provenance(&pool, owner, emitter, home, 2).await;
+    let block = live_blocks(&pool, finding).await[0];
+
+    audit(&pool, block, bases[0], 1.0, emitter).await;
+    audit(&pool, block, bases[1], -1.0, emitter).await;
+
+    let s = shape(&pool, owner, finding).await.expect("owner reads");
+    assert_eq!(s.citation_magnitude, 2);
+    assert_eq!(
+        s.audit_coverage, 2,
+        "EVERY source was evaluated — this is the opposite of unaudited"
+    );
+    assert!(
+        s.citation_quality.abs() < 1e-9,
+        "the two verdicts cancel: expected ~0.0, got {}",
+        s.citation_quality
+    );
+    assert_eq!(
+        s.band, "disputed",
+        "'we looked and it did not hold up' must not be flattened into 'nobody tried' — and the \
+         sweep can never re-queue this finding to correct it"
+    );
+}
+
 /// Falsifies "the aggregate is a latest-wins column" and "decay erases the trail." An old `-1.0`
 /// and a recent `+1.0` of the same citation both remain permanent rows (append-only, spec §4.1 —
 /// "a later +1.0 never erases an earlier -1.0"), while the decay-weighted projection reads

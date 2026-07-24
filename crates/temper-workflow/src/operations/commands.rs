@@ -365,10 +365,16 @@ pub struct StewardDispatchTick {
 /// (`migrations/20260705000001_workflow_jobs.sql:43-45`), so a per-finding enqueue would create one
 /// job and let `ON CONFLICT DO NOTHING` silently discard every sibling finding in the same map.
 ///
-/// `cap` is a **finding** budget (`audit_drift_sweep`'s `p_limit`), defaulting to
-/// `DEFAULT_AUDITOR_DISPATCH_CAP`. `correlation` is the auditor cron's `x-auditor-correlation-id`,
-/// stamped onto every job this tick claims exactly as the steward's is; optional and
-/// provenance-only.
+/// `cap` is a **finding** budget (`audit_drift_sweep`'s `p_limit`), resolved through
+/// `clamp_auditor_cap` — `DEFAULT_AUDITOR_DISPATCH_CAP` when omitted, clamped into
+/// `[1, MAX_AUDITOR_DISPATCH_CAP]` when supplied. `correlation` is the auditor cron's
+/// `x-auditor-correlation-id`, stamped onto every job this tick claims exactly as the steward's is;
+/// optional and provenance-only.
+///
+/// **The tick is gated on the caller being a registered, unrevoked machine principal**, and the
+/// claim it performs is scoped to the caller's reachable cogmaps (spec §6.5). Without both, an
+/// ordinary account could run this endpoint and receive other principals' `cogmap_id`s and finding
+/// lists while taking their jobs out of the queue.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuditorDispatchTick {
     pub cap: Option<i64>,
@@ -386,8 +392,10 @@ pub struct AuditorDispatchTick {
 /// (`migrations/20260705000001_workflow_jobs.sql:110-128`) and appending a duplicate verdict per
 /// re-run, since the audit trail is append-only.
 ///
-/// A no-op when no job is active (e.g. a manual audit outside the dispatch loop), exactly like the
-/// steward's.
+/// Completes **only the caller's own in-flight job** (spec §6.5): a `pending` job that has never
+/// been dispatched is untouchable, and so is another session's `in_progress` one. A no-op returning
+/// `None` when nothing of the caller's is in flight — a manual audit outside the dispatch loop, an
+/// already-completed job, or a reaped lease.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompleteAuditorJob {
     pub cogmap: CogmapId,

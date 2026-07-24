@@ -202,8 +202,9 @@ pub trait Backend: Send + Sync {
         cmd: AuditorDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError>;
 
-    /// Mark a cogmap's active citation-audit job done — the auditor session's last act. Returns the
-    /// completed job id, or `None` when no job was active. See [`CompleteAuditorJob`].
+    /// Mark the caller's in-flight citation-audit job for a cogmap done — the auditor session's
+    /// last act. Returns the completed job id, or `None` when nothing of the caller's was in
+    /// flight. See [`CompleteAuditorJob`].
     async fn complete_auditor_job(
         &self,
         cmd: CompleteAuditorJob,

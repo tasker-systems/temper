@@ -10,7 +10,16 @@
 //! an audit from the citation it audits (spec §5.2; `docs/auth/machine-token-contract.md` §C). That
 //! is an operator/provisioning fact, not something this handler can enforce; what the handler does
 //! guarantee is that everything downstream is scoped to `auth.0.profile().id`, so whichever
-//! principal calls, it only ever sweeps and enqueues over what that principal can already read.
+//! principal calls, it only ever sweeps, enqueues and CLAIMS over what that principal can already
+//! read. "…and claims" is the fix wave's addition: the shipped claim filtered on
+//! `(persona, dispatch_type, status)` alone, so this tick enqueued scoped work and then claimed
+//! anyone's, handing the caller other tenants' `cogmap_id`s and finding-id lists.
+//!
+//! Authorization for `dispatch` and `complete` lives in `temper-services` (`authz/audit_gate.rs` and
+//! the `DbBackend` commands), never here — these handlers hold no predicate, per
+//! `.github/scripts/audit-handler-authz-drift.sh`. `sweep` deliberately keeps NO machine gate: it is
+//! a read that returns only the caller's own readable findings, and it is the operator's debug view
+//! of what the tick would do.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -37,6 +46,23 @@ pub struct SweepQuery {
     pub cap: Option<i64>,
 }
 
+/// Refuse a non-positive `cap` as the caller fault it is.
+///
+/// The service clamps into `[1, MAX_AUDITOR_DISPATCH_CAP]` regardless — that is the hard bound, and
+/// it is what keeps every non-HTTP caller safe — but silently turning `cap: 0` into "one finding" is
+/// answering a question the caller did not ask. Same two-layer shape as the audit value's range
+/// guard: a 400 at the surface for the caller's benefit, a bound underneath for everyone else's.
+/// A cap ABOVE the ceiling is deliberately NOT a 400: "as much as you can" is a coherent request and
+/// the clamp answers it honestly.
+fn validate_cap(cap: Option<i64>) -> ApiResult<()> {
+    match cap {
+        Some(c) if c < 1 => Err(ApiError::BadRequest(format!(
+            "cap must be at least 1 (got {c})"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/auditor/sweep",
@@ -47,13 +73,17 @@ pub struct SweepQuery {
     operation_id = "auditor_sweep",
     params(("cap" = Option<i64>, Query, description = "Max findings to return (default applies when omitted)")),
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "Cogmap-homed findings with incomplete audit coverage, most-uncovered-first", body = Vec<AuditSweepRow>))
+    responses(
+        (status = 200, description = "Cogmap-homed findings with incomplete audit coverage, most-uncovered-first", body = Vec<AuditSweepRow>),
+        (status = 400, description = "cap below 1"),
+    )
 )]
 pub async fn sweep(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(q): Query<SweepQuery>,
 ) -> ApiResult<Json<Vec<AuditSweepRow>>> {
+    validate_cap(q.cap)?;
     let rows =
         auditor_service::drift_sweep(&state.pool, ProfileId::from(auth.0.profile().id), q.cap)
             .await?;
@@ -67,7 +97,11 @@ pub async fn sweep(
     operation_id = "auditor_dispatch",
     security(("bearer_auth" = [])),
     request_body = AuditorDispatchTickRequest,
-    responses((status = 200, description = "Citation-audit jobs claimed for fan-out, each carrying its cogmap's finding list", body = AuditorDispatchTickResponse))
+    responses(
+        (status = 200, description = "Citation-audit jobs claimed for fan-out, each carrying its cogmap's finding list", body = AuditorDispatchTickResponse),
+        (status = 400, description = "cap below 1"),
+        (status = 403, description = "The caller is not a registered, unrevoked machine principal"),
+    )
 )]
 pub async fn dispatch(
     State(state): State<AppState>,
@@ -76,6 +110,7 @@ pub async fn dispatch(
     headers: HeaderMap,
     Json(req): Json<AuditorDispatchTickRequest>,
 ) -> ApiResult<Json<AuditorDispatchTickResponse>> {
+    validate_cap(req.cap)?;
     // Correlation trace, the same shape the steward's tick uses (design
     // 2026-07-06-steward-dispatch-correlation-id): the auditor cron mints a per-tick id and sends it
     // as `x-auditor-correlation-id`. Its OWN header name, not the steward's — the two crons run on
@@ -133,8 +168,8 @@ pub async fn dispatch(
     params(("cogmap" = Uuid, Path, description = "The cognitive map whose active citation-audit job is done")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The active citation-audit job was completed (or none was active)", body = AuditorJobCompleteAck),
-        (status = 404, description = "Cogmap not found, or not readable by the caller (uniform — no existence oracle)"),
+        (status = 200, description = "The caller's in-flight citation-audit job was completed (job_id null when nothing of the caller's was in flight)", body = AuditorJobCompleteAck),
+        (status = 404, description = "Cogmap not found, not readable by the caller, or the caller is not a registered machine principal (uniform — no existence oracle)"),
     )
 )]
 pub async fn complete(
@@ -143,9 +178,10 @@ pub async fn complete(
     RequestSurface(surface): RequestSurface,
     Path(cogmap): Path<Uuid>,
 ) -> ApiResult<Json<AuditorJobCompleteAck>> {
-    // Auth-before-write lives inside DbBackend::complete_auditor_job — just dispatch. There is no
-    // request body: the completion carries no outcome. What the session actually decided lives in
-    // the append-only audit trail it wrote and in its invocation close, not in a queue transition.
+    // Auth-before-write lives inside `DbBackend::complete_auditor_job` (`AuditorJobAuthority`, spec
+    // §6.5) — just dispatch. There is no request body: the completion carries no outcome. What the
+    // session actually decided lives in the append-only audit trail it wrote and in its invocation
+    // close, not in a queue transition.
     let cmd = CompleteAuditorJob {
         cogmap: CogmapId::from(cogmap),
         origin: surface,

@@ -38,6 +38,35 @@ pub async fn lookup_by_client_id(
     Ok(row)
 }
 
+/// Is this **profile** a registered, unrevoked machine principal?
+///
+/// The authorization-time twin of [`lookup_by_client_id`], keyed on the profile rather than the
+/// `client_id`: by the time a gate runs, the `client_id` is gone — `resolve_machine_from_claims`
+/// exchanged it for `client.profile_id` and every downstream layer carries only that
+/// (`profile_service.rs:230-262`). Set 5's audit gate needs the same fact at a *scoped* decision, so
+/// it asks here rather than re-deriving it from claims it does not have.
+///
+/// `revoked_at IS NULL` is not optional: a revoked row still resolves in
+/// [`lookup_by_client_id`] (the authentication gate wants the timestamp for its message), so a
+/// lookup that forgot the predicate would readmit a revoked machine at every site but the door.
+///
+/// **Not** an authentication check and not a substitute for one — a profile that never
+/// authenticates cannot reach any caller of this. It answers only "is this principal one of the
+/// registered agents?", which is the conjunct spec §7 names alongside readability.
+pub async fn is_registered_principal(pool: &PgPool, profile: ProfileId) -> ApiResult<bool> {
+    let registered: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM kb_machine_clients
+                WHERE profile_id = $1
+                  AND revoked_at IS NULL
+           ) AS "registered!: bool""#,
+        *profile,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(registered)
+}
+
 /// Coarse liveness touch (D9): writes only when `last_seen_at` is NULL or older
 /// than five minutes, so the common authentication is a pure read. Returns
 /// whether a write actually happened.

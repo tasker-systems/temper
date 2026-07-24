@@ -103,8 +103,19 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 # The tripwire's file filter is `/src/`-scoped and does not exclude `#[cfg(test)]` modules, so a
 # test fixture in a src-resident test module trips it. That is the tripwire being conservative,
 # which is correct — it is why this entry carries a written review rather than a silent bump.
+# REVIEWED 2026-07-24 (Set 5 fix wave) — `authz/audit_gate.rs` 1 -> 2. The SECOND insert is in the
+# same `#[cfg(all(test, feature = "test-db"))] mod tests`, in
+# `a_citer_who_lost_write_but_kept_read_is_still_refused` — the test that proves the self-audit arm
+# now asks a HISTORICAL question rather than a current-capability one. Its fixture has to reproduce
+# the exact state that readmitted a citer: the finding's home is reassigned away from the citer and
+# the citer is left holding a bare read grant, so `can_modify_resource` is false for it. That grant
+# IS the state under test.
+#   AUTHORITY   — n/a: no production grantor; ephemeral per-test database.
+#   ATTENUATION — `can_read=true, can_write=false`, no delete, no grant. Deliberately NOT a
+#                 self-grant in the escalating sense: it strictly REMOVES capability from the
+#                 grantee relative to the ownership it just lost, which is the whole point.
 read -r -d '' BASELINE <<'EOF' || true
-1 crates/temper-services/src/authz/audit_gate.rs
+2 crates/temper-services/src/authz/audit_gate.rs
 1 crates/temper-services/src/backend/db_backend.rs
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/connection_service.rs

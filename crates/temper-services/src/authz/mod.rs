@@ -39,8 +39,17 @@ mod two_sided;
 //
 // `finding_of_block` itself gained a second caller in Task 8: `citation_audit_service` reuses it
 // (never `authorize`) to refuse a path/block mismatch before dispatching to the backend above —
-// the one spelling of the lookup, used at both of `audit_gate.rs:70-71`'s named call sites.
-pub(crate) use audit_gate::{finding_of_block, AuditAuthority};
+// the one spelling of the lookup, used at both of `audit_gate.rs`'s named call sites.
+//
+// The fix wave added the other two Set 5 authorization decisions to the same module, so all three
+// share one `kb_machine_clients` probe: `AuditorJobAuthority` (job completion — spec §6.5, formerly
+// a hand-rolled `sqlx::query_scalar!` inside the backend command and the only Set 5 gate outside
+// this layer) and `require_machine_principal` (the dispatch tick, which has no subject and so is
+// deliberately NOT a `ScopedAuthority`).
+pub(crate) use audit_gate::{
+    citation_subject, finding_of_block, require_machine_principal, AuditAuthority,
+    AuditorJobAuthority,
+};
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};

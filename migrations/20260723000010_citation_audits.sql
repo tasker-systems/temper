@@ -64,18 +64,33 @@ ON CONFLICT (name) DO NOTHING;
 -- Survives the ON CONFLICT no-op on replay: `INSERT ... RETURNING` yields no row on the replay
 -- path (the row already exists from the first projection), so the fallback SELECT recovers the
 -- existing audit id rather than returning NULL.
+--
+-- `created` COMES FROM THE OWNING EVENT, NEVER `now()` — the module rule every sibling projector
+-- states and follows (`20260624000002_canonical_functions.sql:614,791`: *"Projected timestamps come
+-- from the owning event's occurred_at, never now() (replay-stable by construction)"*; `_project_blocks`,
+-- `_project_block_mutated`, `_project_resource_created` all open with the same
+-- `v_occurred` lookup, `:625,679,725,795,873`). Leaving it to the column DEFAULT is not a cosmetic
+-- deviation here: `resource_citation_quality` weights each audit by `pow(0.5, age/30d)`
+-- (`20260723000020_standing_citation_components.sql:170-188`), so a replay that stamps every row with
+-- the replay clock collapses every weight to ~1 and can INVERT a band — a trail recording
+-- "-1.0 in January, +1.0 in July" reprojects as a dead heat. `kb_citation_audits` is the first table
+-- whose *relative ordering between two of its own rows* is load-bearing, so this is the first place
+-- the shortcut is not survivable.
 CREATE FUNCTION _project_citation_audited(p_event uuid, p_payload jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_audit uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
 BEGIN
-    INSERT INTO kb_citation_audits (block_id, source_kind, source_id, value, reason, audited_by_event_id)
+    INSERT INTO kb_citation_audits (block_id, source_kind, source_id, value, reason,
+                                    audited_by_event_id, created)
     VALUES (
         (p_payload->>'block_id')::uuid,
         (p_payload #>> '{source,kind}')::provenance_source_kind,
         (p_payload #>> '{source,value}')::uuid,
         (p_payload->>'value')::double precision,
         p_payload->>'reason',
-        p_event
+        p_event,
+        v_occurred
     )
     ON CONFLICT (audited_by_event_id) DO NOTHING
     RETURNING id INTO v_audit;
@@ -87,6 +102,76 @@ BEGIN
     RETURN v_audit;
 END;
 $$;
+
+-- ── the two citation predicates the write path and its gate ask ───────────────────────────────
+-- Both are `EXISTS` over `kb_block_provenance` — the table that IS the citation record — and both
+-- exclude `is_corrected` rows, matching every incumbent citation reader
+-- (`20260624000002_canonical_functions.sql:481`, `20260721000010_evidential_standing_memo.sql:55,68,108`,
+-- `20260723000020_standing_citation_components.sql:104`). They are separate functions because they
+-- answer separate questions and are called from separate layers; the shared join is three lines and
+-- `citation_audit`'s existence guard calls `citation_is_live` rather than restating it.
+
+-- "Is (block, source) actually a citation?" — the write path's guard.
+--
+-- Without it an audit of a NON-citation is accepted with 200 and is permanently inert: both
+-- `resource_audit_coverage` and `resource_citation_quality` join through `resource_live_citations`
+-- on the full citation key (`20260723000020_standing_citation_components.sql:132-137,176-180`), so the
+-- row moves nothing. The reachable mistake is a one-row transposition while iterating
+-- `get_block_provenance` — posting block B0 with a source cited on B1 — after which the finding
+-- re-heads `audit_drift_sweep` with the identical `uncovered` count on every subsequent tick,
+-- forever, and the auditor is never told because it got a success.
+CREATE FUNCTION citation_is_live(p_block uuid, p_source_kind provenance_source_kind, p_source uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_block_provenance p
+         WHERE p.block_id    = p_block
+           AND p.source_kind = p_source_kind
+           AND p.source_id   = p_source
+           AND NOT p.is_corrected
+    );
+$$;
+
+-- "Did this profile CONTRIBUTE that citation?" — the self-audit denial arm's exact question
+-- (spec §7: *"the emitter of the block's contributing `block_mutated`/`block_annotated` event"*).
+--
+-- THIS IS A HISTORICAL FACT, NOT A CURRENT CAPABILITY. `can_modify_resource` — the proxy Set 5
+-- shipped with — answers *"can you write this finding now?"*, and the two come apart the moment an
+-- author loses write while keeping read: a revoked direct grant, a `reassign_resource` that moves the
+-- home to another owner, or a team-role demotion below the authoring roles. In every one of those the
+-- citer resolves to `Auditor` again and may grade its own work, which is precisely what §7 says is
+-- *"enforced here or it is not enforced anywhere."* `originator_profile_id` cannot help:
+-- `20260715000040_demote_originator_from_access.sql` establishes that *"originator is provenance only,
+-- not access."* The provenance row's own `contributed_by_event_id` is the durable record, and it is
+-- immutable — so this predicate is stable under every access change.
+--
+-- The emitter resolves to a profile through `kb_entities.profile_id`, the same chain
+-- `writes::resolve_emitter` mints on the way in, so a machine principal's audits and a human's are
+-- separated by exactly the thing that separates their credentials.
+CREATE FUNCTION citation_contributed_by_profile(p_block uuid, p_source_kind provenance_source_kind,
+                                                p_source uuid, p_profile uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_block_provenance p
+          JOIN kb_events   e  ON e.id  = p.contributed_by_event_id
+          JOIN kb_entities en ON en.id = e.emitter_entity_id
+         WHERE p.block_id    = p_block
+           AND p.source_kind = p_source_kind
+           AND p.source_id   = p_source
+           AND NOT p.is_corrected
+           AND en.profile_id = p_profile
+    );
+$$;
+
+COMMENT ON FUNCTION citation_is_live(uuid, provenance_source_kind, uuid) IS
+  'Does an uncorrected kb_block_provenance row exist for this (block, source_kind, source)? The write '
+  'path''s existence guard: an audit of a non-citation is inert for standing, so accepting one is a '
+  'silently successful no-op.';
+COMMENT ON FUNCTION citation_contributed_by_profile(uuid, provenance_source_kind, uuid, uuid) IS
+  'Did this profile emit the event that contributed this citation? The exact self-audit question (spec '
+  '§7) — a HISTORICAL fact off kb_block_provenance.contributed_by_event_id, unaffected by later access '
+  'changes, unlike the can_modify_resource proxy.';
 
 -- ── citation_audit: the entry function (event + projection, one txn) ───────────────────────────
 -- Mirrors `block_annotate`'s anchor resolution exactly
@@ -123,6 +208,15 @@ BEGIN
     IF (p_payload #>> '{source,kind}') <> 'resource' THEN
         RAISE EXCEPTION 'citation_audit: only resource-kind citations are auditable (got %)',
             p_payload #>> '{source,kind}';
+    END IF;
+    -- The (block, source) pair must name a LIVE citation. Same shape and dialect as the kind guard
+    -- above, and for the same reason spec §6.2 gives for that one: *"rather than silently accepting a
+    -- no-op the auditor cannot detect."* See `citation_is_live`'s own header for the failure this
+    -- prevents.
+    IF NOT citation_is_live(v_block, 'resource'::provenance_source_kind,
+                            (p_payload #>> '{source,value}')::uuid) THEN
+        RAISE EXCEPTION 'citation_audit: (block %, source %) is not a live citation',
+            v_block, p_payload #>> '{source,value}';
     END IF;
     SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
         WHERE resource_id = v_resource ORDER BY (anchor_table = 'kb_cogmaps') DESC LIMIT 1;

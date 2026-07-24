@@ -215,8 +215,10 @@ async fn a_resource_create_ticks_the_standing_memo(pool: PgPool) {
 /// `resource_citation_quality` can only return non-zero if an audit row actually exists. Drop the
 /// write and it stays 0.0; drop the tick and it stays 0.0.
 ///
-/// The auditor is a SECOND profile holding a read-only grant, because `AuditAuthority` refuses the
-/// finding's author (spec §7's self-audit denial). A single-profile version of this test would 404
+/// The auditor is a SECOND profile holding a read-only grant AND a `kb_machine_clients`
+/// registration, because `AuditAuthority` refuses the finding's author (spec §7's self-audit
+/// denial) and refuses any principal that is not a registered machine (spec §7's other conjunct).
+/// A single-profile version of this test, or one whose auditor is an unregistered human, would 404
 /// instead of auditing — which is the gate working, not the clock.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn recording_an_audit_moves_quality_off_zero(pool: PgPool) {
@@ -267,6 +269,19 @@ async fn recording_an_audit_moves_quality_off_zero(pool: PgPool) {
     .execute(&pool)
     .await
     .expect("grant the auditor read on the finding");
+
+    // An audit is an AGENT act (spec §7, §5.2): the write gate admits only a registered, unrevoked
+    // machine principal. One allowlist row — no provisioning side effects, since the reach this
+    // test needs is the grant above.
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ($1, $1, $2, $2)",
+    )
+    .bind(format!("auditor-{auditor}@clients"))
+    .bind(auditor)
+    .execute(&pool)
+    .await
+    .expect("register the auditor as a machine principal");
 
     let block: uuid::Uuid = sqlx::query_scalar(
         "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded",

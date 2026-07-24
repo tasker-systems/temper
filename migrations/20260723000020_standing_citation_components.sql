@@ -246,8 +246,23 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
          AND p_citation_quality > 0.0
          AND p_contradiction_balance >= 0.0
             THEN 'reinforced'
-        -- disputed: the adversary examined it and it did not hold. Distinct from the floor.
-        WHEN p_audit_coverage > 0 AND p_citation_quality < 0.0
+        -- disputed: the adversary examined it and it did not hold up. Distinct from the floor.
+        --
+        -- `<= 0.0`, NOT `< 0.0`, and the boundary is the point. Spec §1 asks that "nobody tried"
+        -- never be flattened together with "we looked and it did not hold up" — and a fully-audited
+        -- finding whose verdicts CANCEL is the latter. At exactly `0.0` the strict form fell through
+        -- every arm to `provisional`, byte-identical to a finding nobody has ever opened, and
+        -- `audit_drift_sweep` selects on `coverage < magnitude`
+        -- (`20260723000030_audit_drift_sweep.sql:109`), so a covered finding at quality 0.0 could
+        -- never be re-queued to escape it. That state is ordinary, not a corner: two sources audited
+        -- `+1.0` and `-1.0` land there, and `0.0` is an explicit anchor on the auditor's own published
+        -- scale ("on-topic but does not bear on this connection either way"), which the persona is
+        -- told to PREFER when a citation is undecidable.
+        --
+        -- `p_audit_coverage > 0` is what carries the whole distinction now: it is the "somebody
+        -- looked" conjunct, and it is no longer redundant the way it was under `< 0.0` (where a
+        -- negative quality already implied a joined audit).
+        WHEN p_audit_coverage > 0 AND p_citation_quality <= 0.0
             THEN 'disputed'
         -- provisional: the floor, including EVERY unaudited finding (coverage 0 lands here no
         -- matter how large the citation set).

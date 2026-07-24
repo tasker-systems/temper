@@ -117,6 +117,29 @@ async fn fire_audit(
         .await
 }
 
+/// Make `(block, source)` a LIVE citation.
+///
+/// `citation_audit` refuses to audit a pair that is not one (`citation_is_live`,
+/// `20260723000010_citation_audits.sql`) — an audit of a non-citation is inert for standing, so
+/// accepting it would be a silently successful no-op the auditor could never detect. `make_resource`
+/// above creates with no sources, so every valid-audit fixture in this half of the file needs this
+/// row; the Task 5 fixtures below get theirs from `create_resource_with`'s `sources` instead.
+///
+/// Borrows the block's own genesis event as the contributing act — nothing under test reads that
+/// event's content, the same shortcut `first_block`'s callers already take.
+async fn cite(pool: &sqlx::PgPool, block: Uuid, source: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_block_provenance \
+           (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+         SELECT $1, 'resource', $2, b.genesis_event_id, 0 FROM kb_content_blocks b WHERE b.id = $1",
+    )
+    .bind(block)
+    .bind(source)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 // ── Task 1 — citation_audit / _project_citation_audited ─────────────────────────────────────────
 
 /// LOAD-BEARING: falsifies "the projector returns the wrong id." The `block_annotate` sibling
@@ -139,6 +162,7 @@ async fn citation_audit_inserts_a_row_and_returns_its_audit_id(pool: sqlx::PgPoo
     .await;
     let source = make_resource(&pool, owner, emitter, home, "source", "temper://ca/source1").await;
     let block = first_block(&pool, finding).await;
+    cite(&pool, block, source.uuid()).await;
 
     let audit_id = fire_audit(&pool, emitter, block, source.uuid(), 0.6)
         .await
@@ -179,6 +203,7 @@ async fn two_audits_of_one_citation_both_persist(pool: sqlx::PgPool) {
     .await;
     let source = make_resource(&pool, owner, emitter, home, "source", "temper://ca/source2").await;
     let block = first_block(&pool, finding).await;
+    cite(&pool, block, source.uuid()).await;
 
     fire_audit(&pool, emitter, block, source.uuid(), 0.9)
         .await
@@ -222,6 +247,9 @@ async fn citation_audit_rejects_a_value_outside_the_signed_range(pool: sqlx::PgP
     .await;
     let source = make_resource(&pool, owner, emitter, home, "source", "temper://ca/source3").await;
     let block = first_block(&pool, finding).await;
+    // A real citation, so the CHECK on `value` is unambiguously what rejects this — not the
+    // citation-existence guard that runs before it.
+    cite(&pool, block, source.uuid()).await;
 
     let err = fire_audit(&pool, emitter, block, source.uuid(), 1.5)
         .await
@@ -305,6 +333,7 @@ async fn citation_audit_is_idempotent_under_replay(pool: sqlx::PgPool) {
     .await;
     let source = make_resource(&pool, owner, emitter, home, "source", "temper://ca/source5").await;
     let block = first_block(&pool, finding).await;
+    cite(&pool, block, source.uuid()).await;
 
     let audit_id = fire_audit(&pool, emitter, block, source.uuid(), 0.3)
         .await
@@ -363,6 +392,95 @@ async fn citation_audit_raises_for_an_unknown_block(pool: sqlx::PgPool) {
     );
 }
 
+/// LOAD-BEARING: falsifies "an audit of a NON-citation is accepted." The block exists, the source
+/// exists and is resource-kind, and the only thing wrong is that the block never cited it — the
+/// shape a one-row transposition while iterating `get_block_provenance` produces. Before the guard
+/// this returned an audit id with HTTP 200 while moving nothing: both `resource_audit_coverage` and
+/// `resource_citation_quality` join through `resource_live_citations` on the full citation key, so
+/// the row is permanently inert, the finding re-heads `audit_drift_sweep` with the identical
+/// `uncovered` count on every subsequent tick, and the auditor is never told because it succeeded.
+///
+/// Deliberately paired with a source that IS cited on a DIFFERENT block, so "the source does not
+/// exist" cannot be the reason.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn citation_audit_rejects_a_source_that_is_not_a_citation_of_the_block(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "ca-noncite").await;
+    let cited = make_resource(&pool, owner, emitter, home, "cited", "temper://ca/cited").await;
+    let elsewhere = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "elsewhere",
+        "temper://ca/elsewhere",
+    )
+    .await;
+    let source = make_resource(&pool, owner, emitter, home, "source", "temper://ca/nc-src").await;
+
+    // The source is a real, live citation — of the OTHER finding's block.
+    cite(&pool, first_block(&pool, elsewhere).await, source.uuid()).await;
+    let block = first_block(&pool, cited).await;
+
+    let err = fire_audit(&pool, emitter, block, source.uuid(), 0.5)
+        .await
+        .expect_err("auditing a (block, source) pair that is not a citation must raise");
+    assert!(
+        err.to_string()
+            .to_lowercase()
+            .contains("not a live citation"),
+        "expected the entry function's named guard, got: {err}"
+    );
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "the rejected audit must leave no row — a silently inert verdict is worse than an error"
+    );
+}
+
+/// The corrected-provenance scar is not a live citation either. `is_corrected` is the "this source
+/// was wrong" marker every incumbent citation reader excludes
+/// (`20260721000010_evidential_standing_memo.sql:55,68,108`), so an audit of one would be inert in
+/// exactly the same way — the guard must exclude it for the same reason the producers do.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn citation_audit_rejects_a_corrected_citation(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "ca-corrected").await;
+    let finding = make_resource(&pool, owner, emitter, home, "finding", "temper://ca/corr").await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "source",
+        "temper://ca/corr-src",
+    )
+    .await;
+    let block = first_block(&pool, finding).await;
+    cite(&pool, block, source.uuid()).await;
+    sqlx::query("UPDATE kb_block_provenance SET is_corrected = true WHERE block_id=$1")
+        .bind(block)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = fire_audit(&pool, emitter, block, source.uuid(), 0.5)
+        .await
+        .expect_err("a corrected citation is not live and must not be auditable");
+    assert!(
+        err.to_string()
+            .to_lowercase()
+            .contains("not a live citation"),
+        "expected the entry function's named guard, got: {err}"
+    );
+}
+
 // ── Task 2 — the Rust write path (writes::record_citation_audit[_with]) ─────────────────────────
 
 /// LOAD-BEARING: falsifies "the Rust write path never reaches `_project_citation_audited`" — the
@@ -395,6 +513,7 @@ async fn record_citation_audit_writes_a_row_and_returns_its_audit_id(pool: sqlx:
     )
     .await;
     let block = BlockId::from(first_block(&pool, finding).await);
+    cite(&pool, block.uuid(), source.uuid()).await;
 
     let audit_id = writes::record_citation_audit(
         &pool,
@@ -469,6 +588,7 @@ async fn record_citation_audit_with_stamps_the_invocation_and_authorship(pool: s
     )
     .await;
     let block = BlockId::from(first_block(&pool, finding).await);
+    cite(&pool, block.uuid(), source.uuid()).await;
     let invocation = InvocationId::from(Uuid::now_v7());
 
     let audit_id = writes::record_citation_audit_with(

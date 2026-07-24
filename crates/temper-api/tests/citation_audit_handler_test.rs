@@ -21,17 +21,25 @@ use uuid::Uuid;
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
 /// Seed a finding (`kb_resources` + `kb_resource_homes`) owned/authored by `owner`, homed in
-/// `ctx`, with one content block. Returns `(finding_id, block_id)`.
+/// `ctx`, with one content block that cites one live source resource. Returns
+/// `(finding_id, block_id, source_id)`.
+///
+/// The citation is not decoration: `citation_audit` refuses a `(block, source)` pair that is not a
+/// live `kb_block_provenance` row (`20260723000010_citation_audits.sql`, `citation_is_live`),
+/// because an audit of a non-citation is inert for standing and so a silently successful no-op.
 ///
 /// The block borrows a migration-seeded `kb_events` row for its genesis/last-event FKs — the
 /// same fixture shortcut `authz/audit_gate.rs`'s own `seed` fn takes, since no event content is
-/// read by anything under test here.
+/// read by anything under test here. That also means the citation's emitter is the seed event's,
+/// never a test principal's, so the historical self-audit arm
+/// (`citation_contributed_by_profile`) cannot fire spuriously; the author is refused through the
+/// `can_modify_resource` proxy, which is what test 4 asserts.
 async fn seed_finding_with_block(
     pool: &PgPool,
     owner: Uuid,
     ctx: Uuid,
     title: &str,
-) -> (Uuid, Uuid) {
+) -> (Uuid, Uuid, Uuid) {
     let finding = Uuid::now_v7();
     sqlx::query("INSERT INTO kb_resources (id, title, origin_uri) VALUES ($1, $2, $3)")
         .bind(finding)
@@ -68,7 +76,42 @@ async fn seed_finding_with_block(
     .await
     .expect("insert block");
 
-    (finding, block)
+    let source = Uuid::now_v7();
+    sqlx::query("INSERT INTO kb_resources (id, title, origin_uri) VALUES ($1, $2, $3)")
+        .bind(source)
+        .bind(format!("{title} source"))
+        .bind(format!("test://{source}"))
+        .execute(pool)
+        .await
+        .expect("insert cited source");
+    sqlx::query(
+        "INSERT INTO kb_block_provenance \
+             (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+         VALUES ($1, 'resource', $2, $3, 0)",
+    )
+    .bind(block)
+    .bind(source)
+    .bind(ev)
+    .execute(pool)
+    .await
+    .expect("cite the source on the block");
+
+    (finding, block, source)
+}
+
+/// Register `profile` in the `kb_machine_clients` allowlist. An audit is an agent act: the write
+/// gate admits only a registered, unrevoked machine principal (spec §7's second conjunct), so
+/// without this row even a correctly-granted, non-authoring reader gets a 404.
+async fn register_machine(pool: &PgPool, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ($1, $1, $2, $2)",
+    )
+    .bind(format!("{profile}@clients"))
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("register machine principal");
 }
 
 /// A direct, profile-anchored read-without-write `kb_access_grants` row — the shape `AuditAuthority`
@@ -88,13 +131,16 @@ async fn grant_read_only(pool: &PgPool, finding: Uuid, reader: Uuid, granted_by:
     .expect("grant read-only access");
 }
 
-/// A well-formed request body: a resource-kind source (any id — the write path validates only
-/// that the source KIND is `resource`, never that the id is an existing citation;
-/// `migrations/20260723000010_citation_audits.sql:123-126`) and an in-range value.
-fn valid_body(block: Uuid) -> Value {
+/// A well-formed request body: the block, the source it actually cites, and an in-range value.
+///
+/// The source must be a REAL citation of that block. It used to be `Uuid::now_v7()` — the write
+/// path validated only the source KIND — which is exactly the defect
+/// `citation_audit_rejects_a_source_that_is_not_a_citation_of_the_block` now covers at the SQL
+/// layer and [`posting_an_audit_of_a_non_citation_returns_400`] covers here.
+fn valid_body(block: Uuid, source: Uuid) -> Value {
     json!({
         "block_id": block,
-        "source": { "kind": "resource", "value": Uuid::now_v7() },
+        "source": { "kind": "resource", "value": source },
         "value": 0.8,
         "reason": "independently verified",
     })
@@ -109,19 +155,20 @@ async fn posting_an_audit_returns_the_audit_id(pool: PgPool) {
     let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
     let (author, ctx) =
         common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
-    let (finding, block) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
 
     let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
     let resp = app
         .client
         .post(app.url(&format!("/api/resources/{finding}/citation-audits")))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&valid_body(block))
+        .json(&valid_body(block, source))
         .send()
         .await
         .expect("request failed");
@@ -161,7 +208,7 @@ async fn posting_an_audit_without_auth_returns_401(pool: PgPool) {
             "/api/resources/{}/citation-audits",
             Uuid::new_v4()
         )))
-        .json(&valid_body(Uuid::new_v4()))
+        .json(&valid_body(Uuid::new_v4(), Uuid::new_v4()))
         .send()
         .await
         .expect("request failed");
@@ -182,19 +229,21 @@ async fn posting_on_an_unreadable_finding_returns_404(pool: PgPool) {
     let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
     let (author, ctx) =
         common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
-    let (finding, block) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
 
-    // No access grant, no home, no team — outright unreadable.
+    // No access grant, no home, no team — outright unreadable. Registered as a machine, so the
+    // machine conjunct cannot be what refuses it: readability is.
     let email_stranger = format!("cah-stranger-{}@example.com", Uuid::new_v4());
     let (stranger, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_stranger).await;
+    register_machine(&pool, stranger).await;
     let token = common::generate_test_jwt(&format!("test|{stranger}"), &email_stranger);
 
     let resp = app
         .client
         .post(app.url(&format!("/api/resources/{finding}/citation-audits")))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&valid_body(block))
+        .json(&valid_body(block, source))
         .send()
         .await
         .expect("request failed");
@@ -215,14 +264,16 @@ async fn posting_as_the_author_returns_404(pool: PgPool) {
     let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
     let (author, ctx) =
         common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
-    let (finding, block) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    // Registered, so the machine conjunct is not what refuses it — the self-audit arm is.
+    register_machine(&pool, author).await;
     let token = common::generate_test_jwt(&format!("test|{author}"), &email_author);
 
     let resp = app
         .client
         .post(app.url(&format!("/api/resources/{finding}/citation-audits")))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&valid_body(block))
+        .json(&valid_body(block, source))
         .send()
         .await
         .expect("request failed");
@@ -252,12 +303,14 @@ async fn posting_a_block_of_another_finding_returns_404(pool: PgPool) {
     let email_a = format!("cah-owner-a-{}@example.com", Uuid::new_v4());
     let (owner_a, ctx_a) =
         common::fixtures::create_test_profile_with_context(&pool, &email_a).await;
-    let (finding_a, _block_a) = seed_finding_with_block(&pool, owner_a, ctx_a, "Finding A").await;
+    let (finding_a, _block_a, _source_a) =
+        seed_finding_with_block(&pool, owner_a, ctx_a, "Finding A").await;
 
     let email_b = format!("cah-owner-b-{}@example.com", Uuid::new_v4());
     let (owner_b, ctx_b) =
         common::fixtures::create_test_profile_with_context(&pool, &email_b).await;
-    let (finding_b, block_b) = seed_finding_with_block(&pool, owner_b, ctx_b, "Finding B").await;
+    let (finding_b, block_b, source_b) =
+        seed_finding_with_block(&pool, owner_b, ctx_b, "Finding B").await;
 
     let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
     let (reader, _) =
@@ -266,6 +319,7 @@ async fn posting_a_block_of_another_finding_returns_404(pool: PgPool) {
     // why this is refused.
     grant_read_only(&pool, finding_a, reader, owner_a).await;
     grant_read_only(&pool, finding_b, reader, owner_b).await;
+    register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
     // Path names finding_a; the body's block belongs to finding_b.
@@ -273,7 +327,7 @@ async fn posting_a_block_of_another_finding_returns_404(pool: PgPool) {
         .client
         .post(app.url(&format!("/api/resources/{finding_a}/citation-audits")))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&valid_body(block_b))
+        .json(&valid_body(block_b, source_b))
         .send()
         .await
         .expect("request failed");
@@ -302,17 +356,18 @@ async fn posting_an_out_of_range_value_returns_400(pool: PgPool) {
     let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
     let (author, ctx) =
         common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
-    let (finding, block) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
 
     let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
     let body = json!({
         "block_id": block,
-        "source": { "kind": "resource", "value": Uuid::now_v7() },
+        "source": { "kind": "resource", "value": source },
         "value": 1.5,
         "reason": null,
     });
@@ -331,5 +386,99 @@ async fn posting_an_out_of_range_value_returns_400(pool: PgPool) {
         400,
         "a verdict outside [-1.0, 1.0] must be refused as a caller fault (400), not surface as a \
          500 off the table's CHECK constraint"
+    );
+}
+
+// ─── Test 7: a source that is not a citation of the block → 400 ─────────────
+
+/// The caller-fault the write path used to accept with 200. The reader is admitted by the gate
+/// (readable, non-authoring, registered) and the value is in range — the ONLY thing wrong is that
+/// `block` never cited `source`. Before the guard this returned 200 and an audit id while moving
+/// neither `audit_coverage` nor `citation_quality`, leaving the finding at the head of the drift
+/// sweep forever with the auditor never told.
+///
+/// 400, not 404: the caller already proved it may read this finding by getting past
+/// `AuditAuthority`, so naming the fault leaks nothing — and a silent no-op is strictly worse.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_an_audit_of_a_non_citation_returns_400(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (finding, block, _source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    // A second finding's source: real, live, resource-kind — and cited on a DIFFERENT block, which
+    // is exactly the one-row transposition an auditor iterating `get_block_provenance` makes.
+    let (_other, _other_block, other_source) =
+        seed_finding_with_block(&pool, author, ctx, "Other").await;
+
+    let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, finding, reader, author).await;
+    register_machine(&pool, reader).await;
+    let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{finding}/citation-audits")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&valid_body(block, other_source))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "auditing a (block, source) pair that is not a live citation must be refused, not accepted \
+         as a permanently inert verdict"
+    );
+
+    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits")
+        .fetch_one(&pool)
+        .await
+        .expect("count audits");
+    assert_eq!(audited, 0, "and nothing may land");
+}
+
+// ─── Test 8: a reader that is not a registered machine principal → 404 ──────
+
+/// Spec §7's machine conjunct at the HTTP surface. This principal holds the SAME read-only grant
+/// that admits the auditor in test 1 and authored nothing — so readability and non-authorship both
+/// admit it, and the only thing refusing it is the missing `kb_machine_clients` registration.
+/// Without the conjunct a teammate with read could post `-1.0` on every citation and pin the
+/// finding to `disputed` permanently: the trail is append-only and the evidence read carries no
+/// attribution.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_as_an_unregistered_principal_returns_404(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+
+    let email_reader = format!("cah-human-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, finding, reader, author).await;
+    // …and deliberately NO `register_machine`.
+    let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{finding}/citation-audits")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&valid_body(block, source))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "an unregistered principal must be refused — and with 404, so the endpoint is not an \
+         oracle for which ids are registered agents"
     );
 }

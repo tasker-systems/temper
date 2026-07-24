@@ -38,6 +38,31 @@ pub const DEFAULT_AUDITOR_LEASE_SECONDS: i32 = 600;
 /// of work and would starve every other map.
 pub const DEFAULT_AUDITOR_DISPATCH_CAP: i64 = 50;
 
+/// The ceiling on a caller-supplied auditor `cap`. Bounds the work ONE tick may ask the database
+/// for: `audit_drift_sweep` scores every candidate finding (two producers, each a multi-table join)
+/// before `p_limit` applies, and the same number is the claim's batch limit.
+///
+/// Generous rather than tight — a real backlog after an outage should drain in a few ticks, not
+/// hundreds — but finite, which the shipped code was not.
+pub const MAX_AUDITOR_DISPATCH_CAP: i64 = 500;
+
+/// Resolve a caller-supplied auditor `cap` into the `int` the SQL takes.
+///
+/// **Not cosmetic.** The shipped spelling was `cap.unwrap_or(DEFAULT) as i32`, and an `i64 → i32`
+/// `as` cast **wraps**: `{"cap": 2147483648}` became `-2147483648`, reaching Postgres as
+/// `LIMIT -2147483648` — a database error rendered as a 500 from ordinary user input. `{"cap": -1}`
+/// did the same directly. Clamping into `[1, MAX]` makes both impossible *and* bounds the sweep's
+/// cost, and it lives in one place so every caller (the tick's claim limit and the sweep's finding
+/// budget, which are deliberately the same number) cannot clamp differently.
+///
+/// The surfaces additionally REFUSE a non-positive `cap` with a 400 rather than silently accepting
+/// it — the same two-layer shape as the audit value's range guard (a Rust `BadRequest` for the
+/// caller's benefit, a hard bound underneath for everyone else's).
+pub fn clamp_auditor_cap(cap: Option<i64>) -> i32 {
+    cap.unwrap_or(DEFAULT_AUDITOR_DISPATCH_CAP)
+        .clamp(1, MAX_AUDITOR_DISPATCH_CAP) as i32
+}
+
 /// Which agent persona a queued job is for. The queue is persona-agnostic; `Embed` is the
 /// non-agent, server-computed embedding worker (issue #299) and shares the queue with `Steward`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,4 +195,35 @@ pub struct ClaimedEmbedJob {
     pub resource_id: Uuid,
     /// How many times this job has now been claimed (1 on first dispatch).
     pub attempts: i32,
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    /// The wrap. `2147483648 as i32` is `-2147483648`, and a negative `LIMIT` is a Postgres error —
+    /// so before the clamp this input produced a 500 from a plain JSON body. Asserting the CEILING
+    /// (not merely "positive") is what makes this falsify a `max(1, …)`-only fix.
+    #[test]
+    fn a_cap_past_i32_is_clamped_to_the_ceiling_not_wrapped() {
+        assert_eq!(clamp_auditor_cap(Some(2_147_483_648)), 500);
+        assert_eq!(clamp_auditor_cap(Some(i64::MAX)), 500);
+    }
+
+    /// The other 500: `LIMIT -1`.
+    #[test]
+    fn a_non_positive_cap_is_clamped_to_one() {
+        assert_eq!(clamp_auditor_cap(Some(-1)), 1);
+        assert_eq!(clamp_auditor_cap(Some(0)), 1);
+        assert_eq!(clamp_auditor_cap(Some(i64::MIN)), 1);
+    }
+
+    /// An ordinary cap and the omitted case are untouched — the clamp must not quietly change the
+    /// tick's shipped budget.
+    #[test]
+    fn an_in_range_cap_and_the_default_pass_through() {
+        assert_eq!(clamp_auditor_cap(Some(7)), 7);
+        assert_eq!(clamp_auditor_cap(Some(500)), 500);
+        assert_eq!(clamp_auditor_cap(None), DEFAULT_AUDITOR_DISPATCH_CAP as i32);
+    }
 }

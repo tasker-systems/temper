@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Request body for `POST /api/auditor/dispatch`. Optional — the server default applies ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]).  There is no `threshold` twin of the steward's request: the auditor's selection predicate is structural (`coverage < magnitude`, spec §6.3), not a tunable count, so there is nothing for a caller to set.
+  # Request body for `POST /api/auditor/dispatch`. Optional — the server default applies ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]); a supplied value is clamped into `[1, MAX_AUDITOR_DISPATCH_CAP]` ([`crate::types::workflow_job::clamp_auditor_cap`]) and a value below 1 is refused at the surface with 400.  There is no `threshold` twin of the steward's request: the auditor's selection predicate is structural (`coverage < magnitude`, spec §6.3), not a tunable count, so there is nothing for a caller to set.
   class AuditorDispatchTickRequest < ApiModelBase
     # Max **findings** the sweep returns this tick (`audit_drift_sweep`'s `p_limit`). Those findings collapse into at most that many jobs, one per distinct cogmap.
     attr_accessor :cap

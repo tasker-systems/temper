@@ -8,7 +8,9 @@
 //! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
 //! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
 
-use crate::authz::{authorize, finding_of_block, AuditAuthority};
+use crate::authz::{
+    authorize, citation_subject, require_machine_principal, AuditAuthority, AuditorJobAuthority,
+};
 use crate::backend::region_clocks;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -1990,19 +1992,58 @@ impl Backend for DbBackend {
                 cmd.value
             )));
         }
-        // 1. AUTHORIZE. The subject is the block's owning finding, resolved server-side — the
-        //    command deliberately carries no finding id, so a caller cannot authorize over one
-        //    finding while writing onto a block of another (`authz/audit_gate.rs:65-77`).
-        //    `AuditAuthority` admits a principal who can READ the finding and did NOT author it: a
-        //    deliberate widening (spec §7) with a self-audit denial arm, because an auditor that may
-        //    only assess findings it owns is not an auditor. Both denial arms render `NotFound`
-        //    (`audit_gate.rs:155-173`), which `From<ApiError>` carries through as
-        //    `TemperError::NotFound` (`error.rs:158-168`) — no existence oracle beside the
-        //    leak-safe evidence read.
-        let finding = finding_of_block(&self.pool, cmd.block).await?;
-        let proof = authorize::<AuditAuthority>(&self.pool, self.profile_id, finding).await?;
+        // The second caller-fault guard, and it is REQUIRED here rather than optional: only
+        // resource-kind citations are auditable (spec §6.2), and the authorization subject is the
+        // citation — which needs the source's uuid, a thing `ProvenanceSource::Remote` does not
+        // have. So the discrimination happens once, at the command boundary, before a subject can
+        // exist. It also renders the §6.2 rejection as the caller fault it is: the SQL `RAISE` that
+        // used to be the only guard reached the caller as a 500, unlike the range check beside it.
+        // The `RAISE` stays as the backstop for any non-Rust writer.
+        let source_id = match &cmd.source {
+            temper_core::types::provenance::ProvenanceSource::Resource(id) => *id,
+            _ => {
+                return Err(TemperError::BadRequest(
+                    "only resource-kind citations are auditable".to_string(),
+                ))
+            }
+        };
+        // 1. AUTHORIZE. The subject is the CITATION — the block, the source, and the finding the
+        //    block resolves to server-side. The command deliberately carries no finding id, so a
+        //    caller cannot authorize over one finding while writing onto a block of another
+        //    (`authz/audit_gate.rs`, `CitationSubject`). `AuditAuthority` admits a principal that
+        //    can READ the finding, IS a registered unrevoked machine principal, and did NOT
+        //    contribute this citation: the deliberate widening of spec §7 with both of the conjuncts
+        //    §7 names to narrow it back. All three denial arms render `NotFound`, which
+        //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
+        //    existence oracle beside the leak-safe evidence read.
+        let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
+        let proof = authorize::<AuditAuthority>(&self.pool, self.profile_id, subject).await?;
         // 2. Correlation integrity — additive to the authorization above, before any mutation.
         self.check_act_invocation(cmd.act.invocation).await?;
+
+        // 3. The citation must actually exist. `(block, source)` being a live citation is a
+        //    CALLER FAULT when it is not — a transposed source id — so it renders 400, like the
+        //    range and source-kind guards above it, rather than surfacing the SQL `RAISE` as a 500.
+        //    The `RAISE` in `citation_audit` stays as the backstop for any non-Rust writer.
+        //
+        //    DELIBERATELY AFTER `authorize`, not before: this predicate answers "does this citation
+        //    exist?", and answering it for a caller who has not yet proved it may read the finding
+        //    would turn the write path into the existence oracle every denial arm's `NotFound` is
+        //    there to prevent. Authorization first, then caller-fault diagnostics.
+        let is_live: Option<bool> = sqlx::query_scalar!(
+            "SELECT citation_is_live($1, 'resource'::provenance_source_kind, $2)",
+            *cmd.block,
+            source_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if is_live != Some(true) {
+            return Err(TemperError::BadRequest(format!(
+                "(block {}, source {source_id}) is not a live citation",
+                *cmd.block
+            )));
+        }
 
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -2036,7 +2077,7 @@ impl Backend for DbBackend {
         //    write-cost optimization over it, so a refresh failure is logged and swallowed there.
         //    The finding comes from `proof.subject()`, not from a second lookup — reading the scope
         //    back out of the sealed proof is the whole point of it carrying one.
-        self.tick_resource_standing(proof.subject()).await;
+        self.tick_resource_standing(proof.subject().finding()).await;
 
         Ok(CommandOutput::new(audit))
     }
@@ -2595,18 +2636,32 @@ impl Backend for DbBackend {
     /// `auditor_service::group_by_cogmap` collapses the sweep first, and each cogmap's whole finding
     /// list rides one job's payload for the session to iterate.
     ///
-    /// Auth: the gate is the sweep, and it is the same one the audit write path will apply. Both are
-    /// principal-scoped in SQL (`audit_drift_sweep` routes through `steward_candidate_cogmaps` AND
-    /// `resources_visible_to`), so this tick can only ever enqueue work over findings this principal
-    /// could already read — never a widening.
+    /// Auth is **two gates, not one**, and the fix wave added both halves for the same reason.
+    ///
+    /// 1. **Who may tick at all.** [`require_machine_principal`] — only a registered, unrevoked
+    ///    machine principal. The endpoint exists for exactly one caller per persona and the
+    ///    `kb_machine_clients` registration already names it. Without this, any authenticated
+    ///    principal could run the tick.
+    /// 2. **What a tick may claim.** The sweep was already principal-scoped in SQL
+    ///    (`audit_drift_sweep` routes through `steward_candidate_cogmaps` AND `resources_visible_to`),
+    ///    but the CLAIM was not scoped at all — it filtered on `(persona, dispatch_type, status)` and
+    ///    nothing else. So the tick enqueued *this* principal's work and then claimed *anyone's*,
+    ///    handing back each stolen job's `cogmap_id` and full finding-id list and leaving the real
+    ///    auditor's queue empty. `claim_audit` now passes the principal, and
+    ///    `workflow_job_claim` constrains the claimable set through the same
+    ///    `steward_candidate_cogmaps` the sweep uses (`20260723000030_audit_drift_sweep.sql`).
+    ///
+    /// Neither half subsumes the other: gate 1 stops a human running the pipeline, gate 2 stops one
+    /// registered machine reading another tenant's work.
     async fn auditor_dispatch_tick(
         &self,
         cmd: AuditorDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError> {
         use crate::services::{auditor_service, workflow_job_service};
-        use temper_core::types::workflow_job::{
-            DEFAULT_AUDITOR_DISPATCH_CAP, DEFAULT_AUDITOR_LEASE_SECONDS,
-        };
+        use temper_core::types::workflow_job::{clamp_auditor_cap, DEFAULT_AUDITOR_LEASE_SECONDS};
+
+        // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it.
+        require_machine_principal(&self.pool, self.profile_id).await?;
 
         // 1. Reap stale leases (crashed runs → retry/dead) before claiming. Shared with the steward
         //    tick — the reaper is persona-agnostic, exactly as the queue is.
@@ -2643,7 +2698,11 @@ impl Backend for DbBackend {
         //    rather than made a second knob. It can never truncate this tick's own work (grouping
         //    only ever collapses, so jobs <= findings <= cap), and reusing it means a tick whose
         //    sweep came back empty still drains jobs a previous, cap-limited tick left pending.
-        let limit = cmd.cap.unwrap_or(DEFAULT_AUDITOR_DISPATCH_CAP) as i32;
+        //    `clamp_auditor_cap` is what keeps the reuse honest: an unclamped `cap` reached
+        //    `LIMIT` as an i64-to-i32 WRAP (2147483648 → -2147483648 → a Postgres error surfacing as
+        //    a 500 from user input), and a large positive one was the amplifier for the claim's
+        //    missing scoping.
+        let limit = clamp_auditor_cap(cmd.cap);
         let claimed = workflow_job_service::claim_audit(
             &self.pool,
             Persona::Auditor.as_str(),
@@ -2651,59 +2710,46 @@ impl Backend for DbBackend {
             limit,
             DEFAULT_AUDITOR_LEASE_SECONDS,
             cmd.correlation,
+            self.profile_id,
         )
         .await?;
 
         Ok(CommandOutput::new(claimed))
     }
 
-    /// Complete the cogmap's active citation-audit job — the auditor session's last act.
+    /// Complete the cogmap's active citation-audit job — the auditor session's last act (spec §6.5).
     ///
-    /// AUTH BEFORE WRITE, and the gate is **readability of the cogmap**
-    /// (`anchor_readable_by_profile`), not writability. That is deliberate and it mirrors the audit
-    /// write's own widening (spec §7): the auditor is provisioned with team membership and
-    /// **read-only** cogmap reach precisely so it is not classified as `AuditAuthority::Author`
-    /// (`docs/auth/machine-token-contract.md` §C), so gating its own job's completion on cogmap-write
-    /// would 403 every auditor that is correctly provisioned. Readability is also exactly the
-    /// predicate that put the job in this principal's queue in the first place —
-    /// `audit_drift_sweep` routes through `steward_candidate_cogmaps` — so this admits no principal
-    /// the dispatch would not already have handed work to.
+    /// AUTH BEFORE WRITE, through the policy layer like every other Set 5 decision:
+    /// [`AuditorJobAuthority`] (`authz/audit_gate.rs`), whose arms, probes and `NotFound` dialect are
+    /// named there. It replaced a hand-rolled `anchor_readable_by_profile` lookup inlined here — the
+    /// one Set 5 gate that was not a `ScopedAuthority`, and therefore the one the spec never
+    /// reviewed.
     ///
-    /// A reader who is not the dispatched auditor can therefore complete the job early. The blast
-    /// radius is one skipped tick and it self-heals: completion writes nothing to the audit trail,
-    /// and coverage only moves when a verdict lands, so an unaudited finding re-enters the very next
-    /// sweep.
+    /// **The gate is coarse on purpose and the effect is precise.** The gate answers "may you speak
+    /// about this cogmap's auditor queue?"; the *claim* check lives in
+    /// `workflow_job_complete_claimed`, which transitions only a row that is `in_progress` **and**
+    /// `claimed_by_profile_id = this principal`. That split is what makes "there is no job for you"
+    /// a no-op rather than a refusal — a manual audit outside the dispatch loop, an
+    /// already-completed job and a reaped lease are all legitimate — while still closing both abuses
+    /// the shipped `workflow_job_complete` allowed: terminating a never-dispatched `pending` job
+    /// (indefinite suppression of a cogmap's auditing) and freeing another session's in-flight slot
+    /// (duplicate concurrent audit sessions appending to a trail that cannot retract).
     ///
-    /// `None` means no job was active — a manual audit outside the dispatch loop, or a job the
-    /// reaper already expired. Not an error: the session's work stands either way.
+    /// `None` therefore means "nothing of yours was in flight". Not an error: the session's written
+    /// verdicts stand either way.
     async fn complete_auditor_job(
         &self,
         cmd: CompleteAuditorJob,
     ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
-        let readable = sqlx::query_scalar!(
-            r#"
-            SELECT id AS "id!: uuid::Uuid"
-              FROM kb_cogmaps
-             WHERE id = $1
-               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
-            "#,
-            *cmd.cogmap,
-            *self.profile_id,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(api_err)?;
-        // Absent row = the cogmap does not exist OR the caller cannot read it — both 404, no
-        // existence oracle, the same dialect every other cogmap-scoped read uses.
-        readable.ok_or_else(|| {
-            TemperError::NotFound(format!("cognitive map {} not found", cmd.cogmap.uuid()))
-        })?;
+        let proof =
+            authorize::<AuditorJobAuthority>(&self.pool, self.profile_id, cmd.cogmap).await?;
 
-        let completed = crate::services::workflow_job_service::complete(
+        let completed = crate::services::workflow_job_service::complete_claimed(
             &self.pool,
-            *cmd.cogmap,
+            *proof.subject(),
             Persona::Auditor.as_str(),
             DispatchType::CitationAudit.as_str(),
+            self.profile_id,
         )
         .await?;
 

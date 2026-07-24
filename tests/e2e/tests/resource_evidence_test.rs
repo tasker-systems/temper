@@ -321,6 +321,22 @@ async fn citation_audit_moves_audit_coverage_and_citation_quality(pool: sqlx::Pg
         .await
         .expect("grant read access to the auditor");
 
+    // …and it must be a REGISTERED MACHINE PRINCIPAL. Spec §7 gates the audit write on readability
+    // AND `kb_machine_clients` membership: an audit is an agent act, and the trail it appends to is
+    // permanent, unattributed at the read surface, and unbounded. Without this row the call below
+    // 404s (`AuditAuthority::NotMachine`). A raw allowlist insert rather than
+    // `temper admin machine provision`, because the reach this test needs is the grant above —
+    // all this row carries is "is a registered agent".
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ($1, $1, $2, $2)",
+    )
+    .bind(format!("e2e-auditor-{auditor_profile_id}@clients"))
+    .bind(auditor_profile_id)
+    .execute(&app.pool)
+    .await
+    .expect("register the auditor as a machine principal");
+
     let auditor_token = common::generate_second_user_jwt();
     let auditor_client = TemperClient::with_token(
         &app.base_url(),

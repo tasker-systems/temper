@@ -79,6 +79,18 @@ changes the return type of `resource_standing_shape` and the argument list of
 `standing_band`. So it breaks the additive-only invariant above and **must not ride an
 auto-deploy of `main`**. Cut each target over individually.
 
+`migrations/20260723000030_audit_drift_sweep.sql` rides the same cutover and is **also
+non-additive**, for a different reason: besides the auditor's sweep it DROP+CREATEs
+`workflow_job_claim` to add principal scoping. The new parameter is appended last with a
+`DEFAULT`, so the deployed 5-argument positional call keeps resolving through the
+migrate→deploy window (the mechanics `20260710000010` established) — but the DROP is still a
+moment where a concurrently-running steward or embed tick can fail. Take it inside the same
+maintenance window as the cutover above, not separately. Its `ALTER TABLE kb_workflow_jobs ADD
+COLUMN claimed_by_profile_id` is additive and needs no backfill: an in-flight job claimed
+before the migration has a NULL claimant and simply cannot be completed through
+`workflow_job_complete_claimed` — it expires to the reaper and is re-dispatched, which is the
+designed recovery path.
+
 **The coupling that makes this safe is a single fact: the migration and the binary must
 land together.** A binary one deploy behind still `SELECT`s `indep_breadth` from
 `resource_standing_shape` and will error the moment the migration applies. Conversely the

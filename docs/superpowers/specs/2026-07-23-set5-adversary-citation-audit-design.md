@@ -202,10 +202,34 @@ load-bearing part.
 The design's posture — *evidence no second party has weighed is not yet defensible* — is
 real and must be legible, but it is **not** a value folded into the quality mean. An earlier
 draft gave unaudited citations a `-0.5` contribution to the mean; that produced a perverse
-gradient (adding good-faith evidence demoted a finding two bands) and contradicted the
-monotonicity the same design claimed. The faithful expression is the split above:
-unaudited-ness pins the **band** via the coverage ratio, while **quality** speaks only for
-what was actually assessed.
+gradient (adding good-faith evidence pulled an already-earned **quality verdict** down) and
+contradicted the monotonicity the same design claimed. The faithful expression is the split
+above: unaudited-ness pins the **band** via the coverage ratio, while **quality** speaks only
+for what was actually assessed.
+
+> **ERRATUM (2026-07-24, from the Set 5 implementation review).** As originally written, the
+> parenthetical above said the pathology was *"adding good-faith evidence demoted a finding two
+> bands"*. That overstated it and put this section in conflict with §3.1 and §6.3, which
+> **require** the band to fall: *"citing more sources lowers the ratio and re-enters it into the
+> auditor's queue."* The guarantee this section makes is about the **quality axis only** — which
+> is exactly what the operative sentence two paragraphs down already says (*"adding unaudited
+> evidence cannot pull a positive verdict down — it moves the coverage axis, not the quality
+> axis"*) and exactly what shipped.
+>
+> **The band consequence is intended, and it is stated here so no future reader files it as a
+> bug.** Adding four good-faith unaudited citations to a `near-canonical` finding takes its
+> coverage ratio from 1.0 to 2/6 and drops it to `provisional` — a two-band fall — until an
+> auditor pass covers the new sources. That is §6.4's duty-to-challenge-before-promote working as
+> designed at the level of *newly added* evidence, not only *never-evaluated* findings: a finding
+> is elevated for the evidence that was actually weighed, and evidence added since has not been.
+> The shipped regression test is named for the narrow, true claim
+> (`adding_unaudited_citations_does_not_demote_the_quality_axis`).
+>
+> Band **hysteresis** — letting an earned band survive new unaudited citations while quality stays
+> positive — was considered and **rejected** for this cut: it would decouple the visible band from
+> the coverage ratio that §6.3's re-queueing depends on, and it would make the band a function of
+> history rather than of the current shape, which §1.1 (shape-primary, band as a lossy read-time
+> chip) forbids.
 
 This keeps every property the negative prior was reaching for — an unaudited finding sits at
 the floor, findable but not elevated; the auditor's absence is distinguishable from its
@@ -496,6 +520,62 @@ duty to challenge before promote is discharged by the data model, not by an agen
 to do it. The self-audit denial arm (§7) is what stops the citer from discharging that duty
 against themselves.
 
+### 6.5 Job completion — the auditor has no watermark, so the queue needs an explicit end
+
+*Added 2026-07-24, after implementation. §6.1 described the tick as sweep → enqueue → claim and
+stopped there; that is a genuine hole rather than a deliberate omission, and this section
+records the decision that filled it.*
+
+The steward's job completion rides `steward_advance_watermark` — one atomic "finished this map
+cleanly" act. **The auditor advances no watermark**, so it inherits no completion path. Without
+one, every claimed job's lease simply expires: `workflow_job_reap` returns it to
+`waiting_for_retry` up to `max_attempts` (`migrations/20260705000001_workflow_jobs.sql:110-128`),
+each retry re-dispatches a session over the same finding list, and each session appends fresh
+verdicts to a trail that by §4.1 **cannot retract them**. So there is an endpoint,
+`POST /api/auditor/{cogmap}/complete`, and the session's last act is to call it.
+
+**Authorization is a `ScopedAuthority` like every other decision in this design** (§7's
+requirement, which this endpoint initially failed): `AuditorJobAuthority` in
+`crates/temper-services/src/authz/audit_gate.rs`, with the same two admitting conjuncts the audit
+write uses — the caller can **read** the cogmap (`anchor_readable_by_profile`) and is a
+**registered, unrevoked machine principal** — and denials rendered `NotFound`, uniformly, so the
+endpoint is neither a cogmap-existence oracle nor a registered-agent oracle.
+
+Two decisions inside that are worth stating, because both are places the obvious choice is wrong:
+
+- **Read, not write.** §5.2's provisioning gives the auditor team membership and, at most,
+  **read-only** cogmap reach — deliberately, so `can_modify_resource` does not classify it as
+  `AuditAuthority::Author` and 404 every audit (`docs/auth/machine-token-contract.md` §C). A
+  cogmap-**write** gate here would therefore 403 the one caller the endpoint exists for. The gate
+  must move axis, not tighten on this one.
+- **The gate is coarse; the *effect* is precise.** "Is this your job?" has a third answer —
+  *there is no job* — which is legitimate (a manual audit outside the dispatch loop, an
+  already-completed job, a reaped lease) and must not be a refusal. So the claim check lives in
+  the SQL effect: `workflow_job_complete_claimed` transitions **only** a row that is
+  `in_progress` **and** whose `claimed_by_profile_id` is the caller. Anything else is a
+  guaranteed no-op returning `job_id: null`.
+
+That split is what closes the two abuses the first cut allowed, both reachable by a principal
+holding nothing but read:
+
+1. `workflow_job_complete` also transitions **`pending`** jobs, so a caller could terminate a job
+   that had never been dispatched — suppressing a cogmap's auditing indefinitely while the sweep
+   kept re-offering the finding and the completion kept removing it. Not self-healing.
+2. Completing another session's **in-flight** job frees the single-flight slot mid-run, so the
+   next tick enqueues and claims a **second concurrent** audit over the same finding list —
+   unbounded duplicate verdicts on an unretractable trail, and unbounded model spend.
+
+Completion writes nothing to the audit trail and carries no outcome: what the session decided
+lives in the verdicts it appended and in its invocation close, never in a queue transition.
+
+**The same principal scoping applies to the tick itself** (§6.1/§6.3). The sweep is
+principal-scoped; the **claim** was not, which made "the tick enqueues scoped work and claims
+anyone's" — a cross-tenant disclosure of `cogmap_id`s and finding-id lists, plus theft of the
+audit pipeline. `workflow_job_claim` now takes the principal and constrains the claimable set
+through the same `steward_candidate_cogmaps` the sweep uses, and
+`POST /api/auditor/dispatch` admits only a registered machine principal. Neither half subsumes
+the other.
+
 ---
 
 ## 7. Authorization — `can_audit_resource` is an open grounding obligation
@@ -558,6 +638,26 @@ resolved **against that trait and the existing impls** (`authz/read_gates.rs:30,
    `resources_visible_to(<auditor machine profile>)` returns the findings it is meant to
    audit. The failure this guards against is silent: the whole pipeline builds and every
    audit 404s in production because the machine principal cannot see the corpus.
+
+**AS DISCHARGED (2026-07-24, after the implementation review).** `AuditAuthority`
+(`crates/temper-services/src/authz/audit_gate.rs`) resolves one admitting arm and three denials.
+Two points where the first cut fell short of the text above, both now closed:
+
+- **The machine conjunct was dropped.** The first cut gated on readability and non-authorship only,
+  so *any* principal with read on a finding could write verdicts — permanently (the trail is
+  append-only), unattributed (the evidence read surfaces no auditor), and unbounded. It is now the
+  `NotMachine` arm, probing the same `kb_machine_clients` allowlist `resolve_machine_from_claims`
+  consults at the door, `revoked_at IS NULL` included.
+- **"The cheaper sufficient proxy" was not sufficient.** `can_modify_resource` answers *"can you
+  write this now?"*; authorship is a fact about the past. A citer who loses write and keeps read —
+  a revoked grant, a reassigned home, a role demotion — was readmitted to grading its own work.
+  The `Author` arm now asks the exact question this section names, through
+  `citation_contributed_by_profile` (`kb_block_provenance.contributed_by_event_id` →
+  `kb_events.emitter_entity_id` → `kb_entities.profile_id`), keyed on the **citation**, not the
+  finding. The proxy is retained as a second probe, since it still correctly refuses a present
+  co-editor. Residual: a citation contributed under a *shared* credential cannot be attributed to
+  one of its sharers — which is precisely why §5.2 requires the auditor to hold its own
+  `client_id`.
 
 ---
 

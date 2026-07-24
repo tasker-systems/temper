@@ -51,6 +51,10 @@ Everything below is per finding.
    **Only `source_kind == "resource"` rows are auditable.** Skip `remote` and `event` rows
    entirely — do not try to audit them; the write path refuses them, deliberately, because
    the standing projection does not read them either.
+   **Keep `block_id` and `source_id` paired as they came back.** The write path refuses a
+   `(block, source)` pair that is not a live citation, so a one-row transposition while
+   iterating this list is an error you will see, not a verdict that lands and moves nothing.
+   If you get one, re-read the row rather than retrying the same pair.
 5. **Note the size of the citation set** before you weigh any single member. A connection
    resting on one source and a connection resting on six are different claims about
    evidence, and the same source can be worth more or less depending on which it is.
@@ -95,7 +99,7 @@ adversarial relation. Use these anchors, and interpolate between them:
 | **+1.0** | The source is the direct, explicit warrant for this exact connection. It contains the connected content itself; no inference is needed to get from it to the claim. |
 | **+0.6** | The source **soundly carries** the connection, with one modest step of inference or with partial coverage of it. This is the ordinary verdict for a good citation. |
 | **+0.3** | The source carries **part** of the connection. Real, relevant support, but the claim reaches meaningfully beyond what the source can ground. |
-| **0.0** | The source is on-topic but does not bear on this particular connection either way. Neutral, not negative. |
+| **0.0** | The source is on-topic but does not bear on this particular connection either way. Neutral, not negative. Note: neutral is still a **verdict** — a finding whose audited verdicts net to zero or below reads `disputed`, not `provisional`, because you looked. |
 | **−0.5** | The source **does not carry** the connection: adjacent, or misapplied to a claim it cannot ground. |
 | **−1.0** | The source cannot carry it at all — wrong subject, or the citation is a category error. |
 

@@ -1,19 +1,62 @@
-//! Citation-audit authorization — may this caller record an audit on *this* finding?
+//! Citation-audit authorization — may this caller record an audit on *this* citation, run the
+//! auditor's dispatch tick, and complete the job it was handed?
 //!
 //! This is the gate the whole adversarial premise rests on. Set 5's auditor reads a finding's
 //! citations and emits a signed defensibility verdict per source; if the gate is wrong, a citer
 //! grades its own work, and "assessed by another party" is enforced nowhere.
 //!
-//! # The widening, and the thing that stops it going too far
+//! # The widening, and the two things that stop it going too far
 //!
 //! Every other authored write in temper gates on `can_modify_resource`. An audit must **not**: an
 //! auditor that may only assess findings it owns is not an auditor. So the admitting predicate is
 //! **readability** — a deliberate widening (a write authorized by a read predicate), spec §7.
 //!
-//! Readability alone is not sufficient, and that half is load-bearing. The projection favours
-//! recency and the sweep clears a finding once its citations are covered (spec §4.1, §6.3), so a
-//! citer who audits their own work both inflates its own standing *and* removes the finding from
-//! the adversary's queue. Hence the second denial arm: [`AuditAuthority::Author`].
+//! Readability alone is not sufficient, and spec §7 names **both** of the conjuncts that narrow it
+//! back: *"can read the finding — the full canonical visibility predicate — plus being a registered,
+//! unrevoked machine principal with reach"*, and a **self-audit denial arm**. Both are here:
+//!
+//! * [`AuditAuthority::NotMachine`] — the machine conjunct. Without it, any principal holding read
+//!   on a finding may post `-1.0` on each of its citations and pin it to `disputed` **permanently**:
+//!   the trail is append-only by design (`20260723000010_citation_audits.sql:12-17`), the decay
+//!   weighting means the most recent writer wins, and the evidence read surfaces no attribution. An
+//!   audit is an *agent act*; the principal registry is what says which agents exist.
+//! * [`AuditAuthority::Author`] — the self-audit arm. The projection favours recency and the sweep
+//!   clears a finding once its citations are covered (spec §4.1, §6.3), so a citer who audits its own
+//!   work both inflates its own standing *and* removes the finding from the adversary's queue.
+//!
+//! # The self-audit arm asks a HISTORICAL question, not a current-capability one
+//!
+//! The first cut used `can_modify_resource` as a *sufficient proxy* for "authored the citation", on
+//! the argument that it only ever over-refuses. That is true in one direction and false in the
+//! other. `can_modify_resource` answers *"can you write this finding **now**?"*; authorship is a
+//! fact about the past. They come apart — and the citer is readmitted to grading its own work —
+//! the moment write is removed while read is kept:
+//!
+//! * a direct `can_write` grant is revoked while a team/context/cogmap read path remains;
+//! * the finding's home is reassigned to another owner (`reassign_resource`), and
+//!   `originator_profile_id` confers nothing —
+//!   `20260715000040_demote_originator_from_access.sql` says so in as many words: *"originator is
+//!   provenance only, not access"*;
+//! * a team role is demoted below the authoring roles `context_authorable_by_profile` /
+//!   `cogmap_authorable_by_profile` require, while role-agnostic `profile_effective_teams` keeps the
+//!   read.
+//!
+//! So the arm now asks the exact question spec §7 asks — *"did this principal emit the event that
+//! contributed this citation?"* — through `citation_contributed_by_profile`
+//! (`20260723000010_citation_audits.sql`), which reads `kb_block_provenance.contributed_by_event_id`
+//! → `kb_events.emitter_entity_id` → `kb_entities.profile_id`. That row is immutable, so no later
+//! access change moves the answer. The `can_modify_resource` proxy is **kept as a second probe**,
+//! belt and braces: it still correctly refuses a present co-editor who wrote none of the citation,
+//! which is the safe direction to be wrong in.
+//!
+//! **Residual, stated rather than papered over.** The historical probe is exact for citations whose
+//! contributing event carries an emitter that resolves to a profile — every citation any temper
+//! write path produces, since `writes::resolve_emitter` mints the entity from the authoring
+//! principal. It cannot attribute a citation contributed under a *shared* credential (two agents on
+//! one `client_id` are one `emitter_entity_id`, which is exactly the failure
+//! `docs/auth/machine-token-contract.md` §C tells operators to avoid), nor one whose contributing
+//! event predates the entity it names. In both cases the arm falls back to the `can_modify_resource`
+//! proxy, i.e. to the pre-fix behavior — never to admission-by-default.
 //!
 //! # Machine reach — grounded, not assumed (spec §7 decision 5)
 //!
@@ -51,24 +94,63 @@
 //! *every* audit. Provision the auditor with team membership, and cogmap reach only as `:ro`.
 //!
 //! CONFORM: the `ScopedAuthority` trait + sealed proof (`super`, `mod.rs:54-133`); the
-//! `NotFound`-dialect impls (`super::read_gates`). EXTEND: spec §7, discharged here.
+//! `NotFound`-dialect impls (`super::read_gates`). EXTEND: spec §7, discharged here; spec §6.5
+//! (job completion), discharged by [`AuditorJobAuthority`].
 
 use async_trait::async_trait;
 use sqlx::PgPool;
+use uuid::Uuid;
 
-use temper_core::types::ids::{BlockId, ProfileId, ResourceId};
+use temper_core::types::ids::{BlockId, CogmapId, ProfileId, ResourceId};
 use temper_substrate::readback;
 
 use super::ScopedAuthority;
 use crate::error::{ApiError, ApiResult};
+use crate::services::machine_client_service;
+
+/// Is `caller` a registered, unrevoked machine principal?
+///
+/// The conjunct spec §7 names, in ONE spelling shared by all three Set 5 gates — the audit write
+/// ([`AuditAuthority`]), the job completion ([`AuditorJobAuthority`]), and the dispatch tick
+/// ([`require_machine_principal`]). Three copies of a registry lookup is three places for a future
+/// "is this still needed?" to be answered differently.
+async fn is_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<bool> {
+    machine_client_service::is_registered_principal(pool, caller).await
+}
+
+/// The auditor's **dispatch tick** gate — `POST /api/auditor/dispatch`.
+///
+/// Not a [`ScopedAuthority`], deliberately: a dispatch tick names no subject. The caller passes a
+/// cap and nothing else, so there is no scope to seal into a proof and nothing for a transposition
+/// to transpose. What it *is* is the endpoint half of the queue's principal scoping — the SQL half
+/// lives in `workflow_job_claim`'s reach constraint
+/// (`migrations/20260723000030_audit_drift_sweep.sql`), and neither half is sufficient alone:
+///
+/// * without the reach constraint, one registered machine could claim another tenant's jobs and
+///   read their `cogmap_id` + finding-id payloads;
+/// * without this gate, *any* authenticated principal could run the tick, and — inside whatever
+///   reach it does hold — take the auditor's jobs `in_progress` and never complete them, which
+///   after `max_attempts` reap cycles kills them (`20260705000001_workflow_jobs.sql:110-128`).
+///
+/// `Forbidden`, not `NotFound`: there is no subject whose existence a refusal could confirm, and a
+/// 404 on a fixed route would just be a lie. The dialect argument that makes the other two gates
+/// `NotFound` (`ScopedAuthority::denial`, `mod.rs:86-95`) does not apply where nothing is named.
+pub(crate) async fn require_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<()> {
+    if is_machine_principal(pool, caller).await? {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
 
 /// The finding a block belongs to — **the only way an audit's subject may be named.**
 ///
 /// An audit write lands on a block; the authorization subject is the block's owning resource.
 /// Letting a caller pass a finding id alongside a block id would let it authorize over a finding
 /// it can read while writing onto a block of one it cannot — the transposition the sealed
-/// [`super::Authorized`] proof exists to stop (`mod.rs:95-117`). Both Task 7's backend command and
-/// Task 8's HTTP surface derive the subject here so there is one spelling of the lookup.
+/// [`super::Authorized`] proof exists to stop (`mod.rs:95-117`). One spelling of the lookup, two
+/// callers: [`citation_subject`] (which the backend command builds its sealed subject from) and
+/// `citation_audit_service`'s path/block transposition check — the latter a pure lookup, never an
+/// authorization decision.
 ///
 /// Mirrors the resolution the SQL entry function already performs — `SELECT resource_id INTO
 /// v_resource FROM kb_content_blocks WHERE id = v_block`
@@ -86,62 +168,136 @@ pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult
     resource.map(ResourceId::from).ok_or(ApiError::NotFound)
 }
 
+/// The scope of an audit decision: the **citation**, plus the finding it hangs on.
+///
+/// The finding alone is not enough. `AuditAuthority`'s self-audit arm asks *"did you contribute
+/// **this citation**?"*, which is a `(block, source)` question — the same grain
+/// `kb_block_provenance` and `kb_citation_audits` are keyed on — while readability is a question
+/// about the finding. Carrying all three inside the sealed proof keeps the act from re-naming any
+/// of them: the tick reads `finding` back out of `proof.subject()` rather than re-deriving it.
+///
+/// `source` is a bare `Uuid` because only **resource-kind** citations are auditable (spec §6.2), so
+/// the discrimination happens once, at the command boundary, before a subject exists at all. That
+/// also keeps this type `Copy`, which `ScopedAuthority::Subject` requires and `ProvenanceSource`
+/// (whose `Remote` variant holds a `String`) cannot be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CitationSubject {
+    finding: ResourceId,
+    block: BlockId,
+    source: Uuid,
+}
+
+impl CitationSubject {
+    /// The finding the audited citation hangs on — the standing subject the post-write clock ticks.
+    pub(crate) fn finding(&self) -> ResourceId {
+        self.finding
+    }
+}
+
+/// Resolve `(block, source)` into the sealed audit subject, deriving the finding server-side.
+///
+/// The one constructor for [`CitationSubject`] (its fields are private to this module), so no
+/// caller can assemble a subject whose finding disagrees with its block.
+pub(crate) async fn citation_subject(
+    pool: &PgPool,
+    block: BlockId,
+    source: Uuid,
+) -> ApiResult<CitationSubject> {
+    Ok(CitationSubject {
+        finding: finding_of_block(pool, block).await?,
+        block,
+        source,
+    })
+}
+
 /// Who may record a citation audit on a finding.
 ///
-/// One admitting arm and two denials. The denials are named arms, never an absence and never an
+/// One admitting arm and three denials. The denials are named arms, never an absence and never an
 /// `Err` out of `resolve` — an error short-circuits `authorize` before [`ScopedAuthority::denial`]
 /// runs, which would bypass this domain's chosen refusal dialect (`mod.rs:69-74`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditAuthority {
-    /// Can read the finding, and did not author it. **The only arm that admits an audit.**
+    /// A registered machine principal that can read the finding and did not contribute the
+    /// citation. **The only arm that admits an audit.**
     Auditor,
-    /// DENIAL — the caller can modify the finding, so it is (by the proxy below) the citer. The
-    /// self-audit prohibition of spec §7: enforced here or nowhere.
+    /// DENIAL — the caller contributed this citation (or can still modify the finding, the
+    /// belt-and-braces proxy). The self-audit prohibition of spec §7: enforced here or nowhere.
     Author,
+    /// DENIAL — the caller is not a registered, unrevoked machine principal. Spec §7's other
+    /// conjunct: an audit is an agent act on a permanent, unattributed, unbounded trail.
+    NotMachine,
     /// DENIAL — the caller cannot see the finding at all.
     Unreadable,
 }
 
 #[async_trait]
 impl ScopedAuthority for AuditAuthority {
-    /// The **finding**, never the block. See [`finding_of_block`] for why the caller may not name
-    /// it and where it must come from instead.
-    type Subject = ResourceId;
+    /// The **citation**, never a caller-named finding. See [`CitationSubject`] for why the subject
+    /// carries all three ids and [`citation_subject`] for where they come from.
+    type Subject = CitationSubject;
 
-    /// Two probes, in the only order that can short-circuit: a principal who cannot read the
-    /// finding is refused without ever paying for the authorship probe. The admitting arm needs
-    /// both answers, so nothing cheaper is available for it — this is a sequence, not a
-    /// strongest-first cascade like `grant.rs`'s.
+    /// Four probes, in the only order that can short-circuit safely.
     ///
-    /// Both probes are **calls into the incumbent SQL predicates, never restatements** of them
-    /// (`mod.rs:65-66`):
+    /// Readability runs FIRST and that placement is a leak decision, not a cost one: every later
+    /// arm refuses in the same `NotFound` dialect, so ordering them differently would not leak — but
+    /// a principal who cannot read the finding must not pay for, or be distinguishable by, probes
+    /// about a subject it may not know exists. The machine probe is second because it is a single
+    /// indexed lookup that refuses the entire non-agent population before either authorship query
+    /// runs. The two authorship probes are last, and both must run for the admitting arm.
+    ///
+    /// Every probe is a **call into a SQL predicate, never a restatement** of one (`mod.rs:65-66`):
     ///
     /// * Readability is [`readback::is_resource_visible`], extracted by Task 4 for exactly this
     ///   reason — the standing read this gate sits beside asks the same question through the same
     ///   function, so the two cannot drift (`readback/mod.rs:133-162`).
-    /// * Authorship is `can_modify_resource`, the same call and the same query text as
+    /// * Machine registration is `machine_client_service::is_registered_principal`, the same
+    ///   `kb_machine_clients` allowlist `resolve_machine_from_claims` consults at the door.
+    /// * Citation authorship is `citation_contributed_by_profile`
+    ///   (`20260723000010_citation_audits.sql`) — the exact historical fact, see the module doc.
+    /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
     ///   production's write gate (`db_backend.rs:469-483`).
-    async fn resolve(pool: &PgPool, caller: ProfileId, finding: ResourceId) -> ApiResult<Self> {
-        if !readback::is_resource_visible(pool, caller, finding)
+    async fn resolve(
+        pool: &PgPool,
+        caller: ProfileId,
+        subject: CitationSubject,
+    ) -> ApiResult<Self> {
+        if !readback::is_resource_visible(pool, caller, subject.finding)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
         {
             return Ok(AuditAuthority::Unreadable);
         }
 
-        // `can_modify_resource` is a **sufficient proxy** for "authored the citation", not an exact
-        // one. The exact question is "did this principal emit the block's contributing
-        // `block_mutated`/`block_annotated` event?"; the proxy over-refuses everyone else who may
-        // write the finding — a co-editor holding a write grant, the owner of the home container
-        // (`can_modify_resource`'s container-write cascade). Spec §7 names it *"the cheaper
-        // sufficient proxy"* and accepts that: an audit is a claim of independence, so refusing a
-        // party who could have edited the citation is the safe direction to be wrong in, and the
-        // auditor this gate exists for (a machine with team membership and no cogmap write grant —
-        // see the module doc) is untouched by the over-refusal.
-        let can_modify: Option<bool> =
-            sqlx::query_scalar!("SELECT can_modify_resource($1, $2)", *caller, *finding,)
-                .fetch_one(pool)
-                .await?;
+        if !is_machine_principal(pool, caller).await? {
+            return Ok(AuditAuthority::NotMachine);
+        }
+
+        // The exact question (historical): did this principal emit the event that contributed this
+        // citation? Keyed on the citation, not the finding — a multi-source block has one author per
+        // source, and refusing an auditor for a source it did not contribute would be wrong in the
+        // costly direction.
+        let contributed: Option<bool> = sqlx::query_scalar!(
+            "SELECT citation_contributed_by_profile($1, 'resource'::provenance_source_kind, $2, $3)",
+            subject.block.uuid(),
+            subject.source,
+            *caller,
+        )
+        .fetch_one(pool)
+        .await?;
+        if contributed.unwrap_or(false) {
+            return Ok(AuditAuthority::Author);
+        }
+
+        // The proxy, kept as a second probe. It over-refuses a present co-editor who wrote none of
+        // the citation — the safe direction — and the auditor this gate exists for (a machine with
+        // team membership and no cogmap write grant; see the module doc) is untouched by it.
+        let can_modify: Option<bool> = sqlx::query_scalar!(
+            "SELECT can_modify_resource($1, $2)",
+            *caller,
+            *subject.finding,
+        )
+        .fetch_one(pool)
+        .await?;
 
         Ok(if can_modify.unwrap_or(false) {
             AuditAuthority::Author
@@ -150,13 +306,17 @@ impl ScopedAuthority for AuditAuthority {
         })
     }
 
-    /// **Both** non-admitting arms. `Author` is as much a refusal as `Unreadable`; collapsing it
-    /// into the admitting side — or forgetting it here — would silently restore self-grading.
+    /// **All three** non-admitting arms. `Author` is as much a refusal as `Unreadable`; collapsing
+    /// either into the admitting side — or forgetting one here — silently restores self-grading or
+    /// re-opens the write to every reader.
     fn is_denial(&self) -> bool {
-        matches!(self, AuditAuthority::Author | AuditAuthority::Unreadable)
+        matches!(
+            self,
+            AuditAuthority::Author | AuditAuthority::NotMachine | AuditAuthority::Unreadable
+        )
     }
 
-    /// `NotFound`, not `Forbidden` — and deliberately so on both arms.
+    /// `NotFound`, not `Forbidden` — and deliberately so on every arm.
     ///
     /// The evidence **read** over this same subject is already leak-safe by returning no row: the
     /// `gated` CTE in `resource_standing_shape` yields zero rows to a principal who cannot read the
@@ -167,7 +327,92 @@ impl ScopedAuthority for AuditAuthority {
     ///
     /// It matters for `Author` too, for a second reason: a `Forbidden` distinguishable from the
     /// unreadable case would tell a prober "you may see this finding but you wrote it", leaking the
-    /// authorship relation the audit trail otherwise only exposes to readers.
+    /// authorship relation the audit trail otherwise only exposes to readers. And it matters for
+    /// `NotMachine`, for a third: a distinguishable refusal would make this endpoint an oracle for
+    /// *"which of these ids is a registered agent"*.
+    fn denial() -> ApiError {
+        ApiError::NotFound
+    }
+}
+
+/// Who may complete a cognitive map's active citation-audit job — `POST /api/auditor/{cogmap}/complete`.
+///
+/// Spec §6.5. The endpoint exists because the auditor advances no watermark, so without it the
+/// reaper re-dispatches every audited cogmap and appends duplicate verdicts to a trail that cannot
+/// retract them.
+///
+/// **The gate and the effect are two different narrowings, and both are needed.** This authority
+/// answers *"may you speak about this cogmap's auditor queue at all?"* — readable cogmap, registered
+/// machine principal. It deliberately does **not** answer *"is this your job?"*, because that
+/// question has a third answer — *"there is no job"* — which is a legitimate no-op (a manual audit
+/// outside the dispatch loop, an already-completed job, a reaped lease) and not a refusal. So the
+/// claim check lives in the SQL effect instead: `workflow_job_complete_claimed` transitions only a
+/// row that is `in_progress` **and** `claimed_by_profile_id = caller`
+/// (`migrations/20260723000030_audit_drift_sweep.sql`), and matches nothing otherwise. A caller past
+/// this gate that holds no such job therefore performs a guaranteed no-op — it can neither terminate
+/// a never-dispatched `pending` job (indefinite suppression of a cogmap's auditing) nor free another
+/// session's in-flight slot (duplicate concurrent audit sessions on one finding list).
+///
+/// **Readability, not writability** — and that is not laziness. §C of
+/// `docs/auth/machine-token-contract.md` establishes that the auditor is provisioned *without*
+/// cogmap write precisely so it is not classified [`AuditAuthority::Author`], so a write gate here
+/// would 403 the one caller this endpoint exists for. Readability is also exactly the predicate that
+/// put the job in this principal's queue: `audit_drift_sweep` and `workflow_job_claim`'s reach
+/// constraint both route through `steward_candidate_cogmaps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuditorJobAuthority {
+    /// A registered machine principal that can read the cogmap. **The only admitting arm.**
+    Auditor,
+    /// DENIAL — not a registered, unrevoked machine principal.
+    NotMachine,
+    /// DENIAL — the cogmap does not exist, or the caller cannot read it. One arm for both, because
+    /// the refusal must not tell them apart.
+    Unreadable,
+}
+
+#[async_trait]
+impl ScopedAuthority for AuditorJobAuthority {
+    /// The cognitive map whose auditor queue slot is being completed.
+    type Subject = CogmapId;
+
+    async fn resolve(pool: &PgPool, caller: ProfileId, cogmap: CogmapId) -> ApiResult<Self> {
+        // Existence AND readability in one gated lookup — `anchor_readable_by_profile` is the same
+        // predicate `steward_candidate_cogmaps` gates on, so this admits no principal the dispatch
+        // would not already have handed work to. An absent row is either "no such cogmap" or "not
+        // yours", and the single arm is what keeps them indistinguishable.
+        let readable = sqlx::query_scalar!(
+            r#"
+            SELECT id AS "id!: Uuid"
+              FROM kb_cogmaps
+             WHERE id = $1
+               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
+            "#,
+            *cogmap,
+            *caller,
+        )
+        .fetch_optional(pool)
+        .await?;
+        if readable.is_none() {
+            return Ok(AuditorJobAuthority::Unreadable);
+        }
+
+        Ok(if is_machine_principal(pool, caller).await? {
+            AuditorJobAuthority::Auditor
+        } else {
+            AuditorJobAuthority::NotMachine
+        })
+    }
+
+    fn is_denial(&self) -> bool {
+        matches!(
+            self,
+            AuditorJobAuthority::NotMachine | AuditorJobAuthority::Unreadable
+        )
+    }
+
+    /// `NotFound` on both arms, matching [`AuditAuthority::denial`] and the 404 this endpoint's
+    /// OpenAPI response already documents: cogmap ids travel in share flows, so a `Forbidden` would
+    /// confirm that a guessed id names a real map.
     fn denial() -> ApiError {
         ApiError::NotFound
     }
@@ -180,17 +425,22 @@ mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
-    /// A finding with one block, and the three principals whose answers this gate must separate:
-    /// its author (owns the home), a reader (a read-only grant and nothing more), and an outsider.
+    /// A finding with one block citing one source, and the four principals whose answers these
+    /// gates must separate: the citer that contributed the citation, a registered machine auditor,
+    /// a registered machine principal that has read but did not contribute, and an outsider.
     struct Seeded {
-        /// Owner of the finding's home → `can_modify_resource` true → refused as `Author`.
+        /// Owner of the finding's home AND emitter of the citation → refused as `Author`.
         author: Uuid,
-        /// Direct profile-anchored `can_read` grant, no write → visible, not modifiable → admitted.
-        reader: Uuid,
+        /// Direct profile-anchored `can_read` grant, registered machine, contributed nothing →
+        /// admitted.
+        auditor: Uuid,
+        /// Same grant as `auditor`, but NOT registered in `kb_machine_clients` → `NotMachine`.
+        human_reader: Uuid,
         /// No home, no grant, no team → not visible at all.
         outsider: Uuid,
         finding: Uuid,
         block: Uuid,
+        source: Uuid,
     }
 
     async fn insert_profile(pool: &PgPool, handle: &str) -> Uuid {
@@ -203,10 +453,28 @@ mod tests {
         .unwrap()
     }
 
+    /// Register `profile` as a machine principal — the `kb_machine_clients` allowlist row
+    /// `resolve_machine_from_claims` requires at the door and `AuditAuthority` now requires at the
+    /// gate. Fixture-shaped (raw INSERT, no provisioning side effects) because the reach this test
+    /// needs is the grant seeded separately; all this row carries is "is a registered agent".
+    async fn register_machine(pool: &PgPool, profile: Uuid, client_id: &str) {
+        sqlx::query(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+             VALUES ($1, $1, $2, $2)",
+        )
+        .bind(client_id)
+        .bind(profile)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     async fn seed(pool: &PgPool) -> Seeded {
         let author = insert_profile(pool, "citer").await;
-        let reader = insert_profile(pool, "auditor").await;
+        let auditor = insert_profile(pool, "auditor").await;
+        let human_reader = insert_profile(pool, "human-reader").await;
         let outsider = insert_profile(pool, "stranger").await;
+        register_machine(pool, auditor, "auditor@clients").await;
 
         // A profile-owned context, so `context_authorable_by_profile` (the container-write cascade
         // arm of `can_modify_resource`) admits the author and nobody else. A team-owned context
@@ -226,6 +494,12 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
+        let source: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('a source', '') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO kb_resource_homes \
                (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
@@ -240,25 +514,41 @@ mod tests {
 
         // Read WITHOUT write — the shape the whole feature depends on existing. The table's
         // coherence CHECK ((can_write OR can_delete OR can_grant) <= can_read) permits it.
-        sqlx::query(
-            "INSERT INTO kb_access_grants \
-               (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
-                granted_by_profile_id) \
-             VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
-        )
-        .bind(finding)
-        .bind(reader)
-        .bind(author)
-        .execute(pool)
-        .await
-        .unwrap();
-
-        // The block's genesis/last event FKs borrow a migration-seeded event — the same fixture
-        // shortcut `embed_service.rs:637-653` takes, since no event content is read here.
-        let ev: Uuid = sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
-            .fetch_one(pool)
+        for reader in [auditor, human_reader] {
+            sqlx::query(
+                "INSERT INTO kb_access_grants \
+                   (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+                    granted_by_profile_id) \
+                 VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+            )
+            .bind(finding)
+            .bind(reader)
+            .bind(author)
+            .execute(pool)
             .await
             .unwrap();
+        }
+
+        // The citation's contributing event must be emitted by the AUTHOR's entity: that chain
+        // (`kb_block_provenance.contributed_by_event_id` → `kb_events.emitter_entity_id` →
+        // `kb_entities.profile_id`) is exactly what `citation_contributed_by_profile` walks, and it
+        // is the whole point of the historical arm. A migration-seeded event would attribute the
+        // citation to the `system` actor and the arm could never fire.
+        let author_entity: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'citer@cli') RETURNING id",
+        )
+        .bind(author)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let ev: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id) \
+             VALUES ((SELECT id FROM kb_event_types WHERE name = 'block_mutated'), $1) RETURNING id",
+        )
+        .bind(author_entity)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         let block: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id) \
              VALUES ($1, 0, $2, $2) RETURNING id",
@@ -268,50 +558,68 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_block_provenance \
+               (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+             VALUES ($1, 'resource', $2, $3, 0)",
+        )
+        .bind(block)
+        .bind(source)
+        .bind(ev)
+        .execute(pool)
+        .await
+        .unwrap();
 
         Seeded {
             author,
-            reader,
+            auditor,
+            human_reader,
             outsider,
             finding,
             block,
+            source,
         }
     }
 
+    async fn subject_of(pool: &PgPool, s: &Seeded) -> CitationSubject {
+        citation_subject(pool, BlockId::from(s.block), s.source)
+            .await
+            .expect("the block resolves to its owning finding")
+    }
+
     /// The point of the whole feature: readability, not authorship, admits an audit. Also proves
-    /// decision 1 end to end — the subject is derived from the block by [`finding_of_block`] and
+    /// decision 1 end to end — the subject is derived from the block by [`citation_subject`] and
     /// travels sealed inside the proof, so the act cannot name a different one.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_reader_who_is_not_the_author_may_audit(pool: PgPool) {
+    async fn a_registered_auditor_who_did_not_cite_may_audit(pool: PgPool) {
         let s = seed(&pool).await;
+        let subject = subject_of(&pool, &s).await;
+        assert_eq!(subject.finding(), ResourceId::from(s.finding));
 
-        let subject = finding_of_block(&pool, BlockId::from(s.block))
+        let proof = authorize::<AuditAuthority>(&pool, ProfileId::from(s.auditor), subject)
             .await
-            .expect("the block resolves to its owning finding");
-        assert_eq!(subject, ResourceId::from(s.finding));
-
-        let proof = authorize::<AuditAuthority>(&pool, ProfileId::from(s.reader), subject)
-            .await
-            .expect("a reader who did not author the finding may audit it");
+            .expect("a registered machine reader who did not cite may audit");
         assert_eq!(proof.authority(), AuditAuthority::Auditor);
         assert_eq!(
-            proof.subject(),
+            proof.subject().finding(),
             ResourceId::from(s.finding),
             "the proof carries the finding derived from the block, not a caller-named id"
         );
     }
 
-    /// The self-audit denial. Asserts the *arm*, not merely the refusal: without this the test
-    /// would still pass if the author were misclassified `Unreadable`, and the arm is what a later
-    /// reader will reason about.
+    /// The self-audit denial, on the CURRENT-capability path. Asserts the *arm*, not merely the
+    /// refusal: without this the test would still pass if the author were misclassified.
     #[sqlx::test(migrations = "../../migrations")]
     async fn the_author_of_the_finding_is_refused(pool: PgPool) {
         let s = seed(&pool).await;
-        let subject = ResourceId::from(s.finding);
+        let subject = subject_of(&pool, &s).await;
         let author = ProfileId::from(s.author);
+        // The author must be a registered machine too, or `NotMachine` would refuse it first and
+        // this test would pass for the wrong reason.
+        register_machine(&pool, s.author, "citer@clients").await;
 
         assert!(
-            readback::is_resource_visible(&pool, author, subject)
+            readback::is_resource_visible(&pool, author, subject.finding())
                 .await
                 .unwrap(),
             "the author CAN read its own finding — so readability alone would have admitted it"
@@ -331,11 +639,203 @@ mod tests {
         );
     }
 
+    /// **THE HISTORICAL-FACT TEST.** The citer keeps read and LOSES every write path — the home is
+    /// reassigned to another owner and its read-only grant is all that remains — so
+    /// `can_modify_resource` is now false for it. Under the shipped proxy-only arm this returned
+    /// `Auditor` and the citer could grade its own citation; the arm must still say `Author`,
+    /// because `kb_block_provenance.contributed_by_event_id` still names its entity.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_citer_who_lost_write_but_kept_read_is_still_refused(pool: PgPool) {
+        let s = seed(&pool).await;
+        let subject = subject_of(&pool, &s).await;
+        let author = ProfileId::from(s.author);
+        register_machine(&pool, s.author, "citer@clients").await;
+
+        // Reassign the home to the (non-citing) auditor and give the citer a bare read grant. This
+        // is `reassign_resource`'s effect on access, reduced to the rows that matter.
+        //
+        // `can_modify_resource` has FOUR arms, and stripping write means clearing every one of them
+        // that names this principal — the first cut of this fixture moved only `owner_profile_id`
+        // and the precondition assert below caught it. `originator_profile_id` is a second
+        // home-arm spelling, and the container-write cascade admits whoever may author the HOME
+        // (`20260712000020_can_modify_active_floor.sql:64-72`), which for a profile-owned context is
+        // its owner — so the context has to move too, or the citer keeps modify through the
+        // container regardless of what the resource rows say.
+        sqlx::query(
+            "UPDATE kb_resource_homes SET owner_profile_id = $1, originator_profile_id = $1 \
+             WHERE resource_id = $2",
+        )
+        .bind(s.auditor)
+        .bind(s.finding)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE kb_contexts SET owner_id = $1 \
+              WHERE id = (SELECT anchor_id FROM kb_resource_homes \
+                           WHERE resource_id = $2 AND anchor_table = 'kb_contexts')",
+        )
+        .bind(s.auditor)
+        .bind(s.finding)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_access_grants \
+               (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+                granted_by_profile_id) \
+             VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+        )
+        .bind(s.finding)
+        .bind(s.author)
+        .bind(s.auditor)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let can_modify: Option<bool> =
+            sqlx::query_scalar!("SELECT can_modify_resource($1, $2)", *author, s.finding)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            can_modify,
+            Some(false),
+            "precondition: the proxy no longer refuses this principal — if it still did, this test \
+             could pass without the historical arm existing at all"
+        );
+        assert!(
+            readback::is_resource_visible(&pool, author, subject.finding())
+                .await
+                .unwrap(),
+            "precondition: it kept read, which is what makes the readmission possible"
+        );
+
+        assert_eq!(
+            AuditAuthority::resolve(&pool, author, subject)
+                .await
+                .unwrap(),
+            AuditAuthority::Author,
+            "authorship is a fact about the past: losing write must not readmit the citer to \
+             grading its own citation"
+        );
+    }
+
+    /// The other side of the same coin: the historical arm is keyed on the CITATION, so a principal
+    /// that contributed a *different* citation on the same block is still an auditor for this one.
+    /// Without the `source_id` conjunct this would refuse, and the gate would be unable to audit any
+    /// block a co-contributor ever touched.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn contributing_a_different_citation_on_the_block_does_not_refuse(pool: PgPool) {
+        let s = seed(&pool).await;
+
+        // A second source on the SAME block, contributed by the auditor's own entity.
+        let other_source: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('other source', '') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let auditor_entity: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'auditor@mcp') RETURNING id",
+        )
+        .bind(s.auditor)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let ev: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id) \
+             VALUES ((SELECT id FROM kb_event_types WHERE name = 'block_mutated'), $1) RETURNING id",
+        )
+        .bind(auditor_entity)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_block_provenance \
+               (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+             VALUES ($1, 'resource', $2, $3, 1)",
+        )
+        .bind(s.block)
+        .bind(other_source)
+        .bind(ev)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let auditor = ProfileId::from(s.auditor);
+        assert_eq!(
+            AuditAuthority::resolve(&pool, auditor, subject_of(&pool, &s).await)
+                .await
+                .unwrap(),
+            AuditAuthority::Auditor,
+            "the citation it did NOT contribute is still auditable by it"
+        );
+        let own = citation_subject(&pool, BlockId::from(s.block), other_source)
+            .await
+            .unwrap();
+        assert_eq!(
+            AuditAuthority::resolve(&pool, auditor, own).await.unwrap(),
+            AuditAuthority::Author,
+            "and the citation it DID contribute is not"
+        );
+    }
+
+    /// Spec §7's machine conjunct. The human reader holds exactly the grant the auditor holds and
+    /// contributed nothing — so readability and non-authorship both admit it, and the ONLY thing
+    /// refusing it is the `kb_machine_clients` registration. Delete the `NotMachine` probe and this
+    /// is the test that reds.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_reader_who_is_not_a_registered_machine_is_refused(pool: PgPool) {
+        let s = seed(&pool).await;
+        let subject = subject_of(&pool, &s).await;
+        let reader = ProfileId::from(s.human_reader);
+
+        assert!(
+            readback::is_resource_visible(&pool, reader, subject.finding())
+                .await
+                .unwrap(),
+            "it can read the finding — readability is not why this is refused"
+        );
+        assert_eq!(
+            AuditAuthority::resolve(&pool, reader, subject)
+                .await
+                .unwrap(),
+            AuditAuthority::NotMachine,
+            "an audit is an agent act: an unregistered principal must not write a permanent, \
+             unattributed verdict onto a visible trust signal"
+        );
+        assert!(authorize::<AuditAuthority>(&pool, reader, subject)
+            .await
+            .is_err());
+    }
+
+    /// A revoked registration is not a registration. `lookup_by_client_id` deliberately still
+    /// resolves a revoked row (the auth gate wants the timestamp for its message), so a probe that
+    /// forgot `revoked_at IS NULL` would readmit a decommissioned agent at every site but the door.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_revoked_machine_principal_is_refused(pool: PgPool) {
+        let s = seed(&pool).await;
+        let subject = subject_of(&pool, &s).await;
+        sqlx::query("UPDATE kb_machine_clients SET revoked_at = now() WHERE profile_id = $1")
+            .bind(s.auditor)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            AuditAuthority::resolve(&pool, ProfileId::from(s.auditor), subject)
+                .await
+                .unwrap(),
+            AuditAuthority::NotMachine
+        );
+    }
+
     /// The ordinary read denial — the arm that keeps the write no wider than the read.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_principal_who_cannot_read_is_refused(pool: PgPool) {
         let s = seed(&pool).await;
-        let subject = ResourceId::from(s.finding);
+        let subject = subject_of(&pool, &s).await;
 
         assert_eq!(
             AuditAuthority::resolve(&pool, ProfileId::from(s.outsider), subject)
@@ -350,26 +850,32 @@ mod tests {
         );
     }
 
-    /// Both denial arms refuse in the same dialect, and both are denials at all.
+    /// Every denial arm refuses in the same dialect, and every one is a denial at all.
     ///
     /// This guards a specific future change: a "let's make the denials consistent" pass that
-    /// converts one arm to `Forbidden`, or an `is_denial` "simplification" that matches only
-    /// `Unreadable`. The first turns the gate into an existence oracle beside a read deliberately
-    /// built to avoid one; the second silently restores self-grading. Neither would fail any other
-    /// test in this file.
+    /// converts one arm to `Forbidden`, or an `is_denial` "simplification" that drops an arm. The
+    /// first turns the gate into an existence oracle beside a read deliberately built to avoid one;
+    /// the second silently restores self-grading or re-opens the write to every reader. Neither
+    /// would fail any other test in this file.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn both_denials_render_not_found(pool: PgPool) {
+    async fn every_denial_renders_not_found(pool: PgPool) {
         let s = seed(&pool).await;
-        let subject = ResourceId::from(s.finding);
+        let subject = subject_of(&pool, &s).await;
+        register_machine(&pool, s.author, "citer@clients").await;
 
         assert!(AuditAuthority::Author.is_denial());
+        assert!(AuditAuthority::NotMachine.is_denial());
         assert!(AuditAuthority::Unreadable.is_denial());
         assert!(!AuditAuthority::Auditor.is_denial());
 
-        for (label, caller) in [("author", s.author), ("outsider", s.outsider)] {
+        for (label, caller) in [
+            ("author", s.author),
+            ("human reader", s.human_reader),
+            ("outsider", s.outsider),
+        ] {
             let err = authorize::<AuditAuthority>(&pool, ProfileId::from(caller), subject)
                 .await
-                .expect_err("both arms deny");
+                .expect_err("every non-admitting arm denies");
             assert!(
                 matches!(err, ApiError::NotFound),
                 "{label} must be refused with NotFound, never Forbidden — a distinguishable \
@@ -382,9 +888,137 @@ mod tests {
     /// probe cannot tell a nonexistent block from one on a finding it may not audit.
     #[sqlx::test(migrations = "../../migrations")]
     async fn an_unknown_block_is_not_found(pool: PgPool) {
-        let err = finding_of_block(&pool, BlockId::new())
+        let err = citation_subject(&pool, BlockId::new(), Uuid::now_v7())
             .await
             .expect_err("no such block");
         assert!(matches!(err, ApiError::NotFound));
+    }
+
+    // ── the dispatch-tick gate ────────────────────────────────────────────────
+
+    /// The endpoint half of the Critical fix: an ordinary authenticated principal cannot run the
+    /// auditor's tick at all, so it can never be handed a claimed job's payload.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn only_a_registered_machine_may_run_the_dispatch_tick(pool: PgPool) {
+        let s = seed(&pool).await;
+        assert!(
+            require_machine_principal(&pool, ProfileId::from(s.auditor))
+                .await
+                .is_ok(),
+            "the registered auditor ticks"
+        );
+        let err = require_machine_principal(&pool, ProfileId::from(s.human_reader))
+            .await
+            .expect_err("an unregistered principal must not");
+        assert!(
+            matches!(err, ApiError::Forbidden),
+            "Forbidden, not NotFound: the tick names no subject whose existence a 404 could hide"
+        );
+    }
+
+    // ── the job-completion gate ───────────────────────────────────────────────
+
+    async fn a_readable_cogmap(pool: &PgPool, principal: Uuid) -> Uuid {
+        let telos: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('telos', '') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let cogmap: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('m', $1) RETURNING id",
+        )
+        .bind(telos)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let team: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('job-team', 'Job Team') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(team)
+        .bind(principal)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+            .bind(cogmap)
+            .bind(team)
+            .execute(pool)
+            .await
+            .unwrap();
+        cogmap
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_registered_machine_that_reads_the_cogmap_may_complete(pool: PgPool) {
+        let s = seed(&pool).await;
+        let cogmap = a_readable_cogmap(&pool, s.auditor).await;
+        let proof = authorize::<AuditorJobAuthority>(
+            &pool,
+            ProfileId::from(s.auditor),
+            CogmapId::from(cogmap),
+        )
+        .await
+        .expect("the provisioned auditor completes its own job");
+        assert_eq!(proof.authority(), AuditorJobAuthority::Auditor);
+        assert_eq!(proof.subject(), CogmapId::from(cogmap));
+    }
+
+    /// A mere reader is no longer enough — the shipped gate admitted anyone who could read the
+    /// cogmap, which is how a human could suppress a map's auditing or induce duplicate sessions.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_human_reader_of_the_cogmap_may_not_complete(pool: PgPool) {
+        let s = seed(&pool).await;
+        let cogmap = a_readable_cogmap(&pool, s.human_reader).await;
+        assert_eq!(
+            AuditorJobAuthority::resolve(
+                &pool,
+                ProfileId::from(s.human_reader),
+                CogmapId::from(cogmap)
+            )
+            .await
+            .unwrap(),
+            AuditorJobAuthority::NotMachine
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_unreadable_or_absent_cogmap_is_the_same_not_found(pool: PgPool) {
+        let s = seed(&pool).await;
+        let cogmap = a_readable_cogmap(&pool, s.auditor).await;
+
+        for (label, caller, subject) in [
+            ("unreadable", s.outsider, cogmap),
+            ("absent", s.auditor, Uuid::now_v7()),
+        ] {
+            assert_eq!(
+                AuditorJobAuthority::resolve(
+                    &pool,
+                    ProfileId::from(caller),
+                    CogmapId::from(subject)
+                )
+                .await
+                .unwrap(),
+                AuditorJobAuthority::Unreadable,
+                "{label}"
+            );
+            let err = authorize::<AuditorJobAuthority>(
+                &pool,
+                ProfileId::from(caller),
+                CogmapId::from(subject),
+            )
+            .await
+            .expect_err("both arms deny");
+            assert!(
+                matches!(err, ApiError::NotFound),
+                "{label} must be 404 — one arm for 'no such map' and 'not yours'"
+            );
+        }
     }
 }

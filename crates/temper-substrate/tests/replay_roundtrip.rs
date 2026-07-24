@@ -206,6 +206,22 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     .await;
     let block = BlockId::from(first_block(&pool, finding).await);
 
+    // The `(block, source)` pair must be a LIVE citation — `citation_audit` refuses an audit of a
+    // non-citation (`20260723000010_citation_audits.sql`, `citation_is_live`). `make_resource`
+    // creates with no sources, so the provenance row is added here, borrowing the block's own
+    // genesis event as the contributing act (nothing under test reads that event's content).
+    sqlx::query(
+        "INSERT INTO kb_block_provenance \
+           (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+         SELECT $1, 'resource', $2, b.genesis_event_id, 0 \
+           FROM kb_content_blocks b WHERE b.id = $1",
+    )
+    .bind(block.uuid())
+    .bind(source.uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let audit_id = writes::record_citation_audit(
         &pool,
         CitationAuditParams {
@@ -224,8 +240,22 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     // rule (`replay.rs:3`): the namespace reset deletes the row, so replay's INSERT mints a FRESH
     // `uuid_generate_v7()` and the original id is gone by design. `audited_by_event_id` is the
     // replay-stable identity — it comes off the ledger, which is the whole point.
-    const BY_EVENT: &str = "SELECT block_id, source_kind::text, source_id, value \
+    // EVERY column, not a chosen four. The tuple used to stop at `value` while the assertion below
+    // claimed "byte-identical", so `reason` and — the one that mattered — `created` were outside the
+    // comparison. `created` is the audit's DECAY CLOCK: `resource_citation_quality` weights each
+    // verdict by `pow(0.5, age/30d)`, so a projector that leaves `created` to `DEFAULT now()`
+    // rewrites every weight on replay and can INVERT a band, while this test stayed green. `id` is
+    // deliberately still excluded — see the masked-surrogate note above.
+    const BY_EVENT: &str = "SELECT block_id, source_kind::text, source_id, value, reason, created \
                             FROM kb_citation_audits WHERE audited_by_event_id=$1";
+    type AuditRow = (
+        Uuid,
+        String,
+        Uuid,
+        f64,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+    );
 
     let event_id: Uuid =
         sqlx::query_scalar("SELECT audited_by_event_id FROM kb_citation_audits WHERE id=$1")
@@ -233,7 +263,28 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-    let before: (Uuid, String, Uuid, f64) = sqlx::query_as(BY_EVENT)
+
+    // Age the trail before snapshotting, exactly as `evidential_standing.rs` does to exercise decay
+    // without sleeping — and it is what makes the `created` comparison FALSIFYING rather than
+    // decorative. A same-second write reprojects a `now()` within microseconds of the original, so
+    // the broken projector would pass; a year-old audit reprojects a year off. Both the event's
+    // `occurred_at` (replay's source of truth) and the row's `created` move together, which is the
+    // invariant the projector is supposed to maintain.
+    sqlx::query("UPDATE kb_events SET occurred_at = now() - interval '365 days' WHERE id=$1")
+        .bind(event_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE kb_citation_audits SET created = (SELECT occurred_at FROM kb_events WHERE id=$1) \
+          WHERE audited_by_event_id=$1",
+    )
+    .bind(event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let before: AuditRow = sqlx::query_as(BY_EVENT)
         .bind(event_id)
         .fetch_one(&pool)
         .await
@@ -245,7 +296,7 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
         .await
         .expect("replay must find a projector for citation_audited — no 'no projector' error");
 
-    let after: (Uuid, String, Uuid, f64) = sqlx::query_as(BY_EVENT)
+    let after: AuditRow = sqlx::query_as(BY_EVENT)
         .bind(event_id)
         .fetch_one(&pool)
         .await
@@ -253,7 +304,8 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
 
     assert_eq!(
         before, after,
-        "the reprojected row must be byte-identical to the original"
+        "the reprojected row must be byte-identical to the original — INCLUDING `created`, which \
+         is the decay clock the standing projection weights every verdict by"
     );
 
     // ...and exactly once. `ON CONFLICT (audited_by_event_id) DO NOTHING` is what makes a second

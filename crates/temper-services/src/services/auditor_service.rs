@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::error::ApiResult;
 use temper_core::types::auditor::{AuditJobPayload, AuditSweepRow};
 use temper_core::types::ids::ProfileId;
-use temper_core::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP;
+use temper_core::types::workflow_job::clamp_auditor_cap;
 
 /// One cogmap's worth of audit work: the queue key, and the finding list that rides its payload.
 ///
@@ -34,8 +34,11 @@ pub struct CogmapAuditWork {
 }
 
 /// Sweep the principal's cogmap-homed findings with incomplete audit coverage, most-uncovered-first
-/// (spec §6.3). `cap` is a **finding** budget — `audit_drift_sweep`'s `p_limit` — defaulting to
-/// [`DEFAULT_AUDITOR_DISPATCH_CAP`].
+/// (spec §6.3). `cap` is a **finding** budget — `audit_drift_sweep`'s `p_limit` — resolved through
+/// [`clamp_auditor_cap`], which supplies the default AND bounds the request. The bound is
+/// load-bearing, not hygiene: the sweep's `scored` CTE calls `resource_citation_magnitude` and
+/// `resource_audit_coverage` for **every** candidate before `p_limit` applies, and the raw `as i32`
+/// this replaced wrapped a large `cap` into a negative `LIMIT` (a 500 from user input).
 ///
 /// Auth: the gate is inside the SQL. `audit_drift_sweep` routes through
 /// `steward_candidate_cogmaps(p_principal)` **and** `resources_visible_to(p_principal)`
@@ -48,7 +51,7 @@ pub async fn drift_sweep(
     principal: ProfileId,
     cap: Option<i64>,
 ) -> ApiResult<Vec<AuditSweepRow>> {
-    let limit = cap.unwrap_or(DEFAULT_AUDITOR_DISPATCH_CAP) as i32;
+    let limit = clamp_auditor_cap(cap);
     let rows = sqlx::query!(
         r#"
         SELECT cogmap_id  AS "cogmap_id!: Uuid",
@@ -210,8 +213,24 @@ mod tests {
         .unwrap()
     }
 
+    /// Register `profile` in the `kb_machine_clients` allowlist — the conjunct the dispatch tick now
+    /// requires (`authz::require_machine_principal`). The auditor IS a machine principal by spec
+    /// §5.2; before the fix wave any authenticated principal could run the tick.
+    async fn register_machine(pool: &PgPool, profile: Uuid, client_id: &str) {
+        sqlx::query(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+             VALUES ($1, $1, $2, $2)",
+        )
+        .bind(client_id)
+        .bind(profile)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     async fn seed(pool: &PgPool) -> Seeded {
         let principal = insert_profile(pool, "auditor").await;
+        register_machine(pool, principal, "auditor@clients").await;
 
         let team: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_teams (slug, name) VALUES ('aud-team', 'Aud Team') RETURNING id",
@@ -483,6 +502,147 @@ mod tests {
         assert_eq!(
             steward_still_pending, 1,
             "and the auditor's claim does not steal the steward's job"
+        );
+    }
+
+    /// **The endpoint half of the Critical fix, at the tick.** An ordinary authenticated principal
+    /// — reaching cogmap and finding, so nothing else refuses it — cannot run the tick at all.
+    /// Before the fix this returned claimed jobs; the assertion is the refusal AND its class.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_unregistered_principal_cannot_run_the_tick(pool: PgPool) {
+        let s = seed(&pool).await;
+        seed_finding_with_one_citation(&pool, &s, "finding-a").await;
+        // A second profile in the SAME team — full reach, no `kb_machine_clients` row.
+        let human = insert_profile(&pool, "human").await;
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             SELECT team_id, $1, 'member' FROM kb_team_cogmaps WHERE cogmap_id = $2",
+        )
+        .bind(human)
+        .bind(s.cogmap)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !drift_sweep(&pool, human.into(), None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "precondition: it reaches the work — reach is not why the tick refuses"
+        );
+
+        let err = DbBackend::new(pool.clone(), human.into())
+            .auditor_dispatch_tick(AuditorDispatchTick {
+                cap: None,
+                correlation: None,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect_err("an unregistered principal must not run the auditor's tick");
+        assert!(
+            matches!(err, temper_core::error::TemperError::Forbidden),
+            "expected Forbidden — the tick names no subject whose existence a 404 could hide; \
+             got {err:?}"
+        );
+    }
+
+    /// **The claim half of the Critical fix, end to end through the tick.** Two tenants, each with
+    /// its own team, cogmap and drifted finding, and neither reaching the other. Tenant A's tick
+    /// must come back with A's job only — against the shipped unscoped claim it comes back with
+    /// both, disclosing B's `cogmap_id` and B's finding ids and taking B's job `in_progress` under
+    /// A's lease, where it dies at `max_attempts` without B ever auditing anything.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_tick_never_claims_another_tenants_job(pool: PgPool) {
+        let a = seed(&pool).await;
+        let a_finding = seed_finding_with_one_citation(&pool, &a, "finding-a").await;
+
+        // Tenant B: a second principal, team, cogmap and finding, disjoint from A's.
+        let b_principal = insert_profile(&pool, "auditor-b").await;
+        register_machine(&pool, b_principal, "auditor-b@clients").await;
+        let b_team: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('b-team', 'B Team') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(b_team)
+        .bind(b_principal)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let b_telos: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('b-telos', '') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let b_cogmap: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('b-map', $1) RETURNING id",
+        )
+        .bind(b_telos)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+            .bind(b_cogmap)
+            .bind(b_team)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let b = Seeded {
+            principal: b_principal,
+            cogmap: b_cogmap,
+            event: a.event,
+        };
+        let b_finding = seed_finding_with_one_citation(&pool, &b, "finding-b").await;
+
+        // B's own tick enqueues and claims B's work — the job A must not be able to take.
+        DbBackend::new(pool.clone(), b_principal.into())
+            .auditor_dispatch_tick(AuditorDispatchTick {
+                cap: None,
+                correlation: None,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("B ticks its own tenant");
+
+        let claimed = DbBackend::new(pool.clone(), a.principal.into())
+            .auditor_dispatch_tick(AuditorDispatchTick {
+                cap: None,
+                correlation: None,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("A ticks")
+            .value;
+
+        assert!(
+            claimed.iter().any(|j| j.cogmap_id == a.cogmap
+                && j.findings.len() == 1
+                && j.findings[0] == a_finding),
+            "precondition: A really did claim its OWN work, so an empty result cannot be why the \
+             assertion below holds"
+        );
+        assert!(
+            !claimed.iter().any(|j| j.cogmap_id == b.cogmap),
+            "A must never receive B's job — its payload is B's finding-id list ({b_finding}) and \
+             its slot is B's pipeline"
+        );
+        let b_claimant: Option<Uuid> = sqlx::query_scalar(
+            "SELECT claimed_by_profile_id FROM kb_workflow_jobs \
+              WHERE cogmap_id = $1 AND persona = 'auditor'",
+        )
+        .bind(b.cogmap)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            b_claimant,
+            Some(b_principal),
+            "and B's job is still leased to B, not re-stamped by A's claim"
         );
     }
 

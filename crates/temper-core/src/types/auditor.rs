@@ -72,7 +72,9 @@ pub struct ClaimedAuditJob {
 }
 
 /// Request body for `POST /api/auditor/dispatch`. Optional — the server default applies
-/// ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]).
+/// ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]); a supplied value is clamped into
+/// `[1, MAX_AUDITOR_DISPATCH_CAP]` ([`crate::types::workflow_job::clamp_auditor_cap`]) and a value
+/// below 1 is refused at the surface with 400.
 ///
 /// There is no `threshold` twin of the steward's request: the auditor's selection predicate is
 /// structural (`coverage < magnitude`, spec §6.3), not a tunable count, so there is nothing for a
@@ -88,9 +90,13 @@ pub struct AuditorDispatchTickRequest {
 
 /// Acknowledgement of an auditor session completing its dispatch job.
 ///
-/// `job_id` is `None` when no job was active for the cogmap — a manual audit outside the dispatch
-/// loop, or a job the reaper already expired. That is an outcome, not an error: the session's
-/// verdicts stand either way, and the coverage sweep is what decides whether the finding comes back.
+/// `job_id` is `None` when nothing OF THE CALLER'S was in flight for the cogmap — a manual audit
+/// outside the dispatch loop, an already-completed job, or a lease the reaper expired. That is an
+/// outcome, not an error: the session's verdicts stand either way, and the coverage sweep is what
+/// decides whether the finding comes back. A caller that never claimed the job also lands here,
+/// which is deliberate: completion is restricted to the claimant's own in-flight job (spec §6.5),
+/// so a non-claimant's call is a guaranteed no-op rather than a refusal that would turn "there is
+/// no job" into an error for the legitimate session.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditorJobCompleteAck {
