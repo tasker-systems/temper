@@ -547,3 +547,7 @@ alone and **not shippable alone**, which is the case that convention names.
 `admin_disconnect_slack_principal` (`slack_disconnect_service.rs:267`) is a Bucket-1
 system-authority act still gated by a bare bool — task `019f8ec3-793f-7c52-9378-47dda5d90a5d`. It
 takes `&SystemAdmin` and reads `admin.actor()`. Independent of this design.
+
+> **Done 2026-07-23.** It takes `&SystemAdmin`, and `DisconnectRequest` lost its `actor` field
+> so the operator can only come from the proof. See the enclosure gap section (§7) of
+> `2026-07-22-scoped-authority-policy-layer-design.md`.

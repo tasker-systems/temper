@@ -88,15 +88,15 @@ pub async fn disconnect_me(
     for principal in principals {
         let outcome = disconnect_slack_principal(
             &state.pool,
+            // Self-serve: the actor IS the subject. The principals were derived
+            // from this profile's own link rows.
+            profile_id,
             DisconnectRequest {
                 slack_principal_id: &principal,
                 key: &cfg.vault_key,
                 mode: state.config.auth.mode,
                 revoke_url: provider.revoke_url.clone(),
                 client_id: &cfg.client_id,
-                // Self-serve: the actor IS the subject. The principals were
-                // derived from this profile's own link rows.
-                actor: profile_id,
             },
         )
         .await?;
@@ -157,10 +157,6 @@ pub async fn admin_disconnect(
             mode: state.config.auth.mode,
             revoke_url: provider.revoke_url,
             client_id: &cfg.client_id,
-            // The self-serve arm's field, which this arm does not get to decide:
-            // the service overwrites it from the proof. Filled with the same
-            // value the proof carries so the struct is never momentarily a lie.
-            actor: ProfileId::from(auth.0.profile().id),
         },
     )
     .await?;
