@@ -29,6 +29,15 @@ extend = "./tools/cargo-make/main.toml"
 # DATABASE_URL, AUTH0_*, SESSION_SECRET — production deployments (Vercel) set
 # their env vars natively and never go through cargo-make. The `.env` file is
 # gitignored; copy from `.env.template` to bootstrap.
+#
+# THE FILE MUST EXIST OR EVERY `cargo make` TASK FAILS. cargo-make treats a missing env file as a
+# hard error, and there is no opt-out — `{ path = "./.env", required = false }` was measured and
+# still fails. So a fresh clone cannot run `cargo make check` (or anything else) until `.env` is
+# created, and the failure names the file rather than the bootstrap step.
+#
+# This is why the `rust-quality` CI job `touch .env` before the ts-rs drift gate: it is the first
+# and only CI step that invokes cargo-make, so it is the first place this constraint has ever been
+# reachable from CI. If you add another cargo-make step to any workflow, it needs the same line.
 env_files = ["./.env"]
 
 [env]

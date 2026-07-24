@@ -160,6 +160,26 @@ bun run check          # svelte-check
 > is a stale local `node_modules`, not your change — `bun install` first; CI installs fresh. See
 > [[project_ci_flake_signatures]].)
 
+> **`generate-ts-types` writes TWO trees, and both are gated.** Besides temper-ui's
+> `src/lib/types/generated/`, it emits `packages/agent-workflows/mention/agent/generated/` — the
+> mention agent is workspace-isolated (not a bun `workspaces` member), so no import path reaches
+> temper-ui's tree and it needs its own copy. That export is **filtered to one type**
+> (`export_bindings_linkrefusal`) because ts-rs exports each type's transitive closure: two files
+> instead of the 36 an unfiltered crate export deposits. It also runs with `ts-rs/import-esm`, since
+> the agent is `moduleResolution: NodeNext` where an extensionless relative import is TS2835 — a flag
+> temper-ui neither needs nor gets, so the two trees differ in import style **by design**.
+>
+> `check-ts-rs-drift.sh` (task `ts-rs-drift`, in `cargo make check` and the `rust-quality` CI job)
+> regenerates every tree and fails on any difference. It derives the tree list from main.toml's
+> `TS_RS_EXPORT_DIR` lines, so a third consumer is covered with no edit — and refuses to run over
+> zero trees rather than passing having checked nothing. It uses `git status`, not
+> `git diff --exit-code`, because the diff form cannot see a **newly generated untracked** file:
+> temper-ui's `slack_link.ts` sat in exactly that state for a full PR cycle. **This is the repo's
+> only cross-LANGUAGE gate** — every other check lives inside one language, which is how PR #498
+> merged with `tsc` clean and 79/79 tests green while the agent spoke a retired wire contract. It
+> does **not** cover the wire `status` tags: those live in temper-api, which has no ts-rs (task
+> `019f910b-579b-74c2-bf05-702aaed0a011`).
+
 ## Branch and Commit Conventions
 
 These patterns are observed in recent history rather than rigidly enforced. Match the existing style when in doubt.

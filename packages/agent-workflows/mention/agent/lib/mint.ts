@@ -18,49 +18,29 @@ import { requireEnv, signIntentRequest } from "./link.js";
  */
 
 /**
- * Why `admit` refused this human's principal standing — mirrors the Rust `Refusal`
- * (`#[serde(tag = "kind", rename_all = "snake_case")]`,
- * `crates/temper-principal/src/refusal.rs:23`).
+ * `LinkRefusal` and `Refusal` are GENERATED from the Rust by ts-rs — not mirrored by hand.
  *
- * Only the six variants `temper_principal::admit` can actually produce are modelled. The
- * transition-machine refusals (`illegal_transition`, `insufficient_authority`,
- * `no_prior_standing`) are unreachable through the mint, and that is *pinned* rather than
- * assumed: `only_admit_reachable_refusals_ever_surface`
- * (`crates/temper-services/src/services/slack_link_state.rs:173`) panics if `resolve` ever
- * surfaces one. Modelling them here would invent three user-facing sentences for states no
- * user can reach.
+ * `cargo make generate-ts-types` writes `agent/generated/` from
+ * `crates/temper-core/src/types/slack.rs` (`LinkRefusal`) and its transitive closure
+ * (`Refusal`/`Standing`/`ActorAuthority` from temper-principal). The package gets its own copy
+ * rather than importing temper-ui's because it is workspace-isolated by design (CLAUDE.md), and
+ * `.github/scripts/check-ts-rs-drift.sh` fails the build if the committed files stop matching
+ * what the Rust emits.
  *
- * HAND-MIRRORED, deliberately and temporarily. The authoritative spelling is the ts-rs export
- * at `packages/temper-ui/src/lib/types/generated/admission.ts` — which this package cannot
- * import, because it is workspace-isolated (see CLAUDE.md). Emitting the generated type into
- * *this* tree, and gating it against drift, is exactly Task 8/9 of the linked-identity plan
- * (`docs/superpowers/plans/2026-07-23-linked-identity-state-machine.md`). Until that lands, the
- * only thing keeping this in step with Rust is a human reading both — so if you are here
- * changing it, that gate is the fix, not a wider hand-mirror.
+ * **Do not edit those files, and do not re-mirror these types here.** A hand-written copy is
+ * exactly what shipped a mention agent speaking a retired wire contract while `tsc` and 79 tests
+ * stayed green (PR #498) — the drift was between languages, where no single-language gate can see
+ * it.
+ *
+ * **The remedy splits on `reason`, and that split is the point of the type.** `not_vaulted` is
+ * fixed by re-linking. Every `standing` refusal is fixed by an ADMIN, and re-linking does nothing
+ * for it — telling a denied human to reconnect sends them round a loop that cannot terminate. The
+ * former flat `revoked` arm said exactly that to everyone.
  */
-export type StandingRefusal =
-  | { readonly kind: "no_standing" }
-  | { readonly kind: "unrecognized_standing"; readonly raw: string }
-  | { readonly kind: "denied" }
-  | { readonly kind: "requested" }
-  | { readonly kind: "revoked" }
-  | { readonly kind: "deactivated" };
+export type { LinkRefusal } from "../generated/slack_link.js";
+export type { Refusal } from "../generated/admission.js";
 
-/**
- * Why a mint was refused — mirrors the Rust `LinkRefusal`
- * (`#[serde(tag = "reason", rename_all = "snake_case")]`,
- * `crates/temper-core/src/types/slack.rs:30`).
- *
- * **The remedy splits on this tag, and that split is the entire point of the type.**
- * `not_vaulted` is fixed by re-linking. Every `standing` refusal is fixed by an ADMIN, and
- * re-linking does nothing for it — telling a denied human to reconnect sends them round a loop
- * that cannot terminate. The former flat `revoked` arm said exactly that to everyone, which is
- * the false remedy this whole type exists to end.
- */
-export type LinkRefusal =
-  | { readonly reason: "not_linked" }
-  | { readonly reason: "not_vaulted" }
-  | { readonly reason: "standing"; readonly refusal: StandingRefusal };
+import type { LinkRefusal } from "../generated/slack_link.js";
 
 /**
  * What temper says when asked to mint for this Slack principal — mirrors the Rust

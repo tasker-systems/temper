@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { Refusal } from "../agent/generated/admission.js";
 import {
   decideIdentity,
   isHumanPrincipal,
@@ -228,6 +229,25 @@ describe("standingReply maps the six admit refusals onto three remedies", () => 
     expect(standingReply({ kind: "requested" }, "someone")).toBe(pendingApprovalPrompt("someone"));
     expect(pendingApprovalPrompt("someone").toLowerCase()).toContain("nothing more is needed");
   });
+
+  // FAILS IF: a transition-machine refusal is given user-facing copy, or falls through to
+  // `undefined`. These three are unreachable through the mint — `resolve` delegates standing to
+  // `admit`, and `only_admit_reachable_refusals_ever_surface` panics in Rust if one escapes — so
+  // reaching them means OUR invariant broke, not that the user did anything. They are handled
+  // explicitly rather than by a `default:` so a tenth `Refusal` variant is a compile error.
+  it.each(["illegal_transition", "insufficient_authority", "no_prior_standing"] as const)(
+    "routes the unreachable %s to the our-fault reply and logs it",
+    (kind) => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      // Cast: these arms carry extra fields, and the point of the test is the KIND dispatch.
+      const message = standingReply({ kind } as unknown as Refusal, "someone");
+
+      expect(message).toBe(unknownStandingPrompt("someone"));
+      expect(spy).toHaveBeenCalledWith(expect.stringMatching(/admit cannot produce/), { kind });
+      spy.mockRestore();
+    },
+  );
 
   it("routes an unrecognized standing to the our-fault reply, and LOGS the raw value", () => {
     // FAILS IF: the raw value is swallowed. This state means temper stored a standing this

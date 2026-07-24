@@ -7,9 +7,10 @@
  * (`standingReply` writes one `console.error` on an unrecognized standing; that is a
  * diagnostic on an anomaly path, not I/O this module's callers depend on.)
  *
- * The `StandingRefusal` import is `import type` and therefore ERASED at compile — importing the
- * mint module for real would pull in `link.js`'s env reads and cost this module its
- * env-free-at-import property, which every test here relies on.
+ * `Refusal` is imported from `agent/generated/` — the ts-rs output — rather than from the mint
+ * module, which would have pulled `link.js`'s env reads in behind it and cost this module its
+ * env-free-at-import property, which every test here relies on. It is `import type` and so
+ * erased at compile in any case.
  *
  * ## principalId is OPAQUE
  *
@@ -35,7 +36,7 @@
  * parsing the principalId is never necessary.
  */
 
-import type { StandingRefusal } from "./mint.js";
+import type { Refusal } from "../generated/admission.js";
 
 /** Why an inbound principal was refused a dispatch. */
 export type RejectionReason =
@@ -232,7 +233,7 @@ export function unknownStandingPrompt(handle: string): string {
  * are modelled as a union instead of a `string` — and until the Task 8/9 drift gate lands, this
  * compile error is the only mechanism that will notice a new Rust variant at all.
  */
-export function standingReply(refusal: StandingRefusal, handle: string): string {
+export function standingReply(refusal: Refusal, handle: string): string {
   switch (refusal.kind) {
     // Never approved, no standing row at all, approved-then-withdrawn, or the profile itself
     // disabled. Four different histories, one remedy: an admin decides.
@@ -250,6 +251,24 @@ export function standingReply(refusal: StandingRefusal, handle: string): string 
       // never heard of — so it is logged here, beside the branch that knows it exists, rather
       // than left for a caller to dig back out by re-switching on the kind.
       console.error("temper returned an unrecognized principal standing", { raw: refusal.raw });
+      return unknownStandingPrompt(handle);
+
+    // The three transition-machine refusals. `Refusal` is the WHOLE generated type, but only the
+    // six above are reachable through the mint: `resolve` delegates standing to
+    // `temper_principal::admit`, and `only_admit_reachable_refusals_ever_surface`
+    // (`crates/temper-services/src/services/slack_link_state.rs:173`) panics if any of these ever
+    // surfaces there. So arriving here means that Rust invariant broke — which makes it our bug,
+    // not a state to write user-facing copy for, and it reuses the our-bug reply for that reason.
+    //
+    // Handled EXPLICITLY rather than by a `default:` so the switch stays exhaustive: a tenth
+    // `Refusal` variant is then a compile error here, which — until it reaches this file — is the
+    // earliest anything notices a new Rust variant.
+    case "illegal_transition":
+    case "insufficient_authority":
+    case "no_prior_standing":
+      console.error("mint surfaced a refusal admit cannot produce — check slack_link_state", {
+        kind: refusal.kind,
+      });
       return unknownStandingPrompt(handle);
   }
 }

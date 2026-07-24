@@ -34,8 +34,20 @@ dependencies = [
   "security-tripwires",
   "openapi-rb-drift",
   "openapi-ts-drift",
+  "ts-rs-drift",
   "ts-check"
 ]
+
+[tasks.ts-rs-drift]
+description = "Fail if any committed ts-rs generated type has drifted from the Rust that produces it"
+# The cross-LANGUAGE gate. Every other check here lives inside one language — clippy, tsc, biome —
+# so a Rust type and its TypeScript mirror can disagree while both sides stay green. That is not
+# hypothetical: PR #498 merged with tsc clean and 79/79 tests passing while the mention agent
+# spoke a mint contract the server had stopped emitting.
+#
+# Like openapi-ts-drift and unlike openapi-rb-drift, this NEVER skips: it needs only cargo, which
+# is already required by every other task in this list.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-ts-rs-drift.sh"]
 
 [tasks.security-tripwires]
 description = "Run the code-quality security tripwires (grant sinks, route auth, handler authz, signature secrets, credential Debug)"
@@ -282,7 +294,54 @@ script = [
   "generated=$(ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts 2>/dev/null | wc -l | tr -d ' ')",
   "if [ \"$generated\" -eq 0 ]; then echo 'ERROR: No TypeScript files were generated'; exit 1; fi",
   "echo \"TypeScript types generated: $generated file(s) in packages/temper-ui/src/lib/types/generated/\"",
-  "ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts"
+  "ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts",
+
+  # ---------------------------------------------------------------------------
+  # Second output tree: the @temper mention agent.
+  #
+  # It gets its OWN copy rather than importing temper-ui's because it is
+  # workspace-isolated by design — "deliberately NOT a bun `workspaces` member"
+  # (packages/agent-workflows/mention/CLAUDE.md), so no import path reaches
+  # temper-ui's tree. Two trees is the cost of that isolation, and the drift gate
+  # below is what keeps them honest.
+  #
+  # FILTERED to `export_bindings_linkrefusal`, not a whole-crate export. ts-rs
+  # emits one test per type and exports each type's TRANSITIVE CLOSURE, so this
+  # single filter yields exactly `slack_link.ts` (LinkRefusal) plus the
+  # `admission.ts` it imports (Refusal/Standing/ActorAuthority) — 2 files, where
+  # an unfiltered `-p temper-core` would deposit 36, most of them types this
+  # agent has no relationship to (graph, cognitive maps, resources).
+  #
+  # The closure is why there is no hand-maintained file list here: give
+  # LinkRefusal a new dependency and ts-rs emits that file too, automatically.
+  #
+  # NOTE the crate is temper-CORE. `LinkRefusal` lives in temper-core
+  # (crates/temper-core/src/types/slack.rs), NOT temper-principal — exporting
+  # temper-principal alone would produce `admission.ts` and no `slack_link.ts`,
+  # i.e. everything except the type the agent actually branches on.
+  # `ts-rs/import-esm` is enabled for THIS invocation only, and it is load-bearing.
+  # Without it ts-rs emits `from "./admission"`, and the mention package compiles
+  # under `"moduleResolution": "NodeNext"` (tsconfig.json) where an extensionless
+  # relative ESM import is error TS2835. With it, `from "./admission.js"`.
+  #
+  # NOT enabled repo-wide: temper-ui resolves via its bundler and does not need
+  # the suffix, so flipping the feature globally would rewrite the import line of
+  # every generated file in its tree — 36 files of churn, and a change to the UI
+  # build, to fix a problem only this consumer has. The two trees therefore differ
+  # in import style by design. That is not drift: each tree is regenerated and
+  # diffed against ITSELF by the gate below, with the emit style its consumer
+  # requires.
+  "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/agent-workflows/mention/agent/generated",
+  "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/agent-workflows/mention/agent/generated cargo test -p temper-core --features typescript,ts-rs/import-esm export_bindings_linkrefusal",
+
+  # This dir gets its OWN assertion. The count above covers only temper-ui, so
+  # without this a filter that matches NOTHING — the failure mode of a renamed
+  # type, since `cargo test` exits 0 when zero tests match — would leave this
+  # tree empty and still pass. Name the files rather than counting them: the
+  # closure is small and known, and "2 files" would also be satisfied by the
+  # wrong two.
+  "for f in slack_link.ts admission.ts; do if [ ! -s \"${CARGO_MAKE_WORKING_DIRECTORY}/packages/agent-workflows/mention/agent/generated/$f\" ]; then echo \"ERROR: mention agent types missing $f — did the ts-rs test filter stop matching (renamed type)?\"; exit 1; fi; done",
+  "echo \"TypeScript types generated: slack_link.ts, admission.ts in packages/agent-workflows/mention/agent/generated/\""
 ]
 
 [tasks.openapi]
