@@ -71,8 +71,8 @@ BEGIN
     INSERT INTO kb_citation_audits (block_id, source_kind, source_id, value, reason, audited_by_event_id)
     VALUES (
         (p_payload->>'block_id')::uuid,
-        (p_payload->>'source_kind')::provenance_source_kind,
-        (p_payload->>'source_id')::uuid,
+        (p_payload #>> '{source,kind}')::provenance_source_kind,
+        (p_payload #>> '{source,value}')::uuid,
         (p_payload->>'value')::double precision,
         p_payload->>'reason',
         p_event
@@ -94,6 +94,17 @@ $$;
 -- resolve the event anchor from `kb_resource_homes` for the block's resource, append the event,
 -- project it and return the projector's result.
 --
+-- THE SOURCE IS READ NESTED, matching the incumbent. `_insert_block_provenance`
+-- (`20260704000003_block_provenance_write_path.sql:29-30`) reads a citation's source as
+-- `v_inc #>> '{source,kind}'` / `#>> '{source,value}'`, because that is what Rust's
+-- `ProvenanceSource` emits: `#[serde(tag = "kind", content = "value")]`
+-- (`temper-core/src/types/provenance.rs:37`) produces `{"source":{"kind":…,"value":…}}`. Reading
+-- two flat `source_kind`/`source_id` keys instead would force the Rust payload to carry stringly-
+-- typed fields and a hand-written flattening step — a second spelling of a shape the codebase
+-- already names, and so a drift site. The typed payload struct is `payloads::CitationAudited`
+-- with a plain `source: ProvenanceSource` field, exactly like its `BlockProvenanceCorrected`
+-- sibling (`payloads.rs`).
+--
 -- Only resource-kind citations are auditable (spec §6.2): standing reads only resource-kind
 -- bases (`20260721000010_evidential_standing_memo.sql:110`), so an audit recorded against a
 -- remote/event citation would be a silent no-op the auditor could never detect. Rejected here,
@@ -109,9 +120,9 @@ BEGIN
     IF v_resource IS NULL THEN
         RAISE EXCEPTION 'citation_audit: block % not found', v_block;
     END IF;
-    IF (p_payload->>'source_kind') <> 'resource' THEN
+    IF (p_payload #>> '{source,kind}') <> 'resource' THEN
         RAISE EXCEPTION 'citation_audit: only resource-kind citations are auditable (got %)',
-            p_payload->>'source_kind';
+            p_payload #>> '{source,kind}';
     END IF;
     SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
         WHERE resource_id = v_resource ORDER BY (anchor_table = 'kb_cogmaps') DESC LIMIT 1;

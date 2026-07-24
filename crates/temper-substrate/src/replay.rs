@@ -199,6 +199,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::RegionMaterialized
             | EventKind::RelationshipFolded
             | EventKind::BlockProvenanceAnnotated
+            // citation_audited (Set 5): a signed verdict on a citation, no chunk content — never
+            // selected by this function's `WHERE et.name IN (...)` filter above (it lists only
+            // the five content-bearing types), so this arm exists purely to satisfy exhaustiveness.
+            | EventKind::CitationAudited
             | EventKind::ResourceReassigned
             | EventKind::ContextReassigned
             | EventKind::DelegatedLaunch
@@ -490,6 +494,16 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_block_provenance rows, touches no chunks (so replay reprojects it without prose).
             EventKind::BlockProvenanceAnnotated => {
                 sqlx::query("SELECT _project_block_annotated($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            // citation_audited (Set 5, spec §4.1-4.2): payload-only projector, no sidecar — records
+            // one immutable kb_citation_audits row, idempotent on the event id (ON CONFLICT DO
+            // NOTHING + fallback SELECT), so fire and replay produce identical rows.
+            EventKind::CitationAudited => {
+                sqlx::query("SELECT _project_citation_audited($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)

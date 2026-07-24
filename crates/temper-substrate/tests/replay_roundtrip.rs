@@ -8,9 +8,13 @@
 
 mod common;
 
+use temper_substrate::ids::{BlockId, ContextId, EntityId, ProfileId, ResourceId};
+use temper_substrate::payloads::{AnchorRef, ProvenanceSource};
+use temper_substrate::writes::{self, CitationAuditParams, CreateParams};
 use temper_substrate::{
     replay, scenario::bootseed, scenario::model::Scenario, scenario::runner, write,
 };
+use uuid::Uuid;
 
 const ONBOARDING: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -84,4 +88,182 @@ async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
         proven >= 1,
         "at least one recorded materialization must be fresh enough to re-prove"
     );
+}
+
+// ── Task 2 — citation_audited survives replay ────────────────────────────────────────────────
+//
+// Local fixture helpers (duplicated per file rather than shared — established convention per
+// `citation_audits.rs`'s own header: `block_content.rs`, `invocation_envelope.rs`,
+// `search_index.rs`, `search_surface_a.rs`, and `write_path_mutations.rs` each carry their own
+// copy). `kb_profiles`/`kb_contexts`/`kb_entities` are `INPUT_TABLES` (restored verbatim by
+// `replay::replay`); `kb_resources`/`kb_content_blocks`/`kb_citation_audits` are projections
+// rebuilt by walking events — so this test's resources and audit must come back from the SAME
+// `_project_resource_created`/`_project_citation_audited` halves replay always runs.
+
+async fn system_actor(pool: &sqlx::PgPool) -> (ProfileId, EntityId) {
+    let profile: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let entity: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    (ProfileId::from(profile), EntityId::from(entity))
+}
+
+async fn make_home(pool: &sqlx::PgPool, owner: ProfileId, slug: &str) -> ContextId {
+    ContextId::from(
+        common::insert_context(pool, "kb_profiles", owner.uuid(), slug, slug)
+            .await
+            .unwrap(),
+    )
+}
+
+async fn make_resource(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    home: ContextId,
+    title: &str,
+    uri: &str,
+) -> ResourceId {
+    writes::create_resource_with(
+        pool,
+        CreateParams {
+            title,
+            origin_uri: uri,
+            body: "seed body",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .unwrap()
+}
+
+async fn first_block(pool: &sqlx::PgPool, resource: ResourceId) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// LOAD-BEARING: falsifies the EXACT bug the brief names — a missing `EventKind::
+/// from_canonical_name` arm for `citation_audited` compiles clean and hard-fails only at replay
+/// time, with "replay: no projector for event type citation_audited", against any database that
+/// ever recorded an audit (the `resource_finalized` precedent, `events.rs`'s own `EventKind` doc
+/// comment). Fires one citation audit through the Rust write path, snapshots, resets to a clean
+/// UN-seeded namespace, replays, and asserts the row comes back byte-identical — identified by its
+/// emitting event, not by its surrogate id, per the masked-surrogate rule (see below).
+/// Proof obligation 2 (payload spec §7), extended to this event type.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
+    // NO `common::reset_schema` in the setup half, unlike the sibling above. reset_schema
+    // re-applies every migration and then TRUNCATEs the data tables — including `kb_event_types`
+    // (`common/mod.rs:16-25`). `citation_audited` is registered by a migration INSERT
+    // (`20260723000010_citation_audits.sql`), not by the canonical seed, so the truncate drops it
+    // and `bootseed::seed_system` — which re-seeds only the canonical types — never restores it:
+    // `_event_append` then raises `event_type citation_audited not seeded`
+    // (`20260624000002_canonical_functions.sql:777`). The fresh `MIGRATOR` database this test is
+    // handed already carries the registration, which is what Task 1's tests rely on too.
+    //
+    // The reset BEFORE replay (below) is still correct and is the point of the test: `snapshot`
+    // dumps `kb_event_types` as an INPUT_TABLE (`replay.rs:112`), so replay restores the
+    // registration along with the ledger.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "ca-replay-t2").await;
+    let finding = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "finding",
+        "temper://ca/replay-finding",
+    )
+    .await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "source",
+        "temper://ca/replay-source",
+    )
+    .await;
+    let block = BlockId::from(first_block(&pool, finding).await);
+
+    let audit_id = writes::record_citation_audit(
+        &pool,
+        CitationAuditParams {
+            block,
+            source: ProvenanceSource::Resource(source.uuid()),
+            value: 0.75,
+            reason: Some("replay proof"),
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Identify the row by its EMITTING EVENT, never by its surrogate `id`. `kb_citation_audits.id`
+    // carries no inbound references, which makes it a masked-surrogate table by this module's own
+    // rule (`replay.rs:3`): the namespace reset deletes the row, so replay's INSERT mints a FRESH
+    // `uuid_generate_v7()` and the original id is gone by design. `audited_by_event_id` is the
+    // replay-stable identity — it comes off the ledger, which is the whole point.
+    const BY_EVENT: &str = "SELECT block_id, source_kind::text, source_id, value \
+                            FROM kb_citation_audits WHERE audited_by_event_id=$1";
+
+    let event_id: Uuid =
+        sqlx::query_scalar("SELECT audited_by_event_id FROM kb_citation_audits WHERE id=$1")
+            .bind(audit_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let before: (Uuid, String, Uuid, f64) = sqlx::query_as(BY_EVENT)
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap)
+        .await
+        .expect("replay must find a projector for citation_audited — no 'no projector' error");
+
+    let after: (Uuid, String, Uuid, f64) = sqlx::query_as(BY_EVENT)
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .expect("the citation audit must be reprojected from its event by replay");
+
+    assert_eq!(
+        before, after,
+        "the reprojected row must be byte-identical to the original"
+    );
+
+    // ...and exactly once. `ON CONFLICT (audited_by_event_id) DO NOTHING` is what makes a second
+    // replay pass a no-op rather than a duplicate; without the unique constraint behind it, an
+    // append-only trail would silently double every time the ledger is walked again.
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE audited_by_event_id=$1")
+            .bind(event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1, "replay must reproject the audit exactly once");
 }

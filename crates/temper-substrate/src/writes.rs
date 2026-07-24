@@ -20,7 +20,7 @@ use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, ProfileId, PropertyId,
     ResourceId,
 };
-use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation};
+use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
@@ -514,6 +514,52 @@ pub async fn annotate_block_sources_in_tx(
     )
     .await?
     .block()
+}
+
+/// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
+/// Append-only: fires `citation_audited`, which the SQL projector (`_project_citation_audited`)
+/// inserts into `kb_citation_audits` with no supersession — a later audit never overwrites an
+/// earlier one, even an opposite-signed one (spec §4.1's "a later +1.0 never erases an earlier
+/// -1.0").
+#[derive(Debug)]
+pub struct CitationAuditParams<'a> {
+    pub block: BlockId,
+    pub source: ProvenanceSource,
+    pub value: f64,
+    pub reason: Option<&'a str>,
+    pub emitter: EntityId,
+}
+
+/// [`record_citation_audit_with`] under the default (un-attributed) context.
+pub async fn record_citation_audit(pool: &PgPool, p: CitationAuditParams<'_>) -> Result<Uuid> {
+    record_citation_audit_with(pool, p, EventContext::default()).await
+}
+
+/// Record a citation audit under an explicit [`EventContext`] — the auditor's own confidence in
+/// its verdict rides `ctx.authorship` (→ `kb_events.metadata`), never the payload: the audit's
+/// signed `value` is the only thing the projection ever sees (spec §4.2's self-grading
+/// prohibition — an agent's own confidence must never move its own standing).
+pub async fn record_citation_audit_with(
+    pool: &PgPool,
+    p: CitationAuditParams<'_>,
+    ctx: EventContext,
+) -> Result<Uuid> {
+    let mut tx = begin_scoped(pool).await?;
+    let audit = fire_with(
+        &mut tx,
+        SeedAction::CitationAudit {
+            block: p.block,
+            source: p.source,
+            value: p.value,
+            reason: p.reason,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .citation_audit()?;
+    tx.commit().await?;
+    Ok(audit)
 }
 
 /// Soft-delete a resource.

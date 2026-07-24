@@ -1,11 +1,13 @@
 #![cfg(feature = "artifact-tests")]
-//! Set 5, Task 1 — the append-only citation-audit table, event, and write path (SQL).
+//! Set 5, Task 1 — the append-only citation-audit table, event, and write path (SQL) — and
+//! Task 2, the Rust write path on top of it (`writes::record_citation_audit[_with]`).
 //!
-//! Exercises `citation_audit` / `_project_citation_audited` in
-//! `migrations/20260723000010_citation_audits.sql` against an ephemeral DB. There is no Rust
-//! wrapper yet (that is a later task) — these tests call the SQL entry function and projector
-//! directly, the same idiom `content_mutation.rs` uses for `block_mutate`
-//! (`content_mutation.rs:91-92`: `serde_json::json!` payload, positional `$1`/`$2` binds).
+//! Task 1's tests exercise `citation_audit` / `_project_citation_audited` in
+//! `migrations/20260723000010_citation_audits.sql` directly against an ephemeral DB — the same
+//! idiom `content_mutation.rs` uses for `block_mutate` (`content_mutation.rs:91-92`:
+//! `serde_json::json!` payload, positional `$1`/`$2` binds) — since there was no Rust wrapper
+//! yet. Task 2's tests (bottom of file) drive the same SQL through the typed
+//! `writes::record_citation_audit[_with]` wrapper instead.
 //!
 //! Harness + seeding helpers are local copies of `tests/evidential_standing.rs`'s
 //! `system_actor`/`make_home`/`make_resource` (duplicated per file across this test suite by
@@ -15,10 +17,10 @@
 mod common;
 
 use temper_substrate::events::EventContext;
-use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
-use temper_substrate::payloads::AnchorRef;
+use temper_substrate::ids::{BlockId, ContextId, EntityId, InvocationId, ProfileId, ResourceId};
+use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, ProvenanceSource};
 use temper_substrate::scenario::bootseed;
-use temper_substrate::writes::{self, CreateParams};
+use temper_substrate::writes::{self, CitationAuditParams, CreateParams};
 use uuid::Uuid;
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
@@ -89,7 +91,7 @@ async fn first_block(pool: &sqlx::PgPool, resource: ResourceId) -> Uuid {
     .unwrap()
 }
 
-/// Fire `citation_audit(payload, emitter)` with a `source_kind: "resource"` citation, returning
+/// Fire `citation_audit(payload, emitter)` with a `resource`-kind citation, returning
 /// the audit id it reports (or the DB error, for the rejection tests).
 async fn fire_audit(
     pool: &sqlx::PgPool,
@@ -100,8 +102,7 @@ async fn fire_audit(
 ) -> Result<Uuid, sqlx::Error> {
     let payload = serde_json::json!({
         "block_id": block,
-        "source_kind": "resource",
-        "source_id": source,
+        "source": { "kind": "resource", "value": source },
         "value": value,
         "reason": "test audit",
     });
@@ -260,8 +261,7 @@ async fn citation_audit_rejects_a_remote_source_kind(pool: sqlx::PgPool) {
 
     let payload = serde_json::json!({
         "block_id": block,
-        "source_kind": "remote",
-        "source_id": Uuid::now_v7(),
+        "source": { "kind": "remote", "value": "https://example.invalid/doc" },
         "value": 0.5,
         "reason": "test audit",
     });
@@ -314,8 +314,7 @@ async fn citation_audit_is_idempotent_under_replay(pool: sqlx::PgPool) {
 
     let payload = serde_json::json!({
         "block_id": block,
-        "source_kind": "resource",
-        "source_id": source.uuid(),
+        "source": { "kind": "resource", "value": source.uuid() },
         "value": 0.3,
         "reason": "test audit",
     });
@@ -357,5 +356,170 @@ async fn citation_audit_raises_for_an_unknown_block(pool: sqlx::PgPool) {
     assert!(
         err.to_string().to_lowercase().contains("not found"),
         "expected the entry function's named guard, got: {err}"
+    );
+}
+
+// ── Task 2 — the Rust write path (writes::record_citation_audit[_with]) ─────────────────────────
+
+/// LOAD-BEARING: falsifies "the Rust write path never reaches `_project_citation_audited`" — the
+/// exact `resource_finalized`-shaped failure mode a missing `EventKind`/`SeedAction` wire-up
+/// produces (compiles clean, hard-fails or silently no-ops at the SQL boundary). Fires through
+/// `writes::record_citation_audit` (the typed Rust wrapper, not the raw SQL entry function Task
+/// 1's tests call directly) and asserts a real `kb_citation_audits` row exists for the exact
+/// block/source/value the caller supplied, addressed by the returned audit id.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn record_citation_audit_writes_a_row_and_returns_its_audit_id(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "ca-rust-insert").await;
+    let finding = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "finding",
+        "temper://ca/rust-finding1",
+    )
+    .await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "source",
+        "temper://ca/rust-source1",
+    )
+    .await;
+    let block = BlockId::from(first_block(&pool, finding).await);
+
+    let audit_id = writes::record_citation_audit(
+        &pool,
+        CitationAuditParams {
+            block,
+            source: ProvenanceSource::Resource(source.uuid()),
+            value: 0.6,
+            reason: Some("test audit via rust write path"),
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (row_block, row_source_kind, row_source_id, row_value): (Uuid, String, Uuid, f64) =
+        sqlx::query_as(
+            "SELECT block_id, source_kind::text, source_id, value \
+               FROM kb_citation_audits WHERE id=$1",
+        )
+        .bind(audit_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        row_block,
+        block.uuid(),
+        "the row's block_id must match the audited block"
+    );
+    assert_eq!(
+        row_source_kind, "resource",
+        "the Rust write path must serialize ProvenanceSource::Resource as source_kind='resource'"
+    );
+    assert_eq!(
+        row_source_id,
+        source.uuid(),
+        "the row's source_id must match the cited resource"
+    );
+    assert_eq!(
+        row_value, 0.6,
+        "the row's value must match the caller's verdict"
+    );
+}
+
+/// LOAD-BEARING: falsifies "the auditor's own confidence in its verdict leaks into the payload
+/// the projector reads" — spec §4.2's self-grading prohibition ("the projection never reads that
+/// self-assessment... structural rather than procedural"). Fires with BOTH authorship and an
+/// invocation attached and asserts: (1) `kb_events.invocation_id` is stamped, (2) authorship lives
+/// in `kb_events.metadata`, and (3) neither `confidence` nor `reasoning` appears ANYWHERE in
+/// `kb_events.payload` — the exact column the SQL projector (`_project_citation_audited`) reads.
+/// Mirrors `act_authorship_projection_invisibility.rs`'s pattern, applied to this write path.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn record_citation_audit_with_stamps_the_invocation_and_authorship(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "ca-rust-authorship").await;
+    let finding = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "finding",
+        "temper://ca/rust-finding2",
+    )
+    .await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "source",
+        "temper://ca/rust-source2",
+    )
+    .await;
+    let block = BlockId::from(first_block(&pool, finding).await);
+    let invocation = InvocationId::from(Uuid::now_v7());
+
+    let audit_id = writes::record_citation_audit_with(
+        &pool,
+        CitationAuditParams {
+            block,
+            source: ProvenanceSource::Resource(source.uuid()),
+            value: -0.3,
+            reason: Some("adversarial re-check"),
+            emitter,
+        },
+        EventContext {
+            authorship: Some(AgentAuthorship {
+                reasoning: Some("citation looks fabricated".to_string()),
+                confidence: ConfidenceBand::Confident,
+                rationale: None,
+                persona: Some("adversary".to_string()),
+                model: None,
+            }),
+            invocation: Some(invocation),
+            correlation: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let event_id: Uuid =
+        sqlx::query_scalar("SELECT audited_by_event_id FROM kb_citation_audits WHERE id=$1")
+            .bind(audit_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let (metadata, got_invocation, payload): (serde_json::Value, Option<Uuid>, serde_json::Value) =
+        sqlx::query_as("SELECT metadata, invocation_id, payload FROM kb_events WHERE id=$1")
+            .bind(event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        got_invocation,
+        Some(invocation.uuid()),
+        "invocation_id must be stamped on kb_events, not dropped"
+    );
+    assert_eq!(
+        metadata["confidence"], "confident",
+        "authorship confidence rides kb_events.metadata: {metadata}"
+    );
+    assert_eq!(
+        metadata["reasoning"], "citation looks fabricated",
+        "authorship reasoning rides kb_events.metadata: {metadata}"
+    );
+    assert!(
+        payload.get("confidence").is_none() && payload.get("reasoning").is_none(),
+        "the auditor's own confidence must NEVER leak into the payload the projector reads \
+         (spec §4.2 self-grading prohibition): payload was {payload}"
     );
 }
