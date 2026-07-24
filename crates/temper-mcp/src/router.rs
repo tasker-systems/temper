@@ -9,7 +9,10 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::{DefaultOnFailure, TraceLayer};
+use tracing::Span;
 
 use temper_services::state::AppState;
 
@@ -76,5 +79,36 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         .merge(registration_routes)
         .merge(health)
         .merge(mcp_routes)
+        // HTTP root span, mirroring temper-api's `apply_transport_layers`. Until this landed, MCP
+        // requests had NO root span at all — every MCP log line was parentless, on the surface that
+        // carries the most automated traffic. The span name is `mcp_request`, deliberately NOT the
+        // `http_request` that temper-api's root span and temper-client's request span both already
+        // use: three different things under one name is unreadable once they are exported together.
+        //
+        // `profile_id` is declared Empty and recorded in `service.rs`, not in `require_mcp_auth` —
+        // that middleware only validates the JWT, and a validated token is not yet a profile. Same
+        // deferred-field pattern temper-api uses in its auth middleware, one seam further in.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::extract::Request| {
+                    tracing::info_span!(
+                        "mcp_request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        version = ?request.version(),
+                        profile_id = tracing::field::Empty,
+                    )
+                })
+                .on_response(
+                    |response: &axum::response::Response, latency: Duration, _: &Span| {
+                        tracing::info!(
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis() as u64,
+                            "response",
+                        );
+                    },
+                )
+                .on_failure(DefaultOnFailure::new().level(tracing::Level::ERROR)),
+        )
         .layer(CorsLayer::permissive())
 }

@@ -14,6 +14,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use temper_core::error::TemperError;
+use temper_core::types::authorship::ActContext;
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
@@ -1115,6 +1116,66 @@ impl DbBackend {
     }
 }
 
+/// The act-span field set. Declared `Empty` by every write command's `#[instrument]` and filled by
+/// `act_context` once the command's `ActContext` is in hand.
+///
+/// Why these live on a span of their own rather than on the HTTP root span: `correlation_id` and
+/// `invocation_id` arrive in the **request body** (`ActInput` → `ActContext`), so the
+/// transport-level span — built by `TraceLayer` before the body is parsed — cannot know them. It
+/// would also be the wrong owner: an act is a domain concept, not a transport one. Recording them
+/// onto the root span happens to work today only because there are no other spans, which stops
+/// being true the moment anything nests below.
+///
+/// Read commands legitimately have no act at all (temper has no command-action mechanics for R in
+/// CRUD), so this span is *conditional by design* — its absence on a read is correct, not a gap.
+/// The convention gate asserts accordingly: every request gets a root span, and an act's ids appear
+/// on a span **when an act exists**.
+pub const ACT_SPAN_FIELDS: [&str; 2] = ["correlation_id", "invocation_id"];
+
+/// Map the surface-supplied [`ActContext`] to the substrate's [`EventContext`], and stamp the act's
+/// correlation ids onto the enclosing act span.
+///
+/// This replaces ten hand-written copies of the same three-field mapping (a `From` impl is not
+/// available: both types are foreign to this crate, so the orphan rule forbids it). Folding the
+/// span-recording in here is deliberate — it is the one place every authored write already passes
+/// through, so instrumentation cannot drift out of sync with the mapping the way ten copies would.
+///
+/// `authorship` is cloned rather than moved because callers keep using `cmd.act` afterwards
+/// (`stamp_provenance` takes it by reference); the struct is three `Option`s and the clone is noise
+/// next to the write it precedes.
+///
+/// The caller must carry `#[instrument(fields(correlation_id = Empty, invocation_id = Empty))]`, or
+/// these records land on whatever span happens to be current — see [`ACT_SPAN_FIELDS`].
+fn act_context(act: &ActContext) -> EventContext {
+    let ctx = EventContext {
+        invocation: act.invocation,
+        correlation: act.correlation,
+        authorship: act.authorship.clone(),
+    };
+    record_act_span(&ctx);
+    ctx
+}
+
+/// Stamp an act's ids onto the enclosing act span.
+///
+/// Takes the [`EventContext`] that is actually about to be fired — **not** the inbound
+/// [`ActContext`] — so the span can never disagree with the events it describes. That distinction
+/// is load-bearing for at least one caller: `reconcile_cognitive_map` fires under an invocation it
+/// opens itself (`invocation: Some(inv)`), not the one the caller supplied, and a span reporting
+/// the inbound value there would attribute the run to the wrong envelope.
+fn record_act_span(ctx: &EventContext) {
+    let span = tracing::Span::current();
+    if let Some(correlation) = ctx.correlation {
+        span.record(
+            "correlation_id",
+            tracing::field::display(correlation.uuid()),
+        );
+    }
+    if let Some(invocation) = ctx.invocation {
+        span.record("invocation_id", tracing::field::display(invocation.uuid()));
+    }
+}
+
 impl DbBackend {
     /// Tick T6's two region clocks after a resource write (spec §3.5) — cheap salience clock on telos
     /// drift, expensive formation clock on the event-count threshold. See [`region_clocks`].
@@ -1226,6 +1287,13 @@ impl DbBackend {
     /// [`Backend::begin_segmented_ingest`] (`segmented = true`) — the only caller that needs a resource
     /// born `ingest_state = 'in_progress'`, because its body arrives across many acts and only
     /// `resource_finalize` can say the last one landed.
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn create_resource_inner(
         &self,
         cmd: CreateResource,
@@ -1321,11 +1389,7 @@ impl DbBackend {
         // Map the surface-supplied ActContext → substrate EventContext (identical re-exported types).
         // The authored `resource_created` act carries this authorship + invocation; the property acts
         // fired at creation stay un-stamped (out of the authored-act scope).
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         // Block-provenance: the body's declared sources (position → accretion `seq`), or a Remote
         // record synthesized from an external `origin_uri` when none were declared (issue #352).
         let sources = create_sources(cmd.body.as_ref(), &origin_uri);
@@ -1442,6 +1506,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(detail))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn update_resource(
         &self,
         cmd: UpdateResource,
@@ -1558,11 +1629,7 @@ impl Backend for DbBackend {
         }
 
         // ActContext → EventContext: every sub-event of the update fan-out is correlated + authored.
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         // Defer embedding (issue #299) only when this revise re-blocks the body server-side: a
         // non-empty body change with no precomputed chunks, and the deployment drain is enabled. A
         // meta-only update (body None) re-chunks nothing, so there is nothing to defer or enqueue.
@@ -1661,6 +1728,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(row))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
         // The inbound id IS the substrate resource id (no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
@@ -1674,17 +1748,20 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         writes::delete_resource_with(&self.pool, ResourceId::from(new_id), emitter, act_ctx)
             .await
             .map_err(api_err)?;
         Ok(CommandOutput::new(()))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn annotate_resource(
         &self,
         cmd: AnnotateResource,
@@ -1719,11 +1796,7 @@ impl Backend for DbBackend {
                 seq: i as i32,
             })
             .collect();
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         writes::annotate_block_sources_with(
             &self.pool,
             writes::AnnotateParams {
@@ -1793,6 +1866,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(hits))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
@@ -1815,11 +1895,7 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
         // projection via `assert_edge_from_source_home`. The source modify-gate above is this
         // command's own auth; the helper does not re-gate.
@@ -1840,6 +1916,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(edge))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn retype_relationship(
         &self,
         cmd: RetypeRelationship,
@@ -1857,11 +1940,7 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         writes::retype_relationship_with(
             &self.pool,
             EdgeId::from(handle),
@@ -1875,6 +1954,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn reweight_relationship(
         &self,
         cmd: ReweightRelationship,
@@ -1891,11 +1977,7 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         writes::reweight_relationship_with(
             &self.pool,
             EdgeId::from(handle),
@@ -1908,6 +1990,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn fold_relationship(
         &self,
         cmd: FoldRelationship,
@@ -1924,11 +2013,7 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         writes::fold_relationship_with(
             &self.pool,
             EdgeId::from(handle),
@@ -1944,6 +2029,13 @@ impl Backend for DbBackend {
     /// Upserts the clustering `facet` property (`kb_properties`) on a resource — one row holding the
     /// whole `values` object. Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter
     /// resolution, gated on the TARGET resource directly (facets have no source/target split).
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError> {
         let resource_next = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): gate on the resource the facet is being set on.
@@ -1957,11 +2049,7 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        let act_ctx = act_context(&cmd.act);
         let property_id = writes::set_facet_with(
             &self.pool,
             cmd.resource,
@@ -1983,6 +2071,13 @@ impl Backend for DbBackend {
     /// SERIALIZABLE makes concurrent reconciles abort-and-retry (SQLSTATE 40001 → `Conflict`) instead of
     /// corrupting state — the old app-level open-invocation "mutex" is gone. No HTTP/authz here (the
     /// handler gates first); this is the backend command.
+    // Act span: the parent for this write's events. `skip_all` because the command carries
+    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
+    // `act_context`/`record_act_span` once the ActContext is resolved.
+    #[tracing::instrument(
+        skip_all,
+        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
+    )]
     async fn reconcile_cognitive_map(
         &self,
         cmd: ReconcileCognitiveMap,
@@ -2032,6 +2127,9 @@ impl Backend for DbBackend {
             correlation: cmd.act.correlation,
             authorship: cmd.act.authorship.clone(),
         };
+        // Recorded from `run_ctx`, not `cmd.act`: this reconcile fires under the invocation it just
+        // opened, so the inbound act's invocation (if any) is not what the events will carry.
+        record_act_span(&run_ctx);
 
         // APPLY on the same connection. On ANY error the `?` returns here with `tx` dropped → full
         // rollback (mutations + the envelope open). No Failed-close needed.
