@@ -141,6 +141,14 @@ async fn filtered_visible_page(
         ),
         _ => None,
     };
+    // `context_ref` and a cogmap scope name two different homes — reject the pair server-side, exactly
+    // as `resolve_search_scope` does for search. The CLI/MCP already guard it; this closes the raw-HTTP
+    // gap where the combination silently composed to the empty set instead of a 400.
+    if context_id.is_some() && cogmap_ids.is_some() {
+        return Err(ApiError::BadRequest(
+            "context_ref and cogmap scope are mutually exclusive".into(),
+        ));
+    }
     let sort = params.sort.unwrap_or_default();
     let dir = match params.order.unwrap_or_default() {
         SortOrder::Asc => "ASC",
@@ -183,7 +191,8 @@ async fn filtered_visible_page(
                      AND ge.target_table = 'kb_resources' AND ge.target_id = $8
                      AND ge.edge_kind = 'leads_to' AND ge.label = $9
                      AND NOT ge.is_folded))
-            AND ($10::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($10)))
+            AND ($10::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($10)
+                 AND cogmap_readable_by_profile($1, h.anchor_id)))
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -424,6 +433,14 @@ async fn resolve_search_scope(
     if params.context_ref.is_some() && !effective_cogmaps.is_empty() {
         return Err(ApiError::BadRequest(
             "context_ref and cogmap scope are mutually exclusive".into(),
+        ));
+    }
+    // Wayfind anchors on a SINGLE home, so a multi-map wayfind has no anchor to pool regions within.
+    // The CLI rejects it pre-flight; reject it here too so a raw caller gets a 400 rather than a
+    // silent global wayfind with the cogmap set dropped.
+    if params.wayfind && effective_cogmaps.len() > 1 {
+        return Err(ApiError::BadRequest(
+            "wayfind anchors on a single map; supply at most one cogmap with wayfind".into(),
         ));
     }
 
