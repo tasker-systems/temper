@@ -279,6 +279,40 @@ Reach (`--team`, `--cogmap`) is **plural and explicit**, and is what clears the
 inferred from `--owner-team`, which records the machine's *owner* and is never consulted for
 authorization.
 
+### C. The citation auditor — a SECOND principal, and read-only reach
+
+The auditor (Set 5) is provisioned exactly like the steward above, with two differences that
+are both load-bearing. Register it the same way (Auth0 app → client-grant → `provision`), then:
+
+```bash
+temper admin machine provision --client-id <AUDITOR_CLIENT_ID> --label "citation auditor" \
+  --team <team-ref>:member
+# NOTE: no bare `--cogmap <ref>`. If you grant cogmap reach at all, it MUST be `:ro`.
+```
+
+**1. It must not share the steward's `client_id`.** One credential is one
+`emitter_entity_id`, so a shared client would leave the ledger unable to tell an audit from
+the citation it audits — collapsing "assessed by another party" into "asserted by the same
+party wearing a different label," which is the entire claim the audit trail exists to support.
+A separate IdP application, a separate `provision`, a separate secret in the auditor's own
+deployment env.
+
+**2. Its cogmap reach must be read-only, and the default is not.** `--cogmap <ref>` defaults
+to **write**. Write reach makes `cogmap_authorable_by_profile` — and therefore
+`can_modify_resource` — true for every finding homed in that map, which classifies the auditor
+as `AuditAuthority::Author` and makes the gate refuse **every audit it attempts**, with a 404.
+Nothing about this fails at deploy time: the agent authenticates, the sweep returns work, and
+each write 404s. Prefer team membership alone (which is what actually confers the read the
+auditor needs — `resources_visible_to`'s cogmap arm admits resources homed in a cogmap joined
+to a reachable team), and reach for `--cogmap <ref>:ro` only if a specific map is not
+team-joined.
+
+Note that the steward's own command above passes a bare `--cogmap <cogmap-ref>` — correct for
+the steward, which *writes* into its map, and exactly what the auditor must not copy.
+
+The gate this protects is `AuditAuthority` in `crates/temper-services/src/authz/audit_gate.rs`,
+whose module doc carries the same finding at the point of use.
+
 ## Delivery split — all shipped
 
 - **4a — Auth0 branch. ✅** `client_credentials` in `grant_types_supported`
