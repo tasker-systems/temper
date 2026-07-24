@@ -20,9 +20,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::authz::{TwoSidedAuthority, TwoSidedScope};
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapRow, UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapDetail, CogmapFoundationRow, CogmapRow,
+    UnbindTeamOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 
@@ -45,13 +46,69 @@ pub async fn list_visible(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec
                resource_count       AS "resource_count!",
                telos_resource_id    AS "telos_resource_id!",
                charter_statement
-          FROM cogmap_list_rows($1)
+          FROM cogmap_list_rows($1, NULL::uuid)
         "#,
         profile_id.uuid()
     )
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// One map's full orientation in a single read: identity + charter blocks + foundational resources.
+///
+/// Map-read gated: the identity query passes the map id into `cogmap_list_rows`, which is scoped by
+/// `cogmap_visible_maps` — an unreadable map yields zero rows, surfaced here as `NotFound` (never a
+/// partial leak). The charter reuses `cogmap_charter_select` (member-gated blocks), and the
+/// foundations are the map's visible homed resources with the telos flagged (`cogmap_foundations`).
+pub async fn show_visible(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap_id: Uuid,
+) -> ApiResult<CogmapDetail> {
+    let cogmap = sqlx::query_as!(
+        CogmapRow,
+        r#"
+        SELECT cogmap_id            AS "id!",
+               name                 AS "name!",
+               owner_ref            AS "owner_ref!",
+               team_ids             AS "team_ids!",
+               region_count         AS "region_count!",
+               resource_count       AS "resource_count!",
+               telos_resource_id    AS "telos_resource_id!",
+               charter_statement
+          FROM cogmap_list_rows($1, $2)
+        "#,
+        profile_id.uuid(),
+        cogmap_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    let charter =
+        crate::backend::substrate_read::cogmap_charter_select(pool, profile_id, cogmap_id).await?;
+
+    let foundations = sqlx::query_as!(
+        CogmapFoundationRow,
+        r#"
+        SELECT resource_id  AS "resource_id!",
+               title        AS "title!",
+               doc_type     AS "doc_type!",
+               is_telos     AS "is_telos!"
+          FROM cogmap_foundations($1, $2)
+        "#,
+        profile_id.uuid(),
+        cogmap_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(CogmapDetail {
+        cogmap,
+        charter,
+        foundations,
+    })
 }
 
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).

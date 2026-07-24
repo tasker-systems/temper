@@ -612,6 +612,44 @@
           }
         }
       ],
+      "get": {
+        "tags": [
+          "Cognitive Maps"
+        ],
+        "operationId": "get_cognitive_map",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cognitive map ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The map's identity, charter, and foundational resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CogmapDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Map not found or not readable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "put": {
         "tags": [
           "Cognitive Maps"
@@ -6802,6 +6840,30 @@
           }
         }
       },
+      "CharterBlock": {
+        "type": "object",
+        "description": "One block of a cognitive map's telos charter, as returned by the `resource_blocks(cogmap_telos(…),\n…)` composition (T1 Sequence C). Mirrors the charter-read tuple field-for-field (`seq`, `role`,\n`body_text AS body`) so the service-direct read can `query_as!` straight into it. `role` is one of\n`statement` / `question` / `framing` (`temper-core/src/charter.rs`); a charter block always has both\na role and body, so neither is `Option` (see `cogmap_charter_select`'s forced-non-null SQL).",
+        "required": [
+          "seq",
+          "role",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Assembled block body text (a question-with-context block is `question + \"\\n\\n\" + context`)."
+          },
+          "role": {
+            "type": "string",
+            "description": "One of `statement` / `question` / `framing`."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position within the charter (statement is 0, then questions, then framing)."
+          }
+        }
+      },
       "CharterDisposition": {
         "type": "string",
         "description": "What the reconcile run did to the telos charter — a DISTINCT grain from the landmark counts.",
@@ -6874,6 +6936,64 @@
           "telos_resource_id": {
             "$ref": "#/components/schemas/ResourceId",
             "description": "`kb_cogmaps.telos_resource_id` — the charter resource (NOT NULL)."
+          }
+        }
+      },
+      "CogmapDetail": {
+        "type": "object",
+        "description": "The `cogmap show` aggregate — one map's full orientation in a single read: its identity\n([`CogmapRow`]), its charter blocks (statement / questions / framing, in seq), and the\nfoundational resources it is built on ([`CogmapFoundationRow`], telos flagged). Composed by the\nservice; not a `FromRow`.",
+        "required": [
+          "cogmap",
+          "charter",
+          "foundations"
+        ],
+        "properties": {
+          "charter": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CharterBlock"
+            },
+            "description": "The charter blocks in seq order (statement, then questions, then framing)."
+          },
+          "cogmap": {
+            "$ref": "#/components/schemas/CogmapRow",
+            "description": "The map's identity row (name, held-by scope, counts, charter statement)."
+          },
+          "foundations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CogmapFoundationRow"
+            },
+            "description": "The resources the map is built on — its visible homed set, telos flagged."
+          }
+        }
+      },
+      "CogmapFoundationRow": {
+        "type": "object",
+        "description": "One foundational resource of a cognitive map — a resource homed in the map, as returned by the\n`cogmap_foundations` SQL function field-for-field (so the service read can `query_as!` into it).\nThe map's telos/charter resource is flagged `is_telos`; the rest are the resources the map is\nbuilt on. The decorated `ref` (and `context_ref` where resolvable) is injected render-time by the\nCLI, exactly as list/show/search rows carry one.",
+        "required": [
+          "resource_id",
+          "title",
+          "doc_type",
+          "is_telos"
+        ],
+        "properties": {
+          "doc_type": {
+            "type": "string",
+            "description": "The resource's doc type (task / goal / concept / …)."
+          },
+          "is_telos": {
+            "type": "boolean",
+            "description": "True for the map's telos/charter resource — the constitutive resource, distinguished from the\nrest of the homed set."
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The resource id."
+          },
+          "title": {
+            "type": "string",
+            "description": "The resource title."
           }
         }
       },

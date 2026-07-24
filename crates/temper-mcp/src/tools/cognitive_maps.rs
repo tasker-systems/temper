@@ -202,6 +202,46 @@ pub async fn cogmap_list(
     )]))
 }
 
+/// MCP input for `cogmap_show`. `cogmap` is a ref (UUID or decorated `slug-<uuid>`).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapShowInput {
+    /// The cognitive map to orient on, by ref (UUID or `slug-<uuid>`).
+    pub cogmap: String,
+}
+
+/// One map's full orientation in a single call: its identity, its charter blocks (statement /
+/// questions / framing), and the foundational resources it is built on (its homed set, telos
+/// flagged). Errors with "not found or not readable" when the caller cannot read the map — the same
+/// no-leak convention as `cogmap_analytics`.
+pub async fn cogmap_show(
+    svc: &TemperMcpService,
+    input: CogmapShowInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let detail =
+        cogmap_service::show_visible(&svc.api_state.pool, ProfileId::from(profile.id), cogmap_id)
+            .await
+            .map_err(|e| match e {
+                ApiError::NotFound => rmcp::ErrorData::invalid_params(
+                    "cognitive map not found or not readable".to_string(),
+                    None,
+                ),
+                other => {
+                    rmcp::ErrorData::internal_error(format!("cogmap_show failed: {other}"), None)
+                }
+            })?;
+
+    let text = serde_json::to_string_pretty(&detail).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
 // ── cogmap_create (genesis) ──────────────────────────────────────────────────
 
 /// MCP input for cogmap_create (genesis). The MCP surface creates the map with an EMPTY charter — the

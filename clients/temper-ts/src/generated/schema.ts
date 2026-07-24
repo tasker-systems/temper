@@ -190,7 +190,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["get_cognitive_map"];
         put: operations["reconcile"];
         post?: never;
         delete?: never;
@@ -1723,6 +1723,24 @@ export interface components {
             role: components["schemas"]["TeamRole"];
         };
         /**
+         * @description One block of a cognitive map's telos charter, as returned by the `resource_blocks(cogmap_telos(…),
+         *     …)` composition (T1 Sequence C). Mirrors the charter-read tuple field-for-field (`seq`, `role`,
+         *     `body_text AS body`) so the service-direct read can `query_as!` straight into it. `role` is one of
+         *     `statement` / `question` / `framing` (`temper-core/src/charter.rs`); a charter block always has both
+         *     a role and body, so neither is `Option` (see `cogmap_charter_select`'s forced-non-null SQL).
+         */
+        CharterBlock: {
+            /** @description Assembled block body text (a question-with-context block is `question + "\n\n" + context`). */
+            body: string;
+            /** @description One of `statement` / `question` / `framing`. */
+            role: string;
+            /**
+             * Format: int32
+             * @description Position within the charter (statement is 0, then questions, then framing).
+             */
+            seq: number;
+        };
+        /**
          * @description What the reconcile run did to the telos charter — a DISTINCT grain from the landmark counts.
          * @enum {string}
          */
@@ -1765,6 +1783,43 @@ export interface components {
             staleness: components["schemas"]["CogmapStaleness"];
             /** @description `kb_cogmaps.telos_resource_id` — the charter resource (NOT NULL). */
             telos_resource_id: components["schemas"]["ResourceId"];
+        };
+        /**
+         * @description The `cogmap show` aggregate — one map's full orientation in a single read: its identity
+         *     ([`CogmapRow`]), its charter blocks (statement / questions / framing, in seq), and the
+         *     foundational resources it is built on ([`CogmapFoundationRow`], telos flagged). Composed by the
+         *     service; not a `FromRow`.
+         */
+        CogmapDetail: {
+            /** @description The charter blocks in seq order (statement, then questions, then framing). */
+            charter: components["schemas"]["CharterBlock"][];
+            /** @description The map's identity row (name, held-by scope, counts, charter statement). */
+            cogmap: components["schemas"]["CogmapRow"];
+            /** @description The resources the map is built on — its visible homed set, telos flagged. */
+            foundations: components["schemas"]["CogmapFoundationRow"][];
+        };
+        /**
+         * @description One foundational resource of a cognitive map — a resource homed in the map, as returned by the
+         *     `cogmap_foundations` SQL function field-for-field (so the service read can `query_as!` into it).
+         *     The map's telos/charter resource is flagged `is_telos`; the rest are the resources the map is
+         *     built on. The decorated `ref` (and `context_ref` where resolvable) is injected render-time by the
+         *     CLI, exactly as list/show/search rows carry one.
+         */
+        CogmapFoundationRow: {
+            /** @description The resource's doc type (task / goal / concept / …). */
+            doc_type: string;
+            /**
+             * @description True for the map's telos/charter resource — the constitutive resource, distinguished from the
+             *     rest of the homed set.
+             */
+            is_telos: boolean;
+            /**
+             * Format: uuid
+             * @description The resource id.
+             */
+            resource_id: string;
+            /** @description The resource title. */
+            title: string;
         };
         /**
          * @description HTTP body for `POST /api/cognitive-maps/{id}/grants` — the subject is the path `{id}` (a cogmap),
@@ -4707,6 +4762,39 @@ export interface operations {
             };
             /** @description A concurrent genesis conflicted; retry */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_cognitive_map: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Cognitive map ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The map's identity, charter, and foundational resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CogmapDetail"];
+                };
+            };
+            /** @description Map not found or not readable */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -10,8 +10,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
-    CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail, CogmapGrantBody,
+    CogmapRegionMetricsRow, CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantOutcome,
+    RevokeOutcome, UnbindTeamOutcome,
 };
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 use temper_core::types::reconcile::{
@@ -76,6 +77,18 @@ impl<'a> CognitiveMapClient<'a> {
         let req = self.http.get(path);
         self.http
             .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/cognitive-maps/{id} — one map's full orientation: identity, charter blocks, and
+    /// foundational (homed) resources with the telos flagged. 404 if the map is not found or not
+    /// readable by the caller.
+    pub async fn show(&self, cogmap_id: Uuid) -> Result<CogmapDetail> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/cognitive-maps/{cogmap_id}");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
             .await
     }
 

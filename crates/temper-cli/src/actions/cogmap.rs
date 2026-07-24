@@ -1,8 +1,9 @@
 //! `temper cogmap shape` business logic — thin wrapper over the cognitive-maps client. Cloud-only.
 
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
-    CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail, CogmapGrantBody,
+    CogmapRegionMetricsRow, CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantOutcome,
+    RevokeOutcome, UnbindTeamOutcome,
 };
 
 use crate::error::{Result, TemperError};
@@ -42,6 +43,19 @@ pub async fn list_api(client: &temper_client::TemperClient) -> Result<Vec<Cogmap
     client
         .cognitive_maps()
         .list()
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)
+}
+
+/// Fetch one map's full orientation — identity + charter + foundational resources. 404 (NotFound)
+/// when the map is not readable by the caller.
+pub async fn show_api(
+    client: &temper_client::TemperClient,
+    cogmap_id: uuid::Uuid,
+) -> Result<CogmapDetail> {
+    client
+        .cognitive_maps()
+        .show(cogmap_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)
 }
@@ -335,5 +349,51 @@ mod tests {
             out.contains("The load-bearing shape."),
             "statement body: {out}"
         );
+    }
+
+    #[test]
+    fn cogmap_foundation_injects_resource_ref_and_keeps_telos_flag() {
+        use temper_core::types::cognitive_maps::CogmapFoundationRow;
+        let rid = Uuid::now_v7();
+        let row = CogmapFoundationRow {
+            resource_id: rid,
+            title: "Charter".to_string(),
+            doc_type: "cogmap_charter".to_string(),
+            is_telos: true,
+        };
+        let mut v = serde_json::to_value(&row).expect("serialize");
+        // `show` injects a resource ref on each foundation via inject_ref (resource_id + title).
+        crate::commands::resource::inject_ref(&mut v);
+        let got = v.get("ref").and_then(|x| x.as_str()).expect("ref injected");
+        let parsed = temper_workflow::operations::parse_ref(got).expect("ref parses");
+        assert_eq!(
+            Uuid::from(parsed),
+            rid,
+            "foundation ref resolves to resource id"
+        );
+        assert_eq!(v.get("is_telos").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn cogmap_detail_renders_identity_charter_and_foundations() {
+        use temper_core::types::cognitive_maps::{CharterBlock, CogmapDetail, CogmapFoundationRow};
+        let detail = CogmapDetail {
+            cogmap: sample_cogmap_row("Arch", Some("purpose")),
+            charter: vec![CharterBlock {
+                seq: 0,
+                role: "statement".to_string(),
+                body: "why the map exists".to_string(),
+            }],
+            foundations: vec![CogmapFoundationRow {
+                resource_id: Uuid::now_v7(),
+                title: "Telos".to_string(),
+                doc_type: "cogmap_charter".to_string(),
+                is_telos: true,
+            }],
+        };
+        let out = crate::format::render(&detail, crate::format::OutputFormat::Json).expect("json");
+        for key in ["cogmap", "charter", "foundations", "is_telos"] {
+            assert!(out.contains(key), "detail JSON missing `{key}`: {out}");
+        }
     }
 }

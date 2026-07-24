@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT cogmap_id            AS \"id!\",\n               name                 AS \"name!\",\n               owner_ref            AS \"owner_ref!\",\n               team_ids             AS \"team_ids!\",\n               region_count         AS \"region_count!\",\n               resource_count       AS \"resource_count!\",\n               telos_resource_id    AS \"telos_resource_id!\",\n               charter_statement\n          FROM cogmap_list_rows($1)\n        ",
+  "query": "\n        SELECT cogmap_id            AS \"id!\",\n               name                 AS \"name!\",\n               owner_ref            AS \"owner_ref!\",\n               team_ids             AS \"team_ids!\",\n               region_count         AS \"region_count!\",\n               resource_count       AS \"resource_count!\",\n               telos_resource_id    AS \"telos_resource_id!\",\n               charter_statement\n          FROM cogmap_list_rows($1, NULL::uuid)\n        ",
   "describe": {
     "columns": [
       {
@@ -60,5 +60,5 @@
       null
     ]
   },
-  "hash": "5a98da35b2512770b4ccd15029185e0a696f15db502beb966dce207143919703"
+  "hash": "a299d4ddd1a5f42dddbe1e909eca58d82f21d2409e3c0a2d4e3993bf5a38c8c0"
 }

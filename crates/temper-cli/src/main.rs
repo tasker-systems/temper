@@ -1159,6 +1159,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 name_contains,
                 team,
             } => commands::cogmap::list(name_contains.as_deref(), team.as_deref(), output_format),
+            CogmapCmd::Show { cogmap } => commands::cogmap::show(&cogmap, output_format),
             CogmapCmd::Reconcile {
                 r#ref,
                 manifest,

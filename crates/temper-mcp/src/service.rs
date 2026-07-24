@@ -508,6 +508,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Orient on ONE cognitive map in a single call: its identity, its charter (statement / questions / framing — what the map is for), and the foundational resources it is built on (its homed set, with the telos flagged). Pass the map by ref. Errors 'not found or not readable' when you cannot read it."
+    )]
+    async fn cogmap_show(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapShowInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_show(self, input).await
+    }
+
+    #[tool(
         description = "Begin a segmented (multi-block) ingest for a body too large to send in one call, landing its first segment. Prefer create_resource for anything that fits a single call — segmented ingest costs extra round-trips. content is segment 0's text and content_hash is its bare-hex sha256. Returns resource_id, the landed block set, and an opaque body_hash. Follow with ingest_append for each further segment, then ingest_finalize."
     )]
     async fn ingest_begin(

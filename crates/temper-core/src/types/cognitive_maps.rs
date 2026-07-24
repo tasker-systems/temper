@@ -206,6 +206,46 @@ pub struct CogmapRow {
     pub charter_statement: Option<String>,
 }
 
+/// One foundational resource of a cognitive map — a resource homed in the map, as returned by the
+/// `cogmap_foundations` SQL function field-for-field (so the service read can `query_as!` into it).
+/// The map's telos/charter resource is flagged `is_telos`; the rest are the resources the map is
+/// built on. The decorated `ref` (and `context_ref` where resolvable) is injected render-time by the
+/// CLI, exactly as list/show/search rows carry one.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct CogmapFoundationRow {
+    /// The resource id.
+    pub resource_id: Uuid,
+    /// The resource title.
+    pub title: String,
+    /// The resource's doc type (task / goal / concept / …).
+    pub doc_type: String,
+    /// True for the map's telos/charter resource — the constitutive resource, distinguished from the
+    /// rest of the homed set.
+    pub is_telos: bool,
+}
+
+/// The `cogmap show` aggregate — one map's full orientation in a single read: its identity
+/// ([`CogmapRow`]), its charter blocks (statement / questions / framing, in seq), and the
+/// foundational resources it is built on ([`CogmapFoundationRow`], telos flagged). Composed by the
+/// service; not a `FromRow`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct CogmapDetail {
+    /// The map's identity row (name, held-by scope, counts, charter statement).
+    pub cogmap: CogmapRow,
+    /// The charter blocks in seq order (statement, then questions, then framing).
+    pub charter: Vec<CharterBlock>,
+    /// The resources the map is built on — its visible homed set, telos flagged.
+    pub foundations: Vec<CogmapFoundationRow>,
+}
+
 // ---------------------------------------------------------------------------
 // Cogmap ↔ team binding wire types (org-provisioning Chunk 5).
 //

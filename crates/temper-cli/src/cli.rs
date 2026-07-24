@@ -1471,6 +1471,12 @@ pub enum CogmapCmd {
         #[arg(long)]
         team: Option<String>,
     },
+    /// Orient on one cognitive map: its charter (what it's for) and the resources it's built on
+    /// (its foundational homed set, with the telos flagged).
+    Show {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+    },
     /// Reconcile a cognitive map's content to a committed manifest.
     ///
     /// Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded

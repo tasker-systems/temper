@@ -57,6 +57,52 @@ export type CogmapAnalyticsRow = {
 telos_resource_id: ResourceId, staleness: CogmapStaleness, regulation: Array<CogmapRegulationRow>, };
 
 /**
+ * The `cogmap show` aggregate — one map's full orientation in a single read: its identity
+ * ([`CogmapRow`]), its charter blocks (statement / questions / framing, in seq), and the
+ * foundational resources it is built on ([`CogmapFoundationRow`], telos flagged). Composed by the
+ * service; not a `FromRow`.
+ */
+export type CogmapDetail = { 
+/**
+ * The map's identity row (name, held-by scope, counts, charter statement).
+ */
+cogmap: CogmapRow, 
+/**
+ * The charter blocks in seq order (statement, then questions, then framing).
+ */
+charter: Array<CharterBlock>, 
+/**
+ * The resources the map is built on — its visible homed set, telos flagged.
+ */
+foundations: Array<CogmapFoundationRow>, };
+
+/**
+ * One foundational resource of a cognitive map — a resource homed in the map, as returned by the
+ * `cogmap_foundations` SQL function field-for-field (so the service read can `query_as!` into it).
+ * The map's telos/charter resource is flagged `is_telos`; the rest are the resources the map is
+ * built on. The decorated `ref` (and `context_ref` where resolvable) is injected render-time by the
+ * CLI, exactly as list/show/search rows carry one.
+ */
+export type CogmapFoundationRow = { 
+/**
+ * The resource id.
+ */
+resource_id: string, 
+/**
+ * The resource title.
+ */
+title: string, 
+/**
+ * The resource's doc type (task / goal / concept / …).
+ */
+doc_type: string, 
+/**
+ * True for the map's telos/charter resource — the constitutive resource, distinguished from the
+ * rest of the homed set.
+ */
+is_telos: boolean, };
+
+/**
  * HTTP body for `POST /api/cognitive-maps/{id}/grants` — the subject is the path `{id}` (a cogmap),
  * so the body carries only the principal + capabilities. The handler widens this into a
  * `GrantCapabilityRequest` with `subject_table='kb_cogmaps'`, `subject_id={id}`.

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT resource_id  AS \"resource_id!\",\n               title        AS \"title!\",\n               doc_type     AS \"doc_type!\",\n               is_telos     AS \"is_telos!\"\n          FROM cogmap_foundations($1, $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "doc_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_telos!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "971e2eb3a2e065445d9f172ef32303c02034b5103a893ec2ea2f69a81e1e5cec"
+}
