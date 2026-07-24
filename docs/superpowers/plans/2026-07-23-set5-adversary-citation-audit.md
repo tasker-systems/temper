@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Shipped migrations are immutable.** Every change to a shipped SQL object is a NEW additive migration (DROP+CREATE, or CREATE OR REPLACE where the signature is unchanged). Never edit `20260721000010_evidential_standing_memo.sql`.
-- **Migration numbering:** latest on `main` is `20260722000100`. This plan uses `20260723000010/20/30`; gaps left for concurrent siblings. Re-verify no `20260723*` exists before applying (`git ls-tree origin/main migrations/`).
+- **Migration numbering:** latest on `main` is `20260722000100`. This plan uses `20260724000110/20/30`; gaps left for concurrent siblings. Re-verify no `20260723*` exists before applying (`git ls-tree origin/main migrations/`).
 - **`--all-features`** for builds and clippy. `#[expect(lint, reason=…)]`, never `#[allow]`.
 - **Typed structs over `serde_json::json!()`**. Params structs past 5 domain args. **Use `temper_core::types::provenance::ProvenanceSource`** for a citation's source — it is the existing `{kind,value}` tagged sum (`provenance.rs:35`). There is **no** `ProvenanceSourceKind` type; do not invent one.
 - **Auth before writes**, and the authorization subject travels *inside* the sealed proof.
@@ -29,9 +29,9 @@
 ## File Structure
 
 **Migrations (new):**
-- `20260723000010_citation_audits.sql` — append-only audit table, event type (`category='domain'`), projector, entry function.
-- `20260723000020_standing_citation_components.sql` — the AMEND of Set 3's components: new columns, new producers (magnitude/coverage/quality with per-source collapse + decay + liveness), re-thresholded band with `disputed` arm, rewritten refresh + shape read, retirement of the pairwise objects.
-- `20260723000030_audit_drift_sweep.sql` — the auditor's **principal-scoped** selection function.
+- `20260724000110_citation_audits.sql` — append-only audit table, event type (`category='domain'`), projector, entry function.
+- `20260724000120_standing_citation_components.sql` — the AMEND of Set 3's components: new columns, new producers (magnitude/coverage/quality with per-source collapse + decay + liveness), re-thresholded band with `disputed` arm, rewritten refresh + shape read, retirement of the pairwise objects.
+- `20260724000130_audit_drift_sweep.sql` — the auditor's **principal-scoped** selection function.
 
 **Rust:**
 - `temper-substrate/src/{payloads,events,writes,replay}.rs`, `readback/mod.rs`
@@ -56,7 +56,7 @@
 
 **Grounding tag:** EXTEND — spec §4.1 (append-only, no supersession). The grain argument (a citation is `(block, source)`; `kb_edges` admits only `kb_resources`/`kb_cogmaps` endpoints, `canonical_schema.sql:630,632`) forces an event, not an edge.
 
-**Files:** Create `migrations/20260723000010_citation_audits.sql`; Test `crates/temper-substrate/tests/citation_audits.rs`
+**Files:** Create `migrations/20260724000110_citation_audits.sql`; Test `crates/temper-substrate/tests/citation_audits.rs`
 
 **Interfaces:**
 - Produces: table `kb_citation_audits(id, block_id, source_kind, source_id, value, reason, audited_by_event_id, created)`; event type `citation_audited` (`category='domain'`); `_project_citation_audited(p_event uuid, p_payload jsonb) RETURNS uuid` (returns the **audit** id); entry `citation_audit(p_payload jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}', p_invocation uuid DEFAULT NULL, p_correlation uuid DEFAULT NULL) RETURNS uuid`.
@@ -92,7 +92,7 @@ cargo nextest run -p temper-substrate --features artifact-tests --test citation_
 
 ```bash
 cargo sqlx prepare --workspace -- --all-features
-git add migrations/20260723000010_citation_audits.sql crates/temper-substrate/tests/citation_audits.rs .sqlx
+git add migrations/20260724000110_citation_audits.sql crates/temper-substrate/tests/citation_audits.rs .sqlx
 git commit -m "Task 1: citation audits are append-only events, because the ledger is immutable"
 ```
 
@@ -144,7 +144,7 @@ git commit -m "Task 2: the Rust write path and — the part that is not optional
 
 **Grounding tag:** AMEND — `kb_resource_standing`, `standing_band`, `refresh_resource_standing`, `resource_standing_shape` (all `20260721000010`). Authorized by spec §3.1/§3.4. Safe because `resource_independence_breadth` is a constant today (no production writer for `'independent-of'`).
 
-**Files:** Create `migrations/20260723000020_standing_citation_components.sql`; Test `crates/temper-substrate/tests/evidential_standing.rs` (extend **and prune** — [review])
+**Files:** Create `migrations/20260724000120_standing_citation_components.sql`; Test `crates/temper-substrate/tests/evidential_standing.rs` (extend **and prune** — [review])
 
 **Interfaces:**
 - Consumes: `kb_citation_audits` (Task 1).
@@ -188,7 +188,7 @@ git commit -m "Task 2: the Rust write path and — the part that is not optional
 ```bash
 cargo nextest run -p temper-substrate --features artifact-tests --test evidential_standing
 cargo sqlx prepare --workspace -- --all-features
-git add migrations/20260723000020_standing_citation_components.sql crates/temper-substrate/tests/evidential_standing.rs .sqlx
+git add migrations/20260724000120_standing_citation_components.sql crates/temper-substrate/tests/evidential_standing.rs .sqlx
 git commit -m "Task 3: three axes, decay-weighted quality, and the pairwise model retired with its tests"
 ```
 
@@ -221,7 +221,7 @@ git commit -m "Task 4: the readback's new shape, and one visibility predicate th
 
 **Grounding tag:** EXTEND — spec §6.3. Modelled on `steward_drift_sweep(p_principal, p_threshold)` (`migrations/20260705000002_steward_drift_sweep.sql:19`, routed through `steward_candidate_cogmaps`).
 
-**Files:** Create `migrations/20260723000030_audit_drift_sweep.sql`; Test `crates/temper-substrate/tests/citation_audits.rs` (extend)
+**Files:** Create `migrations/20260724000130_audit_drift_sweep.sql`; Test `crates/temper-substrate/tests/citation_audits.rs` (extend)
 
 **Interfaces:**
 - Produces: `audit_drift_sweep(p_principal uuid, p_limit int) RETURNS TABLE(cogmap_id uuid, finding_id uuid, uncovered int)`.
@@ -244,7 +244,7 @@ git commit -m "Task 4: the readback's new shape, and one visibility predicate th
 ```bash
 cargo nextest run -p temper-substrate --features artifact-tests --test citation_audits
 cargo sqlx prepare --workspace -- --all-features
-git add migrations/20260723000030_audit_drift_sweep.sql crates/temper-substrate/tests/citation_audits.rs .sqlx
+git add migrations/20260724000130_audit_drift_sweep.sql crates/temper-substrate/tests/citation_audits.rs .sqlx
 git commit -m "Task 5: the auditor's queue is coverage, principal-scoped, and live-only"
 ```
 

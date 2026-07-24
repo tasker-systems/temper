@@ -99,7 +99,7 @@ pub enum EventKind {
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
-    /// like `BlockProvenanceAnnotated`, by the post-canonical-seed migration `20260723000010`.
+    /// like `BlockProvenanceAnnotated`, by the post-canonical-seed migration `20260724000110`.
     CitationAudited,
 }
 

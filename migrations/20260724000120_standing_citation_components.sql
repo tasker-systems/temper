@@ -93,13 +93,13 @@ DROP TABLE kb_independence_pairs;
 -- source_id) rather than just source_id is what lets `resource_citation_quality` join the audit
 -- trail on the full citation key `(block_id, source_kind, source_id)` — a citation is a
 -- (block, source) pair (spec §4.1), and `kb_citation_audits` is keyed that way
--- (`20260723000010_citation_audits.sql:23-39`).
+-- (`20260724000110_citation_audits.sql:23-39`).
 --
 -- Join shape CONFORMs to the retired `resource_bases`
 -- (`20260721000010_evidential_standing_memo.sql:104-111`: `NOT p.is_corrected`, `NOT b.is_folded`,
 -- `source_kind = 'resource'`) plus the liveness join spec §3.1 makes mandatory. Only resource-kind
 -- citations participate — that is also what the audit write path enforces
--- (`20260723000010_citation_audits.sql:123-126`), so the two ends agree.
+-- (`20260724000110_citation_audits.sql:123-126`), so the two ends agree.
 CREATE FUNCTION resource_live_citations(p_finding uuid)
 RETURNS TABLE(block_id uuid, source_id uuid) LANGUAGE sql STABLE AS $$
     SELECT DISTINCT p.block_id, p.source_id
@@ -136,7 +136,7 @@ $$;
 -- `evidential_standing.rs::an_audit_on_one_finding_does_not_cover_the_same_source_on_another`.
 --
 -- `a.source_kind = 'resource'` cannot be false here and is defence-in-depth only: `citation_audit`
--- rejects every other kind at the write path (`20260723000010_citation_audits.sql:208-211`) and
+-- rejects every other kind at the write path (`20260724000110_citation_audits.sql:208-211`) and
 -- `resource_live_citations` already restricts `p.source_kind = 'resource'`. No fixture can produce a
 -- non-resource audit row, so no test falsifies it — do not read it as carrying meaning.
 CREATE FUNCTION resource_audit_coverage(p_finding uuid)
@@ -195,7 +195,7 @@ $$;
 -- PostgreSQL's `power()` RAISES `value out of range: overflow` rather than returning `inf`, so a
 -- `created` far enough in the FUTURE makes this READ path error outright for that finding — a
 -- 500 on a GET, for one bad row. `created` now comes from `kb_events.occurred_at`
--- (`20260723000010_citation_audits.sql`), which is caller-influenced on some write paths, so "no
+-- (`20260724000110_citation_audits.sql`), which is caller-influenced on some write paths, so "no
 -- write path can produce it" is no longer the argument it was. The clamp costs nothing and turns a
 -- future-dated verdict into a full-weight one instead of a 500.
 CREATE FUNCTION resource_citation_quality(p_finding uuid)
@@ -289,7 +289,7 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
         -- finding whose verdicts CANCEL is the latter. At exactly `0.0` the strict form fell through
         -- every arm to `provisional`, byte-identical to a finding nobody has ever opened, and
         -- `audit_drift_sweep` selects on `coverage < magnitude`
-        -- (`20260723000030_audit_drift_sweep.sql:109`), so a covered finding at quality 0.0 could
+        -- (`20260724000130_audit_drift_sweep.sql:109`), so a covered finding at quality 0.0 could
         -- never be re-queued to escape it. That state is ordinary, not a corner: two sources audited
         -- `+1.0` and `-1.0` land there, and `0.0` is an explicit anchor on the auditor's own published
         -- scale ("on-topic but does not bear on this connection either way"), which the persona is

@@ -161,7 +161,7 @@ pub async fn claim_audit(
 /// widening of it: [`complete`] is the steward's, it rides `steward_advance_watermark`, and its
 /// broader `status IN ('pending','in_progress','waiting_for_retry')` transition is load-bearing
 /// there. Two narrowings here, each named by what it prevents (the full argument lives beside the
-/// SQL, `migrations/20260723000030_audit_drift_sweep.sql`):
+/// SQL, `migrations/20260724000130_audit_drift_sweep.sql`):
 ///
 /// * `status = 'in_progress'` — [`complete`] also completes a **pending** job, so a caller could
 ///   terminate one that had never been dispatched and suppress a cogmap's auditing indefinitely.

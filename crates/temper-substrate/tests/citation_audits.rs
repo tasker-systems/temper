@@ -3,7 +3,7 @@
 //! Task 2, the Rust write path on top of it (`writes::record_citation_audit[_with]`).
 //!
 //! Task 1's tests exercise `citation_audit` / `_project_citation_audited` in
-//! `migrations/20260723000010_citation_audits.sql` directly against an ephemeral DB — the same
+//! `migrations/20260724000110_citation_audits.sql` directly against an ephemeral DB — the same
 //! idiom `content_mutation.rs` uses for `block_mutate` (`content_mutation.rs:91-92`:
 //! `serde_json::json!` payload, positional `$1`/`$2` binds) — since there was no Rust wrapper
 //! yet. Task 2's tests (bottom of file) drive the same SQL through the typed
@@ -120,7 +120,7 @@ async fn fire_audit(
 /// Make `(block, source)` a LIVE citation.
 ///
 /// `citation_audit` refuses to audit a pair that is not one (`citation_is_live`,
-/// `20260723000010_citation_audits.sql`) — an audit of a non-citation is inert for standing, so
+/// `20260724000110_citation_audits.sql`) — an audit of a non-citation is inert for standing, so
 /// accepting it would be a silently successful no-op the auditor could never detect. `make_resource`
 /// above creates with no sources, so every valid-audit fixture in this half of the file needs this
 /// row; the Task 5 fixtures below get theirs from `create_resource_with`'s `sources` instead.
@@ -651,7 +651,7 @@ async fn record_citation_audit_with_stamps_the_invocation_and_authorship(pool: s
 // ── Task 5 — audit_drift_sweep (SQL) ─────────────────────────────────────────────────────────────
 //
 // Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.2-6.3,
-// migration `20260723000030_audit_drift_sweep.sql`. Every fixture below builds through the SAME
+// migration `20260724000130_audit_drift_sweep.sql`. Every fixture below builds through the SAME
 // production writes as the rest of this file (`create_resource_with` via `make_home`/`make_resource`,
 // `citation_audit` via `fire_audit`, `writes::delete_resource`) plus the cogmap/team-membership
 // fixtures already established in this test suite for exactly this purpose
@@ -796,7 +796,7 @@ async fn seed_cogmap_finding_with_n_citations(
 }
 
 /// Run `audit_drift_sweep(principal, limit)`, returning the raw `(cogmap_id, finding_id, uncovered)`
-/// rows at the shape the migration declares (`20260723000030_audit_drift_sweep.sql`).
+/// rows at the shape the migration declares (`20260724000130_audit_drift_sweep.sql`).
 async fn sweep(pool: &sqlx::PgPool, principal: Uuid, limit: i32) -> Vec<(Uuid, Uuid, i32)> {
     sqlx::query_as("SELECT cogmap_id, finding_id, uncovered FROM audit_drift_sweep($1, $2)")
         .bind(principal)

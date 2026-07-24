@@ -1221,7 +1221,7 @@ impl DbBackend {
     ///
     /// **What the read actually recomputes live.** `resource_standing_shape` recomputes ALL SIX
     /// components from live rows at read — it calls one component function per column and reads
-    /// `kb_resource_standing` for nothing (`20260723000020_standing_citation_components.sql:319-341`).
+    /// `kb_resource_standing` for nothing (`20260724000120_standing_citation_components.sql:319-341`).
     /// The memo is therefore a write-cost optimization + parity anchor, never the read's authority.
     ///
     /// **The Set 3 `TODO(Set 5)` dissolved; a narrower warning replaces it, and is not deleted.**
@@ -2078,7 +2078,7 @@ impl Backend for DbBackend {
         cmd: RecordCitationAudit,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
         // A caller-fault guard, NOT a gate: `kb_citation_audits.value` carries the same bound as a
-        // CHECK (`20260723000010_citation_audits.sql:28`), which would otherwise reach the caller as
+        // CHECK (`20260724000110_citation_audits.sql:28`), which would otherwise reach the caller as
         // a 500 for what is plainly a bad request. It runs first because it names nothing about the
         // subject — it leaks nothing an unauthorized caller could not compute unaided — so the
         // four-step order above is untouched. `contains` also rejects NaN, which no JSON surface can
@@ -2760,7 +2760,7 @@ impl Backend for DbBackend {
     ///    handing back each stolen job's `cogmap_id` and full finding-id list and leaving the real
     ///    auditor's queue empty. `claim_audit` now passes the principal, and
     ///    `workflow_job_claim` constrains the claimable set through the same
-    ///    `steward_candidate_cogmaps` the sweep uses (`20260723000030_audit_drift_sweep.sql`).
+    ///    `steward_candidate_cogmaps` the sweep uses (`20260724000130_audit_drift_sweep.sql`).
     ///
     /// Neither half subsumes the other: gate 1 stops a human running the pipeline, gate 2 stops one
     /// registered machine reading another tenant's work.

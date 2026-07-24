@@ -25,7 +25,7 @@
 //!   **OPEN RISK, recorded rather than hidden.** Dropping it means any principal holding read on a
 //!   finding may post `-1.0` on each of its citations and pin it to `disputed` **for as long as
 //!   nobody outweighs it**: the trail is append-only by design
-//!   (`20260723000010_citation_audits.sql:12-17`), decay means the most recent writer dominates,
+//!   (`20260724000110_citation_audits.sql:12-17`), decay means the most recent writer dominates,
 //!   and the evidence read surfaces **no attribution**, so there is no retraction and no visible
 //!   culprit. The two mitigations that would close it — surfacing per-audit attribution on the
 //!   evidence read, and rate-limiting audits per principal per finding — are NOT built. Whoever
@@ -54,7 +54,7 @@
 //!
 //! So the arm now asks the exact question spec §7 asks — *"did this principal emit the event that
 //! contributed this citation?"* — through `citation_contributed_by_profile`
-//! (`20260723000010_citation_audits.sql`), which reads `kb_block_provenance.contributed_by_event_id`
+//! (`20260724000110_citation_audits.sql`), which reads `kb_block_provenance.contributed_by_event_id`
 //! → `kb_events.emitter_entity_id` → `kb_entities.profile_id`. That row is immutable, so no later
 //! access change moves the answer. The `can_modify_resource` proxy is **kept as a second probe**,
 //! belt and braces: it still correctly refuses a present co-editor who wrote none of the citation,
@@ -135,7 +135,7 @@ async fn is_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<boo
 /// cap and nothing else, so there is no scope to seal into a proof and nothing for a transposition
 /// to transpose. What it *is* is the endpoint half of the queue's principal scoping — the SQL half
 /// lives in `workflow_job_claim`'s reach constraint
-/// (`migrations/20260723000030_audit_drift_sweep.sql`), and neither half is sufficient alone:
+/// (`migrations/20260724000130_audit_drift_sweep.sql`), and neither half is sufficient alone:
 ///
 /// * without the reach constraint, one registered machine could claim another tenant's jobs and
 ///   read their `cogmap_id` + finding-id payloads;
@@ -165,7 +165,7 @@ pub(crate) async fn require_machine_principal(pool: &PgPool, caller: ProfileId) 
 ///
 /// Mirrors the resolution the SQL entry function already performs — `SELECT resource_id INTO
 /// v_resource FROM kb_content_blocks WHERE id = v_block`
-/// (`20260723000010_citation_audits.sql:119`) — and refuses an unknown block with
+/// (`20260724000110_citation_audits.sql:119`) — and refuses an unknown block with
 /// [`ApiError::NotFound`], the same dialect [`AuditAuthority::denial`] uses, so "no such block" and
 /// "a block on a finding you may not audit" are indistinguishable to the caller.
 pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult<ResourceId> {
@@ -263,7 +263,7 @@ impl ScopedAuthority for AuditAuthority {
     ///   reason — the standing read this gate sits beside asks the same question through the same
     ///   function, so the two cannot drift (`readback/mod.rs:133-162`).
     /// * Citation authorship is `citation_contributed_by_profile`
-    ///   (`20260723000010_citation_audits.sql`) — the exact historical fact, see the module doc.
+    ///   (`20260724000110_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
     ///   production's write gate (`db_backend.rs:469-483`).
     async fn resolve(
@@ -323,7 +323,7 @@ impl ScopedAuthority for AuditAuthority {
     ///
     /// The evidence **read** over this same subject is already leak-safe by returning no row: the
     /// `gated` CTE in `resource_standing_shape` yields zero rows to a principal who cannot read the
-    /// finding (`20260723000020_standing_citation_components.sql:326`), which
+    /// finding (`20260724000120_standing_citation_components.sql:326`), which
     /// `evidential_standing_service.rs:43` turns into `ApiError::NotFound`. Refusing the audit
     /// **write** with `Forbidden` would confirm that a guessed finding id names a real finding —
     /// an existence oracle standing directly beside a read built to avoid one.
@@ -349,7 +349,7 @@ impl ScopedAuthority for AuditAuthority {
 /// outside the dispatch loop, an already-completed job, a reaped lease) and not a refusal. So the
 /// claim check lives in the SQL effect instead: `workflow_job_complete_claimed` transitions only a
 /// row that is `in_progress` **and** `claimed_by_profile_id = caller`
-/// (`migrations/20260723000030_audit_drift_sweep.sql`), and matches nothing otherwise. A caller past
+/// (`migrations/20260724000130_audit_drift_sweep.sql`), and matches nothing otherwise. A caller past
 /// this gate that holds no such job therefore performs a guaranteed no-op — it can neither terminate
 /// a never-dispatched `pending` job (indefinite suppression of a cogmap's auditing) nor free another
 /// session's in-flight slot (duplicate concurrent audit sessions on one finding list).

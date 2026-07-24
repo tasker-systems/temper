@@ -885,7 +885,7 @@ pub struct BlockProvenanceCorrected {
 /// is held to it rather than only the ones that go through this struct.
 ///
 /// Registered **permissive** (NULL `payload_schema`), like `block_provenance_annotated`: a
-/// post-canonical-seed event added by migration `20260723000010`, so it is NOT in
+/// post-canonical-seed event added by migration `20260724000110`, so it is NOT in
 /// [`TYPED_EVENT_NAMES`] and gets no committed JSON-Schema snapshot. Validated Rust-side through
 /// [`verify_ledger_roundtrip`] instead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

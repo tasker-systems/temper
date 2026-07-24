@@ -71,7 +71,7 @@ Production migrations are **operator-run** against each target's Neon database
 
 ### Cutover: evidential standing → the three-axis citation model (Set 5)
 
-`migrations/20260723000020_standing_citation_components.sql` is **non-additive**. It drops
+`migrations/20260724000120_standing_citation_components.sql` is **non-additive**. It drops
 three `kb_resource_standing` columns (`indep_breadth`, `adversarial_survival`,
 `challenge_count`) and four functions (`resource_independence_breadth`,
 `refresh_independence_pairs`, `resource_adversarial_survival`, `resource_bases`), and it
@@ -79,7 +79,7 @@ changes the return type of `resource_standing_shape` and the argument list of
 `standing_band`. So it breaks the additive-only invariant above and **must not ride an
 auto-deploy of `main`**. Cut each target over individually.
 
-`migrations/20260723000030_audit_drift_sweep.sql` rides the same cutover and is **also
+`migrations/20260724000130_audit_drift_sweep.sql` rides the same cutover and is **also
 non-additive**, for a different reason: besides the auditor's sweep it DROP+CREATEs
 `workflow_job_claim` to add principal scoping. The new parameter is appended last with a
 `DEFAULT`, so the deployed 5-argument positional call keeps resolving through the

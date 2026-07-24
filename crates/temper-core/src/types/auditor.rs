@@ -5,7 +5,7 @@
 //! **The whole reason this module exists rather than reusing [`crate::types::workflow_job::ClaimedJob`]
 //! is the grain mismatch, and it is worth stating once, here.** `audit_drift_sweep` is
 //! **finding**-grained — `RETURNS TABLE(cogmap_id uuid, finding_id uuid, uncovered int)`
-//! (`migrations/20260723000030_audit_drift_sweep.sql:86-87`) — while `kb_workflow_jobs` enforces
+//! (`migrations/20260724000130_audit_drift_sweep.sql:86-87`) — while `kb_workflow_jobs` enforces
 //! single-flight on `(cogmap_id, persona, dispatch_type)`
 //! (`migrations/20260705000001_workflow_jobs.sql:43-45`, *"the single-flight guarantee"*). Enqueuing
 //! one job per swept row would therefore create the first job and have

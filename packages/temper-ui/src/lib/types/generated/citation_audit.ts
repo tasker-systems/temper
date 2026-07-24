@@ -15,14 +15,14 @@ block_id: string,
  * The cited source being assessed. Only `Resource`-kind citations are auditable: standing
  * reads only resource-kind bases, so the SQL entry refuses anything else at the write path
  * rather than letting it land as a no-op the auditor could never detect
- * (`migrations/20260723000010_citation_audits.sql:123-126`).
+ * (`migrations/20260724000110_citation_audits.sql:123-126`).
  */
 source: ProvenanceSource, 
 /**
  * The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the
  * connection it makes, never a claim about what the source says (spec §3.3). Out-of-range is a
  * 400; the ledger column carries the same bound as a CHECK
- * (`migrations/20260723000010_citation_audits.sql:28`).
+ * (`migrations/20260724000110_citation_audits.sql:28`).
  */
 value: number, 
 /**

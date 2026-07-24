@@ -228,7 +228,7 @@ async fn recording_an_audit_moves_quality_off_zero(pool: PgPool) {
 
     // The cited source must be a live `kb_resources` row: `resource_live_citations` joins
     // `kb_resources src ON src.id = p.source_id AND src.is_active`
-    // (`20260723000020_standing_citation_components.sql:100-106`), so a synthetic uuid would be
+    // (`20260724000120_standing_citation_components.sql:100-106`), so a synthetic uuid would be
     // counted by no axis and the "after" assertion could never move.
     let source = citer_backend
         .create_resource(create_cmd(

@@ -2,7 +2,7 @@
 //! Evidential-standing maturity projection (SQL substrate).
 //!
 //! Exercises the producers/memos in `migrations/20260721000010_evidential_standing_memo.sql` as
-//! amended by `migrations/20260723000020_standing_citation_components.sql` (Set 5, Task 3) against
+//! amended by `migrations/20260724000120_standing_citation_components.sql` (Set 5, Task 3) against
 //! an ephemeral DB. Standing is NOT truth (spec 019f81e8 preamble): these assert the *shape of the
 //! evidence*, never a truth claim. Grounding for the seeding helpers: `content_mutation.rs`
 //! (provenance via `writes`), `write_path_mutations.rs` (edges via `SeedAction::RelationshipAssert`),
@@ -596,7 +596,7 @@ async fn is_resource_visible_false_for_an_unreadable_one(pool: sqlx::PgPool) {
 // ── Set 5 Task 3 — the three citation axes and the re-thresholded band ──────────────────────────
 //
 // Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §3.1/§3.2/§4.1,
-// migration `20260723000020_standing_citation_components.sql`. Every audit below goes through the
+// migration `20260724000120_standing_citation_components.sql`. Every audit below goes through the
 // production write path (`writes::record_citation_audit`), never a hand-rolled INSERT.
 
 /// LOAD-BEARING. Falsifies the collapse spec §3.1's mapping table names in as many words — "an

@@ -42,7 +42,7 @@ pub struct CogmapAuditWork {
 ///
 /// Auth: the gate is inside the SQL. `audit_drift_sweep` routes through
 /// `steward_candidate_cogmaps(p_principal)` **and** `resources_visible_to(p_principal)`
-/// (`migrations/20260723000030_audit_drift_sweep.sql:89-100`) — the same predicates every other read
+/// (`migrations/20260724000130_audit_drift_sweep.sql:89-100`) — the same predicates every other read
 /// uses — so an unreachable cogmap or an unreadable finding simply never appears. There is no
 /// unscoped variant of this call, because a sweep with no principal is a cross-tenant enumeration
 /// oracle (spec §6.3).
@@ -195,7 +195,7 @@ mod tests {
     /// the DDL — `kb_content_blocks` (`20260624000001_canonical_schema.sql`, `resource_id/seq/
     /// genesis_event_id/last_event_id`) and `kb_block_provenance` (`block_id/source_kind/source_id/
     /// contributed_by_event_id/accretion_seq`) — which together are exactly what
-    /// `resource_live_citations` reads (`20260723000020_standing_citation_components.sql:100-107`).
+    /// `resource_live_citations` reads (`20260724000120_standing_citation_components.sql:100-107`).
     struct Seeded {
         principal: Uuid,
         cogmap: Uuid,

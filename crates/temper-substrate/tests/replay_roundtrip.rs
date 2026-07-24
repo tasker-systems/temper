@@ -174,7 +174,7 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     // NO `common::reset_schema` in the setup half, unlike the sibling above. reset_schema
     // re-applies every migration and then TRUNCATEs the data tables — including `kb_event_types`
     // (`common/mod.rs:16-25`). `citation_audited` is registered by a migration INSERT
-    // (`20260723000010_citation_audits.sql`), not by the canonical seed, so the truncate drops it
+    // (`20260724000110_citation_audits.sql`), not by the canonical seed, so the truncate drops it
     // and `bootseed::seed_system` — which re-seeds only the canonical types — never restores it:
     // `_event_append` then raises `event_type citation_audited not seeded`
     // (`20260624000002_canonical_functions.sql:777`). The fresh `MIGRATOR` database this test is
@@ -207,7 +207,7 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     let block = BlockId::from(first_block(&pool, finding).await);
 
     // The `(block, source)` pair must be a LIVE citation — `citation_audit` refuses an audit of a
-    // non-citation (`20260723000010_citation_audits.sql`, `citation_is_live`). `make_resource`
+    // non-citation (`20260724000110_citation_audits.sql`, `citation_is_live`). `make_resource`
     // creates with no sources, so the provenance row is added here, borrowing the block's own
     // genesis event as the contributing act (nothing under test reads that event's content).
     sqlx::query(
@@ -264,26 +264,15 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
             .await
             .unwrap();
 
-    // Age the trail before snapshotting, exactly as `evidential_standing.rs` does to exercise decay
-    // without sleeping — and it is what makes the `created` comparison FALSIFYING rather than
-    // decorative. A same-second write reprojects a `now()` within microseconds of the original, so
-    // the broken projector would pass; a year-old audit reprojects a year off. Both the event's
-    // `occurred_at` (replay's source of truth) and the row's `created` move together, which is the
-    // invariant the projector is supposed to maintain.
-    sqlx::query("UPDATE kb_events SET occurred_at = now() - interval '365 days' WHERE id=$1")
-        .bind(event_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "UPDATE kb_citation_audits SET created = (SELECT occurred_at FROM kb_events WHERE id=$1) \
-          WHERE audited_by_event_id=$1",
-    )
-    .bind(event_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
+    // NO artificial aging of `occurred_at`. An earlier cut did `UPDATE kb_events SET occurred_at =
+    // now() - interval '365 days'`, but `kb_events` is append-only — the `kb_events_append_only`
+    // trigger (`20260624000001_canonical_schema.sql:504-506`) rejects every UPDATE, so that write
+    // does not run at all. It is not needed anyway: the `created` check is made falsifying by the
+    // INVARIANT it asserts, not by a wide time margin. Replay must reproject `created` FROM the
+    // event's `occurred_at`; a `DEFAULT now()` projector instead stamps `created` with the replay
+    // transaction's clock — a different transaction from the original write, so never equal to the
+    // preserved `occurred_at`, whatever the elapsed time. The assertion below pins exactly that, so
+    // it catches the broken projector even at microsecond separation.
     let before: AuditRow = sqlx::query_as(BY_EVENT)
         .bind(event_id)
         .fetch_one(&pool)
@@ -306,6 +295,25 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
         before, after,
         "the reprojected row must be byte-identical to the original — INCLUDING `created`, which \
          is the decay clock the standing projection weights every verdict by"
+    );
+
+    // The load-bearing half of that comparison, stated as the invariant so it cannot pass by luck of
+    // timing: the reprojected `created` equals the replayed event's `occurred_at`. A projector that
+    // defaulted `created` to `now()` would fail here by the whole reset-to-replay gap — the reset
+    // re-runs every migration between the original write and this reprojection.
+    let (created, occurred_at): (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) =
+        sqlx::query_as(
+            "SELECT a.created, e.occurred_at \
+               FROM kb_citation_audits a JOIN kb_events e ON e.id = a.audited_by_event_id \
+              WHERE a.audited_by_event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        created, occurred_at,
+        "replay must source `created` from the event's `occurred_at`, not stamp it with now()"
     );
 
     // ...and exactly once — meaning ONE event yields ONE row on a replay walk, which falsifies a

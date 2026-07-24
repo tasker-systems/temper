@@ -14,7 +14,7 @@
 //! (`crates/temper-core/src/types/standing.rs:36-45`). The second test below drives the new
 //! write surface end to end: a resource-kind citation (never the `https://…` remote source used
 //! above, which `resource_citation_magnitude` does not count —
-//! `migrations/20260723000020_standing_citation_components.sql:100-124`) plus a citation audit
+//! `migrations/20260724000120_standing_citation_components.sql:100-124`) plus a citation audit
 //! recorded by a distinct, non-author auditor (`temper_client::resources::record_citation_audit`,
 //! Task 7/8), asserting the axes move off their pre-audit values rather than merely being numeric.
 
@@ -197,7 +197,7 @@ async fn citation_audit_moves_audit_coverage_and_citation_quality(pool: sqlx::Pg
 
     // The cited source: a plain resource with no provenance of its own. `citation_magnitude`
     // only counts DISTINCT LIVE resource-kind citations
-    // (`migrations/20260723000020_standing_citation_components.sql:100-124`), so the finding
+    // (`migrations/20260724000120_standing_citation_components.sql:100-124`), so the finding
     // below must cite this resource's id directly (never an `https://…` string, which resolves
     // to `ProvenanceSource::Remote` and is invisible to that count).
     let cited = cli_json(

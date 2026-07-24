@@ -137,7 +137,7 @@ pub struct ListRow {
 /// question instead of two independent restatements that could drift apart silently. It is also the
 /// predicate the SQL side already treats as canonical for a profile principal:
 /// `resources_readable_by('profile', p)` — the gate `resource_standing_shape` runs
-/// (`20260723000020_standing_citation_components.sql:326`) — delegates to `resources_visible_to`
+/// (`20260724000120_standing_citation_components.sql:326`) — delegates to `resources_visible_to`
 /// for the `'profile'` arm (`20260712000010_context_read_predicates.sql:419`), so calling
 /// `resources_visible_to` directly here is equivalent for the profile principal, and is the
 /// incumbent Rust-callable form.
@@ -916,7 +916,7 @@ pub async fn anchor_shape(
 }
 
 /// One finding's evidential-standing shape, as returned by `resource_standing_shape` (Set 5,
-/// migration `20260723000020`, replacing Set 3's single `indep_breadth` scalar with three citation-
+/// migration `20260724000120`, replacing Set 3's single `indep_breadth` scalar with three citation-
 /// grain axes — spec §3.1). Substrate-local: the `temper-services` wrapper maps this to the
 /// `StandingShape` wire type (Phase C, later PR). Standing is shape-primary (spec §1.1) — `band` is
 /// a lossy read-time chip carried WITH the shape, never in place of it.

@@ -31,7 +31,7 @@ pub const DEFAULT_AUDITOR_LEASE_SECONDS: i32 = 600;
 
 /// Rows the auditor's sweep asks for per tick — the `p_limit` handed to `audit_drift_sweep`, and
 /// therefore a **finding** budget, not a cogmap one. The sweep is finding-grained
-/// (`migrations/20260723000030_audit_drift_sweep.sql:86-87`,
+/// (`migrations/20260724000130_audit_drift_sweep.sql:86-87`,
 /// `RETURNS TABLE(cogmap_id uuid, finding_id uuid, uncovered int)`) while the queue is cogmap-grained
 /// (spec §6.1), so N swept findings collapse into ≤ N jobs. Deliberately larger than
 /// [`DEFAULT_STEWARD_DISPATCH_CAP`] for that reason: a cap of 10 findings could be one cogmap's worth

@@ -71,7 +71,7 @@ ON CONFLICT (name) DO NOTHING;
 -- `_project_block_mutated`, `_project_resource_created` all open with the same
 -- `v_occurred` lookup, `:625,679,725,795,873`). Leaving it to the column DEFAULT is not a cosmetic
 -- deviation here: `resource_citation_quality` weights each audit by `pow(0.5, age/30d)`
--- (`20260723000020_standing_citation_components.sql:170-188`), so a replay that stamps every row with
+-- (`20260724000120_standing_citation_components.sql:170-188`), so a replay that stamps every row with
 -- the replay clock collapses every weight to ~1 and can INVERT a band — a trail recording
 -- "-1.0 in January, +1.0 in July" reprojects as a dead heat. `kb_citation_audits` is the first table
 -- whose *relative ordering between two of its own rows* is load-bearing, so this is the first place
@@ -107,7 +107,7 @@ $$;
 -- Both are `EXISTS` over `kb_block_provenance` — the table that IS the citation record — and both
 -- exclude `is_corrected` rows, matching every incumbent citation reader
 -- (`20260624000002_canonical_functions.sql:481`, `20260721000010_evidential_standing_memo.sql:55,68,108`,
--- `20260723000020_standing_citation_components.sql:104`). They are separate functions because they
+-- `20260724000120_standing_citation_components.sql:104`). They are separate functions because they
 -- answer separate questions and are called from separate layers; the shared join is three lines and
 -- `citation_audit`'s existence guard calls `citation_is_live` rather than restating it.
 
@@ -115,7 +115,7 @@ $$;
 --
 -- Without it an audit of a NON-citation is accepted with 200 and is permanently inert: both
 -- `resource_audit_coverage` and `resource_citation_quality` join through `resource_live_citations`
--- on the full citation key (`20260723000020_standing_citation_components.sql:132-137,176-180`), so the
+-- on the full citation key (`20260724000120_standing_citation_components.sql:132-137,176-180`), so the
 -- row moves nothing. The reachable mistake is a one-row transposition while iterating
 -- `get_block_provenance` — posting block B0 with a source cited on B1 — after which the finding
 -- re-heads `audit_drift_sweep` with the identical `uncovered` count on every subsequent tick,

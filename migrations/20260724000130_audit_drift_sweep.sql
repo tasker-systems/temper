@@ -21,7 +21,7 @@
 -- and separate").
 --
 -- EACH PRODUCER RUNS ONCE PER CANDIDATE ROW (mirrors `resource_standing_shape`'s `components` CTE,
--- `20260723000020_standing_citation_components.sql:316-318`: "the shipped version called
+-- `20260724000120_standing_citation_components.sql:316-318`: "the shipped version called
 -- `resource_independence_breadth` twice... with five producers that pattern would double every one
 -- of them"). The `scored` CTE below calls `resource_citation_magnitude`/`resource_audit_coverage`
 -- exactly once each per candidate; repeating them across the WHERE clause and the SELECT list would
@@ -31,7 +31,7 @@
 --   * `r.is_active`                 — a soft-deleted finding must not head the queue forever.
 --     Soft-delete only flips this flag; it does not fold blocks or provenance
 --     (`_project_resource_deleted`, `20260624000002_canonical_functions.sql:1051-1061`, cited again
---     by `20260723000020...sql:41-49`), so an unfiltered sweep would keep re-surfacing a deleted
+--     by `20260724000120...sql:41-49`), so an unfiltered sweep would keep re-surfacing a deleted
 --     finding on every tick with no way to ever clear it (spec §3.1's liveness rule, applied to the
 --     queue itself, not just the standing components).
 --   * `r.ingest_state = 'complete'` — a segmented upload still in progress is not yet a finding to
@@ -39,7 +39,7 @@
 --     arriving, so auditing it now would spend a verdict against a provenance list that has not
 --     finished forming. The rule is CLAUDE.md's own: "`ingest_state = 'complete'` goes exactly where
 --     `r.is_active` already goes" (`20260714000001_ingest_state.sql:139`), applied here to the
---     auditor's queue exactly as `20260723000020...sql:45-49` applied it to the standing components.
+--     auditor's queue exactly as `20260724000120...sql:45-49` applied it to the standing components.
 --   * `magnitude > 0`               — a finding with no live resource-kind citations has nothing for
 --     the auditor to weigh. Without this guard, every uncited finding in the corpus would appear at
 --     `uncovered = 0` — pure noise ahead of nothing, since `0 - 0 = 0` is not pushed to the tail by
@@ -69,7 +69,7 @@
 --
 -- KNOWN FIRST-CUT LIMITATION (spec §6.3, documented here rather than fixed): coverage is monotone
 -- under the append-only trail — `kb_citation_audits` has no supersession
--- (`20260723000010_citation_audits.sql:12-17`: "there is deliberately NO `is_superseded` column...
+-- (`20260724000110_citation_audits.sql:12-17`: "there is deliberately NO `is_superseded` column...
 -- a later +1.0 never erases an earlier -1.0"). A readable, live, cogmap-homed finding whose
 -- remaining uncovered sources the auditor *declines* to verdict — rather than covering them — never
 -- regains a fresh selection signal from this predicate: coverage does not fall, and nothing here ages
@@ -226,7 +226,7 @@ $$;
 --   * `claimed_by_profile_id = p_principal` — completing someone else's IN-FLIGHT job frees the
 --     single-flight slot while their session is still running, so the next tick enqueues and claims a
 --     second concurrent audit session over the same finding list, both appending to a trail that by
---     design cannot retract (`20260723000010_citation_audits.sql:12-17`).
+--     design cannot retract (`20260724000110_citation_audits.sql:12-17`).
 -- No match is NULL, not an error: an already-completed job, a reaped lease, or a manual audit outside
 -- the dispatch loop are all "nothing to complete", and the session's written verdicts stand either way.
 CREATE FUNCTION workflow_job_complete_claimed(

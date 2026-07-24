@@ -25,7 +25,7 @@ use uuid::Uuid;
 /// `(finding_id, block_id, source_id)`.
 ///
 /// The citation is not decoration: `citation_audit` refuses a `(block, source)` pair that is not a
-/// live `kb_block_provenance` row (`20260723000010_citation_audits.sql`, `citation_is_live`),
+/// live `kb_block_provenance` row (`20260724000110_citation_audits.sql`, `citation_is_live`),
 /// because an audit of a non-citation is inert for standing and so a silently successful no-op.
 ///
 /// The block borrows a migration-seeded `kb_events` row for its genesis/last-event FKs — the
