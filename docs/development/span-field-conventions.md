@@ -118,12 +118,32 @@ name that says which side of the wire you are on.
   rather than receives. `tracestate` is therefore not read at all — vendor state exists to be
   forwarded, and reading it before there is anywhere to forward it to would be storage with no
   reader.
-- **Nothing has been observed arriving in production yet.** Whether Vercel forwards a client's
-  `traceparent` into a Rust function — or synthesizes one — could not be settled from the crate
-  source or the docs. `vercel_runtime` 2.1.1 *does* read `x-vercel-internal-invocation-id` and
-  `x-vercel-internal-request-id` off inbound requests (`src/lib.rs`, in `run`'s connection handler),
-  so the header channel demonstrably exists; which headers travel it is an empirical question these
-  fields answer by being populated or empty once deployed.
+## What production actually does (measured 2026-07-24)
+
+Whether Vercel forwards a client's `traceparent` into a Rust function could not be settled from the
+crate source or the docs, so it was settled by deploying these fields and reading the logs
+(`dpl_4jneaF2DPYrX92zMo5L6KiGBbkHP`, `iad1`):
+
+| Request | `trace_id` / `parent_span_id` / `trace_sampled` | `vercel_id` / `vercel_invocation_id` |
+|---|---|---|
+| with a client `traceparent` | populated, intact, on **both** `http_request` and `mcp_request` | populated |
+| with none | absent | populated |
+
+**Vercel forwards a caller's `traceparent` and does not synthesize one.** The negative row is
+trustworthy rather than a silent no-op precisely because the Vercel fields are populated beside it:
+the extractor provably ran and found nothing. That disambiguation is why those two fields belong in
+this set rather than in a later increment.
+
+This **contradicted** the prior the work carried in. The spike had reasoned from `@vercel/otel` that
+Vercel "does not use a header" — its `VercelRuntimePropagator.extract()` reads `rootSpanContext` off
+a JS request-context object, `inject()` is a no-op, `fields()` returns `[]` — and inferred that
+nothing would arrive. The inference confused two different things: a *library's propagator
+implementation* is not the *platform's edge behaviour*. Worth remembering the next time a Node
+package's internals are used to predict what a Rust function receives.
+
+The consequence for the goal is that one trace per user action is reachable end to end, and the
+remaining work is ours: every hop of the mention flow is our own code, and the header survives the
+platform between them.
 - **Reads are unspanned below the root.** Deliberate for now — see clause 2. If temper ever grows
   command-action mechanics for reads, this convention should grow with it rather than be worked
   around.
