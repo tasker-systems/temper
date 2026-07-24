@@ -5643,6 +5643,7 @@ dependencies = [
  "temper-principal",
  "temper-services",
  "temper-substrate",
+ "temper-telemetry",
  "temper-workflow",
  "tokio",
  "tower-http",
@@ -5807,6 +5808,7 @@ dependencies = [
  "temper-mcp",
  "temper-services",
  "temper-substrate",
+ "temper-telemetry",
  "temper-workflow",
  "tempfile",
  "tokio",
@@ -5858,6 +5860,7 @@ dependencies = [
  "sqlx",
  "temper-core",
  "temper-services",
+ "temper-telemetry",
  "temper-workflow",
  "tokio",
  "toml 0.8.23",
@@ -5926,6 +5929,14 @@ dependencies = [
  "temper-ingest",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "temper-telemetry"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "tracing",
 ]
 
 [[package]]

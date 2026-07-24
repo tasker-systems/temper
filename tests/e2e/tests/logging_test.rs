@@ -242,7 +242,13 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
         axum::serve(listener, app).await.expect("mcp test server");
     });
 
-    let resp = reqwest::get(format!("http://{addr}/mcp/health"))
+    // Carries a `traceparent` so this covers the extended clause 1 on the MCP surface too. Parity
+    // is not decoration here: MCP is the mention flow's last hop, so a trace that joins on the API
+    // and roots afresh on MCP breaks exactly the case the goal exists to prove.
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/mcp/health"))
+        .header("traceparent", SPEC_TRACEPARENT)
+        .send()
         .await
         .expect("health request");
     assert_eq!(resp.status().as_u16(), 200);
@@ -255,5 +261,166 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
             && s.fields.contains_key("method")
             && s.fields.contains_key("path")),
         "expected an `mcp_request` root span carrying method + path, got: {spans:#?}"
+    );
+
+    let root = root_span(&spans, "mcp_request", "/mcp/health");
+    assert_eq!(
+        root.fields.get("trace_id").map(String::as_str),
+        Some(SPEC_TRACE_ID),
+        "the MCP root span did not join the inbound trace: {root:#?}"
+    );
+}
+
+// ── Clause 1, extended: inbound trace context ────────────────────────────────────────────────
+//
+// `traceparent` is request-level, arrives in a header, and is known at span construction — the same
+// grain as `method` and `path`. So it extends clause 1 rather than earning a clause of its own, and
+// it carries clause 1's unconditional shape with one honest exception: the fields are recorded *when
+// the caller sent them*. A request with no upstream trace legitimately has no trace id, and
+// synthesizing one would manufacture a value no exported span agrees with.
+
+/// The W3C spec's canonical example, reused so the expected ids below are checkable against the
+/// standard rather than against something invented here.
+const SPEC_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+const SPEC_TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+const SPEC_PARENT_ID: &str = "00f067aa0ba902b7";
+
+/// Find the root span for one specific request, identified by span name plus `path`.
+///
+/// Matching on `path` — rather than taking the first span of the right name — is load-bearing:
+/// `common::setup` authenticates by calling `/api/profile`, so its root span is captured *before*
+/// the request under test and would silently answer every assertion here. A trace-context test that
+/// reads the wrong request's span is worse than no test, because it passes for the setup call's
+/// reasons and reports on a request nobody sent trace context to.
+fn root_span(
+    spans: &[common::tracing_layer::CapturedSpan],
+    name: &str,
+    path: &str,
+) -> common::tracing_layer::CapturedSpan {
+    spans
+        .iter()
+        .find(|s| s.name == name && s.fields.get("path").map(String::as_str) == Some(path))
+        .unwrap_or_else(|| panic!("no `{name}` root span for path `{path}`; got: {spans:#?}"))
+        .clone()
+}
+
+/// An inbound `traceparent` lands on the root span, parsed into its parts.
+///
+/// The assertion is on the *parts*, not on the raw header: a trace id is only useful as a grouping
+/// key if every hop agrees on its spelling, and echoing the header back would pass just as happily
+/// with no parsing at all — which is the state this closes.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn root_span_carries_inbound_trace_context(pool: sqlx::PgPool) {
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+
+    let app = common::setup(pool).await;
+
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .header("traceparent", SPEC_TRACEPARENT)
+        .header("x-vercel-id", "iad1::abcde-1784898082809-699809328187")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let spans = spans.lock().unwrap();
+    let root = root_span(&spans, "http_request", "/api/resources");
+
+    assert_eq!(
+        root.fields.get("trace_id").map(String::as_str),
+        Some(SPEC_TRACE_ID),
+        "root span did not carry the inbound trace id: {root:#?}"
+    );
+    assert_eq!(
+        root.fields.get("parent_span_id").map(String::as_str),
+        Some(SPEC_PARENT_ID),
+        "root span did not carry the inbound parent span id: {root:#?}"
+    );
+    assert_eq!(
+        root.fields.get("trace_sampled").map(String::as_str),
+        Some("true"),
+        "root span did not carry the inbound sampled flag: {root:#?}"
+    );
+    assert_eq!(
+        root.fields.get("vercel_id").map(String::as_str),
+        Some("iad1::abcde-1784898082809-699809328187"),
+        "root span did not carry the inbound x-vercel-id: {root:#?}"
+    );
+}
+
+/// The negative half, and the reason this is not merely a presence check.
+///
+/// If the fields were ever filled with a locally-minted id — the obvious "helpful" change — every
+/// request would report a trace id and this suite would still pass a presence-only assertion, while
+/// production quietly gained a trace id per hop instead of one per user action. Absence has to be
+/// asserted for the distinction to survive.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn root_span_leaves_trace_fields_empty_when_none_arrive(pool: sqlx::PgPool) {
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+
+    let app = common::setup(pool).await;
+
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let spans = spans.lock().unwrap();
+    let root = root_span(&spans, "http_request", "/api/resources");
+
+    for field in temper_telemetry::ROOT_TRACE_FIELDS {
+        assert!(
+            !root.fields.contains_key(field),
+            "`{field}` was populated on a request that carried no trace context — a synthesized id \
+             gives every hop its own trace instead of one trace per user action: {root:#?}"
+        );
+    }
+    // …while the unconditional half of clause 1 still holds.
+    assert!(root.fields.contains_key("method"));
+}
+
+/// A malformed `traceparent` is ignored rather than recorded verbatim.
+///
+/// The failure this rejects is a permissive extractor that copies the header through: a `trace_id`
+/// field holding `"garbage"` is worse than an empty one, because it looks like a real correlation
+/// key right up until someone groups by it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn malformed_traceparent_is_ignored(pool: sqlx::PgPool) {
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+
+    let app = common::setup(pool).await;
+
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .header("traceparent", "00-not-a-trace-parent")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let spans = spans.lock().unwrap();
+    let root = root_span(&spans, "http_request", "/api/resources");
+
+    assert!(
+        !root.fields.contains_key("trace_id"),
+        "a malformed traceparent must leave `trace_id` empty, not copy the header through: {root:#?}"
     );
 }

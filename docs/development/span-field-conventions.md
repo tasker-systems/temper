@@ -3,7 +3,8 @@
 What temper's spans are named, what fields they carry, and which of those are enforced.
 
 This document is **not** the authority on its own — the gate in `tests/e2e/tests/logging_test.rs` is,
-and the field set has a single definition in code (`temper_services::backend::ACT_SPAN_FIELDS`).
+and each field set has a single definition in code (`temper_services::backend::ACT_SPAN_FIELDS` for
+the act grain, `temper_telemetry::ROOT_TRACE_FIELDS` for inbound trace context).
 A convention that lives only in prose drifts from the code within a release; this one is written down
 so the *reasoning* survives, while the *assertions* live where they can fail a build.
 
@@ -11,6 +12,16 @@ so the *reasoning* survives, while the *assertions* live where they can fail a b
 
 **Clause 1 — every request produces a root span carrying the request-level fields.**
 Unconditional. `method`, `path`, `version`, and `profile_id` once the request is authenticated.
+Plus, **when the caller sent them**, the inbound trace-context fields (`ROOT_TRACE_FIELDS`).
+
+That last qualifier is the one exception to clause 1's unconditional shape, and it is not a
+weakening. `traceparent` is request-level and header-borne, so it belongs to clause 1's grain rather
+than earning a clause of its own — but a request genuinely may arrive with no upstream trace, and
+the honest record of that is an empty field. The tempting alternative, minting a trace id locally
+when none arrives, would give **every hop its own trace** instead of one trace per user action:
+each deployable would report a confident-looking id that no other deployable shares. Minting root
+ids is the tracer provider's job, and the gate asserts the absence specifically so this cannot be
+"fixed" into existence later.
 
 **Clause 2 — when an act exists, its ids appear on a span of their own inside that request's tree.**
 Conditional, and deliberately so.
@@ -37,13 +48,37 @@ requires the carrying span **not** to be the root, identified by the absence of 
 
 | Span | Created by | Fields |
 |---|---|---|
-| `http_request` | `apply_transport_layers`, `crates/temper-api/src/routes.rs` | `method`, `path`, `version`, `profile_id` (deferred) |
+| `http_request` | `apply_transport_layers`, `crates/temper-api/src/routes.rs` | `method`, `path`, `version`, `profile_id` (deferred), plus `ROOT_TRACE_FIELDS` (deferred) |
 | `mcp_request` | `build_router`, `crates/temper-mcp/src/router.rs` | same set; `profile_id` recorded in `service.rs` on profile resolution |
 | act spans | `#[tracing::instrument]` on each write command in `crates/temper-services/src/backend/db_backend.rs` | `ACT_SPAN_FIELDS` — `correlation_id`, `invocation_id` (both deferred) |
 
 Act spans take the **method name** as the span name (`update_resource`, `set_facet`, …) rather than a
 uniform `act`, because the command is the most useful thing to see in a trace UI. The gate keys on
 fields, not names, so adding a write command needs no gate edit.
+
+### Inbound trace context
+
+`temper_telemetry::record_inbound_trace_context` reads the request's headers and records five
+fields, all deferred, all conditional on the header being present and well-formed:
+
+| Field | Source | Notes |
+|---|---|---|
+| `trace_id` | W3C `traceparent` | The grouping key. The same value on every hop of one user action. |
+| `parent_span_id` | W3C `traceparent` | The upstream span ours would be a child of, once a provider exists. |
+| `trace_sampled` | W3C `traceparent` flags, bit 0 | Upstream's sampling decision; re-deciding downstream produces broken traces. |
+| `vercel_id` | `x-vercel-id` | The bridge into Vercel's own per-request view. Generalizes the hand-rolled logging at the steward hop. |
+| `vercel_invocation_id` | `x-vercel-internal-invocation-id` | Vercel's **function-invocation** grain. |
+
+The header is *parsed*, not copied: `TraceParent::parse` enforces the spec's shape (hex lengths, the
+forbidden all-zero sentinels, version `ff`, version `00`'s exact field count) and normalizes hex to
+lowercase, because two spellings of one trace id split one user action into two rows in any query
+grouped by it. A malformed header logs at debug and records nothing — a `trace_id` holding
+`"garbage"` is worse than an empty one, since it looks like a real key until someone groups by it.
+
+**`vercel_invocation_id` is not `invocation_id`, and the name is load-bearing.** temper's
+`invocation_id` is the agent-run envelope in `ACT_SPAN_FIELDS`; Vercel's is a serverless
+function-invocation id. They are unrelated grains that would merge silently under one field name, so
+the two field sets are asserted disjoint in `temper-telemetry`'s own tests.
 
 ### Deferred fields are the house pattern
 
@@ -73,11 +108,22 @@ name that says which side of the wire you are on.
 
 ## What this does not cover yet
 
-- **No exporter.** These spans currently go to stdout as JSON via `tracing_subscriber::fmt().json()`.
-  Turning them into an actual trace is the `temper-telemetry` task under goal
-  `019f9404-2a4e-7530-8744-92ae4ab6d83e`.
-- **No W3C trace context.** Nothing extracts or propagates `traceparent`, so spans do not yet join
-  across deployables.
+- **No exporter.** These spans currently go to stdout as JSON via `tracing_subscriber::fmt().json()`
+  — five copies of that init, one per deployable. The `temper-telemetry` crate now exists but owns
+  only extraction; the shared init seam and an OTLP exporter are its next increment, under goal
+  `019f9404-2a4e-7530-8744-92ae4ab6d83e`. Until then `trace_id` is a **log field, not a parent**:
+  it makes today's JSON lines joinable across deployables, and nothing is exported anywhere.
+- **No propagation.** Trace context is now *extracted* (above) but never *injected*: nothing sets a
+  `traceparent` on an outbound call, so a trace still stops at the first hop temper originates
+  rather than receives. `tracestate` is therefore not read at all — vendor state exists to be
+  forwarded, and reading it before there is anywhere to forward it to would be storage with no
+  reader.
+- **Nothing has been observed arriving in production yet.** Whether Vercel forwards a client's
+  `traceparent` into a Rust function — or synthesizes one — could not be settled from the crate
+  source or the docs. `vercel_runtime` 2.1.1 *does* read `x-vercel-internal-invocation-id` and
+  `x-vercel-internal-request-id` off inbound requests (`src/lib.rs`, in `run`'s connection handler),
+  so the header channel demonstrably exists; which headers travel it is an empirical question these
+  fields answer by being populated or empty once deployed.
 - **Reads are unspanned below the root.** Deliberate for now — see clause 2. If temper ever grows
   command-action mechanics for reads, this convention should grow with it rather than be worked
   around.

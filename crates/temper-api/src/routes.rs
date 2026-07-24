@@ -490,13 +490,25 @@ fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::extract::Request| {
-                    tracing::info_span!(
+                    // The five deferred trace fields are `temper_telemetry::ROOT_TRACE_FIELDS`;
+                    // `record_inbound_trace_context` fills whichever of them the request actually
+                    // carried. Unlike the act ids — which arrive in the body and so cannot be known
+                    // here — headers are in hand at span construction, so the recording happens
+                    // right on the span just built rather than via `Span::current()` further in.
+                    let span = tracing::info_span!(
                         "http_request",
                         method = %request.method(),
                         path = %request.uri().path(),
                         version = ?request.version(),
                         profile_id = tracing::field::Empty,
-                    )
+                        trace_id = tracing::field::Empty,
+                        parent_span_id = tracing::field::Empty,
+                        trace_sampled = tracing::field::Empty,
+                        vercel_id = tracing::field::Empty,
+                        vercel_invocation_id = tracing::field::Empty,
+                    );
+                    temper_telemetry::record_inbound_trace_context(&span, request.headers());
+                    span
                 })
                 .on_response(
                     |response: &axum::response::Response, latency: Duration, _span: &Span| {

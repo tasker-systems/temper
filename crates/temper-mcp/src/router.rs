@@ -91,13 +91,25 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::extract::Request| {
-                    tracing::info_span!(
+                    // Same deferred trace-field set as temper-api's root span
+                    // (`temper_telemetry::ROOT_TRACE_FIELDS`), recorded through the same helper.
+                    // Parity matters more here than anywhere: the mention flow's last hop lands on
+                    // MCP, so a trace that stops at the API boundary stops one hop short of the
+                    // work it was following.
+                    let span = tracing::info_span!(
                         "mcp_request",
                         method = %request.method(),
                         path = %request.uri().path(),
                         version = ?request.version(),
                         profile_id = tracing::field::Empty,
-                    )
+                        trace_id = tracing::field::Empty,
+                        parent_span_id = tracing::field::Empty,
+                        trace_sampled = tracing::field::Empty,
+                        vercel_id = tracing::field::Empty,
+                        vercel_invocation_id = tracing::field::Empty,
+                    );
+                    temper_telemetry::record_inbound_trace_context(&span, request.headers());
+                    span
                 })
                 .on_response(
                     |response: &axum::response::Response, latency: Duration, _: &Span| {
