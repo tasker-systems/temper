@@ -31,11 +31,34 @@
 //! still place its requests under a trace id of its choosing.
 //!
 //! As a log field that is tolerable, and it is what every OTel deployment does by default at the
-//! edge. It stops being merely a field when the exporter lands and the extracted context becomes a
-//! real **parent**: at that point an unauthenticated caller can graft spans onto someone else's
-//! trace. Whoever builds that increment should decide deliberately whether to trust inbound context
-//! on the public surface, on the internal/signed surfaces only, or behind a header allowlist —
-//! rather than inheriting this module's permissiveness by default.
+//! edge. It stops being merely a field when an exporter lands and the extracted context could become
+//! a real **parent**: at that point an unauthenticated caller could graft spans onto someone else's
+//! trace.
+//!
+//! **That is decided, and the answer is no.** Temper accepts `traceparent` only from itself
+//! (decision `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c`):
+//!
+//! 1. **Never parent from inbound context** — every root span roots its own trace, every surface,
+//!    unconditionally.
+//! 2. **Join a trusted caller's trace with an OTel span *link*, recorded post-auth**, not by
+//!    parenting.
+//! 3. **Never let an inbound `sampled` flag drive sampling.** Record it; do not obey it. It is the
+//!    one consequence with a bill attached — honoring it lets anyone force every span to export.
+//! 4. **Field extraction below stays as it is**, on all surfaces including unauthenticated ones.
+//!    Fields are inert, and they are what makes a 401 debuggable.
+//!
+//! Refusing untrusted context costs nothing, which is why the rule can be absolute: every trace
+//! worth joining is one temper sent itself (agent → internal → MCP, steward → dispatch, UI → API).
+//! An MCP client's trace is not one we want to be a child of.
+//!
+//! The alternative — trusting inbound context on the signed/internal surfaces only — was rejected on
+//! maintenance grounds, not security ones: it is an allowlist that must stay correct as routes move,
+//! and `create_app` mounts the internal routes too, so it could not even be stated per-router. The
+//! accepted cost of links is that a linked trace is navigable but is not a single waterfall.
+//!
+//! **The constraint any counter-proposal must answer:** a span's parent is fixed at creation, and
+//! `TraceLayer` builds the root span before auth runs. So "extract after auth" can yield a field or
+//! a link, never a parent.
 //!
 //! ## The Vercel headers, and one name that must not be reused
 //!
