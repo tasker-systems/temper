@@ -118,6 +118,20 @@ depends on `'challenged'` / `'survived-challenge'` labels with no writer. Both r
 constants for every finding. Dropping them removes no information — there is nothing to
 migrate forward, and the new axes start from the citation trail, which is live data.
 
+**Verify that against the target, do not assume it.** "Provably inert" is a claim about
+*this repo's code*, and `kb_edges.label` is free text — `temper edge assert` accepts an
+arbitrary label, so a customer or a script could have written `'independent-of'` and
+populated the pairs table on their instance. The migration `DROP TABLE`s it and the rows go
+with it. One line, before the migration, against the target's own DB:
+
+```sql
+SELECT count(*) FROM kb_independence_pairs;   -- must be 0
+```
+
+A non-zero count means that instance holds independence data this cutover would discard.
+Stop and decide what to do with it (export it first); do not proceed on the strength of the
+paragraph above.
+
 Rollback is the ordinary one below (restore the snapshot, redeploy the prior binary). There
 is no forward-fix for a half-applied cutover, which is why the backup step is not optional.
 

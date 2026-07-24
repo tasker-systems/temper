@@ -8,6 +8,7 @@ import {
   resolveAuditorModelConfig,
   resolveModelConfig,
 } from "../agent/lib/model-config.js";
+import { AUDITOR_TOOLS, STEWARD_TOOLS } from "../agent/lib/tool-allowlists.js";
 
 let issuer: MockIssuer | undefined;
 let api: MockApi | undefined;
@@ -83,6 +84,44 @@ describe("resolveAuditorModelConfig", () => {
       DEFAULT_AUDITOR_MODEL,
     );
     expect(resolveModelConfig({ AUDITOR_MODEL: "openai/gpt-5.5" }).primary).toBe(DEFAULT_MODEL);
+  });
+});
+
+describe("the persona boundary between the two allow-lists", () => {
+  // LOAD-BEARING. Every audit run begins in a ROOT STEWARD session: eve offers no way to start a
+  // session directly on a declared subagent, so `schedules/auditor.ts` opens a root session and
+  // tells it — by PROMPT — to make exactly one call, into the `auditor` subagent, and to touch no
+  // temper tool itself. Everything downstream of that instruction is prompt-strength, and the
+  // subagent's report (derived from attacker-authorable resource text) returns into that same root
+  // session.
+  //
+  // What keeps the hop safe is capability, not prose: the steward's credential simply cannot emit an
+  // audit, because `record_citation_audit` is not in its allow-list. That was true only by accident
+  // of two separately-authored lists until this test existed. Add the tool to the steward's list —
+  // the plausible edit, since the steward is where the schedule lives — and this reds.
+  it("the steward cannot record a citation audit, however its session is talked to", () => {
+    expect(STEWARD_TOOLS).not.toContain("record_citation_audit");
+    expect(AUDITOR_TOOLS).toContain("record_citation_audit");
+  });
+
+  // The other direction of the same boundary, and the reason the auditor is a separate agent at all:
+  // an auditor that can author findings is a citer, and spec §7's self-audit denial arm should never
+  // be the only thing between the two roles.
+  it("the auditor holds none of the authored-4", () => {
+    for (const authored of [
+      "create_resource",
+      "assert_relationship",
+      "facet_set",
+      "fold_relationship",
+    ]) {
+      expect(AUDITOR_TOOLS).not.toContain(authored);
+      expect(STEWARD_TOOLS).toContain(authored);
+    }
+  });
+
+  // The auditor completes ITS job; the steward's watermark is not its to advance.
+  it("the auditor cannot advance the steward's watermark", () => {
+    expect(AUDITOR_TOOLS).not.toContain("steward_advance_watermark");
   });
 });
 

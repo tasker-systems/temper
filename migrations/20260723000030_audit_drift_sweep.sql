@@ -105,11 +105,19 @@ LANGUAGE sql STABLE AS $$
                resource_audit_coverage(c.finding_id)     AS coverage
           FROM candidates c
     )
+    -- `, s.finding_id` IS THE TIE-BREAKER, and without it this function is not deterministic —
+    -- which is what two of its callers' own docs claim it is (`auditor_service::drift_sweep`'s
+    -- "deterministic, principal-scoped sweep"; `group_by_cogmap`'s "the cogmaps come out in the
+    -- order their first finding appeared", which is stable only relative to a stable input).
+    -- `uncovered DESC` alone leaves rows with equal `uncovered` in an unspecified order, so with the
+    -- default cap of 50 it is not merely the ORDER that varies run to run but WHICH findings are
+    -- enqueued at all when more than 50 tie — the common shape, since most drifting findings sit at
+    -- `uncovered = 1`. `finding_id` is total, stable, and free (it is already selected).
     SELECT s.cogmap_id, s.finding_id, (s.magnitude - s.coverage) AS uncovered
       FROM scored s
      WHERE s.magnitude > 0
        AND s.coverage < s.magnitude
-     ORDER BY uncovered DESC
+     ORDER BY uncovered DESC, s.finding_id
      LIMIT p_limit;
 $$;
 
@@ -144,6 +152,29 @@ COMMENT ON COLUMN kb_workflow_jobs.claimed_by_profile_id IS
     'The principal that CLAIMED this job, set at claim alongside correlation_id (NULL when the claimer '
     'passed no principal — the steward''s unscoped claim). Unlike correlation_id, this one IS consulted: '
     'workflow_job_complete_claimed refuses to complete a job the caller did not claim.';
+
+-- ── RECORDED, NOT FIXED: `invocation_open` can inherit the WRONG persona's tick ────────────────
+-- `20260710000010_steward_tick_correlation.sql:104-110` resolves an opening invocation's correlation
+-- with `WHERE j.cogmap_id = v_orig AND j.status = 'in_progress' ORDER BY j.leased_at DESC LIMIT 1`
+-- and NO persona filter. Its own comment concedes the hazard as something a cogmap "could in
+-- principle" reach. Set 5 makes it ROUTINE: `Persona::Auditor` exists precisely so an auditor job and
+-- a steward job can be in flight over one cogmap at the same time
+-- (`auditor_service::tests::auditor_and_steward_jobs_coexist_for_one_cogmap` asserts exactly that),
+-- and the auditor's cron trails the steward's by 30 minutes — so whichever was leased more recently
+-- wins, and an auditor session's acts can join the steward's tick.
+--
+-- Not fixed here, deliberately. `invocation_open(p_payload, p_emitter)` takes no persona, so the fix
+-- is a behavior change to a function on the STEWARD's live pipeline, outside Set 5's narrative — the
+-- same call already made for the steward's own unscoped claim. The shape it should take when someone
+-- does it: resolve the emitter's profile and prefer the job that principal actually claimed —
+--
+--     ORDER BY coalesce(j.claimed_by_profile_id = v_profile, false) DESC, j.leased_at DESC
+--
+-- `coalesce(..., false)` is not decoration: the steward's claim passes no principal, so its jobs
+-- carry a NULL claimant, and a bare `(claimed_by = v_profile) DESC NULLS LAST` would rank the
+-- auditor's job (false) ABOVE the steward's own (NULL) and make the regression worse than the bug.
+-- With the coalesce, a steward open scores false on both and falls back to today's `leased_at`
+-- ordering, while an auditor open matches its own job outright.
 
 -- Claim, scoped. Body verbatim from `20260710000010:64-83` with two additions: the reach constraint
 -- and the claimant stamp.

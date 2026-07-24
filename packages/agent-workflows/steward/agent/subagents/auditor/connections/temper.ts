@@ -2,6 +2,7 @@ import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
 import { AUDITOR_CREDENTIALS, mintAuditorM2mToken, requireEnv } from "../../../lib/temper-auth.js";
+import { AUDITOR_TOOLS } from "../../../lib/tool-allowlists.js";
 
 /**
  * The citation auditor's sole seam to temper-mcp — **its own connection under its own machine
@@ -27,13 +28,11 @@ import { AUDITOR_CREDENTIALS, mintAuditorM2mToken, requireEnv } from "../../../l
  * finding homed in the map, classifies the auditor as `AuditAuthority::Author`, and 404s every audit
  * it attempts — with nothing failing at deploy time. See `docs/auth/machine-token-contract.md` §C.
  *
- * The allow-list is the persona, stated as capability rather than as instruction. It is READ +
- * VERDICT and nothing else:
- * - the **authored-4** (`create_resource`, `assert_relationship`, `facet_set`, `fold_relationship`)
- *   is absent — an auditor that can author findings is a citer, and §7's self-audit denial arm
- *   should never be the only thing standing between the two roles;
- * - `annotate_resource`, `update_*` and `delete_resource` are absent for the same reason;
- * - `steward_advance_watermark` is absent — the auditor completes ITS job, not the steward's.
+ * The allow-list is the persona, stated as capability rather than as instruction — READ + VERDICT
+ * and nothing else. It lives in `../../../lib/tool-allowlists` beside the steward's, so the two can
+ * be compared by a test rather than by eye: the steward's list must never gain
+ * `record_citation_audit` (the auditor's fan-out passes through a root steward session) and this one
+ * must never gain the authored-4. See that module's header and `tests/auditor.test.ts`.
  *
  * Approval is `never()` — the auditor is autonomous and audited by the invocation envelope, exactly
  * as the steward is.
@@ -47,23 +46,6 @@ export default defineMcpClientConnection({
     : { getToken: async () => ({ token: requireEnv(AUDITOR_CREDENTIALS.staticToken) }) },
   approval: never(),
   tools: {
-    allow: [
-      // The verdict — the only write this agent has.
-      "record_citation_audit",
-      // The citations under audit.
-      "get_block_provenance",
-      // Reading the finding, its cited sources, and its lineage — the §3.3 material.
-      "get_resource",
-      "resource_lineage",
-      "search",
-      // The map's telos, so a citation is weighed against what the map is for.
-      "cogmap_read_charter",
-      // The invocation envelope (§5.4 — it needs nothing new).
-      "invocation_open",
-      "invocation_close",
-      "invocation_show",
-      // Identity self-check: which principal am I actually authoring as.
-      "get_profile",
-    ],
+    allow: [...AUDITOR_TOOLS],
   },
 });

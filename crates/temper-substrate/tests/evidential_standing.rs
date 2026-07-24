@@ -977,6 +977,192 @@ async fn near_canonical_is_reachable_in_one_pass(pool: sqlx::PgPool) {
     );
 }
 
+/// LOAD-BEARING. **The cross-finding leak.** One source S is cited by two DIFFERENT findings; an
+/// auditor audits S on F1 only. F2 must be completely untouched — `coverage 0`, `quality 0.0`,
+/// `provisional` — because an audit is keyed on the CITATION (the `(block, source)` pair), not on the
+/// source.
+///
+/// This is the probe the rest of the quality suite could not supply. Every other test here audits
+/// within one finding, so deleting `AND a.block_id = c.block_id` from the quality join
+/// (`…020…sql`) and from the coverage `EXISTS` leaves them all green — hand-checked on
+/// `a_source_cited_by_two_blocks_counts_once_in_quality`, whose 0.5 is unchanged by the deletion
+/// because both of A's citing rows then join both of A's audits. The real consequence is here: with
+/// the conjunct gone, F2 reads `coverage 1, quality -1.0 → disputed` with nobody having audited F2 at
+/// all — one principal's verdict silently condemning another's finding for sharing a source.
+///
+/// The F1 half is asserted first and is not decoration: it proves the audit landed and is being read,
+/// so F2's zeros cannot be "nothing works".
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_audit_on_one_finding_does_not_cover_the_same_source_on_another(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-shared-src").await;
+    let source = make_resource(&pool, owner, emitter, home, "shared", "temper://es/shared").await;
+
+    // Two findings, each citing the SAME source at create time.
+    let mut findings = Vec::new();
+    for tag in ["f1", "f2"] {
+        findings.push(
+            writes::create_resource_with(
+                &pool,
+                CreateParams {
+                    title: tag,
+                    origin_uri: &format!("temper://es/shared-{tag}"),
+                    body: "a claim resting on the shared source",
+                    doc_type: "research",
+                    home: AnchorRef::context(home),
+                    owner,
+                    originator: owner,
+                    emitter,
+                    properties: &[],
+                    chunks: None,
+                    sources: vec![Incorporation {
+                        source: ProvenanceSource::Resource(source.uuid()),
+                        seq: 0,
+                    }],
+                },
+                EventContext::default(),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let (f1, f2) = (findings[0], findings[1]);
+
+    audit(
+        &pool,
+        live_blocks(&pool, f1).await[0],
+        source,
+        -1.0,
+        emitter,
+    )
+    .await;
+
+    let s1 = shape(&pool, owner, f1).await.expect("owner reads f1");
+    assert_eq!(s1.audit_coverage, 1, "f1's citation WAS audited");
+    assert_eq!(s1.citation_quality, -1.0);
+    assert_eq!(s1.band, "disputed");
+
+    let s2 = shape(&pool, owner, f2).await.expect("owner reads f2");
+    assert_eq!(
+        s2.citation_magnitude, 1,
+        "f2 genuinely cites the same source — that is what makes the leak possible"
+    );
+    assert_eq!(
+        s2.audit_coverage, 0,
+        "nobody audited f2's citation of it: an audit is keyed on the (block, source) pair, not on \
+         the source"
+    );
+    assert_eq!(
+        s2.citation_quality, 0.0,
+        "and no verdict from another finding may reach f2's mean"
+    );
+    assert_eq!(
+        s2.band, "provisional",
+        "f2 is unaudited, not disputed — a shared source must not carry a neighbour's verdict"
+    );
+}
+
+/// LOAD-BEARING. **The band's cut points and its `contradiction_balance` conjuncts**, exercised
+/// against `standing_band` directly with literal arguments.
+///
+/// Direct, not end-to-end, and that is the point: every other band test in this file drives quality
+/// to `±1.0` or `0.0` through real audits, so nothing sits near the `> 0.3` cut and no test ever
+/// supplies a negative balance. Both were unfalsified — `> 0.3` could become `>= 0.3` or `> 0.0`,
+/// and `AND p_contradiction_balance >= 0.0` could be deleted from arms 1 and 2, with the whole suite
+/// still green. Reaching those inputs through fixtures is not possible *exactly*: a per-source mean
+/// is `(w·v)/w`, which is `v` only up to a rounding step, so an end-to-end probe pinned at the `0.3`
+/// boundary would flip on a 1-ulp wobble. `standing_band` is `IMMUTABLE` and total, so calling it
+/// with literals is both exact and the honest grain for an arm test.
+///
+/// The `0.3` cut is not arbitrary — it is co-calibrated with the auditor persona's published scale
+/// (`subagents/auditor/instructions.md`: `+0.3` = "partial" ⇒ **not** near-canonical, `+0.6` =
+/// "sound" ⇒ near-canonical). That coupling was asserted in prose and nowhere in code.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn band_arms_hold_at_their_boundaries(pool: sqlx::PgPool) {
+    // `freshness` is accepted by the signature and DELIBERATELY not gated on, so it is pinned at a
+    // constant here — a band that started reading it would not change any expectation below.
+    async fn band(
+        pool: &sqlx::PgPool,
+        magnitude: i32,
+        coverage: i32,
+        quality: f64,
+        balance: f64,
+    ) -> String {
+        sqlx::query_scalar("SELECT standing_band($1, $2, $3, $4, $5)")
+            .bind(magnitude)
+            .bind(coverage)
+            .bind(quality)
+            .bind(balance)
+            .bind(1.0_f64)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    // The `> 0.3` cut, from both sides.
+    assert_eq!(
+        band(&pool, 2, 2, 0.3, 0.0).await,
+        "reinforced",
+        "the cut is STRICT: an all-partial pass (every source at the persona's +0.3 anchor) must \
+         not reach the top band. `>= 0.3` or `> 0.0` would."
+    );
+    assert_eq!(
+        band(&pool, 2, 2, 0.6, 0.0).await,
+        "near-canonical",
+        "an all-sound pass (+0.6) must reach it — raising the cut past 0.6 silently retires the \
+         top band for the distribution the persona actually emits"
+    );
+    assert_eq!(
+        band(&pool, 2, 2, 0.31, 0.0).await,
+        "near-canonical",
+        "and the cut is 0.3, not something between 0.3 and 0.6"
+    );
+
+    // `AND p_contradiction_balance >= 0.0` on arms 1 and 2, and the arm that now catches what they
+    // refuse. Delete either conjunct and the first two of these read 'near-canonical'/'reinforced'.
+    assert_eq!(
+        band(&pool, 2, 2, 1.0, -1.0).await,
+        "disputed",
+        "a live contradiction blocks the top band"
+    );
+    assert_eq!(
+        band(&pool, 1, 1, 1.0, -1.0).await,
+        "disputed",
+        "the same conjunct on arm 2: a contradicted, audited finding is not 'reinforced'"
+    );
+    assert_eq!(
+        band(&pool, 3, 3, 0.9, -1.0).await,
+        "disputed",
+        "fully covered, strongly positive, one contradicts edge — this fell through every arm to \
+         'provisional' before, indistinguishable from a finding nobody opened AND terminal, since \
+         coverage == magnitude keeps it out of audit_drift_sweep"
+    );
+    assert_eq!(
+        band(&pool, 3, 0, 0.0, -1.0).await,
+        "provisional",
+        "but an UNAUDITED contradicted finding stays at the floor: nobody looked, which is what \
+         the floor means"
+    );
+
+    // The coverage ratio and its divide guard.
+    assert_eq!(
+        band(&pool, 2, 1, 1.0, 0.0).await,
+        "reinforced",
+        "the ratio admits exactly 0.5 — `>= 0.5`, not `> 0.5`"
+    );
+    assert_eq!(
+        band(&pool, 3, 1, 1.0, 0.0).await,
+        "provisional",
+        "and refuses 1/3: below half-covered is the floor however good the audited third is"
+    );
+    assert_eq!(
+        band(&pool, 0, 0, 0.0, 0.0).await,
+        "provisional",
+        "magnitude 0 divides by nothing and falls through the guard to the floor"
+    );
+}
+
 /// LOAD-BEARING. Falsifies dropping the magnitude floor to 1. A single source audited `+1.0` has
 /// perfect coverage and perfect quality and STILL must not be near-canonical — one source is not
 /// diverse evidence (spec §3.1's Landmesser line: "a lone source can never be near-canonical no

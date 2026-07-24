@@ -223,19 +223,22 @@ pub(crate) async fn citation_subject(
 
 /// Who may record a citation audit on a finding.
 ///
-/// One admitting arm and three denials. The denials are named arms, never an absence and never an
+/// One admitting arm and two denials. The denials are named arms, never an absence and never an
 /// `Err` out of `resolve` — an error short-circuits `authorize` before [`ScopedAuthority::denial`]
 /// runs, which would bypass this domain's chosen refusal dialect (`mod.rs:69-74`).
+///
+/// There is deliberately **no `NotMachine` arm**: a human may audit (see the module doc's product
+/// decision and the open risk it accepts). Registration is still what the *dispatch tick* and *job
+/// completion* require — [`require_machine_principal`] and [`AuditorJobAuthority`] — because those
+/// speak for the queue, not for a citation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditAuthority {
-    /// A registered machine principal that can read the finding and did not contribute the
-    /// citation. **The only arm that admits an audit.**
+    /// A principal that can read the finding and did not contribute the citation. **The only arm
+    /// that admits an audit** — machine or human alike.
     Auditor,
     /// DENIAL — the caller contributed this citation (or can still modify the finding, the
     /// belt-and-braces proxy). The self-audit prohibition of spec §7: enforced here or nowhere.
     Author,
-    /// DENIAL — the caller is not a registered, unrevoked machine principal. Spec §7's other
-    /// conjunct: an audit is an agent act on a permanent, unattributed, unbounded trail.
     /// DENIAL — the caller cannot see the finding at all.
     Unreadable,
 }
@@ -246,22 +249,19 @@ impl ScopedAuthority for AuditAuthority {
     /// carries all three ids and [`citation_subject`] for where they come from.
     type Subject = CitationSubject;
 
-    /// Four probes, in the only order that can short-circuit safely.
+    /// Three probes, in the only order that can short-circuit safely.
     ///
     /// Readability runs FIRST and that placement is a leak decision, not a cost one: every later
     /// arm refuses in the same `NotFound` dialect, so ordering them differently would not leak — but
     /// a principal who cannot read the finding must not pay for, or be distinguishable by, probes
-    /// about a subject it may not know exists. The machine probe is second because it is a single
-    /// indexed lookup that refuses the entire non-agent population before either authorship query
-    /// runs. The two authorship probes are last, and both must run for the admitting arm.
+    /// about a subject it may not know exists. The two authorship probes are last, and both must run
+    /// for the admitting arm.
     ///
     /// Every probe is a **call into a SQL predicate, never a restatement** of one (`mod.rs:65-66`):
     ///
     /// * Readability is [`readback::is_resource_visible`], extracted by Task 4 for exactly this
     ///   reason — the standing read this gate sits beside asks the same question through the same
     ///   function, so the two cannot drift (`readback/mod.rs:133-162`).
-    /// * Machine registration is `machine_client_service::is_registered_principal`, the same
-    ///   `kb_machine_clients` allowlist `resolve_machine_from_claims` consults at the door.
     /// * Citation authorship is `citation_contributed_by_profile`
     ///   (`20260723000010_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
@@ -312,9 +312,9 @@ impl ScopedAuthority for AuditAuthority {
         })
     }
 
-    /// **All three** non-admitting arms. `Author` is as much a refusal as `Unreadable`; collapsing
+    /// **Both** non-admitting arms. `Author` is as much a refusal as `Unreadable`; collapsing
     /// either into the admitting side — or forgetting one here — silently restores self-grading or
-    /// re-opens the write to every reader.
+    /// admits a principal that cannot even read the finding.
     fn is_denial(&self) -> bool {
         matches!(self, AuditAuthority::Author | AuditAuthority::Unreadable)
     }
@@ -330,9 +330,7 @@ impl ScopedAuthority for AuditAuthority {
     ///
     /// It matters for `Author` too, for a second reason: a `Forbidden` distinguishable from the
     /// unreadable case would tell a prober "you may see this finding but you wrote it", leaking the
-    /// authorship relation the audit trail otherwise only exposes to readers. And it matters for
-    /// `NotMachine`, for a third: a distinguishable refusal would make this endpoint an oracle for
-    /// *"which of these ids is a registered agent"*.
+    /// authorship relation the audit trail otherwise only exposes to readers.
     fn denial() -> ApiError {
         ApiError::NotFound
     }
@@ -618,9 +616,10 @@ mod tests {
         let s = seed(&pool).await;
         let subject = subject_of(&pool, &s).await;
         let author = ProfileId::from(s.author);
-        // The author is registered as a machine too — harmless now that the machine conjunct is
-        // gone, and it keeps this fixture testing the `Author` arm rather than
-        // this test would pass for the wrong reason.
+        // The author is registered as a machine too. Harmless now that the machine conjunct is
+        // gone, and deliberately kept: it holds this test on the `Author` arm even if a future pass
+        // reinstates a registration conjunct, rather than letting it start passing because the
+        // author stopped being an agent.
         register_machine(&pool, s.author, "citer@clients").await;
 
         assert!(

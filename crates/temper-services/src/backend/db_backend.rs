@@ -1206,6 +1206,18 @@ impl DbBackend {
     /// This is ADDITIVE to the act's own write authz (`can_modify`, context-owner resolution) — it never
     /// authorizes the write, it only guards the *correlation claim*. An act with no invocation skips it
     /// entirely (a one-off attributed act, or a human at the same tools, is fully valid).
+    ///
+    /// **KNOWN GAP, pre-existing and now wider: readability is not ownership.** The predicate is
+    /// "can the caller read the invocation's originating cogmap", not "did the caller open it", so
+    /// any reader of that cogmap may stamp its own act into ANOTHER principal's open envelope. Only
+    /// `kb_events.emitter_entity_id` still separates the two, and that lives on the event, not on the
+    /// envelope. This has been true of every authored write since invocations existed; Set 5 makes it
+    /// reach **citation audits**, where spec §5.4 leans on the envelope for the auditor's
+    /// accountability — a forged audit inside the auditor's live run is not distinguishable from the
+    /// auditor's own without walking each act's emitter. Closing it means keeping the opener on
+    /// `kb_invocations` (there is no such column) and gating on it; that is a schema change on a
+    /// shipped, cross-cutting path and is out of Set 5's scope, so it is recorded here rather than
+    /// implied by the doc above.
     async fn check_act_invocation(
         &self,
         invocation: Option<InvocationId>,
@@ -2011,9 +2023,10 @@ impl Backend for DbBackend {
         //    block resolves to server-side. The command deliberately carries no finding id, so a
         //    caller cannot authorize over one finding while writing onto a block of another
         //    (`authz/audit_gate.rs`, `CitationSubject`). `AuditAuthority` admits a principal that
-        //    can READ the finding, IS a registered unrevoked machine principal, and did NOT
-        //    contribute this citation: the deliberate widening of spec §7 with both of the conjuncts
-        //    §7 names to narrow it back. All three denial arms render `NotFound`, which
+        //    can READ the finding and did NOT contribute this citation — the deliberate widening of
+        //    spec §7, narrowed back by the self-audit arm alone; the machine conjunct was removed by
+        //    product decision so a human may audit (`audit_gate.rs`'s module doc carries the
+        //    decision and the open risk it accepts). Both denial arms render `NotFound`, which
         //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
         //    existence oracle beside the leak-safe evidence read.
         let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
@@ -2021,7 +2034,7 @@ impl Backend for DbBackend {
         // 2. Correlation integrity — additive to the authorization above, before any mutation.
         self.check_act_invocation(cmd.act.invocation).await?;
 
-        // 3. The citation must actually exist. `(block, source)` being a live citation is a
+        // 2b. The citation must actually exist. `(block, source)` being a live citation is a
         //    CALLER FAULT when it is not — a transposed source id — so it renders 400, like the
         //    range and source-kind guards above it, rather than surfacing the SQL `RAISE` as a 500.
         //    The `RAISE` in `citation_audit` stays as the backstop for any non-Rust writer.

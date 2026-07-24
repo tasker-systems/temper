@@ -44,6 +44,14 @@ import { auditorFetch, requireEnv } from "../lib/temper-auth.js";
  *   the root's authored slots, so the auditor's connection and credential are unreachable from a
  *   steward session, and vice versa.
  *
+ *   **The hop itself is capability-bounded, not prompt-bounded — and that is asserted.** One turn of
+ *   every audit run executes in a root STEWARD session holding the steward credential, told by
+ *   prompt to call nothing but the subagent; the subagent's report, derived from attacker-authorable
+ *   resource text, then returns into it. What stops a misbehaving hop from emitting an audit under
+ *   the wrong principal is that `record_citation_audit` is not in the steward's allow-list
+ *   (`lib/tool-allowlists.ts`). That held by accident of two separately-authored lists until
+ *   `tests/auditor.test.ts` started asserting it; treat the assertion as load-bearing, not tidiness.
+ *
  * Cadence: hourly at :30, half an hour behind the steward's `0 * * * *`. Citations authored by a
  * steward tick are then auditable within the same hour without the two ticks writing concurrently
  * over one map. Single-flight and lease-reaping live in the server, so a fixed cadence is safe.

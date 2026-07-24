@@ -20,6 +20,29 @@
 //! `.github/scripts/audit-handler-authz-drift.sh`. `sweep` deliberately keeps NO machine gate: it is
 //! a read that returns only the caller's own readable findings, and it is the operator's debug view
 //! of what the tick would do.
+//!
+//! # `GET /api/auditor/sweep` has no in-repo consumer, and it is KEPT — deliberately
+//!
+//! The review flagged it as over-build: nothing calls it (`schedules/auditor.ts` posts to
+//! `/dispatch` only), yet it is a public, OpenAPI-contracted, SDK-generating route. Kept, for three
+//! reasons that were weighed against deleting it:
+//!
+//! 1. **It is the only non-mutating way to ask what the tick would do.** `/dispatch` reaps,
+//!    enqueues and *claims* — running it to see the queue takes the jobs `in_progress` under the
+//!    caller. An operator debugging "why did nothing get audited this hour" has no other read, and
+//!    the alternative (`psql` against the target) is not available to the agent that would ask.
+//! 2. **Its sibling `GET /api/steward/sweep` exists for the same reason and has no consumer
+//!    either.** Deleting one of a matched pair leaves the next reader deriving why the auditor
+//!    surface is missing a read the steward has — asymmetry costs more than the route does.
+//! 3. **It is not an enumeration oracle and it is not free-running.** `audit_drift_sweep` gates on
+//!    `steward_candidate_cogmaps(caller)` *and* a per-finding `resources_visible_to(caller)`, and
+//!    `cap` is validated here and clamped in `clamp_auditor_cap`. What remains is the scan cost the
+//!    review names (the `scored` CTE prices every candidate before `p_limit` applies), which is a
+//!    property of the sweep itself and applies equally to `/dispatch`.
+//!
+//! The cost of keeping it is a route in `openapi.json` and both SDKs. If a future pass finds the
+//! scan cost matters, narrow the sweep — do not delete the read and leave `/dispatch` as the only
+//! way to look.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;

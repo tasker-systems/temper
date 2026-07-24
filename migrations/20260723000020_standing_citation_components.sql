@@ -66,7 +66,10 @@ COMMENT ON COLUMN kb_resource_standing.audit_coverage IS
 COMMENT ON COLUMN kb_resource_standing.citation_quality IS
   'Mean over the AUDITED SUBSET ONLY of each audited source''s decay-weighted audit value, in '
   '[-1,1] (spec §3.1). 0.0 when audit_coverage = 0 — an unaudited finding makes no quality claim, '
-  'and its low standing comes from the band gate, not from a poisoned mean.';
+  'and its low standing comes from the band gate, not from a poisoned mean. NOT a mean over '
+  'audit_coverage sources: a source whose every verdict has decayed below double precision drops '
+  'out of the mean while still counting as covered, so the pair can read (coverage 3, quality 1.0) '
+  'off a single live verdict. See resource_citation_quality''s header.';
 
 -- ────────────────────────────────────────────────────────────────────────────────────────────────
 -- 2. Retire the pairwise-independence model and its edge-based challenge reader (spec §3.4)
@@ -125,6 +128,17 @@ $$;
 
 -- Evaluated-ness. A source counts once however many of the finding's blocks cite it and however
 -- many audits it carries — `count(DISTINCT source_id)` over sources with at least one audit.
+--
+-- `a.block_id = c.block_id` IS LOAD-BEARING, not join hygiene. An audit is keyed on the CITATION —
+-- the (block, source) pair — and one source is routinely cited by several findings. Drop the block
+-- conjunct and an audit of `(F1.block, S)` makes S look covered on F2 as well: F2 reads
+-- `coverage 1, quality -1.0 → disputed` with nobody having audited F2 at all. Pinned by
+-- `evidential_standing.rs::an_audit_on_one_finding_does_not_cover_the_same_source_on_another`.
+--
+-- `a.source_kind = 'resource'` cannot be false here and is defence-in-depth only: `citation_audit`
+-- rejects every other kind at the write path (`20260723000010_citation_audits.sql:208-211`) and
+-- `resource_live_citations` already restricts `p.source_kind = 'resource'`. No fixture can produce a
+-- non-resource audit row, so no test falsifies it — do not read it as carrying meaning.
 CREATE FUNCTION resource_audit_coverage(p_finding uuid)
 RETURNS int LANGUAGE sql STABLE AS $$
     SELECT count(DISTINCT c.source_id)::int
@@ -167,13 +181,35 @@ $$;
 -- a READ path. A source whose every audit has decayed below double precision yields NULL and is
 -- skipped by the outer `avg` — it still counts toward `audit_coverage`, which is the honest
 -- reading: it was evaluated, but the verdict no longer carries numeric weight.
+--
+-- THE MEAN'S DENOMINATOR IS THEREFORE NOT `audit_coverage`, and the surfaced pair does not say so.
+-- Three audited sources of which two carry only century-old verdicts and one a fresh `+1.0` read
+-- `coverage = 3, quality = 1.0` — near-canonical off a single live verdict, with nothing on the wire
+-- showing the mean was taken over 1 of 3. Recorded rather than fixed: surfacing an
+-- `audited_effective` count is a wire change (`StandingShape`, `openapi.json`, both SDKs, the UI) for
+-- a state ~88 years out, and the alternative — counting decayed-out sources as 0.0 — would be worse,
+-- since it makes time alone push a well-audited finding toward `disputed`.
+--
+-- `greatest(now() - a.created, interval '0')` CLAMPS THE AGE AT ZERO — an overflow guard on the
+-- other side of the same `pow`. A negative age makes the exponent large and POSITIVE, and
+-- PostgreSQL's `power()` RAISES `value out of range: overflow` rather than returning `inf`, so a
+-- `created` far enough in the FUTURE makes this READ path error outright for that finding — a
+-- 500 on a GET, for one bad row. `created` now comes from `kb_events.occurred_at`
+-- (`20260723000010_citation_audits.sql`), which is caller-influenced on some write paths, so "no
+-- write path can produce it" is no longer the argument it was. The clamp costs nothing and turns a
+-- future-dated verdict into a full-weight one instead of a 500.
 CREATE FUNCTION resource_citation_quality(p_finding uuid)
 RETURNS double precision LANGUAGE sql STABLE AS $$
     WITH weighted AS (
         SELECT c.source_id,
                a.value,
-               pow(0.5, extract(epoch FROM (now() - a.created)) / (30.0 * 86400.0)) AS w
+               pow(0.5, extract(epoch FROM greatest(now() - a.created, interval '0'))
+                        / (30.0 * 86400.0)) AS w
         FROM resource_live_citations(p_finding) c
+        -- The full citation key. `a.block_id = c.block_id` is what keeps an audit of one finding's
+        -- citation from scoring a different finding that happens to cite the same source; the
+        -- `source_kind` conjunct is the same unfalsifiable defence-in-depth noted on
+        -- `resource_audit_coverage` above.
         JOIN kb_citation_audits a
           ON a.block_id = c.block_id
          AND a.source_kind = 'resource'
@@ -262,7 +298,19 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
         -- `p_audit_coverage > 0` is what carries the whole distinction now: it is the "somebody
         -- looked" conjunct, and it is no longer redundant the way it was under `< 0.0` (where a
         -- negative quality already implied a joined audit).
-        WHEN p_audit_coverage > 0 AND p_citation_quality <= 0.0
+        --
+        -- The `contradiction_balance < 0.0` half closes the SAME hole on the other conjunct. Arms 1
+        -- and 2 both require `balance >= 0.0`, so a finding with magnitude 3, coverage 3, quality
+        -- +0.9 and ONE live `contradicts` edge (balance -1.0) failed both and fell through to
+        -- `provisional` — again byte-identical to a finding nobody has opened, and again terminal,
+        -- since `coverage = magnitude` keeps it out of `audit_drift_sweep`. It was inherited from
+        -- Set 3's band (`20260721000010:193-199`) rather than introduced here, but it is the same
+        -- defect as the `0.0` case above and it is fixed by the same arm. A finding under live
+        -- contradiction that somebody HAS evaluated is the plainest reading of `disputed` there is.
+        -- Coverage still gates it: an UNAUDITED contradicted finding stays `provisional`, because
+        -- nobody has looked, which is exactly what the floor means.
+        WHEN p_audit_coverage > 0
+         AND (p_citation_quality <= 0.0 OR p_contradiction_balance < 0.0)
             THEN 'disputed'
         -- provisional: the floor, including EVERY unaudited finding (coverage 0 lands here no
         -- matter how large the citation set).

@@ -308,9 +308,17 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
          is the decay clock the standing projection weights every verdict by"
     );
 
-    // ...and exactly once. `ON CONFLICT (audited_by_event_id) DO NOTHING` is what makes a second
-    // replay pass a no-op rather than a duplicate; without the unique constraint behind it, an
-    // append-only trail would silently double every time the ledger is walked again.
+    // ...and exactly once — meaning ONE event yields ONE row on a replay walk, which falsifies a
+    // projector that inserts twice (or a dispatch that routes `citation_audited` to two projectors).
+    //
+    // It does NOT exercise `ON CONFLICT (audited_by_event_id) DO NOTHING`, and an earlier comment
+    // here claimed it did. `common::reset_schema` above TRUNCATEs `kb_citation_audits`, so this
+    // replay's INSERT lands on an empty table and the conflict branch is never entered — the
+    // assertion is true, but for an uninteresting reason. The conflict branch's real proof is
+    // `citation_audits.rs::citation_audit_is_idempotent_under_replay`, which re-projects the SAME
+    // event id against a table that already holds its row and asserts both the returned audit id
+    // (the `RETURNING`-yields-no-row trap) and the count. Stated rather than papered over, so nobody
+    // reads this line as covering the idempotency clause.
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE audited_by_event_id=$1")
             .bind(event_id)

@@ -163,6 +163,27 @@ requirement, on its negative side):
   it and it did not hold. Distinct from the floor.
 - `provisional` — the floor, including every unaudited finding (coverage 0).
 
+> **AS DISCHARGED (2026-07-24, implementation review).** The `disputed` arm shipped **wider**
+> than the bullet above, twice, and both widenings close the same hole this section's own
+> preamble opens — *"'never evaluated' and 'evaluated and found wanting' are not flattened
+> together"*. As written, the arm required `quality < 0` strictly, so two states that had
+> plainly **been** evaluated fell through every arm to `provisional`, byte-identical to a
+> finding nobody had opened — and **terminally**, since both have `coverage = magnitude`,
+> which `audit_drift_sweep` (§6.3) selects against, so nothing could ever re-queue them:
+>
+> 1. **`quality == 0.0` exactly** — two sources audited `+1.0` and `-1.0`, or every source
+>    honestly audited at the `0.0` anchor the persona is told to *prefer* when a citation is
+>    undecidable. Shipped as `citation_quality <= 0.0`.
+> 2. **`contradiction_balance < 0`** — a fully covered, strongly positive finding with one
+>    live `contradicts` edge fails the *"not under live contradiction"* conjunct on both of
+>    the arms above it. Inherited from Set 3's band rather than introduced here, and fixed by
+>    the same arm: `coverage > 0 AND (quality <= 0.0 OR balance < 0.0)`.
+>
+> Coverage still gates it in both cases, so an **unaudited** finding — contradicted or not —
+> stays `provisional`. Pinned by `evidential_standing.rs::band_arms_hold_at_their_boundaries`,
+> which exercises `standing_band` at its literal boundaries (the `> 0.3` cut and both
+> `balance >= 0.0` conjuncts were otherwise asserted nowhere in code).
+
 **Calibrated for the system's real dynamics — reachable in one thorough pass, not many
 rounds.** Two structural choices make the ladder achievable for a resource that is reviewed
 *well once* rather than *often*, which is the common case (most concepts/facts see only a

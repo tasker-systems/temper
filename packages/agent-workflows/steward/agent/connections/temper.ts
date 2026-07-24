@@ -3,6 +3,7 @@ import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
 import { mintM2mToken, requireEnv } from "../lib/temper-auth.js";
+import { STEWARD_TOOLS } from "../lib/tool-allowlists.js";
 
 /**
  * The steward's sole seam to temper-mcp.
@@ -20,8 +21,12 @@ import { mintM2mToken, requireEnv } from "../lib/temper-auth.js";
  *   is cached until ~60s before expiry.
  * - **Approval is `never()`** — the MVP steward is fully autonomous + audited (no
  *   HITL): a single team self-cogmap with no cross-map promotion (design D8).
- * - **24-tool allow-list** scoped to the steward persona. The 9 excluded tools
- *   (region reads + genesis/admin/access) are role-inappropriate for a steward.
+ * - **24-tool allow-list** scoped to the steward persona (`../lib/tool-allowlists`). The 9 excluded
+ *   tools (region reads + genesis/admin/access) are role-inappropriate for a steward — and
+ *   `record_citation_audit` is excluded for a load-bearing reason: the auditor's fan-out opens a
+ *   ROOT steward session before delegating to the subagent (eve offers no way to start a session on
+ *   a subagent directly), and this list is what makes that hop capability-bounded rather than
+ *   prompt-bounded. Asserted by `tests/auditor.test.ts`, not left to inspection.
  *
  * `mintM2mToken` + `requireEnv` are shared with the code schedules (`../lib/temper-auth`) so the
  * connection and the schedules can never drift on how they authenticate.
@@ -37,36 +42,6 @@ export default defineMcpClientConnection({
       : { getToken: async () => ({ token: requireEnv("TEMPER_TOKEN") }) },
   approval: never(),
   tools: {
-    allow: [
-      // Authored-4
-      "create_resource",
-      "assert_relationship",
-      "facet_set",
-      "fold_relationship",
-      // Invocation envelope
-      "invocation_open",
-      "invocation_close",
-      "invocation_show",
-      "invocation_list",
-      // Steward delta / watermark
-      "steward_ingest_delta",
-      "steward_advance_watermark",
-      // Reads
-      "search",
-      "get_resource",
-      "get_context",
-      "list_contexts",
-      "list_resources",
-      "cogmap_read_charter",
-      "describe_doc_type",
-      "list_doc_types",
-      "get_profile",
-      // Mutations (delete_resource is soft-delete: flips is_active via a resource_deleted event)
-      "update_resource",
-      "update_resource_meta",
-      "delete_resource",
-      "retype_relationship",
-      "reweight_relationship",
-    ],
+    allow: [...STEWARD_TOOLS],
   },
 });

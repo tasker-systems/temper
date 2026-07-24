@@ -110,7 +110,14 @@ async fn evidence_returns_the_full_standing_shape_with_band(pool: sqlx::PgPool) 
     // (`crates/temper-core/src/types/standing.rs:36-45`); this is an EXACT set, not a subset —
     // it must fail if a field is added or removed, so the retired names are replaced, not kept
     // alongside the new ones.
-    for key in [
+    //
+    // Compared as SETS, not with a `contains_key` loop. The loop caught removal and was blind to
+    // ADDITION, which is the direction that matters here: a new field on `StandingShape` restales
+    // `openapi.json`, both generated SDKs and the UI, and this is the only e2e assertion standing
+    // between that and a silent wire change. Sorted so the failure prints a readable diff.
+    let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
+    actual.sort_unstable();
+    let mut expected = [
         "finding_id",
         "citation_magnitude",
         "audit_coverage",
@@ -119,12 +126,14 @@ async fn evidence_returns_the_full_standing_shape_with_band(pool: sqlx::PgPool) 
         "freshness",
         "r_parent",
         "band",
-    ] {
-        assert!(
-            obj.contains_key(key),
-            "StandingShape is missing `{key}`: {shape}"
-        );
-    }
+    ];
+    expected.sort_unstable();
+    assert_eq!(
+        actual,
+        expected.as_slice(),
+        "StandingShape's wire fields are an EXACT set — a field added here restales openapi.json, \
+         the temper-rb gem, temper-ts's schema.ts and the UI: {shape}"
+    );
 
     // The shape anchors to the resource we asked about.
     assert_eq!(
