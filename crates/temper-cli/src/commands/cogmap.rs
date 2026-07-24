@@ -13,6 +13,77 @@
 use crate::error::Result;
 use crate::format::OutputFormat;
 
+/// `temper cogmap list [--name-contains <s>] [--team <ref>]` — list the maps you can see, each with
+/// its decorated ref, held-by scope, region/resource counts, and charter statement.
+///
+/// The listing itself is self-scoped server-side (`cogmap_visible_maps`); `--name-contains` /
+/// `--team` are client-side narrowings over the returned set (the set is small — tens of maps). Each
+/// row is decorated with a `ref` (`sluggify(name)-<uuid>`) the way `context list` rows are.
+pub fn list(name_contains: Option<&str>, team: Option<&str>, fmt: OutputFormat) -> Result<()> {
+    let name_needle = name_contains.map(str::to_lowercase);
+    let team = team.map(str::to_owned);
+
+    let rows = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            // Resolve `--team` to a team id first (needs the client), then narrow. A team ref that
+            // matches no team you belong to is a team error, surfaced here rather than silently
+            // yielding an empty list.
+            let team_id = match team.as_deref() {
+                Some(t) => Some(crate::actions::cogmap::resolve_team_id(client, t).await?),
+                None => None,
+            };
+            let mut rows = crate::actions::cogmap::list_api(client).await?;
+            if let Some(needle) = name_needle {
+                rows.retain(|r| r.name.to_lowercase().contains(&needle));
+            }
+            if let Some(tid) = team_id {
+                rows.retain(|r| r.team_ids.contains(&tid));
+            }
+            Ok(rows)
+        })
+    })?;
+
+    // Identity-out: decorate each row with its `ref`, as list/show/search rows carry one.
+    let mut value = serde_json::to_value(&rows)
+        .map_err(|e| crate::error::TemperError::Api(format!("cogmap list serialize: {e}")))?;
+    if let Some(arr) = value.as_array_mut() {
+        for row in arr.iter_mut() {
+            crate::commands::resource::inject_cogmap_ref(row);
+        }
+    }
+    let rendered = crate::format::render(&value, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// `temper cogmap show <cogmap_ref>` — one map's orientation: identity, charter blocks, and the
+/// foundational (homed) resources it is built on, telos flagged. 404 when the map is not readable.
+///
+/// The identity carries a decorated cogmap `ref`; each foundation carries its own resource `ref`
+/// (and `context_ref` where resolvable), the way `resource show`/`list` rows do.
+pub fn show(cogmap_ref: &str, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+
+    let detail = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move { crate::actions::cogmap::show_api(client, cogmap_id).await })
+    })?;
+
+    let mut value = serde_json::to_value(&detail)
+        .map_err(|e| crate::error::TemperError::Api(format!("cogmap show serialize: {e}")))?;
+    if let Some(cog) = value.get_mut("cogmap") {
+        crate::commands::resource::inject_cogmap_ref(cog);
+    }
+    if let Some(founds) = value.get_mut("foundations").and_then(|v| v.as_array_mut()) {
+        // `inject_ref` reads `resource_id` + `title`, so each foundation gets a resource ref.
+        for f in founds.iter_mut() {
+            crate::commands::resource::inject_ref(f);
+        }
+    }
+    let rendered = crate::format::render(&value, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// `temper cogmap shape <cogmap_ref> [--lens <ref>]` — read the map's materialized regions.
 pub fn shape(cogmap_ref: &str, lens_ref: Option<&str>, fmt: OutputFormat) -> Result<()> {
     let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;

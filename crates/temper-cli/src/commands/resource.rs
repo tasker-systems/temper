@@ -125,6 +125,26 @@ fn render_action_result_with_ref<T: serde::Serialize>(
     crate::format::render(&value, fmt)
 }
 
+/// Insert a derived `ref` key into a serialized cogmap row (`CogmapRow`), computed from `id` + `name`
+/// via `decorated_ref` (`sluggify(name)-<uuid>`). Render-time only — never persisted, never on the
+/// wire type. No-op if `id`/`name` are absent or `id` is unparseable. Cogmap refs resolve
+/// trailing-UUID-only, so the slug half is a copy-pasteable, self-documenting decoration.
+pub(crate) fn inject_cogmap_ref(row: &mut serde_json::Value) {
+    if let Some(obj) = row.as_object_mut() {
+        let id = obj.get("id").and_then(|v| v.as_str()).map(str::to_owned);
+        let name = obj.get("name").and_then(|v| v.as_str()).map(str::to_owned);
+        if let (Some(id), Some(name)) = (id, name) {
+            if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+                let decorated = temper_workflow::operations::decorated_ref(
+                    &name,
+                    temper_core::types::ids::ResourceId(uuid),
+                );
+                obj.insert("ref".to_string(), serde_json::Value::String(decorated));
+            }
+        }
+    }
+}
+
 /// Insert a derived `ref` key into a serialized context row
 /// (`ContextRow` / `ContextRowWithCounts`), computed from `owner_ref` + `slug`.
 /// The `ref` is render-time only — never persisted, never on the wire type.
@@ -760,6 +780,9 @@ pub struct ShowParams<'a> {
 pub struct ListParams<'a> {
     pub doc_type: &'a str,
     pub context: Option<&'a str>,
+    /// `--cogmap` (repeatable): scope to resources homed in these cognitive maps (UUID or decorated
+    /// refs). Mutually exclusive with `context`. Empty = no cogmap filter.
+    pub cogmap: &'a [String],
     pub limit: Option<usize>,
     /// `--all`: return every matching row (no page cap). Overrides `limit`
     /// (clap makes the two mutually exclusive, so both are never set together).
@@ -789,6 +812,28 @@ const DEFAULT_LIST_LIMIT: usize = 20;
 /// The default page cap for `list --meta-only` (meta rows are cheaper, so the
 /// default is larger).
 const DEFAULT_META_LIST_LIMIT: usize = 50;
+
+/// Resolve repeated `--cogmap` refs (trailing-UUID-only) into the comma-separated UUID string the
+/// list endpoint's `cogmap_ids` query param expects (the GET can't carry a `Vec`). `None` when no
+/// `--cogmap` was given. Guards mutual exclusion with `--context`: a resource has exactly one home,
+/// so the two filters could only ever intersect to the empty set — reject before the round-trip.
+fn resolve_cogmap_scope_csv(cogmaps: &[String], context: Option<&str>) -> Result<Option<String>> {
+    if cogmaps.is_empty() {
+        return Ok(None);
+    }
+    if context.is_some() {
+        return Err(TemperError::BadRequest(
+            "--context and --cogmap are mutually exclusive; specify at most one home".into(),
+        ));
+    }
+    let mut ids = Vec::with_capacity(cogmaps.len());
+    for r in cogmaps {
+        let id = temper_workflow::operations::parse_ref(r)
+            .map_err(|e| TemperError::Config(format!("invalid cogmap ref {r:?}: {e}")))?;
+        ids.push(id.0.to_string());
+    }
+    Ok(Some(ids.join(",")))
+}
 
 /// Parse a `--sort <field>[:asc|desc]` argument into an enum pair. The field
 /// half is matched against a small alias set; the direction half is optional
@@ -963,9 +1008,11 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         .map(temper_workflow::operations::parse_ref)
         .transpose()?
         .map(uuid::Uuid::from);
+    let cogmap_ids = resolve_cogmap_scope_csv(params.cogmap, params.context)?;
     let api_params = ResourceListParams {
         doc_type_name: Some(doc_type.clone()),
         context_ref: context.clone(),
+        cogmap_ids,
         stage: params.stage.map(str::to_string),
         q: params.title_contains.map(str::to_string),
         goal: goal_id,
@@ -1052,9 +1099,11 @@ fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
         .map(temper_workflow::operations::parse_ref)
         .transpose()?
         .map(uuid::Uuid::from);
+    let cogmap_ids = resolve_cogmap_scope_csv(params.cogmap, params.context)?;
     let api_params = ResourceListParams {
         doc_type_name: Some(params.doc_type.to_string()),
         context_ref: params.context.map(ToString::to_string),
+        cogmap_ids,
         stage: params.stage.map(str::to_string),
         q: params.title_contains.map(str::to_string),
         goal: goal_id,

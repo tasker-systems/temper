@@ -171,7 +171,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["list_cognitive_maps"];
         put?: never;
         post: operations["genesis"];
         delete?: never;
@@ -190,7 +190,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["get_cognitive_map"];
         put: operations["reconcile"];
         post?: never;
         delete?: never;
@@ -1723,6 +1723,24 @@ export interface components {
             role: components["schemas"]["TeamRole"];
         };
         /**
+         * @description One block of a cognitive map's telos charter, as returned by the `resource_blocks(cogmap_telos(…),
+         *     …)` composition (T1 Sequence C). Mirrors the charter-read tuple field-for-field (`seq`, `role`,
+         *     `body_text AS body`) so the service-direct read can `query_as!` straight into it. `role` is one of
+         *     `statement` / `question` / `framing` (`temper-core/src/charter.rs`); a charter block always has both
+         *     a role and body, so neither is `Option` (see `cogmap_charter_select`'s forced-non-null SQL).
+         */
+        CharterBlock: {
+            /** @description Assembled block body text (a question-with-context block is `question + "\n\n" + context`). */
+            body: string;
+            /** @description One of `statement` / `question` / `framing`. */
+            role: string;
+            /**
+             * Format: int32
+             * @description Position within the charter (statement is 0, then questions, then framing).
+             */
+            seq: number;
+        };
+        /**
          * @description What the reconcile run did to the telos charter — a DISTINCT grain from the landmark counts.
          * @enum {string}
          */
@@ -1765,6 +1783,43 @@ export interface components {
             staleness: components["schemas"]["CogmapStaleness"];
             /** @description `kb_cogmaps.telos_resource_id` — the charter resource (NOT NULL). */
             telos_resource_id: components["schemas"]["ResourceId"];
+        };
+        /**
+         * @description The `cogmap show` aggregate — one map's full orientation in a single read: its identity
+         *     ([`CogmapRow`]), its charter blocks (statement / questions / framing, in seq), and the
+         *     foundational resources it is built on ([`CogmapFoundationRow`], telos flagged). Composed by the
+         *     service; not a `FromRow`.
+         */
+        CogmapDetail: {
+            /** @description The charter blocks in seq order (statement, then questions, then framing). */
+            charter: components["schemas"]["CharterBlock"][];
+            /** @description The map's identity row (name, held-by scope, counts, charter statement). */
+            cogmap: components["schemas"]["CogmapRow"];
+            /** @description The resources the map is built on — its visible homed set, telos flagged. */
+            foundations: components["schemas"]["CogmapFoundationRow"][];
+        };
+        /**
+         * @description One foundational resource of a cognitive map — a resource homed in the map, as returned by the
+         *     `cogmap_foundations` SQL function field-for-field (so the service read can `query_as!` into it).
+         *     The map's telos/charter resource is flagged `is_telos`; the rest are the resources the map is
+         *     built on. The decorated `ref` (and `context_ref` where resolvable) is injected render-time by the
+         *     CLI, exactly as list/show/search rows carry one.
+         */
+        CogmapFoundationRow: {
+            /** @description The resource's doc type (task / goal / concept / …). */
+            doc_type: string;
+            /**
+             * @description True for the map's telos/charter resource — the constitutive resource, distinguished from the
+             *     rest of the homed set.
+             */
+            is_telos: boolean;
+            /**
+             * Format: uuid
+             * @description The resource id.
+             */
+            resource_id: string;
+            /** @description The resource title. */
+            title: string;
         };
         /**
          * @description HTTP body for `POST /api/cognitive-maps/{id}/grants` — the subject is the path `{id}` (a cogmap),
@@ -1861,6 +1916,53 @@ export interface components {
             /** Format: uuid */
             principal_id: string;
             principal_table: string;
+        };
+        /**
+         * @description One row of the `cogmap list` surface — a cognitive map's identity + orientation, as returned by
+         *     the `cogmap_list_rows` SQL function (`migrations/20260724000010_cogmap_list_rows.sql`)
+         *     field-for-field, so the service read can `query_as!` straight into it.
+         *
+         *     This is the charter-bearing sibling of the Atlas's `HomeCogmap` view: same visible-maps base
+         *     (`cogmap_visible_maps`), plus `telos_resource_id` and the charter `statement` so a caller can
+         *     orient — *what is this map for* — from the list itself, without a second round-trip. The
+         *     decorated `ref` (`sluggify(name)-<uuid>`) is injected render-time by the CLI (never persisted,
+         *     never on this wire type), exactly as context rows carry one.
+         */
+        CogmapRow: {
+            /**
+             * @description The charter's statement-of-purpose (block-0 of the telos). `None` when the charter has no
+             *     authored statement yet (e.g. an MCP genesis that minted an empty charter).
+             */
+            charter_statement?: string | null;
+            /**
+             * Format: uuid
+             * @description The cognitive map's id.
+             */
+            id: string;
+            /** @description The map's name. */
+            name: string;
+            /**
+             * @description Held-by scope: the already-sigil'd owner (`+<team-slug>` for a team-held map, or the universal
+             *     `temper` marker for a public/system kernel that joins no member team).
+             */
+            owner_ref: string;
+            /**
+             * Format: int32
+             * @description Count of the map's live (non-folded) materialized regions.
+             */
+            region_count: number;
+            /**
+             * Format: int32
+             * @description Count of resources homed in the map (`anchor_table = 'kb_cogmaps'`).
+             */
+            resource_count: number;
+            /** @description The member teams (self-or-ancestor) the map is joined to — the teams that make it visible. */
+            team_ids: string[];
+            /**
+             * Format: uuid
+             * @description The telos/charter resource id.
+             */
+            telos_resource_id: string;
         };
         /**
          * @description Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
@@ -3675,8 +3777,18 @@ export interface components {
              * @description Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
              *     Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
              *     participants the principal can see.
+             *
+             *     Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a
+             *     pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise
+             *     a set `cogmap_id` is treated as a one-element set.
              */
             cogmap_id?: string | null;
+            /**
+             * @description Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive
+             *     beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older
+             *     server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+             */
+            cogmap_ids?: string[] | null;
             /** @description Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side. */
             context_ref?: string | null;
             /** @description Filter by document type. */
@@ -4594,6 +4706,38 @@ export interface operations {
             };
         };
     };
+    list_cognitive_maps: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's visible cognitive maps (identity + charter statement) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CogmapRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     genesis: {
         parameters: {
             query?: never;
@@ -4628,6 +4772,39 @@ export interface operations {
             };
             /** @description A concurrent genesis conflicted; retry */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_cognitive_map: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Cognitive map ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The map's identity, charter, and foundational resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CogmapDetail"];
+                };
+            };
+            /** @description Map not found or not readable */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6477,6 +6654,14 @@ export interface operations {
                  *     query. `None` = no goal filter.
                  */
                 goal?: string | null;
+                /**
+                 * @description Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in
+                 *     one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.
+                 *     A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the
+                 *     query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each
+                 *     `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
+                 */
+                cogmap_ids?: string | null;
                 sort?: null | components["schemas"]["ResourceSortField"];
                 order?: null | components["schemas"]["SortOrder"];
                 limit?: number | null;

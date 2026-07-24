@@ -68,7 +68,15 @@ context_ref: string | null, doc_type_name: string | null, owner: string | null, 
  * resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the
  * query. `None` = no goal filter.
  */
-goal: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
+goal: string | null, 
+/**
+ * Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in
+ * one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.
+ * A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the
+ * query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each
+ * `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
+ */
+cogmap_ids: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
 /**
  * When true, the list endpoint returns `ResourceMetaListResponse`
  * (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of

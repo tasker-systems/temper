@@ -78,8 +78,17 @@ pub struct SearchParams {
     /// Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
     /// Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
     /// participants the principal can see.
+    ///
+    /// Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a
+    /// pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise
+    /// a set `cogmap_id` is treated as a one-element set.
     #[serde(default)]
     pub cogmap_id: Option<Uuid>,
+    /// Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive
+    /// beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older
+    /// server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+    #[serde(default)]
+    pub cogmap_ids: Option<Vec<Uuid>>,
     /// Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the
     /// principal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`.
     #[serde(default)]
@@ -109,6 +118,7 @@ impl Default for SearchParams {
             graph_expand: default_graph_expand(),
             seed_only: false,
             cogmap_id: None,
+            cogmap_ids: None,
             wayfind: false,
             lens_id: None,
             regions: None,
