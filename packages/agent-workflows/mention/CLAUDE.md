@@ -315,6 +315,24 @@ which is why parsing is never necessary.
 | `TEMPER_API_URL`       | Base URL of the temper API this agent asks for each mentioning user's link state and access token, e.g. `https://temperkb.io`. |
 | `SLACK_LINK_SECRET`    | Shared HMAC secret gating `POST /internal/slack/link-state`. **Must equal temper-api's `SLACK_LINK_SECRET`** — a mismatch is a 401 on every mention, not a warning. |
 | `SLACK_MINT_SECRET`    | Shared HMAC secret gating `POST /internal/slack/mint`. **Must equal temper-api's**, and **must DIFFER from `SLACK_LINK_SECRET`** — link-state answers a question, mint hands back a human's entire reach, so sharing one value makes the cheap capability yield the expensive one. `tests/mint.test.ts` asserts the agent never signs a mint with the link key. |
+
+> **The link/mint distinctness is now ENFORCED, not just documented.** `assertSlackSecretsDistinct`
+> (`agent/lib/link.ts`) runs on **both** signed calls — `requestLinkState` and `requestMintedToken`
+> — and throws before any request is made. Both, because `getToken` (`agent/lib/mcp-auth.ts`) reaches
+> the mint without going through link-state, so the mint cannot inherit the earlier check.
+>
+> It is asserted here **because this agent is a separate Vercel deployment with its own
+> environment**. temper-api refuses to *boot* on the same collision, over all five of its shared
+> secrets (`check_secret_distinctness`, `crates/temper-services/src/config.rs`) — but it can only
+> see its own env, never this one. The two failures present very differently: an agent-only
+> collision cannot authenticate both calls and shows up as a 401 on every mention, whereas **both
+> sides set to the same colliding value works perfectly and silently has no privilege split at
+> all**. That silent case is what these checks exist for.
+>
+> The check is at call time, not module load — matching "read at request time" above, and for the
+> reason `lib/mcp-auth.ts` exists: a module-load throw makes a plain `import` fail in a test
+> process. A colliding deployment is therefore caught on its first mention, not at deploy, which is
+> acceptable only because a correctly-paired temper-api will not have booted.
 | `TEMPER_MCP_URL`       | temper-mcp endpoint the connection's tools call, e.g. `https://temperkb.io/api/mcp`. |
 
 The first five are read at request time (`agent/lib/link.ts`'s `requireEnv`), so an unset one

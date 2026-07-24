@@ -191,6 +191,14 @@ audit already earned its keep: it found `machine_registration::rebind`, a pure-a
 | `access_service::list_pending_requests` / `review_request` | list / decide join requests | `is_system_admin` |
 | embed `reembed` | re-embed the whole index | `is_system_admin` |
 | **`machine_registration::rebind`** (`:401`) | transplant a profile's identity + inherited reach onto a new `client_id` | `is_system_admin` — **team ownership is explicitly insufficient** (it would let an owner inherit reach they could never confer, defeating containment) |
+| `slack_disconnect_service::admin_disconnect_slack_principal` | unbind ANY Slack principal from its profile (offboarding, stuck users) | `is_system_admin` — an operator act on someone else's identity, with no resource or team scope to bound it |
+
+> **This table said "every production `is_system_admin` decision point, enumerated" and was missing
+> a row.** The `slack_disconnect` line above was added on 2026-07-23 (task
+> `019f8ec3-793f-7c52-9378-47dda5d90a5d`), when that site was migrated to `&SystemAdmin` — it had
+> been Bucket 1 all along and the audit simply did not see it. Recorded rather than quietly
+> back-filled, because "the audit was exhaustive" is exactly the belief that let it sit: an
+> inventory is a description of the system, and it rots like any other.
 
 **Bucket 2 — scoped-capability → keep raw bool, deferred to `DomainAuthzAction`:**
 

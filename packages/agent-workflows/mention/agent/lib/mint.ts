@@ -1,4 +1,4 @@
-import { requireEnv, signIntentRequest } from "./link.js";
+import { assertSlackSecretsDistinct, requireEnv, signIntentRequest } from "./link.js";
 
 /**
  * The act-as-the-human mint call: agent -> temper-api.
@@ -80,6 +80,11 @@ export type MintOutcome =
  * `principalId` is passed WHOLE. It has 2-4 segments and must never be split.
  */
 export async function requestMintedToken(principalId: string): Promise<MintOutcome> {
+  // The route this guards is the expensive one, so it re-asserts rather than trusting that
+  // `requestLinkState` ran first: `getToken` (`lib/mcp-auth.ts`) mints without going through
+  // link-state at all, so the mint path is genuinely reachable without the earlier check.
+  assertSlackSecretsDistinct();
+
   const baseUrl = requireEnv("TEMPER_API_URL");
   const secret = requireEnv("SLACK_MINT_SECRET");
 

@@ -426,7 +426,13 @@ wrong.
 
 ---
 
-## 7. Finding: an enclosure gap, out of scope but filed here
+## 7. Finding: an enclosure gap, out of scope but filed here — **CLOSED 2026-07-23**
+
+> **Closed.** `admin_disconnect_slack_principal` now takes `&SystemAdmin`, and
+> `DisconnectRequest` no longer has an `actor` field at all — the operator comes from
+> `admin.actor()`, so the "gates on a field of a request struct" hazard below is not fixed
+> so much as made unrepresentable. Task `019f8ec3-793f-7c52-9378-47dda5d90a5d`. The finding
+> is kept in full because its reasoning is why the fix took the shape it did.
 
 `slack_disconnect_service::admin_disconnect_slack_principal` (`:267`) is a **pure system-authority**
 act — `if !is_system_admin(pool, req.actor) { return Err(Forbidden) }` — that the enclosure's

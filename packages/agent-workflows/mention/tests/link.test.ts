@@ -1,7 +1,60 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { requestLinkState, signIntentRequest } from "../agent/lib/link.js";
+import {
+  assertSlackSecretsDistinct,
+  requestLinkState,
+  signIntentRequest,
+} from "../agent/lib/link.js";
+
+describe("assertSlackSecretsDistinct", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // FAILS IF: this deployment may hold one value for both Slack secrets. link-state answers a
+  // question; mint hands back a human's entire reach. temper-api refuses to BOOT on the same
+  // collision (`check_secret_distinctness`), but the agent is a separate Vercel deployment with
+  // its own environment, so a server-side check cannot see this one.
+  it("refuses when the link and mint secrets hold the same value", () => {
+    vi.stubEnv("SLACK_LINK_SECRET", "shared-by-copy-paste");
+    vi.stubEnv("SLACK_MINT_SECRET", "shared-by-copy-paste");
+
+    expect(() => assertSlackSecretsDistinct()).toThrow(/same value/);
+  });
+
+  // FAILS IF: the error text leaks the credential it is complaining about. It surfaces in eve's
+  // logs on a dropped mention, which is not a place a shared secret may appear.
+  it("never prints the colliding value", () => {
+    const leaked = "s3cret-shared-by-copy-paste";
+    vi.stubEnv("SLACK_LINK_SECRET", leaked);
+    vi.stubEnv("SLACK_MINT_SECRET", leaked);
+
+    expect(() => assertSlackSecretsDistinct()).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining(leaked) }),
+    );
+  });
+
+  // FAILS IF: a guard that rejects everything. The correct configuration must pass.
+  it("accepts distinct secrets", () => {
+    vi.stubEnv("SLACK_LINK_SECRET", "link-s3cret");
+    vi.stubEnv("SLACK_MINT_SECRET", "mint-s3cret");
+
+    expect(() => assertSlackSecretsDistinct()).not.toThrow();
+  });
+
+  // FAILS IF: absence is read as collision. An unset variable is `requireEnv`'s business — and
+  // treating two absent secrets as equal would break every deployment that runs one flow and not
+  // the other.
+  it("ignores absent secrets", () => {
+    vi.stubEnv("SLACK_LINK_SECRET", "");
+    vi.stubEnv("SLACK_MINT_SECRET", "");
+    expect(() => assertSlackSecretsDistinct()).not.toThrow();
+
+    vi.stubEnv("SLACK_MINT_SECRET", "only-one-set");
+    expect(() => assertSlackSecretsDistinct()).not.toThrow();
+  });
+});
 
 describe("signIntentRequest", () => {
   it("signs HMAC-SHA256 over `{timestamp}.{body}` as lowercase hex", () => {
@@ -37,6 +90,17 @@ describe("requestLinkState", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  // FAILS IF: the distinctness assert is not WIRED into this call. A correct predicate nothing
+  // invokes is exactly the gap this whole change exists to close, so it is asserted at the caller
+  // and not only on the pure function. Fails CLOSED: no request is made at all.
+  it("makes no signed call when the two secrets collide", async () => {
+    vi.stubEnv("SLACK_MINT_SECRET", "s3cret"); // equal to the SLACK_LINK_SECRET stubbed above
+    const fetchMock = stubFetch(200, { status: "linked", handle: "j-cole-taylor" });
+
+    await expect(requestLinkState(PRINCIPAL)).rejects.toThrow(/same value/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns the linked arm with the handle", async () => {

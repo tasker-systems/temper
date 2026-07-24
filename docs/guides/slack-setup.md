@@ -74,6 +74,27 @@ linking is not configured"). There is no half-on state.
 > four are all-or-nothing, deploying vault code to an instance already running the link flow **turns
 > the link flow off** until the key is present.
 
+A fifth secret gates the **mint** — and it is deliberately *not* part of the all-or-nothing four,
+so an instance that has not set it keeps a fully working link flow and loses only minting:
+
+| Variable | What it is |
+|---|---|
+| `SLACK_MINT_SECRET` | Shared HMAC secret gating `POST /internal/slack/mint`, which vends an access token acting as the mentioning human. `openssl rand -hex 32`. **Must match the agent's copy** (Step 6). Unset disables minting only. |
+
+> **These secrets must all hold DIFFERENT values, and temper-api refuses to boot if any two match.**
+> The split is the security property, not tidiness: `SLACK_LINK_SECRET` gates an endpoint that
+> answers *"is this principal linked?"*, `SLACK_MINT_SECRET` gates one that hands back **a token
+> carrying that human's entire temper reach**, and `SLACK_VAULT_ENC_KEY` decrypts **every** stored
+> refresh token. One value across two of them means whoever holds the cheap capability already holds
+> the expensive one — and because the link and mint secrets are *also* set on the agent's Vercel
+> project (Step 6) while the vault key never leaves temper-api, a vault key reused as either one
+> hands the agent the keys to the whole vault.
+>
+> The check covers all five of the instance's shared secrets — these three plus
+> `INTERNAL_RECONCILE_SECRET` and `EMBED_DISPATCH_SECRET` — and the error names the offending pair.
+> Generate each one separately. `openssl rand -base64 32` is the vault key's documented generator,
+> which makes *"generate once, paste everywhere"* the exact mistake this guards.
+
 ---
 
 ## Step 3 — create the mention agent's Vercel project
@@ -128,13 +149,23 @@ On the mention agent's Vercel project:
 | `SLACK_SIGNING_SECRET` | The signing secret from Step 5 (HMAC-verifies inbound webhooks). |
 | `TEMPER_API_URL` | The temper **API origin**, e.g. `https://temper-cloud.vercel.app`. |
 | `SLACK_LINK_SECRET` | **The same value** as temper-api's `SLACK_LINK_SECRET` (Step 2). |
+| `SLACK_MINT_SECRET` | **The same value** as temper-api's `SLACK_MINT_SECRET` (Step 2) — and a **different** value from `SLACK_LINK_SECRET`. Both sides of one HMAC, so a mismatch `401`s every mint. |
 
 ```sh
 vercel env add SLACK_BOT_TOKEN production
 vercel env add SLACK_SIGNING_SECRET production
 vercel env add TEMPER_API_URL production
 vercel env add SLACK_LINK_SECRET production
+vercel env add SLACK_MINT_SECRET production
 ```
+
+> **Each secret is copied across two projects, and must stay distinct within each.** The agent
+> refuses to make either signed call when its own `SLACK_LINK_SECRET` and `SLACK_MINT_SECRET` hold
+> the same value — it is a separate deployment with its own environment, so temper-api's boot check
+> cannot see it. Note which way each failure presents: a collision on *only* the agent cannot
+> authenticate both calls and shows up as a `401` on every mention, while **both sides set to the
+> same colliding value works perfectly and silently has no privilege split at all**. The second is
+> the one worth guarding, and it is why the check exists on both sides.
 
 Then redeploy (push to `main`, or redeploy from the dashboard) so the functions pick them up.
 

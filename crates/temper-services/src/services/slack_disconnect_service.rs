@@ -14,9 +14,9 @@
 use sqlx::PgPool;
 use temper_core::types::slack::IdpRevocation;
 
-use super::access_service;
 use super::grant_crypto::VaultKey;
 use super::slack_grant_vault_service;
+use crate::auth::SystemAdmin;
 use crate::auth_config::AuthMode;
 use crate::error::{ApiError, ApiResult};
 use crate::oauth_client;
@@ -48,14 +48,6 @@ pub struct DisconnectRequest<'a> {
     pub mode: AuthMode,
     pub revoke_url: String,
     pub client_id: &'a str,
-    /// The profile performing the disconnect.
-    ///
-    /// On the self-serve arm this equals the subject being unbound — the caller
-    /// can only name their own principals. On the admin arm the two differ, and
-    /// **distinguishing those two cases is the point of the audit event this
-    /// field exists to feed**: "you unbound yourself" and "an operator unbound
-    /// you" are different facts about the same row disappearing.
-    pub actor: ProfileId,
 }
 
 /// Unbind a Slack principal: revoke the grant, then delete identity, secret and
@@ -63,8 +55,21 @@ pub struct DisconnectRequest<'a> {
 ///
 /// Idempotent — disconnecting an unlinked principal succeeds quietly, with both
 /// booleans false, no intents swept, and [`IdpRevocation::NotAttempted`].
+///
+/// `actor` is the profile performing the disconnect, and it is a **parameter
+/// rather than a field of [`DisconnectRequest`]** — deliberately, and matching
+/// `access_service::ReviewRequestParams`, which dropped its `reviewer` field for
+/// the same reason. On the self-serve arm the actor equals the subject being
+/// unbound (the caller can only name their own principals); on the admin arm the
+/// two differ, and **distinguishing those cases is the point of the audit event
+/// this value feeds** — "you unbound yourself" and "an operator unbound you" are
+/// different facts about the same row disappearing. Keeping it out of the params
+/// struct means the admin arm passes `admin.actor()` from its proof and a caller
+/// has no field in which to supply an operator id that disagrees with who
+/// actually authorized the act.
 pub async fn disconnect_slack_principal(
     pool: &PgPool,
+    actor: ProfileId,
     req: DisconnectRequest<'_>,
 ) -> ApiResult<DisconnectOutcome> {
     // Resolved on the pool, before the transaction opens: the emitter is a read
@@ -99,7 +104,7 @@ pub async fn disconnect_slack_principal(
     // `admin_disconnect_slack_principal`'s doc below is the live candidate — if
     // it routes through a connection profile, this call is the thing that
     // breaks, and it must provision or reject before it gets here.
-    let emitter = temper_substrate::writes::resolve_emitter(pool, req.actor, "web")
+    let emitter = temper_substrate::writes::resolve_emitter(pool, actor, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -199,7 +204,7 @@ pub async fn disconnect_slack_principal(
         r#"SELECT _admin_slack_disconnected($1,$2,$3,$4) AS "was_linked!""#,
         emitter.uuid(),
         req.slack_principal_id,
-        req.actor.uuid(),
+        actor.uuid(),
         idp_revocation.as_str(),
     )
     .fetch_one(&mut *tx)
@@ -242,39 +247,51 @@ pub async fn disconnect_slack_principal(
 
 /// Admin disconnect: unbind ANY principal, on behalf of an operator.
 ///
-/// The authorization gate lives HERE, in the service, not in the HTTP handler.
-/// That is the repo's `audit-handler-authz-drift` rule, and it is load-bearing
-/// for this feature specifically: a `@temper disconnect` Slack surface is
-/// already planned, and a gate that lives in the axum handler is one that the
-/// next surface must remember to re-add. Enforcing it at the shared layer means
-/// every surface inherits it by construction.
+/// The authorization requirement lives HERE, in the service's signature, not in
+/// any one surface. That is the repo's `audit-handler-authz-drift` rule, and it
+/// is load-bearing for this feature specifically: a `@temper disconnect` Slack
+/// surface is already planned, and a gate written into the axum handler would be
+/// one that surface must remember to re-add. A [`SystemAdmin`] parameter is one
+/// it cannot compile without — every surface inherits it by construction.
 ///
-/// Mirrors `machine_registration_service::provision`, which gates the same way.
+/// The proof IS the check (admin-authz enclosure, spec §3): holding one is only
+/// possible via `require_system_admin`, so this function cannot be reached
+/// without the gate having run. There is no `is_system_admin` call left to
+/// forget and no bool for a future surface to skip. Mirrors
+/// `machine_registration_service::rebind`, the enclosure's closest precedent —
+/// **not** `provision`, which is a scoped `machine_authz` gate on a bare
+/// `ProfileId`.
+///
+/// This is **Bucket 1** by the enclosure's classification: a pure
+/// system-authority act, no resource or team scope, where the only legitimate
+/// question is *"are you a system admin?"*. Do NOT widen it to `machine_authz`
+/// or a team-owner arm — it is an operator act on someone else's identity.
 ///
 /// Note the router is NOT the gate: under `access_mode='open'` the gated router
-/// admits everyone, so this check is the only thing standing between a
-/// non-admin and unbinding someone else's account.
+/// admits everyone, so the proof is the only thing standing between a non-admin
+/// and unbinding someone else's account.
 ///
-/// The operator is named by `req.actor` — the same field the self-serve arm
-/// fills with the caller's own id. It is deliberately NOT a separate parameter:
-/// this function both *gates on* the actor and *passes it through* to the
-/// disconnect, and two spellings of one identity is a drift waiting to happen.
+/// The operator is named by the proof and by nothing else — there is no `actor`
+/// field for a caller to supply, so an operator id that disagrees with who
+/// authorized the act is unrepresentable rather than overwritten. The old shape
+/// had to argue in prose that gating on a request field and attributing from
+/// that same field kept the two in agreement; taking both from the proof makes
+/// the agreement structural.
 pub async fn admin_disconnect_slack_principal(
     pool: &PgPool,
+    admin: &SystemAdmin,
     req: DisconnectRequest<'_>,
 ) -> ApiResult<DisconnectOutcome> {
-    // Auth before writes — before the decrypt, before any DELETE.
-    if !access_service::is_system_admin(pool, req.actor).await? {
-        return Err(ApiError::Forbidden);
-    }
-
+    // The proof already answered "may you?" — before the decrypt and before any
+    // DELETE, because it is minted before this function is entered at all.
+    // What remains is "who?", and the proof answers that too.
     tracing::info!(
         principal = %req.slack_principal_id,
-        actor = %req.actor,
+        actor = %admin.actor(),
         "admin slack disconnect authorized"
     );
 
-    disconnect_slack_principal(pool, req).await
+    disconnect_slack_principal(pool, admin.actor(), req).await
 }
 
 /// Revoke a temper-AS refresh token locally, in the caller's transaction.
@@ -338,6 +355,10 @@ pub async fn reap_expired_intents(pool: &PgPool) -> ApiResult<i64> {
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
+    // The production path no longer names `access_service` — the `&SystemAdmin` proof replaced
+    // its `is_system_admin` call. The fixtures still do, to assert that a profile the test calls
+    // an admin (or a non-admin) genuinely is one by the predicate's own definition.
+    use crate::services::access_service;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use sqlx::PgPool;
@@ -562,13 +583,13 @@ mod tests {
 
         let out = disconnect_slack_principal(
             pool,
+            ProfileId::from(actor),
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &key(),
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
-                actor: ProfileId::from(actor),
             },
         )
         .await
@@ -589,13 +610,13 @@ mod tests {
 
         let out = disconnect_slack_principal(
             &pool,
+            actor,
             DisconnectRequest {
                 slack_principal_id: "slack:T0:UNEVER",
                 key: &key(),
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/unused".to_string(),
                 client_id: "c",
-                actor,
             },
         )
         .await
@@ -632,14 +653,14 @@ mod tests {
         // Unreachable revoke URL: the IdP call must fail and must NOT block the unbind.
         let out = disconnect_slack_principal(
             &pool,
+            // Self-serve shape: the actor unbinds their own principal.
+            ProfileId::from(profile_id),
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &key,
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
-                // Self-serve shape: the actor unbinds their own principal.
-                actor: ProfileId::from(profile_id),
             },
         )
         .await
@@ -719,16 +740,16 @@ mod tests {
             mode: AuthMode::ExternalIdp,
             revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
             client_id: "c",
-            // Self-serve shape, twice over — the same actor unbinds their own
-            // principal, and the second call is the quiet no-op.
-            actor: ProfileId::from(profile_id),
         };
+        // Self-serve shape, twice over — the same actor unbinds their own
+        // principal, and the second call is the quiet no-op.
+        let actor = ProfileId::from(profile_id);
 
-        let first = disconnect_slack_principal(&pool, req())
+        let first = disconnect_slack_principal(&pool, actor, req())
             .await
             .expect("first");
         assert!(first.was_linked);
-        let second = disconnect_slack_principal(&pool, req())
+        let second = disconnect_slack_principal(&pool, actor, req())
             .await
             .expect("second");
         assert!(!second.was_linked, "the second disconnect is a quiet no-op");
@@ -1018,14 +1039,14 @@ mod tests {
         // call would fail and idp_revoked would be false.
         let out = disconnect_slack_principal(
             &pool,
+            // Self-serve shape.
+            ProfileId::from(profile_id),
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &key,
                 mode: AuthMode::TemperAs,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "slack-link-client",
-                // Self-serve shape.
-                actor: ProfileId::from(profile_id),
             },
         )
         .await
@@ -1111,13 +1132,13 @@ mod tests {
 
         let out = disconnect_slack_principal(
             &pool,
+            operator,
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &new_key,
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
-                actor: operator,
             },
         )
         .await
@@ -1196,14 +1217,14 @@ mod tests {
 
         let out = disconnect_slack_principal(
             &pool,
+            // Self-serve shape.
+            ProfileId::from(profile_id),
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &key,
                 mode: AuthMode::TemperAs,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "slack-link-client",
-                // Self-serve shape.
-                actor: ProfileId::from(profile_id),
             },
         )
         .await
@@ -1266,13 +1287,13 @@ mod tests {
 
         let err = disconnect_slack_principal(
             &pool,
+            ProfileId::from(actor),
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &key(),
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
-                actor: ProfileId::from(actor),
             },
         )
         .await
@@ -1295,76 +1316,43 @@ mod tests {
         );
     }
 
-    /// The gate refuses a non-admin, and leaves NO trace.
-    ///
-    /// Every other test in this file calls `disconnect_slack_principal` directly
-    /// and therefore never exercises `admin_disconnect_slack_principal`'s
-    /// `is_system_admin` check at all. This is the wrapper's own test.
-    ///
-    /// The ledger assertion is the auth-before-writes half: the gate runs before
-    /// the decrypt and before any DELETE, so a refused act must leave the link
-    /// intact AND write no audit row. A gate moved after the emission would pass
-    /// a link-survival-only check while filing a disconnect that never happened
-    /// into an append-only ledger.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn a_non_admin_is_refused_by_the_gated_wrapper_and_writes_no_ledger_row(pool: PgPool) {
-        let principal = "slack:TB:UGATED";
-        let subject = insert_profile(&pool).await;
-        // A profile with a perfectly good emitter — the ONLY thing it lacks is
-        // gating-team ownership, so the refusal can only come from the gate.
-        let intruder = insert_profile(&pool).await;
-
-        seed_link(&pool, subject, principal).await;
-
-        assert!(
-            !access_service::is_system_admin(&pool, ProfileId::from(intruder))
-                .await
-                .unwrap(),
-            "the fixture intruder must genuinely not be an admin",
-        );
-
-        let err = admin_disconnect_slack_principal(
-            &pool,
-            DisconnectRequest {
-                slack_principal_id: principal,
-                key: &key(),
-                mode: AuthMode::ExternalIdp,
-                revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
-                client_id: "c",
-                actor: ProfileId::from(intruder),
-            },
-        )
-        .await
-        .expect_err("a non-admin must not be able to unbind someone else's account");
-
-        assert!(
-            matches!(err, ApiError::Forbidden),
-            "the refusal must be Forbidden, not an incidental failure: {err:?}",
-        );
-        assert_eq!(
-            link_count(&pool, principal).await,
-            1,
-            "the router is not the gate — under access_mode='open' this check is the only thing \
-             standing between a non-admin and unbinding another account",
-        );
-        assert!(
-            disconnect_events(&pool).await.is_empty(),
-            "auth before writes: a refused act leaves no audit row",
-        );
-    }
+    // THERE IS NO "a non-admin is refused by the wrapper" TEST HERE, and its absence is the
+    // enclosure landing rather than a gap.
+    //
+    // One lived here until the admin arm took a `&SystemAdmin`. It built a non-admin actor,
+    // called the wrapper, and asserted `Forbidden` + link intact + no ledger row. That test is
+    // no longer *expressible*: `SystemAdmin` is sealed (`auth/mod.rs` — private field, and
+    // `require_system_admin` is the only constructor), so a non-admin cannot produce the
+    // argument the call now requires. "Reaching this function without the gate" stopped being a
+    // runtime outcome to assert on and became a compile error, which is the whole point.
+    //
+    // Its two halves both still have a home, and neither was dropped on the way:
+    //   - the refusal itself → `tests/system_admin_proof_test.rs::non_admin_is_refused`, which
+    //     pins the mint that every enclosed act now depends on, for all of them at once.
+    //   - auth-before-writes (a refused caller leaves the link standing and writes no audit
+    //     row) → `tests/e2e/tests/slack_link_test.rs::
+    //     admin_disconnect_refuses_a_non_admin_and_leaves_the_link_intact`, which drives the
+    //     real HTTP surface. That is now the honest layer for it: the refusal happens in the
+    //     handler, before the service is entered, so a service-level test could only assert
+    //     that un-run code wrote nothing.
 
     /// An admin passes the gate, and the ledger names the ADMIN as the author.
     ///
-    /// The headline claim of `admin_disconnect_slack_principal` is that the gate
-    /// and the audit record read the SAME `req.actor`, so they cannot disagree
-    /// about who acted. That is only provable through the wrapper, and only when
-    /// actor != subject.
+    /// The headline claim of `admin_disconnect_slack_principal` is that the operator who
+    /// passed the gate is the one the audit record names, so the two cannot disagree about
+    /// who acted. That is only provable through the wrapper, and only when actor != subject.
     ///
-    /// **Why this bites:** a wrapper that gated on `req.actor` but then handed
-    /// the disconnect the subject (the tempting shortcut — it is the profile the
-    /// principal belongs to) would succeed here and write the SUBJECT into
-    /// `disconnected_by`, producing an audit trail in which every admin unbind
-    /// looks self-serve.
+    /// **Why this bites:** a wrapper that authorized an admin but then handed the disconnect
+    /// the subject (the tempting shortcut — it is the profile the principal belongs to) would
+    /// succeed here and write the SUBJECT into `disconnected_by`, producing an audit trail in
+    /// which every admin unbind looks self-serve. That is a live possibility in code —
+    /// `disconnect_slack_principal` takes a bare `ProfileId` — so this assertion is what holds
+    /// the wrapper to `admin.actor()`.
+    ///
+    /// What is NOT tested here, because it is no longer expressible: a *caller* supplying a
+    /// disagreeing operator id. `DisconnectRequest` has no `actor` field to supply one in
+    /// (dropped with the enclosure, mirroring `access_service::ReviewRequestParams`), so that
+    /// half of the hazard is excluded by the type rather than caught by a test.
     #[sqlx::test(migrations = "../../migrations")]
     async fn the_gated_wrapper_admits_an_admin_and_records_the_admin_as_the_author(pool: PgPool) {
         let principal = "slack:TB:UADMINOK";
@@ -1375,19 +1363,20 @@ mod tests {
 
         seed_link(&pool, subject, principal).await;
 
+        let proof = crate::test_support::system_admin_proof_for(&pool, admin).await;
         let out = admin_disconnect_slack_principal(
             &pool,
+            &proof,
             DisconnectRequest {
                 slack_principal_id: principal,
                 key: &key(),
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
-                actor: ProfileId::from(admin),
             },
         )
         .await
-        .expect("a gating-team owner must be admitted");
+        .expect("a system admin must be admitted");
 
         assert!(out.was_linked, "the admin arm must actually unbind");
         assert_eq!(link_count(&pool, principal).await, 0);

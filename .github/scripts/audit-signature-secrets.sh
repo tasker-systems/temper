@@ -30,6 +30,19 @@
 # the distinctness check is COMPUTED, not baselined — UPDATE_BASELINE cannot silence it. The
 # baseline exists only to catch a gate being added, removed, or repointed at a different field.
 #
+# IT CHECKS THE SOURCE, NEVER THE DEPLOYED VALUES — and it cannot. Two gates reading two
+# differently-named env vars satisfy this script whatever those vars actually contain, so an
+# operator who wires a new instance by copy-paste can set them to ONE value and collapse the whole
+# privilege split with every gate here still green. That half is asserted at boot instead, by
+# `check_secret_distinctness` (crates/temper-services/src/config.rs), which refuses to start when
+# any two of the five shared secrets hold the same value — a wider set than the three gates below,
+# because it also covers EMBED_DISPATCH_SECRET and SLACK_VAULT_ENC_KEY. The Slack mention agent
+# holds its own copies in a SEPARATE deployment and asserts the same thing at its call sites
+# (`assertSlackSecretsDistinct`, packages/agent-workflows/mention/agent/lib/link.ts).
+#
+# The three are one invariant at three altitudes: distinct FIELDS (here), distinct VALUES at boot,
+# distinct VALUES in the other deployment. None of them subsumes another.
+#
 # USAGE
 #   .github/scripts/audit-signature-secrets.sh          # verify (CI mode)
 #   .github/scripts/audit-signature-secrets.sh --list   # print current gate -> secret mapping
