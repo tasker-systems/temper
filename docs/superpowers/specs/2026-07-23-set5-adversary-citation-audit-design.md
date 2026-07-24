@@ -93,62 +93,98 @@ out of the data model instead of being imposed on the personas.
 
 ## 3. The projection — magnitude and quality, never one number
 
-### 3.1 Two components, not one — **AMEND (of `indep_breadth`), CONFORM (to §1.1)**
+### 3.1 Three components, and the unaudited posture lives in the band — **AMEND (of `indep_breadth`), CONFORM (to §1.1)**
 
-`kb_resource_standing.indep_breadth` (`…memo.sql:32`) becomes two columns:
+`kb_resource_standing.indep_breadth` (`…memo.sql:32`) becomes three columns, and the
+skepticism toward unevaluated evidence is expressed by **where the band gates**, not by a
+number baked into a mean.
 
 - **`citation_magnitude`** — the count of distinct live cited sources for the finding.
-  **Monotone**: citing more evidence never lowers standing.
-- **`citation_quality`** — the **mean** signed audit value over those distinct sources, in
-  `[-1.0, 1.0]`.
+  **Monotone**: citing more evidence never lowers it. This is the *findability* axis — a
+  finding with many sources is well-connected in the graph regardless of whether anyone has
+  audited it.
+- **`audit_coverage`** — the count of those distinct sources that carry **at least one**
+  audit event. Integral, and **monotone under append-only** (§4.1): once a source is
+  audited it stays covered. The *evaluated-ness* axis.
+- **`citation_quality`** — the mean, over the **audited subset only**, of each audited
+  source's decay-weighted audit value (§4.1), in `[-1.0, 1.0]`. Undefined (read as a
+  neutral `0.0`) when `audit_coverage = 0` — an unaudited finding makes no quality claim,
+  and its low standing comes from the band gate below, not from a poisoned mean.
+  **The aggregation is per distinct source, in two stages, and the order matters:** a source
+  cited by several of the finding's blocks may carry several audit events, so first collapse
+  *within* a source (the decay-weighted aggregate over all that source's audits, across all
+  its citing blocks — one value per source), then take the mean *across* distinct sources. A
+  naive `LEFT JOIN` of audits onto provenance yields one row per `(block, source)` audit and
+  gives a five-block source five votes in the outer mean — the echo/actor-count fallacy
+  re-entering through block multiplicity, in the very function written to exclude it (§3.1's
+  `r_parent`-vs-magnitude distinction).
+
+**Liveness is not optional in these counts.** Soft-delete sets `is_active = false` and does
+not fold blocks or provenance (`canonical_functions.sql:1056` is the whole projector), so a
+component that counts provenance without a liveness join keeps a deleted source conferring
+standing forever. Every producer must therefore join `kb_resources` and require the source
+`is_active` (the CLAUDE.md rule: *"`ingest_state = 'complete'` goes exactly where
+`r.is_active` already goes"*), and `citation_magnitude` is *"distinct **live** cited
+sources"* — the word "live" is load-bearing and Set 3's `resource_bases` did not yet carry
+it. The sweep (§6.3) likewise excludes findings that are not `is_active AND
+ingest_state = 'complete'`, or it will feed the auditor a deleted or half-uploaded resource
+at the head of the queue every tick.
+
+The unaudited posture — *"present and reachable, but visibly not-yet-earned"* — is the
+**coverage ratio** `audit_coverage / citation_magnitude` gating the band. An unaudited
+finding has ratio 0, so it is pinned to the floor band no matter how many sources it cites;
+citing more sources *lowers* the ratio and re-enters it into the auditor's queue (§6.3),
+without ever destroying a verdict already earned. This is why the perverse gradient the
+earlier draft carried is gone: quality is computed over audited sources only, so adding
+unaudited evidence cannot pull a positive verdict down — it moves the coverage axis, not the
+quality axis.
 
 The full component mapping against the shipped memo (`…memo.sql:30-40`), so no column's
 fate is left to inference:
 
 | Shipped column | Fate |
 |---|---|
-| `indep_breadth` | **Replaced** by `citation_magnitude` + `citation_quality`. |
-| `adversarial_survival` | **Subsumed** into `citation_quality`. Survival stops being a separate scalar because the gradient *is* the survival signal — a citation that withstood audit carries a positive value, one that did not carries a negative one. This is the binary-to-gradient move (§3.3) applied to the component it was invented for. |
-| `challenge_count` | **Kept, and kept integral** — redefined as **audit coverage**: how many of the finding's distinct cited sources have been audited at all. Its job is unchanged and is the reason it must not become a float: spec §1 requires 0-challenges to be distinguishable from N-withstood, and that is a question about whether anyone *tried*, not about magnitude. |
+| `indep_breadth` | **Replaced** by `citation_magnitude` + `citation_quality` + `audit_coverage`. |
+| `adversarial_survival` | **Subsumed** into `citation_quality`. Survival stops being a separate scalar because the gradient *is* the survival signal — a citation that withstood audit carries a positive value, one that did not carries a negative one (§3.3). |
+| `challenge_count` | **Replaced** by `audit_coverage`, which is the clearer name for the same job — distinguishing "nobody tried" (coverage 0) from "N sources evaluated" (spec §1). Drop the old column rather than leave a name that lies about its meaning. |
 | `contradiction_balance`, `freshness` | **Unchanged.** |
 | `r_parent` | **Unchanged, and deliberately not the same thing as `citation_magnitude`.** `resource_r_parent` counts *all* uncorrected provenance rows over live blocks (`…memo.sql:51-57`) — total accretion, duplicates included — while magnitude counts *distinct sources*. Ten citations of one source is `r_parent = 10, citation_magnitude = 1`, and that difference is load-bearing: it is the echo case. An implementer who collapses them reintroduces the actor-count fallacy. |
 
-`standing_band` (`…memo.sql:186-200`) is re-thresholded over the new component set. Its
-`near-canonical` arm must require **both** magnitude and positive quality; a high-magnitude,
-negative-quality finding is the monoculture and must not reach it.
+**The band** (`standing_band`, `…memo.sql:186-200`) is re-thresholded over the new set. It
+gains a **fourth arm** so the lossy chip carries the *sign* of the auditor's work, and so
+"never evaluated" and "evaluated and found wanting" are not flattened together (spec §1's
+requirement, on its negative side):
 
-They must not be collapsed into a product or a sum. A signed per-citation value summed into
-one breadth number has a perverse gradient — a finding with ten unaudited sources would
-score worse than one with a single unaudited source — and multiplying by a magnitude term
-makes it worse, not better, because magnitude × negative digs the hole faster.
+- `near-canonical` — high magnitude **and** high coverage ratio **and** positive quality.
+  The coverage-ratio conjunct is what stops a high-magnitude monoculture from reaching it.
+- `reinforced` — moderate magnitude, positive quality, and not under live contradiction.
+- `disputed` — `audit_coverage > 0` **and** `citation_quality < 0`: the adversary examined
+  it and it did not hold. Distinct from the floor.
+- `provisional` — the floor, including every unaudited finding (coverage 0).
 
-The deeper reason is that the collapse is the same error spec §1.1 already forbids:
-**standing IS the vector; the band is a lossy read-time chip over it**. Kept separate, the
-two components are exactly what distinguishes diverse-high from echo-high — the Landmesser
-boundary made computable. A saluting crowd reads **high magnitude, negative quality**; a
-small well-audited evidence set reads **low magnitude, positive quality**; and no single
-blended float can tell those apart.
+Exact thresholds are a tunable default this set owns, as Set 3 owned the freshness half-life.
 
 - CONFORM — spec §1.1 (shape-primary, band as lossy chip) and §1.3 (memoized components,
-  band computed at read). `standing_band` (`…memo.sql:186-200`) stays a read-time function
-  over components and is re-thresholded to take both.
+  band computed at read). The band stays a read-time function over components.
 
-### 3.2 The unaudited prior is negative, not neutral — **EXTEND**
+### 3.2 Unaudited is a band state, not a number in a mean — **EXTEND**
 
-An unaudited citation contributes **`-0.5`** to the quality mean. Not zero.
+The design's posture — *evidence no second party has weighed is not yet defensible* — is
+real and must be legible, but it is **not** a value folded into the quality mean. An earlier
+draft gave unaudited citations a `-0.5` contribution to the mean; that produced a perverse
+gradient (adding good-faith evidence demoted a finding two bands) and contradicted the
+monotonicity the same design claimed. The faithful expression is the split above:
+unaudited-ness pins the **band** via the coverage ratio, while **quality** speaks only for
+what was actually assessed.
 
-Zero would make the auditor's absence indistinguishable from its approval — the "absence of
-challenge is not survival" failure (spec §1) reappearing at citation grain. A negative prior
-states the design's actual posture: evidence that no second party has weighed is *suspect*,
-not merely uncounted. Because quality is a **mean**, accumulating unaudited citations cannot
-drive it below the prior — the floor is the prior — so the conservative posture costs
-nothing in monotonicity.
-
-The exact value is a tunable default owned by this set, in the same sense Set 3 owned the
-band thresholds and the 30-day freshness half-life (`…memo.sql:59-75`).
+This keeps every property the negative prior was reaching for — an unaudited finding sits at
+the floor, findable but not elevated; the auditor's absence is distinguishable from its
+approval — with none of the gradient pathology, because the two concerns now live on two
+axes instead of being blended into one.
 
 - EXTEND — authorized by spec §2.4 (silence is not evidence of independence) and §1
-  (0-challenges must be distinguishable from N-withstood), relocated to citation grain.
+  (0-challenges must be distinguishable from N-withstood), relocated to citation grain and
+  to the band rather than the mean.
 
 ### 3.3 An audit is signed, not a discount — **EXTEND**
 
@@ -176,17 +212,30 @@ edge-based `resource_adversarial_survival` reader (`…memo.sql:169-177`) is rep
 citation-grain components. Because the pairs table is provably empty (§1), this AMEND
 carries no data migration and no behavior change.
 
-**The `TODO(Set 5)` at `db_backend.rs:1170` dissolves rather than being fixed.** It exists
-only because breadth read a memo built from independence *edges*, so edge writes had to
-re-drive it. Once breadth reads citations and audits, the refresh trigger is the
-citation/audit write path. No edge-incident refresh is ever added, and the staleness it
-warned about becomes unreachable by construction rather than by circumstance.
+**The `TODO(Set 5)` at `db_backend.rs:1170` dissolves rather than being fixed** — for the
+component it was about. It existed because breadth read a memo built from independence
+*edges*, so edge writes had to re-drive it; once breadth reads citations and audits, no
+independence-edge write can make magnitude, coverage, or quality stale, and that specific
+refresh is never needed.
+
+A narrower edge-staleness *does* remain, and the replacement note must say so rather than
+claim total victory: `contradiction_balance` is **unchanged** (§3.1) and still reads
+`kb_edges` (`…memo.sql:159-163`), while the standing clock still fires only on
+resource writes. So the `kb_resource_standing.contradiction_balance` **column** is stale
+after an edge write until the next resource write over the finding. This is harmless **only**
+because `resource_standing_shape` recomputes every component live at read and never trusts
+the memo column (§4.3) — so the read is correct and the memo is a write-cost optimization,
+exactly as it is for `freshness`. The Task-5 replacement for the TODO must state this
+precisely: *any future consumer that reads `kb_resource_standing` directly, rather than
+calling `resource_standing_shape`, must first wire an edge-incident refresh for
+`contradiction_balance`.* A deleted warning that a memo-column reader needed is worse than a
+stale warning.
 
 ---
 
 ## 4. What a citation audit is
 
-### 4.1 The grain forces the representation — **CONFORM**
+### 4.1 The grain forces the representation, and the trail is append-only — **CONFORM**
 
 A citation is a `(block, source)` pair: `kb_block_provenance` is keyed
 `(block_id, source_kind, source_id, contributed_by_event_id)`
@@ -201,19 +250,48 @@ Three candidate homes were considered:
 |---|---|
 | A float column on `kb_block_provenance` | Rejected. Provenance rows are event projections; a citation is audited repeatedly over its life, and a single column keeps only the latest verdict and discards the history. It also puts an assessment inside the record of what happened — the same category error as storing a band (§1.3 of `019f81e8`). |
 | Reuse `is_corrected` | Rejected. Binary, and it is exactly the truth-claim baggage §3.4 exists to avoid. |
-| **A new event-sourced `kb_citation_audits` projection** | **Chosen.** |
+| **A new append-only `kb_citation_audits` event projection** | **Chosen.** |
 
-`kb_citation_audits` carries one row per `(citation, auditing act)`: the citation key, the
-signed value, and the emitting event id. The standing read takes the **latest live audit per
-citation**; superseded audits remain as history. An audit is thereby itself scarrable and
-re-auditable — the auditor's verdict is an emitted, fallible claim like any other, never an
-authority. This is the house pattern (a `citation_audited` domain event, a `_project_*`
-half, a derived projection), inheriting replay-stability, the append-only guard, and the
-ledger firewall with no new mechanism.
+**The audit trail is append-only, and no audit is ever mutated or superseded.** An audit is
+an event; the ledger is immutable by design; an auditor does not retract a verdict, it emits
+a new one. So `kb_citation_audits` carries **one immutable row per `citation_audited`
+event** — the citation key, the signed value, and the emitting event id — with **no
+`is_superseded` bit, no "latest live audit," and no supersede-on-write.** A later `+1.0`
+never erases an earlier adversary's `-1.0`; both are permanent events in the trail. This is
+strictly the events-as-primary tenet: the row set is a derived, replayable projection of the
+`citation_audited` events, and replay re-appends idempotently on the event id
+(`ON CONFLICT (audited_by_event_id) DO NOTHING`) — there is no mutable state for replay to
+disagree with.
+
+**The visible standing is a decay-weighted projection recomputed fresh from that trail.** A
+citation's audit value is a **recency-weighted aggregate over all its audit events** — newer
+verdicts weigh more, older ones fade in influence but never vanish. It may be materialized as
+a stored column for read-cost, but that materialization is **always recomputed fresh along
+the audit trail, never incrementally from its own prior stored value** — a projection of
+history, not a cache of a cache. Because the aggregate is a pure function of
+`(trail, as-of-time)`, a citation's standing *as of* any past moment is derivable by
+recomputing over the trail truncated at that time: a rolling view of the past, not a
+denormalized latest.
+
+This is the exact pattern the codebase already uses for `freshness` (`…memo.sql:63-75`:
+memoized as a snapshot by the write-path clock, but **recomputed live at read** because it is
+time-decayed and must reflect the current moment) and the disposable-read-model tenet — the
+memo is derivable and throwaway; the events are the truth. See
+[[reference_standing_memo_disposable_readmodel_not_event_sourced]] and
+[[reference_temper_memo_refresh_is_rust_clock_not_trigger]]. The audit decay is that pattern
+pointed at the audit trail instead of the provenance trail.
+
+*Consequence, accepted deliberately:* the live view favours recent assessment — a single
+recent verdict can outweigh an older opposite one — while both remain immutable in the
+ledger and both resurface in an as-of-then view. That recency asymmetry is the intended
+productive-disagreement behaviour (it mirrors §1's contradiction-as-vector-sum, not
+erasure), not a hole to guard against. The exact decay half-life and aggregation shape are
+tunable defaults this set owns.
 
 - CONFORM — events-as-primary, projections derived; the `block_annotate` precedent
   (`migrations/20260710000001_block_provenance_annotate.sql:44`) for a payload-only,
-  chunk-independent write path.
+  chunk-independent write path; the freshness precedent for a time-decayed component
+  recomputed live at read.
 
 ### 4.2 The float rides the payload; self-assessment rides metadata — **CONFORM**
 
@@ -327,35 +405,66 @@ The schedule mirrors `schedules/steward.ts`: deterministic server-side sweep →
 claim, a correlation id minted per tick and threaded across the app boundary, then one
 isolated model session per claimed job.
 
-### 6.2 Scope boundary — cogmap-homed findings only
+### 6.2 Scope boundaries — cogmap-homed findings, resource-kind citations
 
-`kb_workflow_jobs.cogmap_id` is `NOT NULL REFERENCES kb_cogmaps(id)`, but Set 3 made the
-subject of standing **any** `kb_resource` (`…memo.sql:22`), and resources also home in
-contexts. The first cut therefore audits **cogmap-homed findings only**. Widening the queue
-is additive but is a separate concern; the boundary is named rather than designed around.
+Two boundaries, both named rather than designed around:
 
-### 6.3 Selection — unaudited citation coverage
+- **Cogmap-homed findings only.** `kb_workflow_jobs.cogmap_id` is
+  `NOT NULL REFERENCES kb_cogmaps(id)` (`migrations/20260705000001_workflow_jobs.sql:21`),
+  but Set 3 made the subject of standing **any** `kb_resource` (`…memo.sql:22`), and
+  resources also home in contexts. The first cut audits cogmap-homed findings only; widening
+  the queue is additive and separate.
+- **Resource-kind citations only.** `provenance_source_kind` has three values —
+  `'event'`, `'resource'`, `'remote'` (`canonical_schema.sql:105`;
+  `20260704000006_remote_source_kind_enum.sql:8`) — and Set 3's `resource_bases` filters to
+  `'resource'` (`…memo.sql:110`). The standing components inherit that filter, so an audit
+  of a `remote` (external-URL) citation would move nothing. The write path must therefore
+  **reject** a non-`'resource'` `source_kind` with an error naming the reason, rather than
+  silently accepting a no-op the auditor cannot detect. Auditing external-source citations
+  is a coherent later extension (external sources are arguably the *most* independent
+  evidence there is), but it is out of scope here and must be a deliberate widening of the
+  component filters, not an accident of an unrestricted write.
+
+### 6.3 Selection — incomplete audit coverage
 
 The sweep selects findings with **incomplete audit coverage** — `citation_magnitude > 0`
-and `challenge_count < citation_magnitude` (§3.1) — ordered by the size of the uncovered
+and `audit_coverage < citation_magnitude` (§3.1) — ordered by the size of the uncovered
 remainder, so the most-cited and least-audited findings are worked first. This is the
-auditor's analogue of the steward's ingest-drift sweep.
+auditor's analogue of the steward's ingest-drift sweep, and — like it — is
+**principal-scoped**: the sweep takes the auditor's principal and gates through the same
+readability predicate every read uses (the steward's `steward_drift_sweep(p_principal, …)`
+routes through `steward_candidate_cogmaps`; ours must route through the equivalent). A sweep
+with no principal is a cross-tenant enumeration oracle, which would defeat §7's entire
+`NotFound` posture.
 
-Coverage, not quality, is the correct predicate. A quality-based sweep ("still at the
-floor") would mis-handle the partially-audited finding: one audited citation lifts the mean
-off the floor while the rest of the evidence remains unweighed, and the finding would fall
-out of the queue having been only glanced at.
+Coverage, not quality, is the correct predicate. A quality-based sweep would drop a
+partially-audited finding out of the queue after a single citation is weighed.
 
-**Re-audit requires no extra mechanism.** Annotating new sources onto a finding pulls the
-quality mean back toward the prior, which re-enters the finding into the sweep on its own.
+**Re-audit under append-only.** New *citations* re-queue a finding on their own: magnitude
+rises, coverage does not, so the coverage ratio drops and the finding re-enters the sweep.
+Coverage is monotone (§3.1), so re-auditing an *already-covered* finding is **not**
+coverage-triggered — a deliberate first-cut limitation.
+
+The natural next signal, given the decay model of §4.1, is a finding whose newest audit has
+decayed past a threshold — "stale-covered." This is deliberately left for a **future reaper
+pass**: a periodic tick (on the steward or auditor persona) that fires on a different
+predicate than a moved watermark — regions where internal coherence has disaggregated, or
+salience has drifted from the telos, sweeping older resources and older facts against newer
+ones so that unrevisited assumptions are structurally re-accounted-for. That pass is where
+decay-driven re-audit belongs; scoping and building it will likely evolve the auditor persona
+itself, and it is out of scope here. Recorded so the first-cut limitation points at real
+planned work rather than a gap. See [[project_evidential_standing_goal_sets]] and the Set 4
+steward-expansion task.
 
 ### 6.4 Duty-to-challenge-before-promote is structural, not procedural
 
-Quality cannot leave the negative prior without an audit, so no band above `provisional` is
-reachable on unaudited evidence. Set 6 (promotion as translation) inherits the gate for
-free, and Set 5 does not need to know Set 6 exists. This is the spec's
-"duty to challenge before promote" discharged by the data model rather than by an agent
-remembering to do it.
+The coverage-ratio band gate (§3.1) makes it so: no band above `provisional` is reachable
+until the auditor has evaluated the finding's evidence, because an unaudited finding has
+coverage ratio 0 and is pinned to the floor regardless of magnitude. Set 6 (promotion as
+translation) inherits that gate for free, and Set 5 does not need to know Set 6 exists — the
+duty to challenge before promote is discharged by the data model, not by an agent remembering
+to do it. The self-audit denial arm (§7) is what stops the citer from discharging that duty
+against themselves.
 
 ---
 
@@ -369,6 +478,24 @@ finding* — the full canonical visibility predicate — plus being a registered
 machine principal with reach. That is a deliberate widening (a write authorized by
 readability), and it must be designed explicitly rather than falling out of a copied
 handler.
+
+**But readability alone is not sufficient, and this is load-bearing.** Readability lets the
+citer audit their own citations — and because the append-only decay model favours recency
+(§4.1) and the sweep clears a finding once covered (§6.3), a citer who audits their own work
+positively both inflates their standing *and* removes the finding from the adversary's
+queue. That defeats the entire adversarial premise (the self-grading prohibition §4.2 barred
+only the auditor's *confidence* from moving standing; it never barred citer-equals-auditor).
+So the gate **must** carry a self-audit **denial** arm: an audit is refused when the auditing
+principal is the author of the citation it targets (the emitter of the block's contributing
+`block_mutated`/`block_annotated` event, or — the cheaper sufficient proxy — a principal who
+`can_modify` the finding). "Assessed by another party" is enforced here or it is not enforced
+anywhere.
+
+The subject of authorization is the finding **derived from the target `block_id`**, not a
+finding named independently by the caller. The write lands on a block; the gate must resolve
+that block's owning resource and authorize *that*, so a caller cannot authorize over a
+finding they can read while writing onto a block of one they cannot (the transposition the
+sealed proof exists to stop — `authz/mod.rs:95-117`).
 
 It must be expressed in the **`ScopedAuthority` policy layer**
 (`crates/temper-services/src/authz/mod.rs:54-133`; design doc
@@ -384,8 +511,10 @@ resolved **against that trait and the existing impls** (`authz/read_gates.rs:30,
    own doctrine — **which incumbent SQL predicate each arm calls**. *"SQL predicates are
    authoritative here — call them, do not restate them"* (`authz/mod.rs:65-66`). A restated
    visibility predicate is the drift site this whole layer exists to close.
-3. **The denial arm**, named explicitly. Denial is an arm every domain must name, never an
-   absence and never an `Err` from inside `resolve` (`authz/mod.rs:69-74`).
+3. **The denial arms**, named explicitly — there are **two**: not-readable, and
+   self-audit (the citer auditing their own work, per the load-bearing paragraph above).
+   Denial is an arm every domain must name, never an absence and never an `Err` from inside
+   `resolve` (`authz/mod.rs:69-74`).
 4. **The refusal dialect.** `Forbidden` vs `NotFound` is a deliberate information-hiding
    decision, not boilerplate (`authz/mod.rs:76-85`). The consistency argument favours
    `NotFound`: the evidence **read** shipped by Set 3 is already leak-safe by returning no
@@ -393,7 +522,12 @@ resolved **against that trait and the existing impls** (`authz/read_gates.rs:30,
    audit **write** over the same subject should refuse in the same dialect rather than
    creating an existence oracle beside a gate built to avoid one.
 5. **Machine reach.** How this composes with `machine_authz`'s `AuthorizedReach`, given
-   §5.2 requires the auditor to be a registered machine principal.
+   §5.2 requires the auditor to be a registered machine principal. The plan must ground this
+   concretely — read `authz/machine.rs`, confirm which grant rows the auditor's
+   `provision --team <ref>:member` (§5.2) actually creates, and confirm that
+   `resources_visible_to(<auditor machine profile>)` returns the findings it is meant to
+   audit. The failure this guards against is silent: the whole pipeline builds and every
+   audit 404s in production because the machine principal cannot see the corpus.
 
 ---
 
@@ -435,6 +569,19 @@ Two gaps to settle in the plan, both additive:
 - **Context-homed findings.** Out of scope per §6.2 until the queue is widened.
 - **Meta-edges / widening the `kb_edges` CHECK.** Not needed under the citation-grain model,
   and not built.
+- **Auditing `remote` / `event`-kind citations.** Out of scope per §6.2; the write path
+  rejects them rather than silently no-op'ing. A coherent later extension.
+- **Time-based re-audit of already-covered findings.** The decay model (§4.1) makes it
+  natural, but the first-cut sweep re-queues only on new citations (§6.3). A tuning surface.
+- **`near-canonical` reachability by the shipped write paths.** The band's top arm also
+  requires `contradiction_balance`, which depends on `supports`/`corroborates` edges that
+  nothing in the product writes today (full-repo grep: only the reader, its plan, and a
+  test). Set 5 makes the *quality* and *coverage* conjuncts reachable via the audit path but
+  does **not** ship a `supports`-edge writer, so whether `near-canonical` is reachable
+  end-to-end depends on work outside this set. The plan must include a test that asserts
+  which band the shipped write paths *can* reach, so this is a stated fact rather than a
+  surprise — and if the top band proves unreachable, that is Set 6's concern to resolve, not
+  a silent dead threshold.
 - **Set 4 (steward's three jobs).** Untouched. This spec adds a schedule beside the steward
   and never modifies the steward's own tick.
 
@@ -444,14 +591,17 @@ Two gaps to settle in the plan, both additive:
 
 - **Standing ≠ truth** — an audit assesses the defensibility a citation confers, never what
   a source says or whether a claim is true (§3.4, §9).
-- **Events-as-primary / derivable-not-denormalized** — audits are a domain event with a
-  derived projection; standing components stay memoized-and-recomputed, with no stored band
-  (§4.1, §4.3).
-- **Scarrification** — audits supersede rather than mutate; the auditor's verdict is itself
-  challengeable and appears in the element trail (§4.1, §4.3).
-- **No view from nowhere** — the auditor is a situated skeptic with a negative prior, not an
-  authority. Its self-assessment is structurally barred from moving standing (§4.2), and its
-  identity is a distinct ledger-visible principal rather than a self-declared label (§5.2).
-- **Landmesser** — magnitude and quality are kept separate precisely so that a
-  high-magnitude monoculture and a small well-audited evidence set cannot be rendered as the
-  same number (§3.1).
+- **Events-as-primary / derivable-not-denormalized** — audits are an append-only domain
+  event; the visible standing is a decay-weighted projection recomputed fresh from the trail,
+  never incrementally from its own prior value, with no stored band (§4.1, §4.3).
+- **Scarrification** — nothing is mutated or erased: an adversary's negative verdict is a
+  permanent event that fades in influence but stays in the ledger and resurfaces in an
+  as-of-then view; the auditor's verdict is itself challengeable and appears in the element
+  trail (§4.1, §4.3).
+- **No view from nowhere** — the auditor is a situated skeptic, not an authority. Its
+  self-assessment is structurally barred from moving standing (§4.2); the citer is barred
+  from auditing their own work (§7); and its identity is a distinct ledger-visible principal
+  rather than a self-declared label (§5.2).
+- **Landmesser** — magnitude, coverage, and quality are kept as separate axes precisely so
+  that a high-magnitude monoculture (high magnitude, low coverage ratio or negative quality)
+  and a small well-audited evidence set cannot be rendered as the same number (§3.1).
