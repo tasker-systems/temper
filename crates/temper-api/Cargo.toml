@@ -19,6 +19,7 @@ temper-core = { path = "../temper-core", features = ["web-api"] }
 temper-services = { path = "../temper-services" }
 temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-substrate = { path = "../temper-substrate" }
+temper-telemetry = { path = "../temper-telemetry" }
 axum = { version = "0.8", features = ["json", "query"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }

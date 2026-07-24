@@ -8,6 +8,7 @@ description = "MCP server for agent access to the temper knowledge base"
 temper-services = { path = "../temper-services" }
 temper-core = { path = "../temper-core", features = ["web-api", "mcp"] }
 temper-workflow = { path = "../temper-workflow", features = ["web-api", "mcp"] }
+temper-telemetry = { path = "../temper-telemetry" }
 
 rmcp = { version = "1.3", features = [
     "server",

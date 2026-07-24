@@ -54,6 +54,7 @@ temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
 temper-substrate = { path = "../../crates/temper-substrate" }
 temper-workflow = { path = "../../crates/temper-workflow" }
 temper-mcp = { path = "../../crates/temper-mcp" }
+temper-telemetry = { path = "../../crates/temper-telemetry" }
 temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
