@@ -25,12 +25,17 @@
 //!
 //! Design: `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
 
+mod audit_gate;
 mod connection;
 mod grant;
 mod machine;
 mod read_gates;
 mod two_sided;
 
+// `audit_gate` deliberately has no re-export yet: its items have no caller until Task 7's backend
+// command, and a `pub(crate) use` nothing reads is a lint away from breaking the build for no
+// gain. The task that wires the gate adds `pub(crate) use audit_gate::{finding_of_block,
+// AuditAuthority};` here and deletes the `dead_code` expectations in that module.
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};
