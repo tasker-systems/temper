@@ -10,6 +10,8 @@ target/
 !.claude/settings.json
 # Shared, committed multi-agent workflows (resolvable by name at runtime).
 !.claude/workflows/
+# Shared, committed skills (lazy-loaded guidance referenced from CLAUDE.md).
+!.claude/skills/
 .env
 .vercel
 node_modules
