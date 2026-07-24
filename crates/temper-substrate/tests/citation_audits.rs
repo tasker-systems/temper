@@ -17,8 +17,12 @@
 mod common;
 
 use temper_substrate::events::EventContext;
-use temper_substrate::ids::{BlockId, ContextId, EntityId, InvocationId, ProfileId, ResourceId};
-use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, ProvenanceSource};
+use temper_substrate::ids::{
+    BlockId, CogmapId, ContextId, EntityId, InvocationId, ProfileId, ResourceId,
+};
+use temper_substrate::payloads::{
+    AgentAuthorship, AnchorRef, ConfidenceBand, Incorporation, ProvenanceSource,
+};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CitationAuditParams, CreateParams};
 use uuid::Uuid;
@@ -521,5 +525,539 @@ async fn record_citation_audit_with_stamps_the_invocation_and_authorship(pool: s
         payload.get("confidence").is_none() && payload.get("reasoning").is_none(),
         "the auditor's own confidence must NEVER leak into the payload the projector reads \
          (spec §4.2 self-grading prohibition): payload was {payload}"
+    );
+}
+
+// ── Task 5 — audit_drift_sweep (SQL) ─────────────────────────────────────────────────────────────
+//
+// Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.2-6.3,
+// migration `20260723000030_audit_drift_sweep.sql`. Every fixture below builds through the SAME
+// production writes as the rest of this file (`create_resource_with` via `make_home`/`make_resource`,
+// `citation_audit` via `fire_audit`, `writes::delete_resource`) plus the cogmap/team-membership
+// fixtures already established in this test suite for exactly this purpose
+// (`common::genesis_cogmap`, `common::create_team`, `common::create_profile`,
+// `common::add_team_member`, and the raw `kb_team_cogmaps` insert precedented at
+// `cogmap_shape_readback.rs:103-106`).
+//
+// Every assertion below checks PRESENCE/ABSENCE of a specific `(cogmap_id, finding_id)` pair in the
+// sweep's rows, never the total row count — the L0 kernel cogmap
+// (`20260625000001_l0_kernel_cogmap.sql`) and its root-team join are seeded into every test database
+// by `MIGRATOR` regardless of `bootseed::seed_system`, so an assertion on total row count would be
+// coupled to unrelated background seed data instead of the behavior under test.
+
+/// Join a team to a cogmap (`kb_team_cogmaps`) — the row `cogmap_readable_by_profile`
+/// (`20260624000002_canonical_functions.sql:259-267`) reads to decide reachability, and so what
+/// `steward_candidate_cogmaps` (and therefore `audit_drift_sweep`) admits. Raw insert; there is no
+/// typed Rust wrapper for this one row — mirrors the identical fixture insert already used for this
+/// purpose elsewhere in this test suite (`cogmap_shape_readback.rs:103-106`).
+async fn join_team_to_cogmap(pool: &sqlx::PgPool, team: Uuid, cogmap: Uuid) {
+    sqlx::query("INSERT INTO kb_team_cogmaps (team_id, cogmap_id) VALUES ($1, $2)")
+        .bind(team)
+        .bind(cogmap)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Make `member` a principal who can reach `cogmap` through `steward_candidate_cogmaps`: a fresh
+/// team, joined to the cogmap, with `member` added to it as a `'member'`. This is the ONLY path
+/// `cogmap_readable_by_profile` recognizes — direct membership in a team that is ITSELF joined to the
+/// cogmap (`profile_effective_teams`, not team-hierarchy inheritance), so this fixture is deliberately
+/// a fresh team rather than reusing any ambient membership.
+async fn join_principal_to_cogmap(
+    pool: &sqlx::PgPool,
+    member: Uuid,
+    cogmap: Uuid,
+    team_slug: &str,
+) {
+    let team = common::create_team(pool, team_slug).await;
+    common::add_team_member(pool, team, member).await;
+    join_team_to_cogmap(pool, team, cogmap).await;
+}
+
+/// A cogmap-homed finding (spec §6.2's boundary) optionally citing one `source` at create time.
+/// Mirrors `make_resource` above but homes `AnchorRef::cogmap(cogmap)` instead of a context.
+async fn make_cogmap_finding(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    cogmap: CogmapId,
+    title: &str,
+    uri: &str,
+    source: Option<ResourceId>,
+) -> ResourceId {
+    let sources = match source {
+        Some(s) => vec![Incorporation {
+            source: ProvenanceSource::Resource(s.uuid()),
+            seq: 0,
+        }],
+        None => vec![],
+    };
+    writes::create_resource_with(
+        pool,
+        CreateParams {
+            title,
+            origin_uri: uri,
+            body: "seed body",
+            doc_type: "research",
+            home: AnchorRef::cogmap(cogmap),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources,
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap()
+}
+
+/// A cogmap-homed finding citing `n` distinct, unaudited sources all at once — `magnitude = n`,
+/// `coverage = 0`. Multiple `Incorporation`s in a single create is a supported shape (mirrors the
+/// two-source create in `evidential_standing.rs`'s
+/// `a_source_cited_by_two_blocks_counts_once_in_quality`), used here only by the ordering test, which
+/// needs one finding with more than one uncovered source.
+async fn seed_cogmap_finding_with_n_citations(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    cogmap: CogmapId,
+    home_slug: &str,
+    title: &str,
+    uri: &str,
+    n: usize,
+) -> ResourceId {
+    let src_home = make_home(pool, owner, home_slug).await;
+    let mut sources = Vec::with_capacity(n);
+    for i in 0..n {
+        let src = make_resource(
+            pool,
+            owner,
+            emitter,
+            src_home,
+            &format!("{title}-src{i}"),
+            &format!("{uri}-src{i}"),
+        )
+        .await;
+        sources.push(Incorporation {
+            source: ProvenanceSource::Resource(src.uuid()),
+            seq: i as i32,
+        });
+    }
+    writes::create_resource_with(
+        pool,
+        CreateParams {
+            title,
+            origin_uri: uri,
+            body: "seed body",
+            doc_type: "research",
+            home: AnchorRef::cogmap(cogmap),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources,
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap()
+}
+
+/// Run `audit_drift_sweep(principal, limit)`, returning the raw `(cogmap_id, finding_id, uncovered)`
+/// rows at the shape the migration declares (`20260723000030_audit_drift_sweep.sql`).
+async fn sweep(pool: &sqlx::PgPool, principal: Uuid, limit: i32) -> Vec<(Uuid, Uuid, i32)> {
+    sqlx::query_as("SELECT cogmap_id, finding_id, uncovered FROM audit_drift_sweep($1, $2)")
+        .bind(principal)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// LOAD-BEARING. Falsifies "the sweep returns nothing" and "the sweep miscomputes `uncovered`". A
+/// cogmap-homed finding citing one live, unaudited source has `magnitude=1, coverage=0`, so it must
+/// appear with `uncovered=1` for a principal whose team is joined to the cogmap.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_returns_a_finding_with_uncovered_citations(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "ads-basic", "ADS Basic Telos").await;
+    let principal = common::create_profile(&pool, "ads-basic-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, cogmap, "ads-basic-team").await;
+
+    let src_home = make_home(&pool, owner, "ads-basic-src-home").await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "source",
+        "temper://ads/basic-source",
+    )
+    .await;
+    let finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        CogmapId::from(cogmap),
+        "finding",
+        "temper://ads/basic-finding",
+        Some(source),
+    )
+    .await;
+
+    let rows = sweep(&pool, principal, 10).await;
+    let hit = rows
+        .iter()
+        .find(|(c, f, _)| *c == cogmap && *f == finding.uuid())
+        .expect(
+            "the uncovered finding must appear in the sweep for a principal who can read its cogmap",
+        );
+    assert_eq!(hit.2, 1, "magnitude 1, coverage 0 => uncovered 1");
+}
+
+/// LOAD-BEARING. Falsifies "the coverage predicate is missing or inverted." Once the finding's only
+/// source is audited, `coverage == magnitude` and the finding must drop out of the queue — spec
+/// §6.3's actual selection predicate is incomplete coverage, not mere presence of a citation.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_fully_covered_finding(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "ads-covered", "ADS Covered Telos").await;
+    let principal = common::create_profile(&pool, "ads-covered-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, cogmap, "ads-covered-team").await;
+
+    let src_home = make_home(&pool, owner, "ads-covered-src-home").await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "source",
+        "temper://ads/covered-source",
+    )
+    .await;
+    let finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        CogmapId::from(cogmap),
+        "finding",
+        "temper://ads/covered-finding",
+        Some(source),
+    )
+    .await;
+    let block = first_block(&pool, finding).await;
+    fire_audit(&pool, emitter, block, source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    let rows = sweep(&pool, principal, 10).await;
+    assert!(
+        !rows
+            .iter()
+            .any(|(c, f, _)| *c == cogmap && *f == finding.uuid()),
+        "a fully covered finding (coverage == magnitude) must not appear: {rows:?}"
+    );
+}
+
+/// Falsifies "the sweep surfaces uncited findings." A finding with zero live resource-kind citations
+/// (`magnitude=0`) has nothing for the auditor to weigh, so `magnitude > 0` must exclude it — without
+/// the guard it would appear at `uncovered = 0` as pure noise.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_finding_with_no_resource_citations(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "ads-uncited", "ADS Uncited Telos").await;
+    let principal = common::create_profile(&pool, "ads-uncited-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, cogmap, "ads-uncited-team").await;
+
+    let finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        CogmapId::from(cogmap),
+        "finding",
+        "temper://ads/uncited-finding",
+        None,
+    )
+    .await;
+
+    let rows = sweep(&pool, principal, 10).await;
+    assert!(
+        !rows
+            .iter()
+            .any(|(c, f, _)| *c == cogmap && *f == finding.uuid()),
+        "a finding with zero live resource-kind citations has nothing to audit: {rows:?}"
+    );
+}
+
+/// LOAD-BEARING (the §6.2 boundary). The principal here OWNS a context-homed finding — readable via
+/// `resources_visible_to`'s ownership arm (`20260624000002_canonical_functions.sql:132-134`) with NO
+/// cogmap-team join anywhere in this test. That makes the assertion a genuine falsification of the
+/// join shape: a sweep built on the principal's full readable-resource set
+/// (`resources_visible_to`/`resources_readable_by`) and filtered by `anchor_table` AFTERWARD would
+/// ALSO see this finding through plain ownership and leak it in. Only starting the query from the
+/// cogmap-home join (`kb_resource_homes` restricted to `anchor_table='kb_cogmaps'`) keeps a
+/// context-homed finding structurally unreachable, however readable it otherwise is.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_context_homed_finding(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (_owner, emitter) = system_actor(&pool).await;
+    let principal = ProfileId::from(common::insert_profile(&pool, "ads-context-principal").await);
+
+    let home = make_home(&pool, principal, "ads-context-home").await;
+    let source = make_resource(
+        &pool,
+        principal,
+        emitter,
+        home,
+        "source",
+        "temper://ads/context-source",
+    )
+    .await;
+    let finding = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            title: "finding",
+            origin_uri: "temper://ads/context-finding",
+            body: "seed body",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner: principal,
+            originator: principal,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(source.uuid()),
+                seq: 0,
+            }],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    let rows = sweep(&pool, principal.uuid(), 10).await;
+    assert!(
+        !rows.iter().any(|(_, f, _)| *f == finding.uuid()),
+        "a context-homed finding must never surface, however readable it is by ownership: {rows:?}"
+    );
+}
+
+/// LOAD-BEARING. Falsifies "the queue never clears a deleted finding" and "the queue audits
+/// half-uploaded resources." Two otherwise-identical uncovered findings in a readable cogmap: one
+/// soft-deleted (spec §3.1's liveness rule applied to the queue itself — soft-delete flips
+/// `is_active` but does not fold blocks or provenance, so an unfiltered sweep would re-surface it
+/// forever), one flipped to `ingest_state='in_progress'` (its citation set is still forming, by
+/// construction, so it is not yet a finding to audit). Both must be excluded; a third, ordinary
+/// uncovered finding in the SAME cogmap must still appear, which is what proves the exclusion is
+/// per-row and not an accident of the whole cogmap being unreachable.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_deleted_or_in_progress_finding(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) =
+        common::genesis_cogmap(&pool, "ads-liveness", "ADS Liveness Telos").await;
+    let principal = common::create_profile(&pool, "ads-liveness-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, cogmap, "ads-liveness-team").await;
+    let cogmap_id = CogmapId::from(cogmap);
+
+    let src_home = make_home(&pool, owner, "ads-liveness-src-home").await;
+
+    let deleted_source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "src-del",
+        "temper://ads/liveness-src-del",
+    )
+    .await;
+    let deleted_finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "deleted-finding",
+        "temper://ads/liveness-deleted",
+        Some(deleted_source),
+    )
+    .await;
+    writes::delete_resource(&pool, deleted_finding, emitter)
+        .await
+        .unwrap();
+
+    let in_progress_source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "src-ip",
+        "temper://ads/liveness-src-ip",
+    )
+    .await;
+    let in_progress_finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "in-progress-finding",
+        "temper://ads/liveness-in-progress",
+        Some(in_progress_source),
+    )
+    .await;
+    sqlx::query("UPDATE kb_resources SET ingest_state = 'in_progress' WHERE id = $1")
+        .bind(in_progress_finding.uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let live_source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "src-live",
+        "temper://ads/liveness-src-live",
+    )
+    .await;
+    let live_finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "live-finding",
+        "temper://ads/liveness-live",
+        Some(live_source),
+    )
+    .await;
+
+    let rows = sweep(&pool, principal, 10).await;
+    assert!(
+        !rows.iter().any(|(_, f, _)| *f == deleted_finding.uuid()),
+        "a soft-deleted finding must not head the queue: {rows:?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|(_, f, _)| *f == in_progress_finding.uuid()),
+        "an in-progress (half-uploaded) finding must not be audited yet: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(c, f, _)| *c == cogmap && *f == live_finding.uuid()),
+        "an ordinary live, complete finding in the SAME cogmap must still appear: {rows:?}"
+    );
+}
+
+/// LOAD-BEARING (the §6.3 principal gate). A finding homed in a cogmap the principal's team is NOT
+/// joined to must never surface — without this gate the sweep is a cross-tenant enumeration oracle
+/// (spec §6.3: "a sweep with no principal is a cross-tenant enumeration oracle"). The principal IS
+/// joined to a different cogmap (so the sweep is genuinely exercised, not fed an empty candidate set
+/// that would trivially return nothing), and the excluded finding is otherwise identical in shape to
+/// `sweep_returns_a_finding_with_uncovered_citations` (magnitude 1, coverage 0) — the only thing
+/// standing between it and a hit is the principal-scoping.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_finding_the_principal_cannot_read(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (unreachable_cogmap, _telos) =
+        common::genesis_cogmap(&pool, "ads-unreachable", "ADS Unreachable Telos").await;
+    let (reachable_cogmap, _telos2) =
+        common::genesis_cogmap(&pool, "ads-reachable", "ADS Reachable Telos").await;
+    let principal = common::create_profile(&pool, "ads-unreachable-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, reachable_cogmap, "ads-unreachable-team").await;
+
+    let src_home = make_home(&pool, owner, "ads-unreachable-src-home").await;
+    let source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "source",
+        "temper://ads/unreachable-source",
+    )
+    .await;
+    let finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        CogmapId::from(unreachable_cogmap),
+        "finding",
+        "temper://ads/unreachable-finding",
+        Some(source),
+    )
+    .await;
+
+    let rows = sweep(&pool, principal, 10).await;
+    assert!(
+        !rows.iter().any(|(_, f, _)| *f == finding.uuid()),
+        "a finding in a cogmap the principal cannot reach must never surface: {rows:?}"
+    );
+}
+
+/// LOAD-BEARING. Falsifies "the sweep is unordered" and "the sweep orders ascending." Two findings in
+/// the SAME readable cogmap: one with three uncovered sources, one with one. The three-uncovered
+/// finding must sort strictly before the one-uncovered finding (`ORDER BY uncovered DESC`).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "ads-order", "ADS Order Telos").await;
+    let principal = common::create_profile(&pool, "ads-order-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, cogmap, "ads-order-team").await;
+    let cogmap_id = CogmapId::from(cogmap);
+
+    let low_home = make_home(&pool, owner, "ads-order-low-src-home").await;
+    let low_source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        low_home,
+        "low-src",
+        "temper://ads/order-low-src",
+    )
+    .await;
+    let low_finding = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "low-finding",
+        "temper://ads/order-low",
+        Some(low_source),
+    )
+    .await; // magnitude 1, coverage 0 => uncovered 1
+
+    let high_finding = seed_cogmap_finding_with_n_citations(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "ads-order-high-src-home",
+        "high-finding",
+        "temper://ads/order-high",
+        3,
+    )
+    .await; // magnitude 3, coverage 0 => uncovered 3
+
+    let rows = sweep(&pool, principal, 10).await;
+    let low_pos = rows
+        .iter()
+        .position(|(_, f, _)| *f == low_finding.uuid())
+        .expect("the low-uncovered finding must appear");
+    let high_pos = rows
+        .iter()
+        .position(|(_, f, _)| *f == high_finding.uuid())
+        .expect("the high-uncovered finding must appear");
+    assert!(
+        high_pos < low_pos,
+        "uncovered DESC: the finding with 3 uncovered sources must sort before the one with 1: {rows:?}"
     );
 }
