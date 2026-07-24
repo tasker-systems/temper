@@ -57,8 +57,8 @@ mod embed_impl {
         AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, CloseInvocation,
         CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent,
         FoldRelationship, ListResources, MaterializeOnThreshold, OpenInvocation,
-        ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources,
-        ShowResource, StewardDispatchTick, UpdateResource,
+        ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship, ReweightRelationship,
+        SearchResources, ShowResource, StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
@@ -223,6 +223,28 @@ mod embed_impl {
         ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::fold_relationship not wired until cutover".to_string(),
+            ))
+        }
+
+        // Set 5's citation audit is trait-complete here but NOT CLI-dispatchable, and the reason is
+        // structural rather than "not wired yet". The command is BLOCK-addressed by design — the
+        // finding may not be caller-named, because a caller that could name one while writing onto a
+        // block of another is the transposition the sealed authority proof exists to stop
+        // (`temper-services/src/authz/audit_gate.rs:65-77`) — while the endpoint it would POST to is
+        // finding-addressed (`POST /api/resources/{id}/citation-audits`). CloudBackend has no
+        // block→finding resolver and `temper-client` exposes no read that offers one, so it cannot
+        // build the path without the command growing a field the design forbids. Set 5's auditor is
+        // an MCP/agent machine principal (spec §5.2) that reaches the API directly;
+        // `TemperClient::resources().record_citation_audit` exists for that surface and the e2e.
+        async fn record_citation_audit(
+            &self,
+            _cmd: RecordCitationAudit,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::record_citation_audit is not dispatchable: the command is \
+                 block-addressed and the endpoint is finding-addressed, and the CLI has no \
+                 block→finding resolver"
+                    .to_string(),
             ))
         }
 
@@ -489,8 +511,8 @@ mod non_embed_impl {
         AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, CloseInvocation,
         CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
         ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
-        ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
-        ShowResource, StewardDispatchTick, UpdateResource,
+        RecordCitationAudit, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
+        SearchResources, ShowResource, StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -597,6 +619,15 @@ mod non_embed_impl {
             &self,
             _cmd: FoldRelationship,
         ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn record_citation_audit(
+            &self,
+            _cmd: RecordCitationAudit,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

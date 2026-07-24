@@ -619,26 +619,34 @@ async fn make_cogmap_finding(
 /// two-source create in `evidential_standing.rs`'s
 /// `a_source_cited_by_two_blocks_counts_once_in_quality`), used here only by the ordering test, which
 /// needs one finding with more than one uncovered source.
-async fn seed_cogmap_finding_with_n_citations(
-    pool: &sqlx::PgPool,
+/// The eight things that finding needs. A params struct rather than eight positional arguments:
+/// the repo treats `#[expect(clippy::too_many_arguments)]` as a smell to fix, not to suppress, and
+/// four of these are `&str`/id pairs that positional calls would happily transpose in silence.
+struct CogmapFindingSeed<'a> {
     owner: ProfileId,
     emitter: EntityId,
     cogmap: CogmapId,
-    home_slug: &str,
-    title: &str,
-    uri: &str,
+    home_slug: &'a str,
+    title: &'a str,
+    uri: &'a str,
+    /// How many distinct sources the finding cites.
     n: usize,
+}
+
+async fn seed_cogmap_finding_with_n_citations(
+    pool: &sqlx::PgPool,
+    p: CogmapFindingSeed<'_>,
 ) -> ResourceId {
-    let src_home = make_home(pool, owner, home_slug).await;
-    let mut sources = Vec::with_capacity(n);
-    for i in 0..n {
+    let src_home = make_home(pool, p.owner, p.home_slug).await;
+    let mut sources = Vec::with_capacity(p.n);
+    for i in 0..p.n {
         let src = make_resource(
             pool,
-            owner,
-            emitter,
+            p.owner,
+            p.emitter,
             src_home,
-            &format!("{title}-src{i}"),
-            &format!("{uri}-src{i}"),
+            &format!("{}-src{i}", p.title),
+            &format!("{}-src{i}", p.uri),
         )
         .await;
         sources.push(Incorporation {
@@ -649,14 +657,14 @@ async fn seed_cogmap_finding_with_n_citations(
     writes::create_resource_with(
         pool,
         CreateParams {
-            title,
-            origin_uri: uri,
+            title: p.title,
+            origin_uri: p.uri,
             body: "seed body",
             doc_type: "research",
-            home: AnchorRef::cogmap(cogmap),
-            owner,
-            originator: owner,
-            emitter,
+            home: AnchorRef::cogmap(p.cogmap),
+            owner: p.owner,
+            originator: p.owner,
+            emitter: p.emitter,
             properties: &[],
             chunks: None,
             sources,
@@ -1037,13 +1045,15 @@ async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
 
     let high_finding = seed_cogmap_finding_with_n_citations(
         &pool,
-        owner,
-        emitter,
-        cogmap_id,
-        "ads-order-high-src-home",
-        "high-finding",
-        "temper://ads/order-high",
-        3,
+        CogmapFindingSeed {
+            owner,
+            emitter,
+            cogmap: cogmap_id,
+            home_slug: "ads-order-high-src-home",
+            title: "high-finding",
+            uri: "temper://ads/order-high",
+            n: 3,
+        },
     )
     .await; // magnitude 3, coverage 0 => uncovered 3
 

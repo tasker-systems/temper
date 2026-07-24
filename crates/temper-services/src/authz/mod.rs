@@ -32,10 +32,11 @@ mod machine;
 mod read_gates;
 mod two_sided;
 
-// `audit_gate` deliberately has no re-export yet: its items have no caller until Task 7's backend
-// command, and a `pub(crate) use` nothing reads is a lint away from breaking the build for no
-// gain. The task that wires the gate adds `pub(crate) use audit_gate::{finding_of_block,
-// AuditAuthority};` here and deletes the `dead_code` expectations in that module.
+// Wired by Task 7: `DbBackend::record_citation_audit` derives the subject with `finding_of_block`
+// and gates on `AuditAuthority`. That backend command is the single chokepoint every surface funnels
+// through, so it is the only caller — a second `authorize::<AuditAuthority>` on a surface would be a
+// double gate that can drift from this one.
+pub(crate) use audit_gate::{finding_of_block, AuditAuthority};
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};

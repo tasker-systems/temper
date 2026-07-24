@@ -14,7 +14,8 @@ use serde_json::Value;
 use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
+use temper_core::types::ids::{BlockId, CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
+use temper_core::types::provenance::ProvenanceSource;
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -165,6 +166,41 @@ pub struct AnnotateResource {
     pub content_block: Option<uuid::Uuid>,
     /// Per-act correlation + authorship — stamps the `block_provenance_annotated` act. Empty by
     /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
+    pub origin: Surface,
+}
+
+/// Record an auditor's signed defensibility verdict on ONE `(block, source)` citation (Set 5,
+/// spec §4.1). The write is **append-only**: the projector inserts a new `kb_citation_audits` row
+/// with no supersession, so a later `+1.0` never erases an earlier `-1.0`.
+///
+/// **Block-addressed, and deliberately carries no finding id.** The authorization subject — the
+/// block's owning finding — is derived server-side from `block`. Letting a caller name a finding
+/// alongside the block would let it authorize over a finding it may read while writing onto a
+/// block of one it may not; the sealed authority proof exists to stop exactly that transposition
+/// (`temper-services/src/authz/audit_gate.rs:65-77`, which also states that this command and the
+/// HTTP surface share one spelling of the lookup).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecordCitationAudit {
+    /// The audited citation's block (`kb_content_blocks.id`).
+    pub block: BlockId,
+    /// The cited source being assessed. Only `Resource`-kind citations are auditable — standing
+    /// reads only resource-kind bases, so the SQL entry refuses anything else at the write path
+    /// rather than letting it land as a silent no-op
+    /// (`migrations/20260723000010_citation_audits.sql:123-126`).
+    pub source: ProvenanceSource,
+    /// The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the
+    /// connection it makes, never a claim about what the source says (spec §3.3/§3.4). The ledger
+    /// column carries the same bound as a CHECK
+    /// (`migrations/20260723000010_citation_audits.sql:28`).
+    pub value: f64,
+    /// Optional free-text rationale, recorded on the ledger row.
+    pub reason: Option<String>,
+    /// Per-act correlation + authorship — stamps the authored `citation_audited` act. Empty by
+    /// default; correlation never authorizes the write. The auditor's own confidence rides here
+    /// (→ `kb_events.metadata`) and never the payload: only the signed `value` moves standing
+    /// (spec §4.2's self-grading prohibition, `temper-substrate/src/writes.rs:538-541`).
     #[serde(default, skip_serializing_if = "ActContext::is_empty")]
     pub act: ActContext,
     pub origin: Surface,
@@ -444,6 +480,23 @@ mod tests {
         };
         let s = serde_json::to_string(&cmd).unwrap();
         assert_eq!(serde_json::from_str::<AssertRelationship>(&s).unwrap(), cmd);
+    }
+
+    #[test]
+    fn record_citation_audit_command_round_trips() {
+        let cmd = RecordCitationAudit {
+            block: BlockId::new(),
+            source: ProvenanceSource::Resource(uuid::Uuid::now_v7()),
+            value: -0.75,
+            reason: Some("the source does not support the connection".to_string()),
+            act: Default::default(),
+            origin: Surface::Mcp,
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RecordCitationAudit>(&s).unwrap(),
+            cmd
+        );
     }
 
     #[test]

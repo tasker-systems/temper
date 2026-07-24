@@ -8,6 +8,7 @@
 //! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
 //! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
 
+use crate::authz::{authorize, finding_of_block, AuditAuthority};
 use crate::backend::region_clocks;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -36,8 +37,9 @@ use temper_workflow::operations::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, BodyUpdate,
     CloseInvocation, CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource,
     FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, OpenInvocation,
-    ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
-    SearchResources, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
+    ReconcileCognitiveMap, RecordCitationAudit, ResourceSummary, RetypeRelationship,
+    ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
+    Surface, UpdateResource,
 };
 use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -1144,7 +1146,8 @@ impl DbBackend {
         }
     }
 
-    /// Tick the evidential-standing memo after a resource write (Set 3, Phase B). Recomputes the
+    /// Tick the evidential-standing memo after a resource write (Set 3, Phase B) or a citation-audit
+    /// write (Set 5, spec §4.3 — which CONFORMs to this policy verbatim). Recomputes the
     /// touched finding's standing components and UPSERTs its `kb_resource_standing` memo row via the
     /// shipped SQL (Task 5's [`temper_substrate::write::refresh_resource_standing`]).
     ///
@@ -1153,23 +1156,31 @@ impl DbBackend {
     /// memo stays stale only until the next write over this finding re-drives it. Escalating would trade
     /// a self-healing staleness for a user-visible 500.
     ///
-    /// **What the read actually recomputes live.** `resource_standing_shape` recomputes FIVE of the six
-    /// components from live rows at read (`r_parent`, `contradiction_balance`, `adversarial_survival`,
-    /// `challenge_count`, `freshness`), so for those the `kb_resource_standing` memo is a write-cost
-    /// optimization + parity anchor, never the read's authority. The exception is `indep_breadth`:
-    /// `resource_independence_breadth` sums the `kb_independence_pairs` memo, and that pairs memo is
-    /// (re)built ONLY here (via `refresh_independence_pairs` inside the shipped SQL), NOT at read and NOT
-    /// on edge writes. So an `independent-of` edge asserted/folded among a finding's bases would leave
-    /// `indep_breadth` stale until the next resource create/update over that finding re-drives it.
+    /// **What the read actually recomputes live.** `resource_standing_shape` recomputes ALL SIX
+    /// components from live rows at read — it calls one component function per column and reads
+    /// `kb_resource_standing` for nothing (`20260723000020_standing_citation_components.sql:319-341`).
+    /// The memo is therefore a write-cost optimization + parity anchor, never the read's authority.
     ///
-    /// Why that is safe in Set 3, and what Set 5 owes. Wired onto the resource create/update paths only,
-    /// NOT the edge paths (`assert_relationship` / `fold_relationship`). Set 3 ships NO `independent-of`
-    /// edge writer (that is Set 5's), so `kb_independence_pairs` is always empty today and `indep_breadth`
-    /// is always the live silence-default — the staleness above is unreachable, not merely rare. The
-    /// deferral of edge-incident refresh is therefore correct now but conditional:
-    /// **TODO(Set 5): when the independence/scar edge writer lands, it MUST drive edge-incident
-    /// `refresh_independence_pairs` (both resource endpoints) — or `indep_breadth` will read stale after
-    /// an independence-edge assert/fold.**
+    /// **The Set 3 `TODO(Set 5)` dissolved; a narrower warning replaces it, and is not deleted.**
+    /// This doc used to warn that `indep_breadth` summed the `kb_independence_pairs` memo — rebuilt
+    /// only here, never at read and never on edge writes — so an `independent-of` edge assert/fold
+    /// would leave it stale, and Set 5's edge writer would owe an edge-incident refresh. That debt is
+    /// gone rather than paid: `kb_independence_pairs`, `refresh_independence_pairs` and
+    /// `resource_independence_breadth` are dropped (`…citation_components.sql:80-84`), breadth is now
+    /// `citation_magnitude` / `audit_coverage` / `citation_quality` read from live citations and the
+    /// append-only audit trail, and no edge write can make any of the three stale (spec §3.4).
+    ///
+    /// **What did NOT change.** `contradiction_balance` is untouched by Set 5 and still sums
+    /// `kb_edges` (`20260721000010_evidential_standing_memo.sql:156-164`), while this clock still
+    /// fires only on resource create/update and on the citation-audit write — never on
+    /// `assert_relationship` / `retype` / `reweight` / `fold_relationship`. So the
+    /// `kb_resource_standing.contradiction_balance` **column** is stale after an edge write until the
+    /// next of those writes over the finding re-drives it. That is harmless **only** because the read
+    /// recomputes it live and never trusts the column, exactly as it does for `freshness`. Hence the
+    /// standing obligation, which replaces the discharged TODO rather than removing it:
+    /// **any future consumer that reads `kb_resource_standing` directly instead of calling
+    /// `resource_standing_shape` must FIRST wire an edge-incident refresh for
+    /// `contradiction_balance` (both edge endpoints).**
     async fn tick_resource_standing(&self, finding: ResourceId) {
         match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
             Ok(()) => tracing::debug!(
@@ -1939,6 +1950,95 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
+    }
+
+    /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.3).
+    ///
+    /// **Authorization lives HERE, not on a surface and not in a service.** This backend is the
+    /// single chokepoint every surface (HTTP, MCP, CLI) funnels through, so a gate placed here
+    /// cannot be forgotten by a new caller — the failure mode a surface-only gate has (`db_backend`'s
+    /// own F1 create-into-cogmap note at `:1258-1262` says the same thing about the same hazard).
+    /// There is exactly ONE `authorize::<AuditAuthority>` for this command in the codebase; a second
+    /// one on the HTTP service would be a double gate free to drift from this one.
+    ///
+    /// The four steps below are ordered, and the order is not stylistic:
+    ///
+    /// 1. **Authorize** — before any mutation (auth before writes), over the finding *derived from
+    ///    the block*. Moving it after the write is a write-then-check; moving it after step 2 would
+    ///    let an unauthorized caller probe invocation existence through the 404/409 split.
+    /// 2. **Correlation integrity** — ADDITIVE to step 1, never a substitute for it. Step 1 asks
+    ///    *may I audit this finding?*; this asks *is the envelope I am claiming open, and mine?*
+    ///    (`Self::check_act_invocation`). Confusing the two is what the `AssertRelationship` doc's
+    ///    *"correlation never authorizes the write"* exists to prevent. Dropping it would let the
+    ///    auditor stamp acts onto a closed or unreadable run.
+    /// 3. **Write** — append-only; the projector never supersedes an earlier verdict.
+    /// 4. **Tick** — the standing memo, AFTER the write, so it recomputes over the landed audit.
+    ///    Ticking earlier would refresh the pre-audit state and leave the memo stale.
+    async fn record_citation_audit(
+        &self,
+        cmd: RecordCitationAudit,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // A caller-fault guard, NOT a gate: `kb_citation_audits.value` carries the same bound as a
+        // CHECK (`20260723000010_citation_audits.sql:28`), which would otherwise reach the caller as
+        // a 500 for what is plainly a bad request. It runs first because it names nothing about the
+        // subject — it leaks nothing an unauthorized caller could not compute unaided — so the
+        // four-step order above is untouched. `contains` also rejects NaN, which no JSON surface can
+        // deliver but the type permits.
+        if !(-1.0..=1.0).contains(&cmd.value) {
+            return Err(TemperError::BadRequest(format!(
+                "citation audit value {} is outside [-1.0, 1.0]",
+                cmd.value
+            )));
+        }
+        // 1. AUTHORIZE. The subject is the block's owning finding, resolved server-side — the
+        //    command deliberately carries no finding id, so a caller cannot authorize over one
+        //    finding while writing onto a block of another (`authz/audit_gate.rs:65-77`).
+        //    `AuditAuthority` admits a principal who can READ the finding and did NOT author it: a
+        //    deliberate widening (spec §7) with a self-audit denial arm, because an auditor that may
+        //    only assess findings it owns is not an auditor. Both denial arms render `NotFound`
+        //    (`audit_gate.rs:155-173`), which `From<ApiError>` carries through as
+        //    `TemperError::NotFound` (`error.rs:158-168`) — no existence oracle beside the
+        //    leak-safe evidence read.
+        let finding = finding_of_block(&self.pool, cmd.block).await?;
+        let proof = authorize::<AuditAuthority>(&self.pool, self.profile_id, finding).await?;
+        // 2. Correlation integrity — additive to the authorization above, before any mutation.
+        self.check_act_invocation(cmd.act.invocation).await?;
+
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
+            authorship: cmd.act.authorship,
+        };
+        // 3. WRITE. Append-only: `_project_citation_audited` inserts a new row and supersedes
+        //    nothing, so a later verdict never erases an earlier one.
+        let audit = writes::record_citation_audit_with(
+            &self.pool,
+            writes::CitationAuditParams {
+                block: cmd.block,
+                source: cmd.source,
+                value: cmd.value,
+                reason: cmd.reason.as_deref(),
+                emitter,
+            },
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
+
+        // 4. TICK. Set 5 spec §4.3 CONFORMs to `tick_resource_standing`'s established policy
+        //    verbatim, including **never fail the write**: the audit has committed and the memo is a
+        //    write-cost optimization over it, so a refresh failure is logged and swallowed there.
+        //    The finding comes from `proof.subject()`, not from a second lookup — reading the scope
+        //    back out of the sealed proof is the whole point of it carrying one.
+        self.tick_resource_standing(proof.subject()).await;
+
+        Ok(CommandOutput::new(audit))
     }
 
     /// Upserts the clustering `facet` property (`kb_properties`) on a resource — one row holding the

@@ -24,9 +24,9 @@ use temper_core::types::materialize::MaterializeAck;
 use super::commands::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, CloseInvocation,
     CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
-    ReweightRelationship, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
-    UpdateResource,
+    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+    RetypeRelationship, ReweightRelationship, SearchResources, SetFacet, ShowResource,
+    StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
 use super::surface::Surface;
@@ -118,6 +118,20 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<EdgeId>, TemperError>;
+
+    // ── citation audits (Set 5) ──
+    // An auditor's signed defensibility verdict on ONE `(block, source)` citation. Returns the new
+    // `kb_citation_audits.id`.
+
+    /// Record a citation audit. Unlike every other authored write on this trait, the gate is
+    /// **readability of the audited finding plus NOT having authored it** — a deliberate widening
+    /// (an auditor that may only assess findings it owns is not an auditor) with a self-audit
+    /// denial arm, per spec §7. The finding is derived from [`RecordCitationAudit::block`]; the
+    /// command cannot name it.
+    async fn record_citation_audit(
+        &self,
+        cmd: RecordCitationAudit,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
 
     // ── facet writes (T1 Sequence B — facet_set vertical slice) ──
     // Upserts a typed property row (`kb_properties`) on a resource. Returns the property id.

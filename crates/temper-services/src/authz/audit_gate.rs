@@ -75,14 +75,6 @@ use crate::error::{ApiError, ApiResult};
 /// (`20260723000010_citation_audits.sql:119`) — and refuses an unknown block with
 /// [`ApiError::NotFound`], the same dialect [`AuditAuthority::denial`] uses, so "no such block" and
 /// "a block on a finding you may not audit" are indistinguishable to the caller.
-#[cfg_attr(
-    not(all(test, feature = "test-db")),
-    expect(
-        dead_code,
-        reason = "Task 6 ships the gate; Task 7's backend command and Task 8's handler are its \
-                  only callers and land next. Delete this attribute when the first one wires it."
-    )
-)]
 pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult<ResourceId> {
     let resource = sqlx::query_scalar!(
         "SELECT resource_id FROM kb_content_blocks WHERE id = $1",
@@ -99,14 +91,6 @@ pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult
 /// One admitting arm and two denials. The denials are named arms, never an absence and never an
 /// `Err` out of `resolve` — an error short-circuits `authorize` before [`ScopedAuthority::denial`]
 /// runs, which would bypass this domain's chosen refusal dialect (`mod.rs:69-74`).
-#[cfg_attr(
-    not(all(test, feature = "test-db")),
-    expect(
-        dead_code,
-        reason = "Task 6 ships the gate; Task 7's backend command and Task 8's handler are its \
-                  only callers and land next. Delete this attribute when the first one wires it."
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditAuthority {
     /// Can read the finding, and did not author it. **The only arm that admits an audit.**
