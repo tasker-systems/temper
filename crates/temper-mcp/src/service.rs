@@ -257,6 +257,18 @@ impl TemperMcpService {
         tools::relationships::fold_relationship(self, input).await
     }
 
+    #[tool(
+        description = "Record an auditor's signed defensibility verdict on one (block, source) citation of a finding. The value spans [-1.0, 1.0]: assess how much this source supports the specific connection the citation claims — never whether the underlying claim is true, and never what the source itself says. A strongly negative value expresses that the source does not carry the connection made here, without asserting what the source does say; a positive value reinforces the citation. Only Resource-kind sources are auditable. Append-only: a later verdict never erases an earlier one."
+    )]
+    async fn record_citation_audit(
+        &self,
+        Parameters(input): Parameters<tools::citation_audits::RecordCitationAuditInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::citation_audits::record_citation_audit(self, input).await
+    }
+
     #[tool(description = "Set a facet (typed property) on a resource — the steward's facet act")]
     async fn facet_set(
         &self,
