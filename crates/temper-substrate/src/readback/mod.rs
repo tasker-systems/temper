@@ -130,10 +130,41 @@ pub struct ListRow {
 /// invariant (event-sourced backfill collapses timestamps to synthesis time); the row set + projected
 /// fields are.
 ///
-/// Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the module-level note.
+/// The one Rust-callable spelling of "can `principal` see `resource`?", under `resources_visible_to`.
+///
+/// This exists so `ensure_visible` (below — private, so deliberately not an intra-doc link from a
+/// public item) and Task 6's authorization gate ask the identical
+/// question instead of two independent restatements that could drift apart silently. It is also the
+/// predicate the SQL side already treats as canonical for a profile principal:
+/// `resources_readable_by('profile', p)` — the gate `resource_standing_shape` runs
+/// (`20260724000120_standing_citation_components.sql:326`) — delegates to `resources_visible_to`
+/// for the `'profile'` arm (`20260712000010_context_read_predicates.sql:419`), so calling
+/// `resources_visible_to` directly here is equivalent for the profile principal, and is the
+/// incumbent Rust-callable form.
+///
+/// Runtime `sqlx::query_scalar` (NOT the `query!` macro) — see the module-level note.
+pub async fn is_resource_visible(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+) -> Result<bool> {
+    // `resources_visible_to` and its nested `profile_effective_teams`/`team_ancestors` resolve their
+    // unqualified references against the connection search_path (`public` — the one schema), so no
+    // per-txn `SET LOCAL`.
+    let visible: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
+    )
+    .bind(principal)
+    .bind(resource)
+    .fetch_one(pool)
+    .await?;
+    Ok(visible)
+}
+
 /// WS2 consumer-axis gate for single-resource reads: error unless `new_id` is visible to
-/// `principal` under `resources_visible_to`. The set reads (`list`/`fts_search`/
-/// `vector_search`/`neighbors`) instead JOIN the function directly (a set can't be pre-checked).
+/// `principal` under `resources_visible_to` (delegates the check itself to
+/// [`is_resource_visible`]). The set reads (`list`/`fts_search`/`vector_search`/`neighbors`) instead
+/// JOIN the function directly (a set can't be pre-checked).
 ///
 /// Returns a TYPED [`ReadbackError`]: [`ReadbackError::NotVisible`] when the principal can't see the
 /// resource (the caller maps it to 404 — denying existence, never 403, no existence-leak oracle,
@@ -145,16 +176,7 @@ async fn ensure_visible(
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<(), ReadbackError> {
-    // `resources_visible_to` and its nested `profile_effective_teams`/`team_ancestors` resolve their
-    // unqualified references against the connection search_path (`public` — the one schema), so no
-    // per-txn `SET LOCAL`.
-    let visible: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
-    )
-    .bind(principal)
-    .bind(new_id)
-    .fetch_one(pool)
-    .await?;
+    let visible = is_resource_visible(pool, principal, new_id).await?;
     if visible {
         Ok(())
     } else {
@@ -893,16 +915,27 @@ pub async fn anchor_shape(
         .collect())
 }
 
-/// One finding's evidential-standing shape, as returned by `resource_standing_shape` (Set 3,
-/// migration `20260721000010`). Substrate-local: the `temper-services` wrapper maps this to the
+/// One finding's evidential-standing shape, as returned by `resource_standing_shape` (Set 5,
+/// migration `20260724000120`, replacing Set 3's single `indep_breadth` scalar with three citation-
+/// grain axes — spec §3.1). Substrate-local: the `temper-services` wrapper maps this to the
 /// `StandingShape` wire type (Phase C, later PR). Standing is shape-primary (spec §1.1) — `band` is
 /// a lossy read-time chip carried WITH the shape, never in place of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandingShapeRow {
     pub finding_id: ResourceId,
-    pub indep_breadth: f64,
-    pub adversarial_survival: f64,
-    pub challenge_count: i32,
+    /// Findability axis (spec §3.1): count of DISTINCT LIVE cited sources. Monotone — citing more
+    /// evidence never lowers it. NOT `r_parent`, which counts every provenance row including
+    /// duplicates of the same source.
+    pub citation_magnitude: i32,
+    /// Evaluated-ness axis (spec §3.1): count of those distinct sources carrying at least one
+    /// citation audit. Monotone under the append-only audit trail — once a source is audited it
+    /// stays covered.
+    pub audit_coverage: i32,
+    /// Quality axis (spec §3.1): the mean, over the AUDITED SUBSET ONLY, of each audited source's
+    /// decay-weighted audit value, in `[-1.0, 1.0]`. `0.0` when `audit_coverage == 0` — an
+    /// unaudited finding makes no quality claim; its low standing comes from the band gate, not a
+    /// poisoned mean.
+    pub citation_quality: f64,
     pub contradiction_balance: f64,
     pub freshness: f64,
     pub r_parent: f64,
@@ -923,7 +956,7 @@ pub async fn resource_standing(
     finding: ResourceId,
 ) -> Result<Option<StandingShapeRow>> {
     let row = sqlx::query(
-        "SELECT finding_id, indep_breadth, adversarial_survival, challenge_count,
+        "SELECT finding_id, citation_magnitude, audit_coverage, citation_quality,
                 contradiction_balance, freshness, r_parent, band
            FROM resource_standing_shape($1, 'profile', $2)",
     )
@@ -934,9 +967,9 @@ pub async fn resource_standing(
 
     Ok(row.map(|r| StandingShapeRow {
         finding_id: r.get("finding_id"),
-        indep_breadth: r.get("indep_breadth"),
-        adversarial_survival: r.get("adversarial_survival"),
-        challenge_count: r.get("challenge_count"),
+        citation_magnitude: r.get("citation_magnitude"),
+        audit_coverage: r.get("audit_coverage"),
+        citation_quality: r.get("citation_quality"),
         contradiction_balance: r.get("contradiction_balance"),
         freshness: r.get("freshness"),
         r_parent: r.get("r_parent"),

@@ -16,12 +16,66 @@ use temper_services::services::evidential_standing_service::resource_evidence;
 
 mod common;
 
+/// Give `finding` one live resource-kind citation: a body block, a cited resource, and the
+/// `kb_block_provenance` row that joins them — the exact three rows `resource_live_citations`
+/// walks. Returns the cited source's id.
+///
+/// Raw inserts, mirroring the sibling fixture in `citation_audit_handler_test.rs:37-100` (this
+/// crate's test files each carry their own fixtures; `common::seed_resource` deliberately seeds no
+/// content block). The contributing event is borrowed from the scaffold — nothing under test reads
+/// it, and `resource_citation_magnitude` never looks at `contributed_by_event_id`.
+async fn cite_one_source_on(pool: &PgPool, finding: Uuid) -> Uuid {
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .expect("the context scaffold seeded an event");
+    let block = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_content_blocks (id, resource_id, seq, genesis_event_id, last_event_id) \
+         VALUES ($1, $2, 0, $3, $3)",
+    )
+    .bind(block)
+    .bind(finding)
+    .bind(event)
+    .execute(pool)
+    .await
+    .expect("insert block");
+
+    let source = Uuid::now_v7();
+    sqlx::query("INSERT INTO kb_resources (id, title, origin_uri) VALUES ($1, $2, $3)")
+        .bind(source)
+        .bind("Cited Source")
+        .bind(format!("test://{source}"))
+        .execute(pool)
+        .await
+        .expect("insert cited source");
+    sqlx::query(
+        "INSERT INTO kb_block_provenance \
+             (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+         VALUES ($1, 'resource', $2, $3, 0)",
+    )
+    .bind(block)
+    .bind(source)
+    .bind(event)
+    .execute(pool)
+    .await
+    .expect("cite the source on the block");
+
+    source
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn readable_finding_returns_full_shape(pool: PgPool) {
     // A profile-owned context + goal: the goal is readable by its owner
     // (`resources_readable_by('profile', owner)` = `resources_visible_to(owner)`, which admits
     // profile-owned homes). `n = 0` → the goal only, no child tasks.
     let (owner, _ctx, goal) = common::seed_context_with_goal_and_tasks(&pool, 0).await;
+    // ONE live resource-kind citation. Without it every numeric component of this shape is zero,
+    // and the assertions below hold just as well against producers that return a constant — which
+    // is what they used to do: `citation_magnitude` was not asserted at all, and `audit_coverage`,
+    // `band` and an `is_finite()` on `citation_quality` all pass against a hardcoded zero shape.
+    // A seeded citation makes `citation_magnitude == 1` a value only a real computation produces.
+    cite_one_source_on(&pool, goal).await;
 
     let shape = resource_evidence(&pool, owner, goal)
         .await
@@ -29,18 +83,33 @@ async fn readable_finding_returns_full_shape(pool: PgPool) {
 
     // The shape describes the requested finding and carries the band chip WITH it.
     assert_eq!(shape.finding_id, ResourceId::from(goal), "shape: {shape:?}");
-    // A finding with no emitted evidence has zeroed components and the lowest band.
-    assert_eq!(shape.challenge_count, 0, "no challenges yet: {shape:?}");
+    assert_eq!(
+        shape.citation_magnitude, 1,
+        "the one seeded live resource-kind citation is counted — a constant producer reds here: \
+         {shape:?}"
+    );
+    assert_eq!(
+        shape.r_parent, 1.0,
+        "and the same provenance row is counted by r_parent, which is a DIFFERENT producer over \
+         the same rows: {shape:?}"
+    );
+    // Cited but unaudited: the axes are independent, and this is the state the auditor's queue
+    // exists to clear.
+    assert_eq!(
+        shape.audit_coverage, 0,
+        "nobody has audited that citation yet: {shape:?}"
+    );
+    assert_eq!(
+        shape.citation_quality, 0.0,
+        "an unaudited finding makes no quality claim — neutral 0.0, not a negative prior: {shape:?}"
+    );
     assert_eq!(
         shape.band, "provisional",
-        "a no-evidence finding bands provisional: {shape:?}"
+        "cited, unaudited, uncontradicted: the floor: {shape:?}"
     );
-    // Every numeric component is present (non-NaN) — `band` is a lossy summary OVER these.
-    assert!(shape.indep_breadth.is_finite(), "shape: {shape:?}");
-    assert!(shape.adversarial_survival.is_finite(), "shape: {shape:?}");
+    // The remaining numeric components are present (non-NaN) — `band` is a lossy summary OVER these.
     assert!(shape.contradiction_balance.is_finite(), "shape: {shape:?}");
     assert!(shape.freshness.is_finite(), "shape: {shape:?}");
-    assert!(shape.r_parent.is_finite(), "shape: {shape:?}");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

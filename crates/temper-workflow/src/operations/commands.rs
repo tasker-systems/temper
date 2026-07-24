@@ -14,7 +14,8 @@ use serde_json::Value;
 use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
+use temper_core::types::ids::{BlockId, CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
+use temper_core::types::provenance::ProvenanceSource;
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -170,6 +171,41 @@ pub struct AnnotateResource {
     pub origin: Surface,
 }
 
+/// Record an auditor's signed defensibility verdict on ONE `(block, source)` citation (Set 5,
+/// spec §4.1). The write is **append-only**: the projector inserts a new `kb_citation_audits` row
+/// with no supersession, so a later `+1.0` never erases an earlier `-1.0`.
+///
+/// **Block-addressed, and deliberately carries no finding id.** The authorization subject — the
+/// block's owning finding — is derived server-side from `block`. Letting a caller name a finding
+/// alongside the block would let it authorize over a finding it may read while writing onto a
+/// block of one it may not; the sealed authority proof exists to stop exactly that transposition
+/// (`temper-services/src/authz/audit_gate.rs:65-77`, which also states that this command and the
+/// HTTP surface share one spelling of the lookup).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecordCitationAudit {
+    /// The audited citation's block (`kb_content_blocks.id`).
+    pub block: BlockId,
+    /// The cited source being assessed. Only `Resource`-kind citations are auditable — standing
+    /// reads only resource-kind bases, so the SQL entry refuses anything else at the write path
+    /// rather than letting it land as a silent no-op
+    /// (`migrations/20260724000110_citation_audits.sql:123-126`).
+    pub source: ProvenanceSource,
+    /// The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the
+    /// connection it makes, never a claim about what the source says (spec §3.3/§3.4). The ledger
+    /// column carries the same bound as a CHECK
+    /// (`migrations/20260724000110_citation_audits.sql:28`).
+    pub value: f64,
+    /// Optional free-text rationale, recorded on the ledger row.
+    pub reason: Option<String>,
+    /// Per-act correlation + authorship — stamps the authored `citation_audited` act. Empty by
+    /// default; correlation never authorizes the write. The auditor's own confidence rides here
+    /// (→ `kb_events.metadata`) and never the payload: only the signed `value` moves standing
+    /// (spec §4.2's self-grading prohibition, `temper-substrate/src/writes.rs:538-541`).
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
+    pub origin: Surface,
+}
+
 /// Delete a resource. In the cloud-first model this is a soft-delete on the
 /// server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -318,6 +354,54 @@ pub struct StewardDispatchTick {
     pub origin: Surface,
 }
 
+/// Compose one deterministic citation-auditor dispatch pass (Set 5, spec §6.1): reap stale jobs,
+/// sweep the principal's cogmap-homed findings with incomplete audit coverage
+/// (`audit_drift_sweep`), group those findings **by cogmap**, enqueue one job per cogmap carrying
+/// its finding list, and claim up to that many jobs for fan-out. Returns the claimed jobs — the
+/// caller starts one isolated session per job, and each session iterates its job's findings.
+///
+/// The grouping is not an optimization. The queue enforces single-flight on
+/// `(cogmap_id, persona, dispatch_type)`
+/// (`migrations/20260705000001_workflow_jobs.sql:43-45`), so a per-finding enqueue would create one
+/// job and let `ON CONFLICT DO NOTHING` silently discard every sibling finding in the same map.
+///
+/// `cap` is a **finding** budget (`audit_drift_sweep`'s `p_limit`), resolved through
+/// `clamp_auditor_cap` — `DEFAULT_AUDITOR_DISPATCH_CAP` when omitted, clamped into
+/// `[1, MAX_AUDITOR_DISPATCH_CAP]` when supplied. `correlation` is the auditor cron's
+/// `x-auditor-correlation-id`, stamped onto every job this tick claims exactly as the steward's is;
+/// optional and provenance-only.
+///
+/// **The tick is gated on the caller being a registered, unrevoked machine principal**, and the
+/// claim it performs is scoped to the caller's reachable cogmaps (spec §6.5). Without both, an
+/// ordinary account could run this endpoint and receive other principals' `cogmap_id`s and finding
+/// lists while taking their jobs out of the queue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditorDispatchTick {
+    pub cap: Option<i64>,
+    pub correlation: Option<CorrelationId>,
+    pub origin: Surface,
+}
+
+/// Mark this cogmap's active citation-audit job done — the auditor session's last act.
+///
+/// The steward has no equivalent command because its completion rides its watermark advance
+/// (`advance_steward_watermark` calls `workflow_job_complete` itself: a clean watermark advance IS
+/// steward-run completion). The auditor advances no watermark, so without an explicit completion its
+/// job would simply sit `in_progress` until `workflow_job_reap` expired the lease and re-queued it —
+/// dispatching the SAME cogmap up to `max_attempts` times
+/// (`migrations/20260705000001_workflow_jobs.sql:110-128`) and appending a duplicate verdict per
+/// re-run, since the audit trail is append-only.
+///
+/// Completes **only the caller's own in-flight job** (spec §6.5): a `pending` job that has never
+/// been dispatched is untouchable, and so is another session's `in_progress` one. A no-op returning
+/// `None` when nothing of the caller's is in flight — a manual audit outside the dispatch loop, an
+/// already-completed job, or a reaped lease.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompleteAuditorJob {
+    pub cogmap: CogmapId,
+    pub origin: Surface,
+}
+
 /// Re-materialize an anchor's regions when its formation delta since the last materialize clears
 /// `threshold` (T4b) — the cron-invokable trigger for the substrate's own (deterministic,
 /// non-authored) region-formation cadence. Gated on write of the anchor
@@ -444,6 +528,23 @@ mod tests {
         };
         let s = serde_json::to_string(&cmd).unwrap();
         assert_eq!(serde_json::from_str::<AssertRelationship>(&s).unwrap(), cmd);
+    }
+
+    #[test]
+    fn record_citation_audit_command_round_trips() {
+        let cmd = RecordCitationAudit {
+            block: BlockId::new(),
+            source: ProvenanceSource::Resource(uuid::Uuid::now_v7()),
+            value: -0.75,
+            reason: Some("the source does not support the connection".to_string()),
+            act: Default::default(),
+            origin: Surface::Mcp,
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RecordCitationAudit>(&s).unwrap(),
+            cmd
+        );
     }
 
     #[test]

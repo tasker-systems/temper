@@ -1,5 +1,6 @@
 lib/temper/generated.rb
 lib/temper/generated/api/access_api.rb
+lib/temper/generated/api/auditor_api.rb
 lib/temper/generated/api/cognitive_maps_api.rb
 lib/temper/generated/api/contexts_api.rb
 lib/temper/generated/api/events_api.rb
@@ -35,6 +36,10 @@ lib/temper/generated/models/atlas_edge.rb
 lib/temper/generated/models/atlas_home.rb
 lib/temper/generated/models/atlas_node.rb
 lib/temper/generated/models/atlas_subgraph.rb
+lib/temper/generated/models/audit_sweep_row.rb
+lib/temper/generated/models/auditor_dispatch_tick_request.rb
+lib/temper/generated/models/auditor_dispatch_tick_response.rb
+lib/temper/generated/models/auditor_job_complete_ack.rb
 lib/temper/generated/models/bind_team_outcome.rb
 lib/temper/generated/models/bind_team_request.rb
 lib/temper/generated/models/block_provenance_row.rb
@@ -46,6 +51,8 @@ lib/temper/generated/models/bulk_reassign_request.rb
 lib/temper/generated/models/change_role_request.rb
 lib/temper/generated/models/charter_block.rb
 lib/temper/generated/models/charter_disposition.rb
+lib/temper/generated/models/citation_audit_request.rb
+lib/temper/generated/models/claimed_audit_job.rb
 lib/temper/generated/models/claimed_job.rb
 lib/temper/generated/models/close_invocation_request.rb
 lib/temper/generated/models/cogmap_analytics_row.rb

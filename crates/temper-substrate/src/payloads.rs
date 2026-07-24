@@ -868,6 +868,36 @@ pub struct BlockProvenanceCorrected {
     pub scar: String,
 }
 
+/// Payload for `citation_audited` (Set 5, spec §4.1-4.2) — an auditor's signed verdict on one
+/// `(block, source)` citation, appended to the immutable `kb_citation_audits` trail. No
+/// supersession: a later audit never overwrites an earlier one, even an opposite-signed one
+/// (spec §4.1).
+///
+/// `source` is the plain typed [`ProvenanceSource`], exactly like [`BlockProvenanceCorrected`]
+/// above. Its derived `#[serde(tag = "kind", content = "value")]` shape is what
+/// `_project_citation_audited` reads (`#>> '{source,kind}'` / `#>> '{source,value}'`), which is
+/// in turn the shape `_insert_block_provenance` has always read
+/// (`20260704000003_block_provenance_write_path.sql:29-30`). One spelling of a citation source
+/// across Rust and SQL, so the two cannot drift.
+///
+/// `value` is the signed defensibility verdict, constrained to `[-1.0, 1.0]` by the table's CHECK
+/// — the range is enforced in SQL, not here, so every writer (Rust, MCP, a future direct caller)
+/// is held to it rather than only the ones that go through this struct.
+///
+/// Registered **permissive** (NULL `payload_schema`), like `block_provenance_annotated`: a
+/// post-canonical-seed event added by migration `20260724000110`, so it is NOT in
+/// [`TYPED_EVENT_NAMES`] and gets no committed JSON-Schema snapshot. Validated Rust-side through
+/// [`verify_ledger_roundtrip`] instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct CitationAudited {
+    pub block_id: BlockId,
+    pub source: ProvenanceSource,
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 // ── invocation envelope + agent-authorship payloads ─────────────────────────
 
 // Per-act agent-authorship metadata — the canonical home is now `temper_core::types::authorship`
@@ -1121,6 +1151,12 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "block_provenance_annotated" => {
                     serde_json::from_value::<BlockProvenanceAnnotated>(r.payload.clone())?;
+                }
+                // citation_audited (Set 5, spec §4.1-4.2): the auditor write path
+                // (`writes::record_citation_audit`) has a real emitter now, same posture as
+                // block_provenance_annotated above.
+                "citation_audited" => {
+                    serde_json::from_value::<CitationAudited>(r.payload.clone())?;
                 }
                 // Admin-ledger events (spec 2026-07-16): the epoch marker and the grant chokepoint's
                 // SQL-built payloads. These have write paths now (migrations 20260717000020 /

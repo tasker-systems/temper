@@ -1,16 +1,20 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT cogmap_scope_ids($1, $2)",
+  "query": "SELECT block_append($1,$2,$3,$4,$5,$6)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "cogmap_scope_ids",
+        "name": "block_append",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
+        "Jsonb",
+        "Jsonb",
+        "Uuid",
+        "Jsonb",
         "Uuid",
         "Uuid"
       ]
@@ -19,5 +23,5 @@
       null
     ]
   },
-  "hash": "ffd88e5774e8fe02e8a31525461d4ec3184fd73753157bee8e27a92c13ca7bb0"
+  "hash": "bb6cd7641b29e323511bb52ab15a6c3f71c1b6dfd8cfc19c4d39754e6f2d2be1"
 }

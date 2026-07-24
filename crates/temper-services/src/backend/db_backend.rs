@@ -8,6 +8,9 @@
 //! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
 //! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
 
+use crate::authz::{
+    authorize, citation_subject, require_machine_principal, AuditAuthority, AuditorJobAuthority,
+};
 use crate::backend::region_clocks;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -34,11 +37,12 @@ use temper_core::types::reconcile::{
 use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, BodyUpdate,
-    CloseInvocation, CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource,
-    FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, OpenInvocation,
-    ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
-    SearchResources, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
+    BodyUpdate, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, ListResources,
+    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+    ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
+    SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -1205,7 +1209,8 @@ impl DbBackend {
         }
     }
 
-    /// Tick the evidential-standing memo after a resource write (Set 3, Phase B). Recomputes the
+    /// Tick the evidential-standing memo after a resource write (Set 3, Phase B) or a citation-audit
+    /// write (Set 5, spec §4.3 — which CONFORMs to this policy verbatim). Recomputes the
     /// touched finding's standing components and UPSERTs its `kb_resource_standing` memo row via the
     /// shipped SQL (Task 5's [`temper_substrate::write::refresh_resource_standing`]).
     ///
@@ -1214,23 +1219,31 @@ impl DbBackend {
     /// memo stays stale only until the next write over this finding re-drives it. Escalating would trade
     /// a self-healing staleness for a user-visible 500.
     ///
-    /// **What the read actually recomputes live.** `resource_standing_shape` recomputes FIVE of the six
-    /// components from live rows at read (`r_parent`, `contradiction_balance`, `adversarial_survival`,
-    /// `challenge_count`, `freshness`), so for those the `kb_resource_standing` memo is a write-cost
-    /// optimization + parity anchor, never the read's authority. The exception is `indep_breadth`:
-    /// `resource_independence_breadth` sums the `kb_independence_pairs` memo, and that pairs memo is
-    /// (re)built ONLY here (via `refresh_independence_pairs` inside the shipped SQL), NOT at read and NOT
-    /// on edge writes. So an `independent-of` edge asserted/folded among a finding's bases would leave
-    /// `indep_breadth` stale until the next resource create/update over that finding re-drives it.
+    /// **What the read actually recomputes live.** `resource_standing_shape` recomputes ALL SIX
+    /// components from live rows at read — it calls one component function per column and reads
+    /// `kb_resource_standing` for nothing (`20260724000120_standing_citation_components.sql:319-341`).
+    /// The memo is therefore a write-cost optimization + parity anchor, never the read's authority.
     ///
-    /// Why that is safe in Set 3, and what Set 5 owes. Wired onto the resource create/update paths only,
-    /// NOT the edge paths (`assert_relationship` / `fold_relationship`). Set 3 ships NO `independent-of`
-    /// edge writer (that is Set 5's), so `kb_independence_pairs` is always empty today and `indep_breadth`
-    /// is always the live silence-default — the staleness above is unreachable, not merely rare. The
-    /// deferral of edge-incident refresh is therefore correct now but conditional:
-    /// **TODO(Set 5): when the independence/scar edge writer lands, it MUST drive edge-incident
-    /// `refresh_independence_pairs` (both resource endpoints) — or `indep_breadth` will read stale after
-    /// an independence-edge assert/fold.**
+    /// **The Set 3 `TODO(Set 5)` dissolved; a narrower warning replaces it, and is not deleted.**
+    /// This doc used to warn that `indep_breadth` summed the `kb_independence_pairs` memo — rebuilt
+    /// only here, never at read and never on edge writes — so an `independent-of` edge assert/fold
+    /// would leave it stale, and Set 5's edge writer would owe an edge-incident refresh. That debt is
+    /// gone rather than paid: `kb_independence_pairs`, `refresh_independence_pairs` and
+    /// `resource_independence_breadth` are dropped (`…citation_components.sql:80-84`), breadth is now
+    /// `citation_magnitude` / `audit_coverage` / `citation_quality` read from live citations and the
+    /// append-only audit trail, and no edge write can make any of the three stale (spec §3.4).
+    ///
+    /// **What did NOT change.** `contradiction_balance` is untouched by Set 5 and still sums
+    /// `kb_edges` (`20260721000010_evidential_standing_memo.sql:156-164`), while this clock still
+    /// fires only on resource create/update and on the citation-audit write — never on
+    /// `assert_relationship` / `retype` / `reweight` / `fold_relationship`. So the
+    /// `kb_resource_standing.contradiction_balance` **column** is stale after an edge write until the
+    /// next of those writes over the finding re-drives it. That is harmless **only** because the read
+    /// recomputes it live and never trusts the column, exactly as it does for `freshness`. Hence the
+    /// standing obligation, which replaces the discharged TODO rather than removing it:
+    /// **any future consumer that reads `kb_resource_standing` directly instead of calling
+    /// `resource_standing_shape` must FIRST wire an edge-incident refresh for
+    /// `contradiction_balance` (both edge endpoints).**
     async fn tick_resource_standing(&self, finding: ResourceId) {
         match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
             Ok(()) => tracing::debug!(
@@ -1254,6 +1267,18 @@ impl DbBackend {
     /// This is ADDITIVE to the act's own write authz (`can_modify`, context-owner resolution) — it never
     /// authorizes the write, it only guards the *correlation claim*. An act with no invocation skips it
     /// entirely (a one-off attributed act, or a human at the same tools, is fully valid).
+    ///
+    /// **KNOWN GAP, pre-existing and now wider: readability is not ownership.** The predicate is
+    /// "can the caller read the invocation's originating cogmap", not "did the caller open it", so
+    /// any reader of that cogmap may stamp its own act into ANOTHER principal's open envelope. Only
+    /// `kb_events.emitter_entity_id` still separates the two, and that lives on the event, not on the
+    /// envelope. This has been true of every authored write since invocations existed; Set 5 makes it
+    /// reach **citation audits**, where spec §5.4 leans on the envelope for the auditor's
+    /// accountability — a forged audit inside the auditor's live run is not distinguishable from the
+    /// auditor's own without walking each act's emitter. Closing it means keeping the opener on
+    /// `kb_invocations` (there is no such column) and gating on it; that is a schema change on a
+    /// shipped, cross-cutting path and is out of Set 5's scope, so it is recorded here rather than
+    /// implied by the doc above.
     async fn check_act_invocation(
         &self,
         invocation: Option<InvocationId>,
@@ -2026,6 +2051,135 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
+    /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.3).
+    ///
+    /// **Authorization lives HERE, not on a surface and not in a service.** This backend is the
+    /// single chokepoint every surface (HTTP, MCP, CLI) funnels through, so a gate placed here
+    /// cannot be forgotten by a new caller — the failure mode a surface-only gate has (`db_backend`'s
+    /// own F1 create-into-cogmap note at `:1258-1262` says the same thing about the same hazard).
+    /// There is exactly ONE `authorize::<AuditAuthority>` for this command in the codebase; a second
+    /// one on the HTTP service would be a double gate free to drift from this one.
+    ///
+    /// The four steps below are ordered, and the order is not stylistic:
+    ///
+    /// 1. **Authorize** — before any mutation (auth before writes), over the finding *derived from
+    ///    the block*. Moving it after the write is a write-then-check; moving it after step 2 would
+    ///    let an unauthorized caller probe invocation existence through the 404/409 split.
+    /// 2. **Correlation integrity** — ADDITIVE to step 1, never a substitute for it. Step 1 asks
+    ///    *may I audit this finding?*; this asks *is the envelope I am claiming open, and mine?*
+    ///    (`Self::check_act_invocation`). Confusing the two is what the `AssertRelationship` doc's
+    ///    *"correlation never authorizes the write"* exists to prevent. Dropping it would let the
+    ///    auditor stamp acts onto a closed or unreadable run.
+    /// 3. **Write** — append-only; the projector never supersedes an earlier verdict.
+    /// 4. **Tick** — the standing memo, AFTER the write, so it recomputes over the landed audit.
+    ///    Ticking earlier would refresh the pre-audit state and leave the memo stale.
+    async fn record_citation_audit(
+        &self,
+        cmd: RecordCitationAudit,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // A caller-fault guard, NOT a gate: `kb_citation_audits.value` carries the same bound as a
+        // CHECK (`20260724000110_citation_audits.sql:28`), which would otherwise reach the caller as
+        // a 500 for what is plainly a bad request. It runs first because it names nothing about the
+        // subject — it leaks nothing an unauthorized caller could not compute unaided — so the
+        // four-step order above is untouched. `contains` also rejects NaN, which no JSON surface can
+        // deliver but the type permits.
+        if !(-1.0..=1.0).contains(&cmd.value) {
+            return Err(TemperError::BadRequest(format!(
+                "citation audit value {} is outside [-1.0, 1.0]",
+                cmd.value
+            )));
+        }
+        // The second caller-fault guard, and it is REQUIRED here rather than optional: only
+        // resource-kind citations are auditable (spec §6.2), and the authorization subject is the
+        // citation — which needs the source's uuid, a thing `ProvenanceSource::Remote` does not
+        // have. So the discrimination happens once, at the command boundary, before a subject can
+        // exist. It also renders the §6.2 rejection as the caller fault it is: the SQL `RAISE` that
+        // used to be the only guard reached the caller as a 500, unlike the range check beside it.
+        // The `RAISE` stays as the backstop for any non-Rust writer.
+        let source_id = match &cmd.source {
+            temper_core::types::provenance::ProvenanceSource::Resource(id) => *id,
+            _ => {
+                return Err(TemperError::BadRequest(
+                    "only resource-kind citations are auditable".to_string(),
+                ))
+            }
+        };
+        // 1. AUTHORIZE. The subject is the CITATION — the block, the source, and the finding the
+        //    block resolves to server-side. The command deliberately carries no finding id, so a
+        //    caller cannot authorize over one finding while writing onto a block of another
+        //    (`authz/audit_gate.rs`, `CitationSubject`). `AuditAuthority` admits a principal that
+        //    can READ the finding and did NOT contribute this citation — the deliberate widening of
+        //    spec §7, narrowed back by the self-audit arm alone; the machine conjunct was removed by
+        //    product decision so a human may audit (`audit_gate.rs`'s module doc carries the
+        //    decision and the open risk it accepts). Both denial arms render `NotFound`, which
+        //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
+        //    existence oracle beside the leak-safe evidence read.
+        let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
+        let proof = authorize::<AuditAuthority>(&self.pool, self.profile_id, subject).await?;
+        // 2. Correlation integrity — additive to the authorization above, before any mutation.
+        self.check_act_invocation(cmd.act.invocation).await?;
+
+        // 2b. The citation must actually exist. `(block, source)` being a live citation is a
+        //    CALLER FAULT when it is not — a transposed source id — so it renders 400, like the
+        //    range and source-kind guards above it, rather than surfacing the SQL `RAISE` as a 500.
+        //    The `RAISE` in `citation_audit` stays as the backstop for any non-Rust writer.
+        //
+        //    DELIBERATELY AFTER `authorize`, not before: this predicate answers "does this citation
+        //    exist?", and answering it for a caller who has not yet proved it may read the finding
+        //    would turn the write path into the existence oracle every denial arm's `NotFound` is
+        //    there to prevent. Authorization first, then caller-fault diagnostics.
+        let is_live: Option<bool> = sqlx::query_scalar!(
+            "SELECT citation_is_live($1, 'resource'::provenance_source_kind, $2)",
+            *cmd.block,
+            source_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if is_live != Some(true) {
+            return Err(TemperError::BadRequest(format!(
+                "(block {}, source {source_id}) is not a live citation",
+                *cmd.block
+            )));
+        }
+
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
+            authorship: cmd.act.authorship,
+        };
+        // 3. WRITE. Append-only: `_project_citation_audited` inserts a new row and supersedes
+        //    nothing, so a later verdict never erases an earlier one.
+        let audit = writes::record_citation_audit_with(
+            &self.pool,
+            writes::CitationAuditParams {
+                block: cmd.block,
+                source: cmd.source,
+                value: cmd.value,
+                reason: cmd.reason.as_deref(),
+                emitter,
+            },
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
+
+        // 4. TICK. Set 5 spec §4.3 CONFORMs to `tick_resource_standing`'s established policy
+        //    verbatim, including **never fail the write**: the audit has committed and the memo is a
+        //    write-cost optimization over it, so a refresh failure is logged and swallowed there.
+        //    The finding comes from `proof.subject()`, not from a second lookup — reading the scope
+        //    back out of the sealed proof is the whole point of it carrying one.
+        self.tick_resource_standing(proof.subject().finding()).await;
+
+        Ok(CommandOutput::new(audit))
+    }
+
     /// Upserts the clustering `facet` property (`kb_properties`) on a resource — one row holding the
     /// whole `values` object. Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter
     /// resolution, gated on the TARGET resource directly (facets have no source/target split).
@@ -2580,6 +2734,137 @@ impl Backend for DbBackend {
         .await?;
 
         Ok(CommandOutput::new(claimed))
+    }
+
+    /// One citation-auditor dispatch pass (Set 5, spec §6.1): reap → sweep → GROUP BY COGMAP →
+    /// enqueue → claim.
+    ///
+    /// Structurally the steward's tick with one extra step, and that step is the whole point. The
+    /// sweep is finding-grained; the queue's single-flight index is cogmap-grained
+    /// (`migrations/20260705000001_workflow_jobs.sql:43-45`). Enqueuing per swept row would create
+    /// the first job per cogmap and let `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` (`:59-62`)
+    /// discard the rest **without an error** — N findings silently becoming 1. So
+    /// `auditor_service::group_by_cogmap` collapses the sweep first, and each cogmap's whole finding
+    /// list rides one job's payload for the session to iterate.
+    ///
+    /// Auth is **two gates, not one**, and the fix wave added both halves for the same reason.
+    ///
+    /// 1. **Who may tick at all.** `require_machine_principal` (private, so a plain span — a public item cannot intra-doc-link one) — only a registered, unrevoked
+    ///    machine principal. The endpoint exists for exactly one caller per persona and the
+    ///    `kb_machine_clients` registration already names it. Without this, any authenticated
+    ///    principal could run the tick.
+    /// 2. **What a tick may claim.** The sweep was already principal-scoped in SQL
+    ///    (`audit_drift_sweep` routes through `steward_candidate_cogmaps` AND `resources_visible_to`),
+    ///    but the CLAIM was not scoped at all — it filtered on `(persona, dispatch_type, status)` and
+    ///    nothing else. So the tick enqueued *this* principal's work and then claimed *anyone's*,
+    ///    handing back each stolen job's `cogmap_id` and full finding-id list and leaving the real
+    ///    auditor's queue empty. `claim_audit` now passes the principal, and
+    ///    `workflow_job_claim` constrains the claimable set through the same
+    ///    `steward_candidate_cogmaps` the sweep uses (`20260724000130_audit_drift_sweep.sql`).
+    ///
+    /// Neither half subsumes the other: gate 1 stops a human running the pipeline, gate 2 stops one
+    /// registered machine reading another tenant's work.
+    async fn auditor_dispatch_tick(
+        &self,
+        cmd: AuditorDispatchTick,
+    ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError> {
+        use crate::services::{auditor_service, workflow_job_service};
+        use temper_core::types::workflow_job::{clamp_auditor_cap, DEFAULT_AUDITOR_LEASE_SECONDS};
+
+        // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it.
+        require_machine_principal(&self.pool, self.profile_id).await?;
+
+        // 1. Reap stale leases (crashed runs → retry/dead) before claiming. Shared with the steward
+        //    tick — the reaper is persona-agnostic, exactly as the queue is.
+        workflow_job_service::reap(&self.pool, "lease expired").await?;
+
+        // 2. Deterministic, principal-scoped sweep over cogmap-homed findings with incomplete
+        //    audit coverage, most-uncovered-first.
+        let drifted = auditor_service::drift_sweep(&self.pool, self.profile_id, cmd.cap).await?;
+
+        // 3. Collapse finding grain → queue grain, then enqueue ONE job per cogmap carrying its
+        //    finding list. Already-active maps skip via the in-flight index.
+        for work in auditor_service::group_by_cogmap(&drifted) {
+            let payload = serde_json::to_value(&work.payload).map_err(|e| {
+                crate::error::ApiError::Internal(format!(
+                    "citation-audit job payload for cogmap {} is not serializable: {e}",
+                    work.cogmap_id
+                ))
+            })?;
+            workflow_job_service::enqueue_with_payload(
+                &self.pool,
+                work.cogmap_id,
+                Persona::Auditor.as_str(),
+                DispatchType::CitationAudit.as_str(),
+                payload,
+            )
+            .await?;
+        }
+
+        // 4. Claim for fan-out, stamping this tick's correlation onto each claimed row exactly as
+        //    the steward tick does — `invocation_open` inherits it, so an auditor session's
+        //    invocation joins back to its tick with nothing asked of the agent.
+        //
+        //    The claim limit is `cap` — the SAME number the sweep took as its finding budget, reused
+        //    rather than made a second knob. It can never truncate this tick's own work (grouping
+        //    only ever collapses, so jobs <= findings <= cap), and reusing it means a tick whose
+        //    sweep came back empty still drains jobs a previous, cap-limited tick left pending.
+        //    `clamp_auditor_cap` is what keeps the reuse honest: an unclamped `cap` reached
+        //    `LIMIT` as an i64-to-i32 WRAP (2147483648 → -2147483648 → a Postgres error surfacing as
+        //    a 500 from user input), and a large positive one was the amplifier for the claim's
+        //    missing scoping.
+        let limit = clamp_auditor_cap(cmd.cap);
+        let claimed = workflow_job_service::claim_audit(
+            &self.pool,
+            Persona::Auditor.as_str(),
+            DispatchType::CitationAudit.as_str(),
+            limit,
+            DEFAULT_AUDITOR_LEASE_SECONDS,
+            cmd.correlation,
+            self.profile_id,
+        )
+        .await?;
+
+        Ok(CommandOutput::new(claimed))
+    }
+
+    /// Complete the cogmap's active citation-audit job — the auditor session's last act (spec §6.5).
+    ///
+    /// AUTH BEFORE WRITE, through the policy layer like every other Set 5 decision:
+    /// `AuditorJobAuthority` (`authz/audit_gate.rs` — private, hence a plain span), whose arms, probes and `NotFound` dialect are
+    /// named there. It replaced a hand-rolled `anchor_readable_by_profile` lookup inlined here — the
+    /// one Set 5 gate that was not a `ScopedAuthority`, and therefore the one the spec never
+    /// reviewed.
+    ///
+    /// **The gate is coarse on purpose and the effect is precise.** The gate answers "may you speak
+    /// about this cogmap's auditor queue?"; the *claim* check lives in
+    /// `workflow_job_complete_claimed`, which transitions only a row that is `in_progress` **and**
+    /// `claimed_by_profile_id = this principal`. That split is what makes "there is no job for you"
+    /// a no-op rather than a refusal — a manual audit outside the dispatch loop, an
+    /// already-completed job and a reaped lease are all legitimate — while still closing both abuses
+    /// the shipped `workflow_job_complete` allowed: terminating a never-dispatched `pending` job
+    /// (indefinite suppression of a cogmap's auditing) and freeing another session's in-flight slot
+    /// (duplicate concurrent audit sessions appending to a trail that cannot retract).
+    ///
+    /// `None` therefore means "nothing of yours was in flight". Not an error: the session's written
+    /// verdicts stand either way.
+    async fn complete_auditor_job(
+        &self,
+        cmd: CompleteAuditorJob,
+    ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
+        let proof =
+            authorize::<AuditorJobAuthority>(&self.pool, self.profile_id, cmd.cogmap).await?;
+
+        let completed = crate::services::workflow_job_service::complete_claimed(
+            &self.pool,
+            *proof.subject(),
+            Persona::Auditor.as_str(),
+            DispatchType::CitationAudit.as_str(),
+            self.profile_id,
+        )
+        .await?;
+
+        Ok(CommandOutput::new(completed))
     }
 
     /// Re-materialize a cogmap's regions when its formation delta clears the threshold (T4b). AUTH

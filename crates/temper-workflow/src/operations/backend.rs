@@ -22,11 +22,11 @@ use temper_core::types::ingest::{
 use temper_core::types::materialize::MaterializeAck;
 
 use super::commands::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, CloseInvocation,
-    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
-    ReweightRelationship, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
-    UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+    CloseInvocation, CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource,
+    FoldRelationship, ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+    RecordCitationAudit, RetypeRelationship, ReweightRelationship, SearchResources, SetFacet,
+    ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
 use super::surface::Surface;
@@ -119,6 +119,20 @@ pub trait Backend: Send + Sync {
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<EdgeId>, TemperError>;
 
+    // ── citation audits (Set 5) ──
+    // An auditor's signed defensibility verdict on ONE `(block, source)` citation. Returns the new
+    // `kb_citation_audits.id`.
+
+    /// Record a citation audit. Unlike every other authored write on this trait, the gate is
+    /// **readability of the audited finding plus NOT having authored it** — a deliberate widening
+    /// (an auditor that may only assess findings it owns is not an auditor) with a self-audit
+    /// denial arm, per spec §7. The finding is derived from [`RecordCitationAudit::block`]; the
+    /// command cannot name it.
+    async fn record_citation_audit(
+        &self,
+        cmd: RecordCitationAudit,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
+
     // ── facet writes (T1 Sequence B — facet_set vertical slice) ──
     // Upserts a typed property row (`kb_properties`) on a resource. Returns the property id.
 
@@ -175,6 +189,26 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: StewardDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError>;
+
+    /// Run one deterministic citation-auditor dispatch pass (reap → sweep → group-by-cogmap →
+    /// enqueue → claim) and return the claimed jobs for fan-out. See [`AuditorDispatchTick`].
+    ///
+    /// The return type is [`temper_core::types::auditor::ClaimedAuditJob`], not `ClaimedJob`:
+    /// the auditor's job carries a finding list its session must iterate, and dropping that on the
+    /// floor at the trait boundary would reintroduce the very grain collapse the grouping exists to
+    /// prevent.
+    async fn auditor_dispatch_tick(
+        &self,
+        cmd: AuditorDispatchTick,
+    ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError>;
+
+    /// Mark the caller's in-flight citation-audit job for a cogmap done — the auditor session's
+    /// last act. Returns the completed job id, or `None` when nothing of the caller's was in
+    /// flight. See [`CompleteAuditorJob`].
+    async fn complete_auditor_job(
+        &self,
+        cmd: CompleteAuditorJob,
+    ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError>;
 
     // ── cron-driven region materialize-on-threshold (T4b) ──
     // Re-materialize a cogmap's regions when its formation delta since the last materialize clears

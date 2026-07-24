@@ -96,6 +96,11 @@ pub enum EventKind {
     /// from the same transition functions, paired with a standing change when a demote is a
     /// consequence of `Revoke`/`Deactivate`.
     PrincipalGovernanceChanged,
+    /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
+    /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
+    /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
+    /// like `BlockProvenanceAnnotated`, by the post-canonical-seed migration `20260724000110`.
+    CitationAudited,
 }
 
 impl EventKind {
@@ -131,6 +136,7 @@ impl EventKind {
             EventKind::SlackPrincipalDisconnected => "slack_principal_disconnected",
             EventKind::PrincipalStandingChanged => "principal_standing_changed",
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
+            EventKind::CitationAudited => "citation_audited",
         }
     }
 
@@ -171,6 +177,7 @@ impl EventKind {
             "slack_principal_disconnected" => EventKind::SlackPrincipalDisconnected,
             "principal_standing_changed" => EventKind::PrincipalStandingChanged,
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
+            "citation_audited" => EventKind::CitationAudited,
             _ => return None,
         })
     }
@@ -337,6 +344,16 @@ pub enum SeedAction<'a> {
         incorporated: &'a [payloads::Incorporation],
         emitter: EntityId,
     },
+    /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec
+    /// §4.1-4.2). Append-only — fires `citation_audited`, projected into `kb_citation_audits`
+    /// with no supersession (a later verdict never overwrites an earlier one).
+    CitationAudit {
+        block: BlockId,
+        source: payloads::ProvenanceSource,
+        value: f64,
+        reason: Option<&'a str>,
+        emitter: EntityId,
+    },
     /// Append a NEW block at `block.seq` to an existing resource (segmented ingest).
     /// Unlike `BlockMutate` (revise-in-place), this creates a fresh block and fires
     /// the `block_created` event. Idempotent in SQL on (resource, seq, block merkle).
@@ -430,6 +447,7 @@ impl SeedAction<'_> {
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
             SeedAction::BlockAnnotate { .. } => EventKind::BlockProvenanceAnnotated,
+            SeedAction::CitationAudit { .. } => EventKind::CitationAudited,
             SeedAction::BlockAppend { .. } => EventKind::BlockCreated,
             SeedAction::CharterSet { .. } => EventKind::CharterSet,
             SeedAction::ResourceDelete { .. } => EventKind::ResourceDeleted,
@@ -460,6 +478,10 @@ pub enum Fired {
     Lens(LensId),
     Materialize(EventId),
     Block(BlockId),
+    /// The audit row id a `CitationAudit` fire produced (bare `Uuid` — there is no
+    /// `CitationAuditId` newtype; `kb_citation_audits` rows are addressed only by this write path
+    /// and Task 3's decay aggregation, neither of which needs cross-crate type safety yet).
+    CitationAudit(Uuid),
     /// The telos resource id a `CharterSet` fire replaced the charter on.
     Charter(ResourceId),
     Invocation(InvocationId),
@@ -507,6 +529,14 @@ impl Fired {
         match self {
             Fired::Block(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Block, got {other:?}"),
+        }
+    }
+
+    /// Extract the audit id a `CitationAudit` fire produced.
+    pub fn citation_audit(self) -> Result<Uuid> {
+        match self {
+            Fired::CitationAudit(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::CitationAudit, got {other:?}"),
         }
     }
 
@@ -970,6 +1000,35 @@ pub async fn fire_with(
             .await?
             .context("block_annotate returned null")?;
             Ok(Fired::Block(BlockId::from(id)))
+        }
+
+        SeedAction::CitationAudit {
+            block,
+            source,
+            value,
+            reason,
+            emitter,
+        } => {
+            // The float rides the payload; the auditor's OWN confidence in its verdict rides
+            // `ctx_meta` instead (spec §4.2's self-grading prohibition — see `EventContext`).
+            let payload = payloads::CitationAudited {
+                block_id: block,
+                source,
+                value,
+                reason: reason.map(str::to_owned),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT citation_audit($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("citation_audit returned null")?;
+            Ok(Fired::CitationAudit(id))
         }
 
         SeedAction::BlockAppend {

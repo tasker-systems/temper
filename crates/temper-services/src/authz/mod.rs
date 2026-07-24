@@ -25,12 +25,31 @@
 //!
 //! Design: `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
 
+mod audit_gate;
 mod connection;
 mod grant;
 mod machine;
 mod read_gates;
 mod two_sided;
 
+// Wired by Task 7: `DbBackend::record_citation_audit` derives the subject with `finding_of_block`
+// and gates on `AuditAuthority`. That backend command is the single chokepoint every surface funnels
+// through, so it is the only caller of `authorize::<AuditAuthority>` — a second one on a surface
+// would be a double gate that can drift from this one.
+//
+// `finding_of_block` itself gained a second caller in Task 8: `citation_audit_service` reuses it
+// (never `authorize`) to refuse a path/block mismatch before dispatching to the backend above —
+// the one spelling of the lookup, used at both of `audit_gate.rs`'s named call sites.
+//
+// The fix wave added the other two Set 5 authorization decisions to the same module, so all three
+// share one `kb_machine_clients` probe: `AuditorJobAuthority` (job completion — spec §6.5, formerly
+// a hand-rolled `sqlx::query_scalar!` inside the backend command and the only Set 5 gate outside
+// this layer) and `require_machine_principal` (the dispatch tick, which has no subject and so is
+// deliberately NOT a `ScopedAuthority`).
+pub(crate) use audit_gate::{
+    citation_subject, finding_of_block, require_machine_principal, AuditAuthority,
+    AuditorJobAuthority,
+};
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};

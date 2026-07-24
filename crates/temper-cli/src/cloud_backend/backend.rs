@@ -54,11 +54,12 @@ impl CloudBackend {
 mod embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, CloseInvocation,
-        CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent,
-        FoldRelationship, ListResources, MaterializeOnThreshold, OpenInvocation,
-        ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources,
-        ShowResource, StewardDispatchTick, UpdateResource,
+        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+        Backend, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
+        CreateResource, DeleteResource, DomainEvent, FoldRelationship, ListResources,
+        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+        RetypeRelationship, ReweightRelationship, SearchResources, ShowResource,
+        StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
@@ -226,6 +227,28 @@ mod embed_impl {
             ))
         }
 
+        // Set 5's citation audit is trait-complete here but NOT CLI-dispatchable, and the reason is
+        // structural rather than "not wired yet". The command is BLOCK-addressed by design — the
+        // finding may not be caller-named, because a caller that could name one while writing onto a
+        // block of another is the transposition the sealed authority proof exists to stop
+        // (`temper-services/src/authz/audit_gate.rs:65-77`) — while the endpoint it would POST to is
+        // finding-addressed (`POST /api/resources/{id}/citation-audits`). CloudBackend has no
+        // block→finding resolver and `temper-client` exposes no read that offers one, so it cannot
+        // build the path without the command growing a field the design forbids. Set 5's auditor is
+        // an MCP/agent machine principal (spec §5.2) that reaches the API directly;
+        // `TemperClient::resources().record_citation_audit` exists for that surface and the e2e.
+        async fn record_citation_audit(
+            &self,
+            _cmd: RecordCitationAudit,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::record_citation_audit is not dispatchable: the command is \
+                 block-addressed and the endpoint is finding-addressed, and the CLI has no \
+                 block→finding resolver"
+                    .to_string(),
+            ))
+        }
+
         async fn set_facet(
             &self,
             _cmd: temper_workflow::operations::SetFacet,
@@ -296,6 +319,27 @@ mod embed_impl {
         {
             Err(TemperError::Project(
                 "CloudBackend::steward_dispatch_tick not wired until cutover".to_string(),
+            ))
+        }
+
+        // The auditor's tick is cron-driven over HTTP (`POST /api/auditor/dispatch`), never a CLI
+        // verb — same posture as the steward's, so the same unwired stub.
+        async fn auditor_dispatch_tick(
+            &self,
+            _cmd: AuditorDispatchTick,
+        ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::auditor_dispatch_tick not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn complete_auditor_job(
+            &self,
+            _cmd: CompleteAuditorJob,
+        ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::complete_auditor_job not wired until cutover".to_string(),
             ))
         }
 
@@ -486,11 +530,12 @@ mod embed_impl {
 mod non_embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, CloseInvocation,
-        CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
-        ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
-        ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
-        ShowResource, StewardDispatchTick, UpdateResource,
+        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+        Backend, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
+        CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
+        OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, ResourceSummary,
+        RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
+        StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -602,6 +647,15 @@ mod non_embed_impl {
             ))
         }
 
+        async fn record_citation_audit(
+            &self,
+            _cmd: RecordCitationAudit,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
         async fn set_facet(
             &self,
             _cmd: temper_workflow::operations::SetFacet,
@@ -663,6 +717,25 @@ mod non_embed_impl {
             _cmd: StewardDispatchTick,
         ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError>
         {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn auditor_dispatch_tick(
+            &self,
+            _cmd: AuditorDispatchTick,
+        ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError>
+        {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn complete_auditor_job(
+            &self,
+            _cmd: CompleteAuditorJob,
+        ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

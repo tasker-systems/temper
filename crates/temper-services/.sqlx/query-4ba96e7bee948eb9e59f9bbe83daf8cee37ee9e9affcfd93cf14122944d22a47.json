@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ch.resource_id, avg(ch.embedding)::text AS \"vec?\" FROM kb_chunks ch JOIN kb_content_blocks b ON b.id = ch.block_id AND NOT b.is_folded WHERE ch.is_current AND ch.embedding IS NOT NULL AND ch.resource_id = ANY($1) GROUP BY ch.resource_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vec?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "4ba96e7bee948eb9e59f9bbe83daf8cee37ee9e9affcfd93cf14122944d22a47"
+}

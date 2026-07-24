@@ -24,6 +24,45 @@ pub const DEFAULT_EMBED_LEASE_SECONDS: i32 = 600;
 /// under the function timeout; the queue drains the backlog across ticks.
 pub const DEFAULT_EMBED_DISPATCH_CAP: i32 = 5;
 
+/// Lease for a claimed citation-audit job (Set 5). Same reasoning as the steward lease: it MUST
+/// exceed the Vercel function timeout (300s) so a genuinely-running auditor session is never reaped
+/// mid-flight. An auditor session weighs several citations serially, so it is not shorter.
+pub const DEFAULT_AUDITOR_LEASE_SECONDS: i32 = 600;
+
+/// Rows the auditor's sweep asks for per tick — the `p_limit` handed to `audit_drift_sweep`, and
+/// therefore a **finding** budget, not a cogmap one. The sweep is finding-grained
+/// (`migrations/20260724000130_audit_drift_sweep.sql:86-87`,
+/// `RETURNS TABLE(cogmap_id uuid, finding_id uuid, uncovered int)`) while the queue is cogmap-grained
+/// (spec §6.1), so N swept findings collapse into ≤ N jobs. Deliberately larger than
+/// [`DEFAULT_STEWARD_DISPATCH_CAP`] for that reason: a cap of 10 findings could be one cogmap's worth
+/// of work and would starve every other map.
+pub const DEFAULT_AUDITOR_DISPATCH_CAP: i64 = 50;
+
+/// The ceiling on a caller-supplied auditor `cap`. Bounds the work ONE tick may ask the database
+/// for: `audit_drift_sweep` scores every candidate finding (two producers, each a multi-table join)
+/// before `p_limit` applies, and the same number is the claim's batch limit.
+///
+/// Generous rather than tight — a real backlog after an outage should drain in a few ticks, not
+/// hundreds — but finite, which the shipped code was not.
+pub const MAX_AUDITOR_DISPATCH_CAP: i64 = 500;
+
+/// Resolve a caller-supplied auditor `cap` into the `int` the SQL takes.
+///
+/// **Not cosmetic.** The shipped spelling was `cap.unwrap_or(DEFAULT) as i32`, and an `i64 → i32`
+/// `as` cast **wraps**: `{"cap": 2147483648}` became `-2147483648`, reaching Postgres as
+/// `LIMIT -2147483648` — a database error rendered as a 500 from ordinary user input. `{"cap": -1}`
+/// did the same directly. Clamping into `[1, MAX]` makes both impossible *and* bounds the sweep's
+/// cost, and it lives in one place so every caller (the tick's claim limit and the sweep's finding
+/// budget, which are deliberately the same number) cannot clamp differently.
+///
+/// The surfaces additionally REFUSE a non-positive `cap` with a 400 rather than silently accepting
+/// it — the same two-layer shape as the audit value's range guard (a Rust `BadRequest` for the
+/// caller's benefit, a hard bound underneath for everyone else's).
+pub fn clamp_auditor_cap(cap: Option<i64>) -> i32 {
+    cap.unwrap_or(DEFAULT_AUDITOR_DISPATCH_CAP)
+        .clamp(1, MAX_AUDITOR_DISPATCH_CAP) as i32
+}
+
 /// Which agent persona a queued job is for. The queue is persona-agnostic; `Embed` is the
 /// non-agent, server-computed embedding worker (issue #299) and shares the queue with `Steward`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +70,11 @@ pub const DEFAULT_EMBED_DISPATCH_CAP: i32 = 5;
 pub enum Persona {
     Steward,
     Embed,
+    /// The citation auditor (Set 5). A DISTINCT persona value, not a steward dispatch_type: the
+    /// single-flight index is `(cogmap_id, persona, dispatch_type)`
+    /// (`migrations/20260705000001_workflow_jobs.sql:43-45`), so a separate persona is what lets an
+    /// auditor job and a steward job be in flight over the same cogmap at once.
+    Auditor,
 }
 
 impl Persona {
@@ -39,6 +83,7 @@ impl Persona {
         match self {
             Persona::Steward => "steward",
             Persona::Embed => "embed",
+            Persona::Auditor => "auditor",
         }
     }
 }
@@ -51,6 +96,10 @@ impl Persona {
 pub enum DispatchType {
     Steward,
     Embed,
+    /// One citation-audit pass over a single cogmap (Set 5). ONE dispatch type for the whole
+    /// persona — deliberately not one per finding: per-finding discrimination would make
+    /// `dispatch_type` unboundedly cardinal, which spec §6.1 names and rejects.
+    CitationAudit,
 }
 
 impl DispatchType {
@@ -59,6 +108,7 @@ impl DispatchType {
         match self {
             DispatchType::Steward => "steward",
             DispatchType::Embed => "embed",
+            DispatchType::CitationAudit => "citation-audit",
         }
     }
 }
@@ -145,4 +195,35 @@ pub struct ClaimedEmbedJob {
     pub resource_id: Uuid,
     /// How many times this job has now been claimed (1 on first dispatch).
     pub attempts: i32,
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    /// The wrap. `2147483648 as i32` is `-2147483648`, and a negative `LIMIT` is a Postgres error —
+    /// so before the clamp this input produced a 500 from a plain JSON body. Asserting the CEILING
+    /// (not merely "positive") is what makes this falsify a `max(1, …)`-only fix.
+    #[test]
+    fn a_cap_past_i32_is_clamped_to_the_ceiling_not_wrapped() {
+        assert_eq!(clamp_auditor_cap(Some(2_147_483_648)), 500);
+        assert_eq!(clamp_auditor_cap(Some(i64::MAX)), 500);
+    }
+
+    /// The other 500: `LIMIT -1`.
+    #[test]
+    fn a_non_positive_cap_is_clamped_to_one() {
+        assert_eq!(clamp_auditor_cap(Some(-1)), 1);
+        assert_eq!(clamp_auditor_cap(Some(0)), 1);
+        assert_eq!(clamp_auditor_cap(Some(i64::MIN)), 1);
+    }
+
+    /// An ordinary cap and the omitted case are untouched — the clamp must not quietly change the
+    /// tick's shipped budget.
+    #[test]
+    fn an_in_range_cap_and_the_default_pass_through() {
+        assert_eq!(clamp_auditor_cap(Some(7)), 7);
+        assert_eq!(clamp_auditor_cap(Some(500)), 500);
+        assert_eq!(clamp_auditor_cap(None), DEFAULT_AUDITOR_DISPATCH_CAP as i32);
+    }
 }

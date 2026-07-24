@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM kb_machine_clients\n                WHERE profile_id = $1\n                  AND revoked_at IS NULL\n           ) AS \"registered!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "registered!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b32e3d80fbd6b8c10b2eafd5515889031a1cb228cdbe0f64192c57c9797110f4"
+}

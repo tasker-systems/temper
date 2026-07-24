@@ -1,24 +1,23 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT workflow_job_enqueue($1, $2, $3, '{}'::jsonb) AS \"id: Uuid\"",
+  "query": "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1,$2) RETURNING id",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id: Uuid",
+        "name": "id",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
         "Text",
-        "Text"
+        "Uuid"
       ]
     },
     "nullable": [
-      null
+      false
     ]
   },
-  "hash": "e9750558a03841d8d169853ba97195cf67b5cf6612ecae188f72095476341d4a"
+  "hash": "705cc750d094e0df9acc6234ab017ea1e9390db545d28806db5797cddd792a3d"
 }

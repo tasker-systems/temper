@@ -69,6 +69,72 @@ Production migrations are **operator-run** against each target's Neon database
   cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
   that established this pattern is in git history.)
 
+### Cutover: evidential standing → the three-axis citation model (Set 5)
+
+`migrations/20260724000120_standing_citation_components.sql` is **non-additive**. It drops
+three `kb_resource_standing` columns (`indep_breadth`, `adversarial_survival`,
+`challenge_count`) and four functions (`resource_independence_breadth`,
+`refresh_independence_pairs`, `resource_adversarial_survival`, `resource_bases`), and it
+changes the return type of `resource_standing_shape` and the argument list of
+`standing_band`. So it breaks the additive-only invariant above and **must not ride an
+auto-deploy of `main`**. Cut each target over individually.
+
+`migrations/20260724000130_audit_drift_sweep.sql` rides the same cutover and is **also
+non-additive**, for a different reason: besides the auditor's sweep it DROP+CREATEs
+`workflow_job_claim` to add principal scoping. The new parameter is appended last with a
+`DEFAULT`, so the deployed 5-argument positional call keeps resolving through the
+migrate→deploy window (the mechanics `20260710000010` established) — but the DROP is still a
+moment where a concurrently-running steward or embed tick can fail. Take it inside the same
+maintenance window as the cutover above, not separately. Its `ALTER TABLE kb_workflow_jobs ADD
+COLUMN claimed_by_profile_id` is additive and needs no backfill: an in-flight job claimed
+before the migration has a NULL claimant and simply cannot be completed through
+`workflow_job_complete_claimed` — it expires to the reaper and is re-dispatched, which is the
+designed recovery path.
+
+**The coupling that makes this safe is a single fact: the migration and the binary must
+land together.** A binary one deploy behind still `SELECT`s `indep_breadth` from
+`resource_standing_shape` and will error the moment the migration applies. Conversely the
+new binary reads columns that do not exist until it does.
+
+```
+back up (durable Neon snapshot)  →  sqlx migrate run  →  deploy the binary  →  verify
+```
+
+Verify with a real read, not a migration exit code:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" \
+  https://<target>/api/resources/<known-finding-id>/evidence | jq
+# expect: citation_magnitude, audit_coverage, citation_quality, contradiction_balance,
+#         freshness, r_parent, band  — and NO indep_breadth / adversarial_survival /
+#         challenge_count.
+```
+
+**No backfill is needed, and that is a property of the thing being dropped, not an
+omission.** The retired model was provably inert: `resource_independence_breadth` reads
+`kb_independence_pairs`, which is built only from `'independent-of'` edges, and nothing in
+the repo writes that label outside a Set-3 test; `resource_adversarial_survival` likewise
+depends on `'challenged'` / `'survived-challenge'` labels with no writer. Both returned
+constants for every finding. Dropping them removes no information — there is nothing to
+migrate forward, and the new axes start from the citation trail, which is live data.
+
+**Verify that against the target, do not assume it.** "Provably inert" is a claim about
+*this repo's code*, and `kb_edges.label` is free text — `temper edge assert` accepts an
+arbitrary label, so a customer or a script could have written `'independent-of'` and
+populated the pairs table on their instance. The migration `DROP TABLE`s it and the rows go
+with it. One line, before the migration, against the target's own DB:
+
+```sql
+SELECT count(*) FROM kb_independence_pairs;   -- must be 0
+```
+
+A non-zero count means that instance holds independence data this cutover would discard.
+Stop and decide what to do with it (export it first); do not proceed on the strength of the
+paragraph above.
+
+Rollback is the ordinary one below (restore the snapshot, redeploy the prior binary). There
+is no forward-fix for a half-applied cutover, which is why the backup step is not optional.
+
 Some migrations also have an **operator-run content step** after the schema lands.
 Delivering or updating the L0 kernel cogmap's content (landmarks + telos charter)
 is one such step — it is admin-gated and fail-closed, with its own

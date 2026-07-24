@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use temper_core::types::citation_audit::CitationAuditRequest;
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::BlockProvenanceRow;
@@ -199,6 +200,26 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// Record an auditor's signed verdict on one `(block, source)` citation of this finding.
+    /// POST /api/resources/{id}/citation-audits, returning the new `kb_citation_audits.id`.
+    ///
+    /// `resource_id` is the routing address only: the server derives the authorization subject from
+    /// `request.block_id` and refuses a block belonging to a different finding, so passing a finding
+    /// here confers nothing. The gate is readability of the finding plus NOT having authored it —
+    /// an audit is a claim of independence (spec §7).
+    pub async fn record_citation_audit(
+        &self,
+        resource_id: Uuid,
+        request: &CitationAuditRequest,
+    ) -> Result<Uuid> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{resource_id}/citation-audits");
+        let req = self.http.post(&path).json(request);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 

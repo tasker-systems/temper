@@ -16,14 +16,17 @@ require 'time'
 module Temper::Generated
   # A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are non-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`), so an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side read returns `Option<StandingShape>`, `None` for \"not readable.\"
   class StandingShape < ApiModelBase
-    # N challenges withstood (`resource_adversarial_survival`); 0 when there have been no challenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`).
-    attr_accessor :adversarial_survival
+    # How many of those distinct sources carry at least one audit. Monotone under the append-only audit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness* axis, and the thing that tells \"nobody tried\" apart from \"N sources were evaluated.\"
+    attr_accessor :audit_coverage
 
-    # Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
+    # Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`) computed over the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
     attr_accessor :band
 
-    # Count of adversarial challenges raised against the finding, so a consumer can distinguish \"0 challenges\" from \"N challenges, 0 withstood.\"
-    attr_accessor :challenge_count
+    # Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing more evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which counts provenance rows including duplicates. Ten citations of one source is `r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the actor-count fallacy.
+    attr_accessor :citation_magnitude
+
+    # Mean, over the **audited subset only**, of each audited source's decay-weighted audit value, in `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding makes no quality claim, and its low standing comes from the band gate, never from a poisoned mean (spec §3.2).
+    attr_accessor :citation_quality
 
     # Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
     attr_accessor :contradiction_balance
@@ -34,22 +37,19 @@ module Temper::Generated
     # Reversible time-decay off the finding's most recent uncorrected reinforcement; computed live at read (never from the memo) because it must reflect the current moment.
     attr_accessor :freshness
 
-    # Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence default: an unasserted pair is assumed correlated, not independent.
-    attr_accessor :indep_breadth
-
     # Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.
     attr_accessor :r_parent
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'adversarial_survival' => :'adversarial_survival',
+        :'audit_coverage' => :'audit_coverage',
         :'band' => :'band',
-        :'challenge_count' => :'challenge_count',
+        :'citation_magnitude' => :'citation_magnitude',
+        :'citation_quality' => :'citation_quality',
         :'contradiction_balance' => :'contradiction_balance',
         :'finding_id' => :'finding_id',
         :'freshness' => :'freshness',
-        :'indep_breadth' => :'indep_breadth',
         :'r_parent' => :'r_parent'
       }
     end
@@ -67,13 +67,13 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'adversarial_survival' => :'Float',
+        :'audit_coverage' => :'Integer',
         :'band' => :'String',
-        :'challenge_count' => :'Integer',
+        :'citation_magnitude' => :'Integer',
+        :'citation_quality' => :'Float',
         :'contradiction_balance' => :'Float',
         :'finding_id' => :'String',
         :'freshness' => :'Float',
-        :'indep_breadth' => :'Float',
         :'r_parent' => :'Float'
       }
     end
@@ -100,10 +100,10 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'adversarial_survival')
-        self.adversarial_survival = attributes[:'adversarial_survival']
+      if attributes.key?(:'audit_coverage')
+        self.audit_coverage = attributes[:'audit_coverage']
       else
-        self.adversarial_survival = nil
+        self.audit_coverage = nil
       end
 
       if attributes.key?(:'band')
@@ -112,10 +112,16 @@ module Temper::Generated
         self.band = nil
       end
 
-      if attributes.key?(:'challenge_count')
-        self.challenge_count = attributes[:'challenge_count']
+      if attributes.key?(:'citation_magnitude')
+        self.citation_magnitude = attributes[:'citation_magnitude']
       else
-        self.challenge_count = nil
+        self.citation_magnitude = nil
+      end
+
+      if attributes.key?(:'citation_quality')
+        self.citation_quality = attributes[:'citation_quality']
+      else
+        self.citation_quality = nil
       end
 
       if attributes.key?(:'contradiction_balance')
@@ -136,12 +142,6 @@ module Temper::Generated
         self.freshness = nil
       end
 
-      if attributes.key?(:'indep_breadth')
-        self.indep_breadth = attributes[:'indep_breadth']
-      else
-        self.indep_breadth = nil
-      end
-
       if attributes.key?(:'r_parent')
         self.r_parent = attributes[:'r_parent']
       else
@@ -154,16 +154,20 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @adversarial_survival.nil?
-        invalid_properties.push('invalid value for "adversarial_survival", adversarial_survival cannot be nil.')
+      if @audit_coverage.nil?
+        invalid_properties.push('invalid value for "audit_coverage", audit_coverage cannot be nil.')
       end
 
       if @band.nil?
         invalid_properties.push('invalid value for "band", band cannot be nil.')
       end
 
-      if @challenge_count.nil?
-        invalid_properties.push('invalid value for "challenge_count", challenge_count cannot be nil.')
+      if @citation_magnitude.nil?
+        invalid_properties.push('invalid value for "citation_magnitude", citation_magnitude cannot be nil.')
+      end
+
+      if @citation_quality.nil?
+        invalid_properties.push('invalid value for "citation_quality", citation_quality cannot be nil.')
       end
 
       if @contradiction_balance.nil?
@@ -178,10 +182,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "freshness", freshness cannot be nil.')
       end
 
-      if @indep_breadth.nil?
-        invalid_properties.push('invalid value for "indep_breadth", indep_breadth cannot be nil.')
-      end
-
       if @r_parent.nil?
         invalid_properties.push('invalid value for "r_parent", r_parent cannot be nil.')
       end
@@ -193,25 +193,25 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @adversarial_survival.nil?
+      return false if @audit_coverage.nil?
       return false if @band.nil?
-      return false if @challenge_count.nil?
+      return false if @citation_magnitude.nil?
+      return false if @citation_quality.nil?
       return false if @contradiction_balance.nil?
       return false if @finding_id.nil?
       return false if @freshness.nil?
-      return false if @indep_breadth.nil?
       return false if @r_parent.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] adversarial_survival Value to be assigned
-    def adversarial_survival=(adversarial_survival)
-      if adversarial_survival.nil?
-        fail ArgumentError, 'adversarial_survival cannot be nil'
+    # @param [Object] audit_coverage Value to be assigned
+    def audit_coverage=(audit_coverage)
+      if audit_coverage.nil?
+        fail ArgumentError, 'audit_coverage cannot be nil'
       end
 
-      @adversarial_survival = adversarial_survival
+      @audit_coverage = audit_coverage
     end
 
     # Custom attribute writer method with validation
@@ -225,13 +225,23 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] challenge_count Value to be assigned
-    def challenge_count=(challenge_count)
-      if challenge_count.nil?
-        fail ArgumentError, 'challenge_count cannot be nil'
+    # @param [Object] citation_magnitude Value to be assigned
+    def citation_magnitude=(citation_magnitude)
+      if citation_magnitude.nil?
+        fail ArgumentError, 'citation_magnitude cannot be nil'
       end
 
-      @challenge_count = challenge_count
+      @citation_magnitude = citation_magnitude
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] citation_quality Value to be assigned
+    def citation_quality=(citation_quality)
+      if citation_quality.nil?
+        fail ArgumentError, 'citation_quality cannot be nil'
+      end
+
+      @citation_quality = citation_quality
     end
 
     # Custom attribute writer method with validation
@@ -265,16 +275,6 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] indep_breadth Value to be assigned
-    def indep_breadth=(indep_breadth)
-      if indep_breadth.nil?
-        fail ArgumentError, 'indep_breadth cannot be nil'
-      end
-
-      @indep_breadth = indep_breadth
-    end
-
-    # Custom attribute writer method with validation
     # @param [Object] r_parent Value to be assigned
     def r_parent=(r_parent)
       if r_parent.nil?
@@ -289,13 +289,13 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          adversarial_survival == o.adversarial_survival &&
+          audit_coverage == o.audit_coverage &&
           band == o.band &&
-          challenge_count == o.challenge_count &&
+          citation_magnitude == o.citation_magnitude &&
+          citation_quality == o.citation_quality &&
           contradiction_balance == o.contradiction_balance &&
           finding_id == o.finding_id &&
           freshness == o.freshness &&
-          indep_breadth == o.indep_breadth &&
           r_parent == o.r_parent
     end
 
@@ -308,7 +308,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [adversarial_survival, band, challenge_count, contradiction_balance, finding_id, freshness, indep_breadth, r_parent].hash
+      [audit_coverage, band, citation_magnitude, citation_quality, contradiction_balance, finding_id, freshness, r_parent].hash
     end
 
     # Builds the object from hash
