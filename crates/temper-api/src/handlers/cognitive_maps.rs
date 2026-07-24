@@ -19,9 +19,9 @@ use temper_services::services::{access_service, cogmap_service, materialize_serv
 use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
-    CogmapRegionRow, CogmapRevokeBody, GrantCapabilityRequest, GrantOutcome,
-    RevokeCapabilityRequest, RevokeOutcome, UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail, CogmapGrantBody,
+    CogmapRegionMetricsRow, CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantCapabilityRequest,
+    GrantOutcome, RevokeCapabilityRequest, RevokeOutcome, UnbindTeamOutcome,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
@@ -122,6 +122,51 @@ pub async fn genesis(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(out.value))
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "list_cognitive_maps",
+    path = "/api/cognitive-maps",
+    tag = "Cognitive Maps",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The caller's visible cognitive maps (identity + charter statement)", body = Vec<CogmapRow>),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
+    )
+)]
+pub async fn list(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<Vec<CogmapRow>>> {
+    // No entry gate: `list_visible` is self-scoped through `cogmap_visible_maps` — it returns exactly
+    // the maps the caller may see (deny → empty list).
+    cogmap_service::list_visible(&state.pool, ProfileId::from(auth.0.profile().id))
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "get_cognitive_map",
+    path = "/api/cognitive-maps/{id}",
+    tag = "Cognitive Maps",
+    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The map's identity, charter, and foundational resources", body = CogmapDetail),
+        (status = 404, description = "Map not found or not readable"),
+    )
+)]
+pub async fn show(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+) -> ApiResult<Json<CogmapDetail>> {
+    // Map-read gated inside `show_visible`: an unreadable map is 404, never a partial leak.
+    cogmap_service::show_visible(&state.pool, ProfileId::from(auth.0.profile().id), cogmap_id)
+        .await
+        .map(Json)
 }
 
 #[utoipa::path(

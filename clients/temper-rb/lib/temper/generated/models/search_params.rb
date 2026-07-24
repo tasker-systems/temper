@@ -16,8 +16,11 @@ require 'time'
 module Temper::Generated
   # Request body for POST /api/search.
   class SearchParams < ApiModelBase
-    # Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.
+    # Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.  Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise a set `cogmap_id` is treated as a one-element set.
     attr_accessor :cogmap_id
+
+    # Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+    attr_accessor :cogmap_ids
 
     # Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.
     attr_accessor :context_ref
@@ -68,6 +71,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'cogmap_id' => :'cogmap_id',
+        :'cogmap_ids' => :'cogmap_ids',
         :'context_ref' => :'context_ref',
         :'doc_type' => :'doc_type',
         :'edge_types' => :'edge_types',
@@ -100,6 +104,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'cogmap_id' => :'String',
+        :'cogmap_ids' => :'Array<String>',
         :'context_ref' => :'String',
         :'doc_type' => :'String',
         :'edge_types' => :'Array<String>',
@@ -122,6 +127,7 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'cogmap_id',
+        :'cogmap_ids',
         :'context_ref',
         :'doc_type',
         :'edge_types',
@@ -154,6 +160,12 @@ module Temper::Generated
 
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
+      end
+
+      if attributes.key?(:'cogmap_ids')
+        if (value = attributes[:'cogmap_ids']).is_a?(Array)
+          self.cogmap_ids = value
+        end
       end
 
       if attributes.key?(:'context_ref')
@@ -244,6 +256,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           cogmap_id == o.cogmap_id &&
+          cogmap_ids == o.cogmap_ids &&
           context_ref == o.context_ref &&
           doc_type == o.doc_type &&
           edge_types == o.edge_types &&
@@ -270,7 +283,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, context_ref, doc_type, edge_types, embedding, graph_depth, graph_expand, lens_id, limit, offset, query, regions, search_config, seed_ids, seed_only, wayfind].hash
+      [cogmap_id, cogmap_ids, context_ref, doc_type, edge_types, embedding, graph_depth, graph_expand, lens_id, limit, offset, query, regions, search_config, seed_ids, seed_only, wayfind].hash
     end
 
     # Builds the object from hash

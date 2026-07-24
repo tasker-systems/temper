@@ -537,6 +537,7 @@ module Temper::Generated
     # @option opts [String] :q 
     # @option opts [String] :stage 
     # @option opts [String] :goal Goal filter (task only): the resolved goal &#x60;ResourceId&#x60; (as UUID). Returns only resources joined to this goal via a live &#x60;advances&#x60;→goal edge. The CLI/MCP resolve the caller&#39;s &#x60;--goal &lt;ref&gt;&#x60; to this UUID (trailing-UUID-only) before the query. &#x60;None&#x60; &#x3D; no goal filter.
+    # @option opts [String] :cogmap_ids Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (&#x60;anchor_table &#x3D; &#39;kb_cogmaps&#39;&#x60;), intersected with the caller&#39;s visible set. A CSV string rather than a &#x60;Vec&#x60; because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each &#x60;--cogmap &lt;ref&gt;&#x60; (trailing-UUID-only) and join here. &#x60;None&#x60;/empty &#x3D; no cogmap filter.
     # @option opts [ResourceSortField] :sort 
     # @option opts [SortOrder] :order 
     # @option opts [Integer] :limit 
@@ -557,6 +558,7 @@ module Temper::Generated
     # @option opts [String] :q 
     # @option opts [String] :stage 
     # @option opts [String] :goal Goal filter (task only): the resolved goal &#x60;ResourceId&#x60; (as UUID). Returns only resources joined to this goal via a live &#x60;advances&#x60;→goal edge. The CLI/MCP resolve the caller&#39;s &#x60;--goal &lt;ref&gt;&#x60; to this UUID (trailing-UUID-only) before the query. &#x60;None&#x60; &#x3D; no goal filter.
+    # @option opts [String] :cogmap_ids Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (&#x60;anchor_table &#x3D; &#39;kb_cogmaps&#39;&#x60;), intersected with the caller&#39;s visible set. A CSV string rather than a &#x60;Vec&#x60; because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each &#x60;--cogmap &lt;ref&gt;&#x60; (trailing-UUID-only) and join here. &#x60;None&#x60;/empty &#x3D; no cogmap filter.
     # @option opts [ResourceSortField] :sort 
     # @option opts [SortOrder] :order 
     # @option opts [Integer] :limit 
@@ -584,6 +586,7 @@ module Temper::Generated
       query_params[:'q'] = opts[:'q'] if !opts[:'q'].nil?
       query_params[:'stage'] = opts[:'stage'] if !opts[:'stage'].nil?
       query_params[:'goal'] = opts[:'goal'] if !opts[:'goal'].nil?
+      query_params[:'cogmap_ids'] = opts[:'cogmap_ids'] if !opts[:'cogmap_ids'].nil?
       query_params[:'sort'] = opts[:'sort'] if !opts[:'sort'].nil?
       query_params[:'order'] = opts[:'order'] if !opts[:'order'].nil?
       query_params[:'limit'] = opts[:'limit'] if !opts[:'limit'].nil?

@@ -22,19 +22,49 @@ pub struct CapturedEvent {
 /// Shared storage for captured events.
 pub type CapturedEvents = Arc<Mutex<Vec<CapturedEvent>>>;
 
+/// A captured span, with the fields it carried when it closed.
+///
+/// Distinct from [`CapturedEvent::span_fields`], which *merges* a span with all of its ancestors —
+/// useful for "was this value in scope?", useless for "which span owns this value?". The convention
+/// gate needs the latter: it has to prove an act's ids sit on their own span and did not merely fall
+/// through onto the HTTP root span, which is exactly what a merged view cannot distinguish.
+#[derive(Debug, Clone)]
+pub struct CapturedSpan {
+    pub name: String,
+    pub fields: HashMap<String, String>,
+}
+
+/// Shared storage for captured spans.
+pub type CapturedSpans = Arc<Mutex<Vec<CapturedSpan>>>;
+
 /// A `tracing::Layer` that records every event into a shared `Vec`.
 pub struct TestTracingLayer {
     events: CapturedEvents,
+    spans: CapturedSpans,
 }
 
 impl TestTracingLayer {
     pub fn new() -> (Self, CapturedEvents) {
+        let (layer, events, _spans) = Self::with_spans();
+        (layer, events)
+    }
+
+    /// Like [`TestTracingLayer::new`], but also returns per-span capture.
+    ///
+    /// Spans are recorded **on close**, not on creation: deferred fields (`tracing::field::Empty`
+    /// filled later via `Span::record`) are only complete once the span ends. Capturing at creation
+    /// would miss every field this codebase records late — which is most of the interesting ones
+    /// (`profile_id`, `correlation_id`, `invocation_id`).
+    pub fn with_spans() -> (Self, CapturedEvents, CapturedSpans) {
         let events: CapturedEvents = Arc::new(Mutex::new(Vec::new()));
+        let spans: CapturedSpans = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
                 events: events.clone(),
+                spans: spans.clone(),
             },
             events,
+            spans,
         )
     }
 }
@@ -117,5 +147,18 @@ where
         };
 
         self.events.lock().unwrap().push(captured);
+    }
+
+    fn on_close(&self, id: Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(&id) else { return };
+        let fields = span
+            .extensions()
+            .get::<HashMap<String, String>>()
+            .cloned()
+            .unwrap_or_default();
+        self.spans.lock().unwrap().push(CapturedSpan {
+            name: span.name().to_string(),
+            fields,
+        });
     }
 }

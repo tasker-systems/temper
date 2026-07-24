@@ -25,7 +25,7 @@ fn cli_args<'a>(query: &'a str, context: Option<&'a str>) -> CliSearchArgs<'a> {
         query,
         embedding: None,
         context,
-        cogmap: None,
+        cogmap: &[],
         wayfind: true,
         lens: None,
         regions: Some(10),

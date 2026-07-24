@@ -79,6 +79,12 @@ impl TemperMcpService {
             .await
             .map_err(map_authz_error)?;
 
+        // Fill the `mcp_request` root span's deferred `profile_id` (declared Empty in
+        // `build_router`). Recorded here rather than in `require_mcp_auth` because that middleware
+        // only validates the JWT — this is the first point at which a *profile* exists. Same
+        // deferred-field pattern as temper-api's auth middleware.
+        tracing::Span::current().record("profile_id", tracing::field::display(authed.profile().id));
+
         tracing::debug!(profile_id = %authed.profile().id, sub = %claims.sub, "Profile resolved");
 
         // Level 2: system-access gate (shared seam).
@@ -505,6 +511,30 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_read_charter(self, input).await
+    }
+
+    #[tool(
+        description = "List the cognitive maps you can see, each with its id, name, held-by team scope, region/resource counts, and charter statement (what the map is for). The first move for orienting across maps — every row's id is addressable by the other cogmap tools. Optional name_contains narrows by name substring."
+    )]
+    async fn cogmap_list(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapListInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_list(self, input).await
+    }
+
+    #[tool(
+        description = "Orient on ONE cognitive map in a single call: its identity, its charter (statement / questions / framing — what the map is for), and the foundational resources it is built on (its homed set, with the telos flagged). Pass the map by ref. Errors 'not found or not readable' when you cannot read it."
+    )]
+    async fn cogmap_show(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapShowInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_show(self, input).await
     }
 
     #[tool(

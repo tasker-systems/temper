@@ -181,6 +181,10 @@ pub struct ListResourcesInput {
     /// resources linked to it via a live `advances`→goal edge (task-only in practice).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
+    /// Scope to resources homed in one or more cognitive maps (UUID or decorated refs). The result
+    /// is the union across the maps. Mutually exclusive with `context_ref`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cogmap: Option<Vec<String>>,
     /// Max results (default 50, max 200).
     pub limit: Option<i64>,
     /// Pagination offset.
@@ -838,12 +842,35 @@ pub async fn list_resources(
         .transpose()
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
+    // Resolve the optional cogmap scope (each ref → UUID, trailing-UUID-only) into the CSV the list
+    // params carry. Mutually exclusive with context_ref (a resource has one home).
+    let cogmap_ids: Option<String> = match input.cogmap.as_deref() {
+        Some(refs) if !refs.is_empty() => {
+            if input.context_ref.is_some() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "context_ref and cogmap are mutually exclusive".to_string(),
+                    None,
+                ));
+            }
+            let mut ids = Vec::with_capacity(refs.len());
+            for r in refs {
+                let id = temper_workflow::operations::parse_ref(r).map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("bad cogmap ref {r:?}: {e}"), None)
+                })?;
+                ids.push(id.0.to_string());
+            }
+            Some(ids.join(","))
+        }
+        _ => None,
+    };
+
     // Build list params — context_ref is resolved server-side by filtered_visible_page;
     // bare context names are rejected there (spec Decision 1).
     let params = temper_workflow::types::resource::ResourceListParams {
         context_ref: input.context_ref.clone(),
         doc_type_name: input.doc_type_name.clone(),
         goal: goal.map(uuid::Uuid::from),
+        cogmap_ids,
         limit: input.limit.or(Some(50)).map(|l| l.min(200)),
         offset: input.offset,
         ..Default::default()
@@ -1575,6 +1602,7 @@ mod fields_projection_tests {
             context_ref: None,
             doc_type_name: None,
             goal: None,
+            cogmap: None,
             limit: None,
             offset: None,
             fields: Some(vec!["managed_meta".to_string()]),

@@ -1131,6 +1131,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         &svc,
         temper_mcp::tools::resources::ListResourcesInput {
             goal: None,
+            cogmap: None,
             context_ref: Some("@me/list-selector".to_string()),
             doc_type_name: Some("research".to_string()),
             limit: None,
@@ -1180,6 +1181,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         &svc,
         temper_mcp::tools::resources::ListResourcesInput {
             goal: None,
+            cogmap: None,
             context_ref: Some("@me/list-selector".to_string()),
             doc_type_name: Some("no-such-doctype".to_string()),
             limit: None,
