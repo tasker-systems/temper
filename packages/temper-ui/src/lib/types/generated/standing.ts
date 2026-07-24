@@ -13,20 +13,26 @@ export type StandingShape = {
  */
 finding_id: ResourceId, 
 /**
- * Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence
- * default: an unasserted pair is assumed correlated, not independent.
+ * Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing
+ * more evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which
+ * counts provenance rows including duplicates. Ten citations of one source is
+ * `r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the
+ * actor-count fallacy.
  */
-indep_breadth: number, 
+citation_magnitude: number, 
 /**
- * N challenges withstood (`resource_adversarial_survival`); 0 when there have been no
- * challenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`).
+ * How many of those distinct sources carry at least one audit. Monotone under the append-only
+ * audit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*
+ * axis, and the thing that tells "nobody tried" apart from "N sources were evaluated."
  */
-adversarial_survival: number, 
+audit_coverage: number, 
 /**
- * Count of adversarial challenges raised against the finding, so a consumer can distinguish
- * "0 challenges" from "N challenges, 0 withstood."
+ * Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,
+ * in `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding
+ * makes no quality claim, and its low standing comes from the band gate, never from a poisoned
+ * mean (spec §3.2).
  */
-challenge_count: number, 
+citation_quality: number, 
 /**
  * Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
  */
@@ -41,7 +47,8 @@ freshness: number,
  */
 r_parent: number, 
 /**
- * Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over
+ * Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)
+ * computed over
  * the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
  */
 band: string, };

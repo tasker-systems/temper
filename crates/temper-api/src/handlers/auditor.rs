@@ -41,6 +41,10 @@ pub struct SweepQuery {
     get,
     path = "/api/auditor/sweep",
     tag = "Auditor",
+    // Explicit, because utoipa otherwise derives the operationId from the fn name and this
+    // module's `sweep`/`dispatch` collide with `handlers::steward`'s identically-named fns. A
+    // duplicate operationId is not cosmetic: it collides in the generated Ruby gem and TS client.
+    operation_id = "auditor_sweep",
     params(("cap" = Option<i64>, Query, description = "Max findings to return (default applies when omitted)")),
     security(("bearer_auth" = [])),
     responses((status = 200, description = "Cogmap-homed findings with incomplete audit coverage, most-uncovered-first", body = Vec<AuditSweepRow>))
@@ -60,6 +64,7 @@ pub async fn sweep(
     post,
     path = "/api/auditor/dispatch",
     tag = "Auditor",
+    operation_id = "auditor_dispatch",
     security(("bearer_auth" = [])),
     request_body = AuditorDispatchTickRequest,
     responses((status = 200, description = "Citation-audit jobs claimed for fan-out, each carrying its cogmap's finding list", body = AuditorDispatchTickResponse))
@@ -124,6 +129,7 @@ pub async fn dispatch(
     post,
     path = "/api/auditor/{cogmap}/complete",
     tag = "Auditor",
+    operation_id = "complete_auditor_job",
     params(("cogmap" = Uuid, Path, description = "The cognitive map whose active citation-audit job is done")),
     security(("bearer_auth" = [])),
     responses(

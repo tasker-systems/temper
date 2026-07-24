@@ -383,6 +383,166 @@
         ]
       }
     },
+    "/api/auditor/dispatch": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Auditor"
+        ],
+        "operationId": "auditor_dispatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuditorDispatchTickRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Citation-audit jobs claimed for fan-out, each carrying its cogmap's finding list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditorDispatchTickResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/auditor/sweep": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Auditor"
+        ],
+        "operationId": "auditor_sweep",
+        "parameters": [
+          {
+            "name": "cap",
+            "in": "query",
+            "description": "Max findings to return (default applies when omitted)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cogmap-homed findings with incomplete audit coverage, most-uncovered-first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditSweepRow"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/auditor/{cogmap}/complete": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Auditor"
+        ],
+        "operationId": "complete_auditor_job",
+        "parameters": [
+          {
+            "name": "cogmap",
+            "in": "path",
+            "description": "The cognitive map whose active citation-audit job is done",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active citation-audit job was completed (or none was active)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditorJobCompleteAck"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Cogmap not found, or not readable by the caller (uniform — no existence oracle)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/auth/slack/link/me": {
       "parameters": [
         {
@@ -4296,6 +4456,101 @@
         ]
       }
     },
+    "/api/resources/{id}/citation-audits": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Resources"
+        ],
+        "summary": "Record an auditor's signed defensibility verdict on one `(block, source)` citation of the\nfinding at `{id}`. CONFORM to `handlers::edges::assert` (the sibling authored-write handler):\nthin — build the command, dispatch it, map the error. No persistence here.",
+        "description": "`id` is a routing address only. The real authorization subject is the block's owning finding,\nresolved server-side from `req.block_id`\n(`temper-services/src/authz/audit_gate.rs:65-77`). `citation_audit_service::record_citation_audit`\nderives that finding and refuses with 404 if it disagrees with `id`, so a caller cannot address\none finding in the path while writing an audit onto a block of another.\n\n`CitationAuditRequest` carries no act/authorship fields (unlike `AssertRelationshipRequest`'s\nflattened `ActInput`) — that shape was fixed in Task 7/3 and is not this task's to change — so\nthe command's `act` is always the empty default here.",
+        "operationId": "record_citation_audit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID (the finding being audited)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CitationAuditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Citation audit recorded; returns the new kb_citation_audits.id",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload, or a verdict value outside [-1.0, 1.0]",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — the finding is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/resources/{id}/content": {
       "parameters": [
         {
@@ -6577,6 +6832,89 @@
           }
         }
       },
+      "AuditSweepRow": {
+        "type": "object",
+        "description": "One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.\n\n`uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has\nnot yet weighed; the sweep orders by it descending, so the most-cited/least-audited findings head\nthe queue (spec §6.3).",
+        "required": [
+          "cogmap_id",
+          "finding_id",
+          "uncovered"
+        ],
+        "properties": {
+          "cogmap_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cogmap the finding is homed in — the queue's grain (spec §6.2)."
+          },
+          "finding_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The finding with uncovered citations — the auditor's grain."
+          },
+          "uncovered": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Distinct live cited sources this finding carries that no audit has yet weighed."
+          }
+        }
+      },
+      "AuditorDispatchTickRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/auditor/dispatch`. Optional — the server default applies\n([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]).\n\nThere is no `threshold` twin of the steward's request: the auditor's selection predicate is\nstructural (`coverage < magnitude`, spec §6.3), not a tunable count, so there is nothing for a\ncaller to set.",
+        "properties": {
+          "cap": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Max **findings** the sweep returns this tick (`audit_drift_sweep`'s `p_limit`). Those\nfindings collapse into at most that many jobs, one per distinct cogmap."
+          }
+        }
+      },
+      "AuditorDispatchTickResponse": {
+        "type": "object",
+        "description": "Response for an auditor dispatch tick — the jobs claimed for fan-out.",
+        "required": [
+          "claimed"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClaimedAuditJob"
+            }
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The correlation the server parsed out of `x-auditor-correlation-id` and stamped onto every\nclaimed job — echoed so the cron can assert its tick id survived parsing, rather than assume\nit. `None` when the header was absent or not a UUID (both self-root; neither is an error)."
+          }
+        }
+      },
+      "AuditorJobCompleteAck": {
+        "type": "object",
+        "description": "Acknowledgement of an auditor session completing its dispatch job.\n\n`job_id` is `None` when no job was active for the cogmap — a manual audit outside the dispatch\nloop, or a job the reaper already expired. That is an outcome, not an error: the session's\nverdicts stand either way, and the coverage sweep is what decides whether the finding comes back.",
+        "required": [
+          "cogmap_id"
+        ],
+        "properties": {
+          "cogmap_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "job_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
       "BindTeamOutcome": {
         "type": "object",
         "description": "The result of binding a cognitive map to a team. `bound` is `false` when the\nbinding already existed (idempotent no-op) — the clean mirror of genesis's\n`created` flag.",
@@ -6775,6 +7113,73 @@
           "created",
           "updated"
         ]
+      },
+      "CitationAuditRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/resources/{id}/citation-audits`.",
+        "required": [
+          "block_id",
+          "source",
+          "value"
+        ],
+        "properties": {
+          "block_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The audited citation's block (`kb_content_blocks.id`). The server resolves this to its\nowning finding — that resolved finding, never the path id, is what authorization is\nevaluated over."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional free-text rationale, recorded on the ledger row."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProvenanceSource",
+            "description": "The cited source being assessed. Only `Resource`-kind citations are auditable: standing\nreads only resource-kind bases, so the SQL entry refuses anything else at the write path\nrather than letting it land as a no-op the auditor could never detect\n(`migrations/20260723000010_citation_audits.sql:123-126`)."
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the\nconnection it makes, never a claim about what the source says (spec §3.3). Out-of-range is a\n400; the ledger column carries the same bound as a CHECK\n(`migrations/20260723000010_citation_audits.sql:28`)."
+          }
+        }
+      },
+      "ClaimedAuditJob": {
+        "type": "object",
+        "description": "A citation-audit job claimed for fan-out — the auditor twin of\n[`crate::types::workflow_job::ClaimedJob`], carrying the finding list the job was enqueued with.\n\nOne isolated session per entry, exactly as the steward's fan-out works; the difference is that\neach session iterates `findings` rather than tending one target.",
+        "required": [
+          "id",
+          "cogmap_id",
+          "attempts",
+          "findings"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times this job has now been claimed (1 on first dispatch)."
+          },
+          "cogmap_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The single cognitive map this claimed run audits within."
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The findings this run must audit — the payload the enqueue carried, read back verbatim."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The queue row id."
+          }
+        }
       },
       "ClaimedJob": {
         "type": "object",
@@ -10852,28 +11257,33 @@
         "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"",
         "required": [
           "finding_id",
-          "indep_breadth",
-          "adversarial_survival",
-          "challenge_count",
+          "citation_magnitude",
+          "audit_coverage",
+          "citation_quality",
           "contradiction_balance",
           "freshness",
           "r_parent",
           "band"
         ],
         "properties": {
-          "adversarial_survival": {
-            "type": "number",
-            "format": "double",
-            "description": "N challenges withstood (`resource_adversarial_survival`); 0 when there have been no\nchallenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`)."
+          "audit_coverage": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of those distinct sources carry at least one audit. Monotone under the append-only\naudit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*\naxis, and the thing that tells \"nobody tried\" apart from \"N sources were evaluated.\""
           },
           "band": {
             "type": "string",
-            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over\nthe shape above. Carried WITH the shape, never presented instead of it (spec §1.1)."
+            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over\nthe shape above. Carried WITH the shape, never presented instead of it (spec §1.1)."
           },
-          "challenge_count": {
+          "citation_magnitude": {
             "type": "integer",
             "format": "int32",
-            "description": "Count of adversarial challenges raised against the finding, so a consumer can distinguish\n\"0 challenges\" from \"N challenges, 0 withstood.\""
+            "description": "Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing\nmore evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which\ncounts provenance rows including duplicates. Ten citations of one source is\n`r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the\nactor-count fallacy."
+          },
+          "citation_quality": {
+            "type": "number",
+            "format": "double",
+            "description": "Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,\nin `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding\nmakes no quality claim, and its low standing comes from the band gate, never from a poisoned\nmean (spec §3.2)."
           },
           "contradiction_balance": {
             "type": "number",
@@ -10888,11 +11298,6 @@
             "type": "number",
             "format": "double",
             "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment."
-          },
-          "indep_breadth": {
-            "type": "number",
-            "format": "double",
-            "description": "Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence\ndefault: an unasserted pair is assumed correlated, not independent."
           },
           "r_parent": {
             "type": "number",
@@ -11599,6 +12004,10 @@
     {
       "name": "Steward",
       "description": "Team-self-cognition steward ingest trigger (delta + watermark)"
+    },
+    {
+      "name": "Auditor",
+      "description": "Citation auditor dispatch — coverage sweep + per-cogmap job fan-out"
     },
     {
       "name": "Access",

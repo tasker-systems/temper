@@ -110,6 +110,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auditor/dispatch": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auditor_dispatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auditor/sweep": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["auditor_sweep"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auditor/{cogmap}/complete": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["complete_auditor_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/slack/link/me": {
         parameters: {
             query?: never;
@@ -1006,6 +1063,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/{id}/citation-audits": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record an auditor's signed defensibility verdict on one `(block, source)` citation of the
+         *     finding at `{id}`. CONFORM to `handlers::edges::assert` (the sibling authored-write handler):
+         *     thin — build the command, dispatch it, map the error. No persistence here.
+         * @description `id` is a routing address only. The real authorization subject is the block's owning finding,
+         *     resolved server-side from `req.block_id`
+         *     (`temper-services/src/authz/audit_gate.rs:65-77`). `citation_audit_service::record_citation_audit`
+         *     derives that finding and refuses with 404 if it disagrees with `id`, so a caller cannot address
+         *     one finding in the path while writing an audit onto a block of another.
+         *
+         *     `CitationAuditRequest` carries no act/authorship fields (unlike `AssertRelationshipRequest`'s
+         *     flattened `ActInput`) — that shape was fixed in Task 7/3 and is not this task's to change — so
+         *     the command's `act` is always the empty default here.
+         */
+        post: operations["record_citation_audit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/content": {
         parameters: {
             query?: never;
@@ -1614,6 +1704,70 @@ export interface components {
             nodes: components["schemas"]["AtlasNode"][];
         };
         /**
+         * @description One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.
+         *
+         *     `uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has
+         *     not yet weighed; the sweep orders by it descending, so the most-cited/least-audited findings head
+         *     the queue (spec §6.3).
+         */
+        AuditSweepRow: {
+            /**
+             * Format: uuid
+             * @description The cogmap the finding is homed in — the queue's grain (spec §6.2).
+             */
+            cogmap_id: string;
+            /**
+             * Format: uuid
+             * @description The finding with uncovered citations — the auditor's grain.
+             */
+            finding_id: string;
+            /**
+             * Format: int32
+             * @description Distinct live cited sources this finding carries that no audit has yet weighed.
+             */
+            uncovered: number;
+        };
+        /**
+         * @description Request body for `POST /api/auditor/dispatch`. Optional — the server default applies
+         *     ([`crate::types::workflow_job::DEFAULT_AUDITOR_DISPATCH_CAP`]).
+         *
+         *     There is no `threshold` twin of the steward's request: the auditor's selection predicate is
+         *     structural (`coverage < magnitude`, spec §6.3), not a tunable count, so there is nothing for a
+         *     caller to set.
+         */
+        AuditorDispatchTickRequest: {
+            /**
+             * Format: int64
+             * @description Max **findings** the sweep returns this tick (`audit_drift_sweep`'s `p_limit`). Those
+             *     findings collapse into at most that many jobs, one per distinct cogmap.
+             */
+            cap?: number | null;
+        };
+        /** @description Response for an auditor dispatch tick — the jobs claimed for fan-out. */
+        AuditorDispatchTickResponse: {
+            claimed: components["schemas"]["ClaimedAuditJob"][];
+            /**
+             * Format: uuid
+             * @description The correlation the server parsed out of `x-auditor-correlation-id` and stamped onto every
+             *     claimed job — echoed so the cron can assert its tick id survived parsing, rather than assume
+             *     it. `None` when the header was absent or not a UUID (both self-root; neither is an error).
+             */
+            correlation_id?: string | null;
+        };
+        /**
+         * @description Acknowledgement of an auditor session completing its dispatch job.
+         *
+         *     `job_id` is `None` when no job was active for the cogmap — a manual audit outside the dispatch
+         *     loop, or a job the reaper already expired. That is an outcome, not an error: the session's
+         *     verdicts stand either way, and the coverage sweep is what decides whether the finding comes back.
+         */
+        AuditorJobCompleteAck: {
+            /** Format: uuid */
+            cogmap_id: string;
+            /** Format: uuid */
+            job_id?: string | null;
+        };
+        /**
          * @description The result of binding a cognitive map to a team. `bound` is `false` when the
          *     binding already existed (idempotent no-op) — the clean mirror of genesis's
          *     `created` flag.
@@ -1727,6 +1881,59 @@ export interface components {
          * @enum {string}
          */
         CharterDisposition: "absent" | "unchanged" | "created" | "updated";
+        /** @description Request body for `POST /api/resources/{id}/citation-audits`. */
+        CitationAuditRequest: {
+            /**
+             * Format: uuid
+             * @description The audited citation's block (`kb_content_blocks.id`). The server resolves this to its
+             *     owning finding — that resolved finding, never the path id, is what authorization is
+             *     evaluated over.
+             */
+            block_id: string;
+            /** @description Optional free-text rationale, recorded on the ledger row. */
+            reason?: string | null;
+            /**
+             * @description The cited source being assessed. Only `Resource`-kind citations are auditable: standing
+             *     reads only resource-kind bases, so the SQL entry refuses anything else at the write path
+             *     rather than letting it land as a no-op the auditor could never detect
+             *     (`migrations/20260723000010_citation_audits.sql:123-126`).
+             */
+            source: components["schemas"]["ProvenanceSource"];
+            /**
+             * Format: double
+             * @description The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the
+             *     connection it makes, never a claim about what the source says (spec §3.3). Out-of-range is a
+             *     400; the ledger column carries the same bound as a CHECK
+             *     (`migrations/20260723000010_citation_audits.sql:28`).
+             */
+            value: number;
+        };
+        /**
+         * @description A citation-audit job claimed for fan-out — the auditor twin of
+         *     [`crate::types::workflow_job::ClaimedJob`], carrying the finding list the job was enqueued with.
+         *
+         *     One isolated session per entry, exactly as the steward's fan-out works; the difference is that
+         *     each session iterates `findings` rather than tending one target.
+         */
+        ClaimedAuditJob: {
+            /**
+             * Format: int32
+             * @description How many times this job has now been claimed (1 on first dispatch).
+             */
+            attempts: number;
+            /**
+             * Format: uuid
+             * @description The single cognitive map this claimed run audits within.
+             */
+            cogmap_id: string;
+            /** @description The findings this run must audit — the payload the enqueue carried, read back verbatim. */
+            findings: string[];
+            /**
+             * Format: uuid
+             * @description The queue row id.
+             */
+            id: string;
+        };
         /**
          * @description A job claimed for dispatch — the caller starts exactly one agent session per `ClaimedJob`,
          *     carrying its single `cogmap_id` (the fan-out is over the workflow, never the agent's target).
@@ -3933,22 +4140,35 @@ export interface components {
          */
         StandingShape: {
             /**
-             * Format: double
-             * @description N challenges withstood (`resource_adversarial_survival`); 0 when there have been no
-             *     challenges yet — distinct from a genuine zero-survival outcome (see `challenge_count`).
+             * Format: int32
+             * @description How many of those distinct sources carry at least one audit. Monotone under the append-only
+             *     audit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*
+             *     axis, and the thing that tells "nobody tried" apart from "N sources were evaluated."
              */
-            adversarial_survival: number;
+            audit_coverage: number;
             /**
-             * @description Lossy read-time summary band (`provisional` / `reinforced` / `near-canonical`) computed over
+             * @description Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)
+             *     computed over
              *     the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
              */
             band: string;
             /**
              * Format: int32
-             * @description Count of adversarial challenges raised against the finding, so a consumer can distinguish
-             *     "0 challenges" from "N challenges, 0 withstood."
+             * @description Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing
+             *     more evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which
+             *     counts provenance rows including duplicates. Ten citations of one source is
+             *     `r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the
+             *     actor-count fallacy.
              */
-            challenge_count: number;
+            citation_magnitude: number;
+            /**
+             * Format: double
+             * @description Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,
+             *     in `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding
+             *     makes no quality claim, and its low standing comes from the band gate, never from a poisoned
+             *     mean (spec §3.2).
+             */
+            citation_quality: number;
             /**
              * Format: double
              * @description Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
@@ -3962,12 +4182,6 @@ export interface components {
              *     live at read (never from the memo) because it must reflect the current moment.
              */
             freshness: number;
-            /**
-             * Format: double
-             * @description Independence-discounted breadth over the finding's evidentiary bases (spec §2.1). Silence
-             *     default: an unasserted pair is assumed correlated, not independent.
-             */
-            indep_breadth: number;
             /**
              * Format: double
              * @description Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.
@@ -4515,6 +4729,92 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+        };
+    };
+    auditor_dispatch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuditorDispatchTickRequest"];
+            };
+        };
+        responses: {
+            /** @description Citation-audit jobs claimed for fan-out, each carrying its cogmap's finding list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditorDispatchTickResponse"];
+                };
+            };
+        };
+    };
+    auditor_sweep: {
+        parameters: {
+            query?: {
+                /** @description Max findings to return (default applies when omitted) */
+                cap?: number;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cogmap-homed findings with incomplete audit coverage, most-uncovered-first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditSweepRow"][];
+                };
+            };
+        };
+    };
+    complete_auditor_job: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description The cognitive map whose active citation-audit job is done */
+                cogmap: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active citation-audit job was completed (or none was active) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditorJobCompleteAck"];
+                };
+            };
+            /** @description Cogmap not found, or not readable by the caller (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -6838,6 +7138,63 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    record_citation_audit: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID (the finding being audited) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CitationAuditRequest"];
+            };
+        };
+        responses: {
+            /** @description Citation audit recorded; returns the new kb_citation_audits.id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Invalid payload, or a verdict value outside [-1.0, 1.0] */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found — the finding is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id} */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

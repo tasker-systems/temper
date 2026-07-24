@@ -69,6 +69,46 @@ Production migrations are **operator-run** against each target's Neon database
   cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
   that established this pattern is in git history.)
 
+### Cutover: evidential standing → the three-axis citation model (Set 5)
+
+`migrations/20260723000020_standing_citation_components.sql` is **non-additive**. It drops
+three `kb_resource_standing` columns (`indep_breadth`, `adversarial_survival`,
+`challenge_count`) and four functions (`resource_independence_breadth`,
+`refresh_independence_pairs`, `resource_adversarial_survival`, `resource_bases`), and it
+changes the return type of `resource_standing_shape` and the argument list of
+`standing_band`. So it breaks the additive-only invariant above and **must not ride an
+auto-deploy of `main`**. Cut each target over individually.
+
+**The coupling that makes this safe is a single fact: the migration and the binary must
+land together.** A binary one deploy behind still `SELECT`s `indep_breadth` from
+`resource_standing_shape` and will error the moment the migration applies. Conversely the
+new binary reads columns that do not exist until it does.
+
+```
+back up (durable Neon snapshot)  →  sqlx migrate run  →  deploy the binary  →  verify
+```
+
+Verify with a real read, not a migration exit code:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" \
+  https://<target>/api/resources/<known-finding-id>/evidence | jq
+# expect: citation_magnitude, audit_coverage, citation_quality, contradiction_balance,
+#         freshness, r_parent, band  — and NO indep_breadth / adversarial_survival /
+#         challenge_count.
+```
+
+**No backfill is needed, and that is a property of the thing being dropped, not an
+omission.** The retired model was provably inert: `resource_independence_breadth` reads
+`kb_independence_pairs`, which is built only from `'independent-of'` edges, and nothing in
+the repo writes that label outside a Set-3 test; `resource_adversarial_survival` likewise
+depends on `'challenged'` / `'survived-challenge'` labels with no writer. Both returned
+constants for every finding. Dropping them removes no information — there is nothing to
+migrate forward, and the new axes start from the citation trail, which is live data.
+
+Rollback is the ordinary one below (restore the snapshot, redeploy the prior binary). There
+is no forward-fix for a half-applied cutover, which is why the backup step is not optional.
+
 Some migrations also have an **operator-run content step** after the schema lands.
 Delivering or updating the L0 kernel cogmap's content (landmarks + telos charter)
 is one such step — it is admin-gated and fail-closed, with its own
