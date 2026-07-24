@@ -144,6 +144,9 @@ impl ApiConfig {
         // which mode their instance is in is exactly the operator who mis-sets these variables.
         tracing::info!(mode = %auth.mode, "auth configured");
 
+        // Auth identity first, then secret hygiene, then everything that merely has to be present.
+        check_secret_distinctness(&lookup)?;
+
         let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
             .unwrap_or_default()
             .split(',')
@@ -222,4 +225,262 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
         public_base_url: get("PUBLIC_BASE_URL")?,
         vault_key,
     })
+}
+
+/// Every variable whose plaintext value is a standalone credential: hold the string, exercise the
+/// capability. Four gate an internal surface; the fifth decrypts what one of them protects.
+///
+/// | Variable                    | Capability it confers                                          |
+/// | --------------------------- | -------------------------------------------------------------- |
+/// | `INTERNAL_RECONCILE_SECRET` | call `/internal/saml/reconcile`                                  |
+/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons                                       |
+/// | `SLACK_LINK_SECRET`         | ask `/internal/slack/link-state` *"is this principal linked?"*    |
+/// | `SLACK_MINT_SECRET`         | mint a token acting as **any linked human, with their full reach**|
+/// | `SLACK_VAULT_ENC_KEY`       | decrypt **every** vaulted refresh token                           |
+///
+/// The order is load-bearing only in that it fixes which pair a multi-way collision reports, so the
+/// error is deterministic rather than dependent on iteration order.
+///
+/// `SLACK_VAULT_ENC_KEY` is in this list even though it is an AEAD key rather than a gate secret,
+/// and it is the most dangerous member. `SLACK_LINK_SECRET` and `SLACK_MINT_SECRET` are **shared
+/// with the Slack mention agent**, which runs as a separate Vercel deployment; the vault key never
+/// leaves temper-api. If the vault key equals either of them, the agent holds the key to every
+/// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
+/// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
+/// operator error this guards.
+const SHARED_SECRET_VARS: [&str; 5] = [
+    "INTERNAL_RECONCILE_SECRET",
+    "EMBED_DISPATCH_SECRET",
+    "SLACK_LINK_SECRET",
+    "SLACK_MINT_SECRET",
+    "SLACK_VAULT_ENC_KEY",
+];
+
+/// Refuse to boot when two shared secrets hold the same value.
+///
+/// **This is the value-level twin of a structural check that already exists.**
+/// `.github/scripts/audit-signature-secrets.sh` asserts each signature gate reads a distinct config
+/// *field* — a property of the source. It is satisfied by two gates reading two differently-named
+/// env vars, whatever those vars happen to contain. Nothing looked at the deployed *values*, so an
+/// operator wiring a new instance by copy-paste could collapse the privilege split silently: every
+/// gate still passes, nothing logs, and the security property the split exists for is simply untrue
+/// of that deployment. A test cannot catch it either — a test can only tell two secrets apart in an
+/// environment that already has them distinct.
+///
+/// Checked over the **raw environment**, not over the parsed [`ApiConfig`], and that is deliberate.
+/// `parse_slack_link` is all-or-nothing, so a `SLACK_LINK_SECRET` colliding with the mint secret
+/// would be invisible to a config-level check whenever some *other* Slack variable happens to be
+/// unset. That collision is latent, not absent: it goes live the moment the operator fills in the
+/// missing variable, and boot is the last moment anyone is looking. The property being asserted is
+/// about the values an operator sets, so the environment is the honest place to assert it.
+///
+/// Only [`ApiConfig::from_lookup`] runs this, so the in-process test harnesses that build an
+/// `ApiConfig` by struct literal are unaffected — correctly, since they are not deployments.
+fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
+    // Empty is absent (the `.filter(|s| !s.is_empty())` convention every field above uses). Two
+    // unset variables both reading "" are not a collision — they are two disabled endpoints.
+    let present: Vec<(&'static str, String)> = SHARED_SECRET_VARS
+        .iter()
+        .filter_map(|&name| lookup(name).filter(|v| !v.is_empty()).map(|v| (name, v)))
+        .collect();
+
+    for (i, (a_name, a_value)) in present.iter().enumerate() {
+        for (b_name, b_value) in &present[i + 1..] {
+            if a_value == b_value {
+                return Err(ConfigError::SecretCollision(a_name, b_name));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Build a lookup from pairs. Absent keys return None. (The `auth_config::tests` helper,
+    /// which this module cannot reach across the `mod` boundary.)
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        move |k: &str| map.get(k).cloned()
+    }
+
+    /// The minimum a real instance needs to get past every *other* check in `from_lookup` — so a
+    /// failure in these tests is the distinctness check and nothing else.
+    fn bootable() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("DATABASE_URL", "postgresql://localhost/temper_test"),
+            ("AUTH_ISSUER", "https://tenant.auth0.com/"),
+            ("JWKS_URL", "https://tenant.auth0.com/.well-known/jwks.json"),
+            ("AUTH_AUDIENCE", "https://temperkb.io/api"),
+        ]
+    }
+
+    /// A distinct value per secret — the correct configuration.
+    fn distinct_secrets() -> Vec<(&'static str, String)> {
+        SHARED_SECRET_VARS
+            .iter()
+            .enumerate()
+            .map(|(i, &name)| (name, format!("secret-value-number-{i}")))
+            .collect()
+    }
+
+    fn with_secrets(secrets: &[(&'static str, String)]) -> Vec<(String, String)> {
+        bootable()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .chain(secrets.iter().map(|(k, v)| ((*k).to_string(), v.clone())))
+            .collect()
+    }
+
+    fn lookup_of(pairs: &[(String, String)]) -> impl Fn(&str) -> Option<String> + '_ {
+        let refs: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        env(&refs)
+    }
+
+    // --- the invariant, over the whole pair space ---
+
+    // FAILS IF: any two shared secrets may hold the same value. Exhaustive over the pairs rather
+    // than hand-listing them, so a SIXTH entry in SHARED_SECRET_VARS is covered against all five
+    // incumbents the moment it is added — with no test edit, which is exactly the edit that would
+    // be forgotten. (A hand-written pair list is also how you end up asserting the pair you already
+    // thought of and none of the ones you didn't.)
+    #[test]
+    fn every_pair_of_shared_secrets_must_differ() {
+        for (i, &a) in SHARED_SECRET_VARS.iter().enumerate() {
+            for &b in &SHARED_SECRET_VARS[i + 1..] {
+                let mut secrets = distinct_secrets();
+                // Collapse b onto a's value — the copy-paste an operator actually makes.
+                let a_value = secrets
+                    .iter()
+                    .find(|(n, _)| *n == a)
+                    .map(|(_, v)| v.clone())
+                    .expect("a is in SHARED_SECRET_VARS");
+                for entry in secrets.iter_mut() {
+                    if entry.0 == b {
+                        entry.1 = a_value.clone();
+                    }
+                }
+
+                assert_eq!(
+                    check_secret_distinctness(env(&secrets
+                        .iter()
+                        .map(|(k, v)| (*k, v.as_str()))
+                        .collect::<Vec<_>>())),
+                    Err(ConfigError::SecretCollision(a, b)),
+                    "{a} and {b} were allowed to hold the same value",
+                );
+            }
+        }
+    }
+
+    // FAILS IF: the check fires on a correct configuration. The other half of the pair — a guard
+    // that rejects everything is not a guard, and this is the assertion that would catch it.
+    #[test]
+    fn all_distinct_secrets_are_accepted() {
+        let secrets = distinct_secrets();
+        let pairs: Vec<(&str, &str)> = secrets.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        assert_eq!(check_secret_distinctness(env(&pairs)), Ok(()));
+    }
+
+    // FAILS IF: absence is read as collision. Two unset secrets both look like "" and are NOT the
+    // same credential — they are two disabled endpoints, which is a supported deployment (every
+    // e2e harness but one leaves `embed_dispatch_secret: None`).
+    #[test]
+    fn unset_and_empty_secrets_do_not_collide() {
+        assert_eq!(check_secret_distinctness(env(&[])), Ok(()));
+        assert_eq!(
+            check_secret_distinctness(env(&[
+                ("SLACK_LINK_SECRET", ""),
+                ("SLACK_MINT_SECRET", ""),
+                ("EMBED_DISPATCH_SECRET", ""),
+            ])),
+            Ok(())
+        );
+    }
+
+    // FAILS IF: only ONE of a colliding pair is set — that is a single secret, not a shared one.
+    #[test]
+    fn a_lone_secret_never_collides() {
+        assert_eq!(
+            check_secret_distinctness(env(&[("SLACK_MINT_SECRET", "only-one-set")])),
+            Ok(())
+        );
+    }
+
+    // FAILS IF: the collision error names the wrong pair, or prints the colliding secret.
+    //
+    // The sibling assertion on `ConfigError::McpAudienceMismatch`
+    // (`auth_config::tests::errors_name_the_variable_and_never_print_values`) carries the same
+    // obligation for a URL. Here the leaked value would be an actual credential, and the boot
+    // failure is loud by design — panicked straight to the deployment log by all four entrypoints
+    // (`api/axum.rs`, `api/mcp.rs`, `api/internal.rs`, `temper-api/src/main.rs`, each
+    // `unwrap_or_else(|e| panic!("refusing to start: {e}"))`), which is precisely a log sink the
+    // ApiConfig `Debug` impl above goes to some length to keep secrets out of.
+    //
+    // The collided pair is deliberately the two vars the message's *prose* never mentions, so this
+    // asserts the `{0}`/`{1}` interpolation and cannot be satisfied by the fixed explanatory text.
+    #[test]
+    fn a_collision_error_names_both_variables_and_never_the_value() {
+        let leaked = "s3cret-shared-by-copy-paste";
+        let err = check_secret_distinctness(env(&[
+            ("INTERNAL_RECONCILE_SECRET", leaked),
+            ("EMBED_DISPATCH_SECRET", leaked),
+        ]))
+        .unwrap_err();
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("INTERNAL_RECONCILE_SECRET"),
+            "must name the offending var: {msg}"
+        );
+        assert!(
+            msg.contains("EMBED_DISPATCH_SECRET"),
+            "must name the relation's other side: {msg}"
+        );
+        assert!(!msg.contains(leaked), "must NEVER print a secret: {msg}");
+    }
+
+    // --- and that it is actually WIRED into the boot path ---
+    //
+    // The three above test a pure function; these two prove `from_lookup` calls it. A correct
+    // predicate nothing invokes is the failure mode that motivated this task in the first place.
+
+    // FAILS IF: `from_lookup` builds a config for a deployment whose privilege split has collapsed.
+    #[test]
+    fn from_lookup_refuses_a_deployment_with_colliding_secrets() {
+        let mut secrets = distinct_secrets();
+        for entry in secrets.iter_mut() {
+            if entry.0 == "SLACK_MINT_SECRET" {
+                entry.1 = "shared-by-copy-paste".to_string();
+            }
+            if entry.0 == "SLACK_LINK_SECRET" {
+                entry.1 = "shared-by-copy-paste".to_string();
+            }
+        }
+        let pairs = with_secrets(&secrets);
+
+        assert_eq!(
+            ApiConfig::from_lookup(lookup_of(&pairs)).map(|_| ()),
+            Err(ConfigError::SecretCollision(
+                "SLACK_LINK_SECRET",
+                "SLACK_MINT_SECRET"
+            )),
+        );
+    }
+
+    // FAILS IF: the check turned a correctly-configured deployment into a boot failure.
+    #[test]
+    fn from_lookup_accepts_a_deployment_with_distinct_secrets() {
+        let pairs = with_secrets(&distinct_secrets());
+        assert!(ApiConfig::from_lookup(lookup_of(&pairs)).is_ok());
+    }
 }

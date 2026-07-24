@@ -35,6 +35,21 @@ describe("requestMintedToken", () => {
     vi.unstubAllEnvs();
   });
 
+  // FAILS IF: the distinctness assert is not WIRED into the mint call.
+  //
+  // This is the necessary complement to the signing test below, which can only distinguish the two
+  // keys in an environment that already HAS them distinct — the `beforeEach` above supplies that,
+  // and production may not. `getToken` (`lib/mcp-auth.ts`) reaches this function without going
+  // through `requestLinkState`, so the mint path needs its own assert rather than inheriting one.
+  // Fails CLOSED: the most privileged call in the agent is not made at all.
+  it("makes no mint call when the two secrets collide", async () => {
+    vi.stubEnv("SLACK_LINK_SECRET", MINT_SECRET); // the copy-paste an operator actually makes
+    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted" });
+
+    await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(/same value/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   // FAILS IF: the module signs with SLACK_LINK_SECRET (or any key other than SLACK_MINT_SECRET).
   // This is the one that catches a reuse of the link key — the privilege split at
   // config.rs:32-48 is the whole reason `/internal/slack/mint` has its own router and layer.
