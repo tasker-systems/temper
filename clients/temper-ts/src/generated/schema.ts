@@ -171,7 +171,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["list_cognitive_maps"];
         put?: never;
         post: operations["genesis"];
         delete?: never;
@@ -1861,6 +1861,53 @@ export interface components {
             /** Format: uuid */
             principal_id: string;
             principal_table: string;
+        };
+        /**
+         * @description One row of the `cogmap list` surface — a cognitive map's identity + orientation, as returned by
+         *     the `cogmap_list_rows` SQL function (`migrations/20260724000010_cogmap_list_rows.sql`)
+         *     field-for-field, so the service read can `query_as!` straight into it.
+         *
+         *     This is the charter-bearing sibling of the Atlas's `HomeCogmap` view: same visible-maps base
+         *     (`cogmap_visible_maps`), plus `telos_resource_id` and the charter `statement` so a caller can
+         *     orient — *what is this map for* — from the list itself, without a second round-trip. The
+         *     decorated `ref` (`sluggify(name)-<uuid>`) is injected render-time by the CLI (never persisted,
+         *     never on this wire type), exactly as context rows carry one.
+         */
+        CogmapRow: {
+            /**
+             * @description The charter's statement-of-purpose (block-0 of the telos). `None` when the charter has no
+             *     authored statement yet (e.g. an MCP genesis that minted an empty charter).
+             */
+            charter_statement?: string | null;
+            /**
+             * Format: uuid
+             * @description The cognitive map's id.
+             */
+            id: string;
+            /** @description The map's name. */
+            name: string;
+            /**
+             * @description Held-by scope: the already-sigil'd owner (`+<team-slug>` for a team-held map, or the universal
+             *     `temper` marker for a public/system kernel that joins no member team).
+             */
+            owner_ref: string;
+            /**
+             * Format: int32
+             * @description Count of the map's live (non-folded) materialized regions.
+             */
+            region_count: number;
+            /**
+             * Format: int32
+             * @description Count of resources homed in the map (`anchor_table = 'kb_cogmaps'`).
+             */
+            resource_count: number;
+            /** @description The member teams (self-or-ancestor) the map is joined to — the teams that make it visible. */
+            team_ids: string[];
+            /**
+             * Format: uuid
+             * @description The telos/charter resource id.
+             */
+            telos_resource_id: string;
         };
         /**
          * @description Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
@@ -4591,6 +4638,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_cognitive_maps: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's visible cognitive maps (identity + charter statement) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CogmapRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

@@ -2,7 +2,7 @@
 
 use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
-    CogmapRegionRow, CogmapRevokeBody, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
+    CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
 };
 
 use crate::error::{Result, TemperError};
@@ -34,6 +34,16 @@ pub fn resolve_principal(
             "no principal — supply exactly one of --to-profile/--to-team (or --from-*)".to_string(),
         )),
     }
+}
+
+/// Fetch the caller's visible cognitive maps (identity + charter statement). Self-scoped
+/// server-side — an empty vec means the caller can see no maps, never an error.
+pub async fn list_api(client: &temper_client::TemperClient) -> Result<Vec<CogmapRow>> {
+    client
+        .cognitive_maps()
+        .list()
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Call the shape API for the given cogmap (and optional lens), both already resolved to UUIDs.
@@ -266,5 +276,64 @@ mod tests {
         assert!(out.starts_with('['), "json should be an array: {out}");
         assert!(out.contains("\"region_id\""), "json: {out}");
         assert!(out.contains("\"member_count\""), "json: {out}");
+    }
+
+    fn sample_cogmap_row(name: &str, statement: Option<&str>) -> CogmapRow {
+        CogmapRow {
+            id: Uuid::now_v7(),
+            name: name.to_string(),
+            owner_ref: "+platform".to_string(),
+            team_ids: vec![],
+            region_count: 3,
+            resource_count: 12,
+            telos_resource_id: Uuid::now_v7(),
+            charter_statement: statement.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn cogmap_list_row_injects_ref_that_resolves_to_the_id() {
+        let row = sample_cogmap_row(
+            "My Architecture Map",
+            Some("What holds the platform together."),
+        );
+        let id = row.id;
+        let mut value = serde_json::to_value(&row).expect("serialize");
+        crate::commands::resource::inject_cogmap_ref(&mut value);
+        let got = value
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .expect("ref injected");
+        // The contract is trailing-UUID resolution, not an exact slug — assert the ref round-trips.
+        let parsed = temper_workflow::operations::parse_ref(got).expect("ref parses");
+        assert_eq!(
+            Uuid::from(parsed),
+            id,
+            "decorated ref must resolve to the map id"
+        );
+    }
+
+    #[test]
+    fn cogmap_row_omits_null_charter_statement() {
+        let row = sample_cogmap_row("Empty", None);
+        let out = crate::format::render(&row, crate::format::OutputFormat::Json).expect("json");
+        assert!(
+            !out.contains("charter_statement"),
+            "a null statement is omitted from JSON: {out}"
+        );
+    }
+
+    #[test]
+    fn cogmap_row_renders_charter_statement_when_present() {
+        let row = sample_cogmap_row("Architecture", Some("The load-bearing shape."));
+        let out = crate::format::render(&row, crate::format::OutputFormat::Json).expect("json");
+        assert!(
+            out.contains("charter_statement"),
+            "statement present: {out}"
+        );
+        assert!(
+            out.contains("The load-bearing shape."),
+            "statement body: {out}"
+        );
     }
 }

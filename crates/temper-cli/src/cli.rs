@@ -1460,6 +1460,17 @@ pub enum AdminAccessAction {
 
 #[derive(Subcommand)]
 pub enum CogmapCmd {
+    /// List the cognitive maps you can see — each with its ref, held-by scope, region/resource
+    /// counts, and charter statement (what the map is for). Filter by name and/or team.
+    List {
+        /// Filter to maps whose name contains this substring (case-insensitive).
+        #[arg(long)]
+        name_contains: Option<String>,
+        /// Filter to maps held by this team: a slug (optionally `+`-prefixed), a decorated
+        /// `slug-<uuid>` ref, or a team UUID.
+        #[arg(long)]
+        team: Option<String>,
+    },
     /// Reconcile a cognitive map's content to a committed manifest.
     ///
     /// Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded

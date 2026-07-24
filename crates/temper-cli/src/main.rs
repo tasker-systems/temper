@@ -1155,6 +1155,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         }
         Commands::Edge { action } => temper_cli::commands::edge::run(action, output_format),
         Commands::Cogmap { cmd } => match cmd {
+            CogmapCmd::List {
+                name_contains,
+                team,
+            } => commands::cogmap::list(name_contains.as_deref(), team.as_deref(), output_format),
             CogmapCmd::Reconcile {
                 r#ref,
                 manifest,

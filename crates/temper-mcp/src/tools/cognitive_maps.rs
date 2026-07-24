@@ -170,6 +170,38 @@ pub async fn cogmap_read_charter(
     )]))
 }
 
+/// MCP input for `cogmap_list`. All fields optional — the default is every map you can see.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CogmapListInput {
+    /// Optional case-insensitive name-substring filter.
+    #[serde(default)]
+    pub name_contains: Option<String>,
+}
+
+/// List the cognitive maps the caller can see, each with identity + charter statement — the first
+/// move for orienting across maps. Self-scoped server-side (`cogmap_visible_maps`); an empty array
+/// means you can see no maps, never an error. Each row's `id` is directly addressable by every
+/// cogmap tool.
+pub async fn cogmap_list(
+    svc: &TemperMcpService,
+    input: CogmapListInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let mut rows = cogmap_service::list_visible(&svc.api_state.pool, ProfileId::from(profile.id))
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_list failed: {e}"), None))?;
+
+    if let Some(needle) = input.name_contains.as_deref().map(str::to_lowercase) {
+        rows.retain(|r| r.name.to_lowercase().contains(&needle));
+    }
+
+    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
 // ── cogmap_create (genesis) ──────────────────────────────────────────────────
 
 /// MCP input for cogmap_create (genesis). The MCP surface creates the map with an EMPTY charter — the

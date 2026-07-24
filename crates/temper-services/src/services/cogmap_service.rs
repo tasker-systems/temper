@@ -21,8 +21,38 @@ use uuid::Uuid;
 
 use crate::authz::{TwoSidedAuthority, TwoSidedScope};
 use crate::error::ApiResult;
-use temper_core::types::cognitive_maps::{BindTeamOutcome, BindTeamRequest, UnbindTeamOutcome};
+use temper_core::types::cognitive_maps::{
+    BindTeamOutcome, BindTeamRequest, CogmapRow, UnbindTeamOutcome,
+};
 use temper_core::types::ids::{CogmapId, ProfileId};
+
+/// List every cognitive map visible to the profile, with identity + charter statement.
+///
+/// No entry gate: the read is self-scoped inside `cogmap_list_rows` via `cogmap_visible_maps`
+/// (up-expanded team membership ∪ explicit read grant), so it returns exactly the maps the caller
+/// may see — deny is an empty list, never an error. The charter statement rides the same
+/// member-gated `resource_blocks` projection the charter read uses. Mirrors `context_service::
+/// list_visible` in shape.
+pub async fn list_visible(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec<CogmapRow>> {
+    let rows = sqlx::query_as!(
+        CogmapRow,
+        r#"
+        SELECT cogmap_id            AS "id!",
+               name                 AS "name!",
+               owner_ref            AS "owner_ref!",
+               team_ids             AS "team_ids!",
+               region_count         AS "region_count!",
+               resource_count       AS "resource_count!",
+               telos_resource_id    AS "telos_resource_id!",
+               charter_statement
+          FROM cogmap_list_rows($1)
+        "#,
+        profile_id.uuid()
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
 
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).
 ///

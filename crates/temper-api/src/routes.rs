@@ -117,7 +117,10 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::segments::append_block_handler
         ))
         .routes(routes!(handlers::segments::finalize_handler))
-        .routes(routes!(handlers::cognitive_maps::genesis))
+        .routes(routes!(
+            handlers::cognitive_maps::genesis,
+            handlers::cognitive_maps::list
+        ))
         .routes(routes!(handlers::cognitive_maps::reconcile))
         .routes(routes!(handlers::cognitive_maps::shape))
         .routes(routes!(handlers::cognitive_maps::materialize_delta))

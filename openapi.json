@@ -520,6 +520,42 @@
           }
         }
       ],
+      "get": {
+        "tags": [
+          "Cognitive Maps"
+        ],
+        "operationId": "list_cognitive_maps",
+        "responses": {
+          "200": {
+            "description": "The caller's visible cognitive maps (identity + charter statement)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CogmapRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "Cognitive Maps"
@@ -7017,6 +7053,64 @@
           },
           "principal_table": {
             "type": "string"
+          }
+        }
+      },
+      "CogmapRow": {
+        "type": "object",
+        "description": "One row of the `cogmap list` surface — a cognitive map's identity + orientation, as returned by\nthe `cogmap_list_rows` SQL function (`migrations/20260724000010_cogmap_list_rows.sql`)\nfield-for-field, so the service read can `query_as!` straight into it.\n\nThis is the charter-bearing sibling of the Atlas's `HomeCogmap` view: same visible-maps base\n(`cogmap_visible_maps`), plus `telos_resource_id` and the charter `statement` so a caller can\norient — *what is this map for* — from the list itself, without a second round-trip. The\ndecorated `ref` (`sluggify(name)-<uuid>`) is injected render-time by the CLI (never persisted,\nnever on this wire type), exactly as context rows carry one.",
+        "required": [
+          "id",
+          "name",
+          "owner_ref",
+          "team_ids",
+          "region_count",
+          "resource_count",
+          "telos_resource_id"
+        ],
+        "properties": {
+          "charter_statement": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The charter's statement-of-purpose (block-0 of the telos). `None` when the charter has no\nauthored statement yet (e.g. an MCP genesis that minted an empty charter)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cognitive map's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The map's name."
+          },
+          "owner_ref": {
+            "type": "string",
+            "description": "Held-by scope: the already-sigil'd owner (`+<team-slug>` for a team-held map, or the universal\n`temper` marker for a public/system kernel that joins no member team)."
+          },
+          "region_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of the map's live (non-folded) materialized regions."
+          },
+          "resource_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of resources homed in the map (`anchor_table = 'kb_cogmaps'`)."
+          },
+          "team_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The member teams (self-or-ancestor) the map is joined to — the teams that make it visible."
+          },
+          "telos_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The telos/charter resource id."
           }
         }
       },

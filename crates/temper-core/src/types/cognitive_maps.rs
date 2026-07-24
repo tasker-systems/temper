@@ -170,6 +170,42 @@ pub struct CharterBlock {
     pub body: String,
 }
 
+/// One row of the `cogmap list` surface — a cognitive map's identity + orientation, as returned by
+/// the `cogmap_list_rows` SQL function (`migrations/20260724000010_cogmap_list_rows.sql`)
+/// field-for-field, so the service read can `query_as!` straight into it.
+///
+/// This is the charter-bearing sibling of the Atlas's `HomeCogmap` view: same visible-maps base
+/// (`cogmap_visible_maps`), plus `telos_resource_id` and the charter `statement` so a caller can
+/// orient — *what is this map for* — from the list itself, without a second round-trip. The
+/// decorated `ref` (`sluggify(name)-<uuid>`) is injected render-time by the CLI (never persisted,
+/// never on this wire type), exactly as context rows carry one.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct CogmapRow {
+    /// The cognitive map's id.
+    pub id: Uuid,
+    /// The map's name.
+    pub name: String,
+    /// Held-by scope: the already-sigil'd owner (`+<team-slug>` for a team-held map, or the universal
+    /// `temper` marker for a public/system kernel that joins no member team).
+    pub owner_ref: String,
+    /// The member teams (self-or-ancestor) the map is joined to — the teams that make it visible.
+    pub team_ids: Vec<Uuid>,
+    /// Count of the map's live (non-folded) materialized regions.
+    pub region_count: i32,
+    /// Count of resources homed in the map (`anchor_table = 'kb_cogmaps'`).
+    pub resource_count: i32,
+    /// The telos/charter resource id.
+    pub telos_resource_id: Uuid,
+    /// The charter's statement-of-purpose (block-0 of the telos). `None` when the charter has no
+    /// authored statement yet (e.g. an MCP genesis that minted an empty charter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charter_statement: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Cogmap ↔ team binding wire types (org-provisioning Chunk 5).
 //

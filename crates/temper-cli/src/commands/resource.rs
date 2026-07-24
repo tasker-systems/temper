@@ -125,6 +125,26 @@ fn render_action_result_with_ref<T: serde::Serialize>(
     crate::format::render(&value, fmt)
 }
 
+/// Insert a derived `ref` key into a serialized cogmap row (`CogmapRow`), computed from `id` + `name`
+/// via `decorated_ref` (`sluggify(name)-<uuid>`). Render-time only — never persisted, never on the
+/// wire type. No-op if `id`/`name` are absent or `id` is unparseable. Cogmap refs resolve
+/// trailing-UUID-only, so the slug half is a copy-pasteable, self-documenting decoration.
+pub(crate) fn inject_cogmap_ref(row: &mut serde_json::Value) {
+    if let Some(obj) = row.as_object_mut() {
+        let id = obj.get("id").and_then(|v| v.as_str()).map(str::to_owned);
+        let name = obj.get("name").and_then(|v| v.as_str()).map(str::to_owned);
+        if let (Some(id), Some(name)) = (id, name) {
+            if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+                let decorated = temper_workflow::operations::decorated_ref(
+                    &name,
+                    temper_core::types::ids::ResourceId(uuid),
+                );
+                obj.insert("ref".to_string(), serde_json::Value::String(decorated));
+            }
+        }
+    }
+}
+
 /// Insert a derived `ref` key into a serialized context row
 /// (`ContextRow` / `ContextRowWithCounts`), computed from `owner_ref` + `slug`.
 /// The `ref` is render-time only — never persisted, never on the wire type.

@@ -53,6 +53,7 @@ lib/temper/generated/models/cogmap_region_metrics_row.rb
 lib/temper/generated/models/cogmap_region_row.rb
 lib/temper/generated/models/cogmap_regulation_row.rb
 lib/temper/generated/models/cogmap_revoke_body.rb
+lib/temper/generated/models/cogmap_row.rb
 lib/temper/generated/models/cogmap_staleness.rb
 lib/temper/generated/models/confidence_band.rb
 lib/temper/generated/models/content_response.rb
