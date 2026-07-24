@@ -108,16 +108,24 @@ name that says which side of the wire you are on.
 
 ## What this does not cover yet
 
-- **No exporter.** These spans currently go to stdout as JSON via `tracing_subscriber::fmt().json()`
-  — five copies of that init, one per deployable. The `temper-telemetry` crate now exists but owns
-  only extraction; the shared init seam and an OTLP exporter are its next increment, under goal
-  `019f9404-2a4e-7530-8744-92ae4ab6d83e`. Until then `trace_id` is a **log field, not a parent**:
-  it makes today's JSON lines joinable across deployables, and nothing is exported anywhere.
+- **No exporter.** These spans go to stdout as JSON. That init is no longer five copies — it is
+  `temper_telemetry::init_server_logging()`, with `init_cli_logging()` as the CLI's deliberately
+  different variant — and it is built on `Registry` + layers precisely so the exporter attaches as
+  one more layer. The exporter itself is still the next increment, under goal
+  `019f9404-2a4e-7530-8744-92ae4ab6d83e` (task `019f943d`); operator-facing shape is sketched in
+  [../guides/open-telemetry-setup.md](../guides/open-telemetry-setup.md). Until it lands `trace_id`
+  is a **log field, not a parent**: it makes today's JSON lines joinable across deployables, and
+  nothing is exported anywhere.
+
+  When it does land, `trace_id` still will not become a parent — decision
+  `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` settles that temper roots every trace locally and joins a
+  trusted caller by span *link*. The field keeps exactly the meaning it has now.
 - **No propagation.** Trace context is now *extracted* (above) but never *injected*: nothing sets a
   `traceparent` on an outbound call, so a trace still stops at the first hop temper originates
   rather than receives. `tracestate` is therefore not read at all — vendor state exists to be
   forwarded, and reading it before there is anywhere to forward it to would be storage with no
   reader.
+
 ## What production actually does (measured 2026-07-24)
 
 Whether Vercel forwards a client's `traceparent` into a Rust function could not be settled from the

@@ -424,3 +424,48 @@ async fn malformed_traceparent_is_ignored(pool: sqlx::PgPool) {
         "a malformed traceparent must leave `trace_id` empty, not copy the header through: {root:#?}"
     );
 }
+
+/// The CLI's stdout is an output contract, and this is the only test that exercises it as a user
+/// does — by running the real binary and looking at the two streams separately.
+///
+/// A different grain from everything above. Those assert the *structure* of spans inside the server
+/// process; this asserts which *file descriptor* the `temper` binary logs to. The unit tests in
+/// `temper_telemetry::init` pin each stack's format, but `std::io::stderr` appears in exactly one
+/// line of production code (`init_cli_logging`) and no in-process test can observe that choice.
+///
+/// What breaks if this regresses: `temper … | jq` starts failing for every user the moment anything
+/// raises the CLI's default log level or moves it to stdout — `ort`'s INFO chatter on embed paths
+/// being the case that motivated the split originally.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_logs_go_to_stderr_leaving_stdout_parseable(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    let output = common::run_temper_cli_with_env(
+        &app,
+        &[("RUST_LOG", "debug")],
+        &["resource", "list", "--type", "task", "--format", "json"],
+    )
+    .await
+    .expect("spawn temper");
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+
+    // Non-vacuity first: with no log output at all, the stderr assertion below would pass while
+    // proving nothing. `RUST_LOG=debug` over an HTTP call guarantees reqwest/hyper say something.
+    assert!(
+        !stderr.trim().is_empty(),
+        "RUST_LOG=debug produced no logs anywhere, so this test proves nothing. stdout was:\n{stdout}"
+    );
+
+    serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be parseable JSON, got {e}:\n{stdout}"));
+
+    assert!(
+        !stderr
+            .lines()
+            .any(|line| line.trim_start().starts_with('{')),
+        "CLI logs must stay human-readable — a JSON line on either stream is indistinguishable \
+         from command output:\n{stderr}"
+    );
+}

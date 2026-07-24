@@ -2,8 +2,12 @@
 name = "temper-telemetry"
 version = "0.1.0"
 edition = "2021"
-description = "Shared telemetry seam for temper's deployables: inbound trace-context extraction and the root-span field convention"
+description = "Shared telemetry seam for temper's deployables: logging init, inbound trace-context extraction, and the root-span field convention"
 
 [dependencies]
 http = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+serde_json = "1"

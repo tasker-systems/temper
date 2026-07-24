@@ -1,8 +1,12 @@
 //! Shared telemetry seam for temper's deployables.
 //!
-//! Today this owns one thing: reading whatever correlation context arrives on an inbound request
-//! and stamping it onto that request's root span. That is the *extraction* half of W3C trace
-//! context — the half that needs no exporter, no vendor, and no dependency set.
+//! Two things live here:
+//!
+//! - [`init`] — how a temper process logs. One seam for the five binaries that used to configure
+//!   `tracing_subscriber` themselves, and the place the OTLP exporter will attach.
+//! - This module — reading whatever correlation context arrives on an inbound request and stamping
+//!   it onto that request's root span. That is the *extraction* half of W3C trace context, the half
+//!   that needs no exporter, no vendor, and no dependency set.
 //!
 //! ## Why extraction lands before export
 //!
@@ -71,6 +75,10 @@
 //! `temper_services::backend::ACT_SPAN_FIELDS`. They are unrelated concepts that would silently
 //! merge under one field name, so Vercel's is recorded as `vercel_invocation_id` and never as
 //! `invocation_id`.
+
+pub mod init;
+
+pub use init::{init_cli_logging, init_server_logging};
 
 use http::HeaderMap;
 use tracing::Span;
