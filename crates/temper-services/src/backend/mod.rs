@@ -8,4 +8,4 @@ mod db_backend;
 pub mod region_clocks;
 pub mod substrate_read;
 
-pub use db_backend::DbBackend;
+pub use db_backend::{DbBackend, ACT_SPAN_FIELDS};

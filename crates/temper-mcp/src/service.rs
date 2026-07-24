@@ -79,6 +79,12 @@ impl TemperMcpService {
             .await
             .map_err(map_authz_error)?;
 
+        // Fill the `mcp_request` root span's deferred `profile_id` (declared Empty in
+        // `build_router`). Recorded here rather than in `require_mcp_auth` because that middleware
+        // only validates the JWT — this is the first point at which a *profile* exists. Same
+        // deferred-field pattern as temper-api's auth middleware.
+        tracing::Span::current().record("profile_id", tracing::field::display(authed.profile().id));
+
         tracing::debug!(profile_id = %authed.profile().id, sub = %claims.sub, "Profile resolved");
 
         // Level 2: system-access gate (shared seam).
