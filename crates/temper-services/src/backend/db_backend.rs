@@ -2638,7 +2638,7 @@ impl Backend for DbBackend {
     ///
     /// Auth is **two gates, not one**, and the fix wave added both halves for the same reason.
     ///
-    /// 1. **Who may tick at all.** [`require_machine_principal`] — only a registered, unrevoked
+    /// 1. **Who may tick at all.** `require_machine_principal` (private, so a plain span — a public item cannot intra-doc-link one) — only a registered, unrevoked
     ///    machine principal. The endpoint exists for exactly one caller per persona and the
     ///    `kb_machine_clients` registration already names it. Without this, any authenticated
     ///    principal could run the tick.
@@ -2720,7 +2720,7 @@ impl Backend for DbBackend {
     /// Complete the cogmap's active citation-audit job — the auditor session's last act (spec §6.5).
     ///
     /// AUTH BEFORE WRITE, through the policy layer like every other Set 5 decision:
-    /// [`AuditorJobAuthority`] (`authz/audit_gate.rs`), whose arms, probes and `NotFound` dialect are
+    /// `AuditorJobAuthority` (`authz/audit_gate.rs` — private, hence a plain span), whose arms, probes and `NotFound` dialect are
     /// named there. It replaced a hand-rolled `anchor_readable_by_profile` lookup inlined here — the
     /// one Set 5 gate that was not a `ScopedAuthority`, and therefore the one the spec never
     /// reviewed.
