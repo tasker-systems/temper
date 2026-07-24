@@ -249,6 +249,13 @@ pub struct ResourceListParams {
     /// query. `None` = no goal filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<Uuid>,
+    /// Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in
+    /// one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.
+    /// A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the
+    /// query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each
+    /// `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cogmap_ids: Option<String>,
     pub sort: Option<ResourceSortField>,
     pub order: Option<SortOrder>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]

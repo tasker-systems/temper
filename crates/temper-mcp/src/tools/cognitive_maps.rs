@@ -170,6 +170,78 @@ pub async fn cogmap_read_charter(
     )]))
 }
 
+/// MCP input for `cogmap_list`. All fields optional — the default is every map you can see.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CogmapListInput {
+    /// Optional case-insensitive name-substring filter.
+    #[serde(default)]
+    pub name_contains: Option<String>,
+}
+
+/// List the cognitive maps the caller can see, each with identity + charter statement — the first
+/// move for orienting across maps. Self-scoped server-side (`cogmap_visible_maps`); an empty array
+/// means you can see no maps, never an error. Each row's `id` is directly addressable by every
+/// cogmap tool.
+pub async fn cogmap_list(
+    svc: &TemperMcpService,
+    input: CogmapListInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let mut rows = cogmap_service::list_visible(&svc.api_state.pool, ProfileId::from(profile.id))
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_list failed: {e}"), None))?;
+
+    if let Some(needle) = input.name_contains.as_deref().map(str::to_lowercase) {
+        rows.retain(|r| r.name.to_lowercase().contains(&needle));
+    }
+
+    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// MCP input for `cogmap_show`. `cogmap` is a ref (UUID or decorated `slug-<uuid>`).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapShowInput {
+    /// The cognitive map to orient on, by ref (UUID or `slug-<uuid>`).
+    pub cogmap: String,
+}
+
+/// One map's full orientation in a single call: its identity, its charter blocks (statement /
+/// questions / framing), and the foundational resources it is built on (its homed set, telos
+/// flagged). Errors with "not found or not readable" when the caller cannot read the map — the same
+/// no-leak convention as `cogmap_analytics`.
+pub async fn cogmap_show(
+    svc: &TemperMcpService,
+    input: CogmapShowInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let detail =
+        cogmap_service::show_visible(&svc.api_state.pool, ProfileId::from(profile.id), cogmap_id)
+            .await
+            .map_err(|e| match e {
+                ApiError::NotFound => rmcp::ErrorData::invalid_params(
+                    "cognitive map not found or not readable".to_string(),
+                    None,
+                ),
+                other => {
+                    rmcp::ErrorData::internal_error(format!("cogmap_show failed: {other}"), None)
+                }
+            })?;
+
+    let text = serde_json::to_string_pretty(&detail).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
 // ── cogmap_create (genesis) ──────────────────────────────────────────────────
 
 /// MCP input for cogmap_create (genesis). The MCP surface creates the map with an EMPTY charter — the

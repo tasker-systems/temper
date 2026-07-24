@@ -520,6 +520,42 @@
           }
         }
       ],
+      "get": {
+        "tags": [
+          "Cognitive Maps"
+        ],
+        "operationId": "list_cognitive_maps",
+        "responses": {
+          "200": {
+            "description": "The caller's visible cognitive maps (identity + charter statement)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CogmapRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "Cognitive Maps"
@@ -576,6 +612,44 @@
           }
         }
       ],
+      "get": {
+        "tags": [
+          "Cognitive Maps"
+        ],
+        "operationId": "get_cognitive_map",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cognitive map ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The map's identity, charter, and foundational resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CogmapDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Map not found or not readable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "put": {
         "tags": [
           "Cognitive Maps"
@@ -3704,6 +3778,18 @@
             }
           },
           {
+            "name": "cogmap_ids",
+            "in": "query",
+            "description": "Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in\none of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.\nA CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the\nquery string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each\n`--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "sort",
             "in": "query",
             "required": false,
@@ -6766,6 +6852,30 @@
           }
         }
       },
+      "CharterBlock": {
+        "type": "object",
+        "description": "One block of a cognitive map's telos charter, as returned by the `resource_blocks(cogmap_telos(…),\n…)` composition (T1 Sequence C). Mirrors the charter-read tuple field-for-field (`seq`, `role`,\n`body_text AS body`) so the service-direct read can `query_as!` straight into it. `role` is one of\n`statement` / `question` / `framing` (`temper-core/src/charter.rs`); a charter block always has both\na role and body, so neither is `Option` (see `cogmap_charter_select`'s forced-non-null SQL).",
+        "required": [
+          "seq",
+          "role",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Assembled block body text (a question-with-context block is `question + \"\\n\\n\" + context`)."
+          },
+          "role": {
+            "type": "string",
+            "description": "One of `statement` / `question` / `framing`."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position within the charter (statement is 0, then questions, then framing)."
+          }
+        }
+      },
       "CharterDisposition": {
         "type": "string",
         "description": "What the reconcile run did to the telos charter — a DISTINCT grain from the landmark counts.",
@@ -6838,6 +6948,64 @@
           "telos_resource_id": {
             "$ref": "#/components/schemas/ResourceId",
             "description": "`kb_cogmaps.telos_resource_id` — the charter resource (NOT NULL)."
+          }
+        }
+      },
+      "CogmapDetail": {
+        "type": "object",
+        "description": "The `cogmap show` aggregate — one map's full orientation in a single read: its identity\n([`CogmapRow`]), its charter blocks (statement / questions / framing, in seq), and the\nfoundational resources it is built on ([`CogmapFoundationRow`], telos flagged). Composed by the\nservice; not a `FromRow`.",
+        "required": [
+          "cogmap",
+          "charter",
+          "foundations"
+        ],
+        "properties": {
+          "charter": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CharterBlock"
+            },
+            "description": "The charter blocks in seq order (statement, then questions, then framing)."
+          },
+          "cogmap": {
+            "$ref": "#/components/schemas/CogmapRow",
+            "description": "The map's identity row (name, held-by scope, counts, charter statement)."
+          },
+          "foundations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CogmapFoundationRow"
+            },
+            "description": "The resources the map is built on — its visible homed set, telos flagged."
+          }
+        }
+      },
+      "CogmapFoundationRow": {
+        "type": "object",
+        "description": "One foundational resource of a cognitive map — a resource homed in the map, as returned by the\n`cogmap_foundations` SQL function field-for-field (so the service read can `query_as!` into it).\nThe map's telos/charter resource is flagged `is_telos`; the rest are the resources the map is\nbuilt on. The decorated `ref` (and `context_ref` where resolvable) is injected render-time by the\nCLI, exactly as list/show/search rows carry one.",
+        "required": [
+          "resource_id",
+          "title",
+          "doc_type",
+          "is_telos"
+        ],
+        "properties": {
+          "doc_type": {
+            "type": "string",
+            "description": "The resource's doc type (task / goal / concept / …)."
+          },
+          "is_telos": {
+            "type": "boolean",
+            "description": "True for the map's telos/charter resource — the constitutive resource, distinguished from the\nrest of the homed set."
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The resource id."
+          },
+          "title": {
+            "type": "string",
+            "description": "The resource title."
           }
         }
       },
@@ -7017,6 +7185,64 @@
           },
           "principal_table": {
             "type": "string"
+          }
+        }
+      },
+      "CogmapRow": {
+        "type": "object",
+        "description": "One row of the `cogmap list` surface — a cognitive map's identity + orientation, as returned by\nthe `cogmap_list_rows` SQL function (`migrations/20260724000010_cogmap_list_rows.sql`)\nfield-for-field, so the service read can `query_as!` straight into it.\n\nThis is the charter-bearing sibling of the Atlas's `HomeCogmap` view: same visible-maps base\n(`cogmap_visible_maps`), plus `telos_resource_id` and the charter `statement` so a caller can\norient — *what is this map for* — from the list itself, without a second round-trip. The\ndecorated `ref` (`sluggify(name)-<uuid>`) is injected render-time by the CLI (never persisted,\nnever on this wire type), exactly as context rows carry one.",
+        "required": [
+          "id",
+          "name",
+          "owner_ref",
+          "team_ids",
+          "region_count",
+          "resource_count",
+          "telos_resource_id"
+        ],
+        "properties": {
+          "charter_statement": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The charter's statement-of-purpose (block-0 of the telos). `None` when the charter has no\nauthored statement yet (e.g. an MCP genesis that minted an empty charter)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cognitive map's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The map's name."
+          },
+          "owner_ref": {
+            "type": "string",
+            "description": "Held-by scope: the already-sigil'd owner (`+<team-slug>` for a team-held map, or the universal\n`temper` marker for a public/system kernel that joins no member team)."
+          },
+          "region_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of the map's live (non-folded) materialized regions."
+          },
+          "resource_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of resources homed in the map (`anchor_table = 'kb_cogmaps'`)."
+          },
+          "team_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The member teams (self-or-ancestor) the map is joined to — the teams that make it visible."
+          },
+          "telos_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The telos/charter resource id."
           }
         }
       },
@@ -10438,7 +10664,18 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).\nMutually exclusive with `context_ref`. When set, the corpus is the map's homed\nparticipants the principal can see."
+            "description": "Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).\nMutually exclusive with `context_ref`. When set, the corpus is the map's homed\nparticipants the principal can see.\n\nRetained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a\npre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise\na set `cogmap_id` is treated as a one-element set."
+          },
+          "cogmap_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive\nbeside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older\nserver ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`."
           },
           "context_ref": {
             "type": [

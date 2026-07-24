@@ -277,9 +277,10 @@ pub enum Commands {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
-        /// Scope search to a single cognitive map (UUID or decorated ref). Mutually exclusive with --context.
-        #[arg(long)]
-        cogmap: Option<String>,
+        /// Scope search to one or more cognitive maps (UUID or decorated ref). Repeatable —
+        /// `--cogmap A --cogmap B` searches the union of both maps. Mutually exclusive with --context.
+        #[arg(long = "cogmap")]
+        cogmap: Vec<String>,
         /// Wayfind: lens-driven region-salience search across your visible maps. Mutually exclusive with --context / --cogmap.
         #[arg(long)]
         wayfind: bool,
@@ -480,6 +481,11 @@ pub enum ResourceAction {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
+        /// Scope to resources homed in one or more cognitive maps (UUID or decorated ref).
+        /// Repeatable — `--cogmap A --cogmap B` lists resources homed in either. Mutually
+        /// exclusive with --context.
+        #[arg(long = "cogmap")]
+        cogmap: Vec<String>,
         /// Maximum results (default 20; 50 with --meta-only). The response always
         /// carries `total` (the full match count) and `truncated`, so a capped
         /// page is self-evident. Conflicts with --all.
@@ -1460,6 +1466,23 @@ pub enum AdminAccessAction {
 
 #[derive(Subcommand)]
 pub enum CogmapCmd {
+    /// List the cognitive maps you can see — each with its ref, held-by scope, region/resource
+    /// counts, and charter statement (what the map is for). Filter by name and/or team.
+    List {
+        /// Filter to maps whose name contains this substring (case-insensitive).
+        #[arg(long)]
+        name_contains: Option<String>,
+        /// Filter to maps held by this team: a slug (optionally `+`-prefixed), a decorated
+        /// `slug-<uuid>` ref, or a team UUID.
+        #[arg(long)]
+        team: Option<String>,
+    },
+    /// Orient on one cognitive map: its charter (what it's for) and the resources it's built on
+    /// (its foundational homed set, with the telos flagged).
+    Show {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+    },
     /// Reconcile a cognitive map's content to a committed manifest.
     ///
     /// Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded

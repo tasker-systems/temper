@@ -170,6 +170,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 ResourceAction::List {
                     r#type,
                     context,
+                    cogmap,
                     limit,
                     all,
                     offset,
@@ -185,6 +186,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::resource::ListParams {
                         doc_type: &r#type,
                         context: context.as_deref(),
+                        cogmap: &cogmap,
                         limit,
                         all,
                         offset,
@@ -1138,7 +1140,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     query: &query,
                     embedding,
                     context: context.as_deref(),
-                    cogmap: cogmap.as_deref(),
+                    cogmap: &cogmap,
                     wayfind,
                     lens: lens.as_deref(),
                     regions,
@@ -1155,6 +1157,11 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         }
         Commands::Edge { action } => temper_cli::commands::edge::run(action, output_format),
         Commands::Cogmap { cmd } => match cmd {
+            CogmapCmd::List {
+                name_contains,
+                team,
+            } => commands::cogmap::list(name_contains.as_deref(), team.as_deref(), output_format),
+            CogmapCmd::Show { cogmap } => commands::cogmap::show(&cogmap, output_format),
             CogmapCmd::Reconcile {
                 r#ref,
                 manifest,
