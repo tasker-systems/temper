@@ -523,6 +523,17 @@ async fn readback_resource_standing_is_gated_and_carries_band(pool: sqlx::PgPool
         shape.r_parent, n as f64,
         "r_parent matches the seeded provenance count"
     );
+    // Set 5 Task 3/4 (spec §3.1): the two integer citation axes over the readback shape. `n`
+    // distinct live sources were seeded (one per base), none audited, so magnitude == n and
+    // coverage == 0.
+    assert_eq!(
+        shape.citation_magnitude, n as i32,
+        "citation_magnitude counts the n distinct live seeded sources"
+    );
+    assert_eq!(
+        shape.audit_coverage, 0,
+        "no citation audits were recorded for this finding, so coverage is 0"
+    );
     assert!(
         !shape.band.is_empty(),
         "the band chip is carried WITH the shape"
@@ -537,6 +548,48 @@ async fn readback_resource_standing_is_gated_and_carries_band(pool: sqlx::PgPool
     assert!(
         denied.is_none(),
         "an unrelated profile must not read the finding's standing shape: {denied:?}"
+    );
+}
+
+// ── Task 4 — readback::is_resource_visible (the extracted, shared predicate) ───────────────────
+//
+// `is_resource_visible` is the one Rust-callable spelling of `resources_visible_to`, extracted out
+// of `ensure_visible` so this read and Task 6's authorization gate ask the identical question. These
+// two tests exercise it directly rather than through `resource_standing`, since `resource_standing`'s
+// gate runs `resources_readable_by('profile', …)` inside SQL and never calls the extracted Rust
+// function at all — a green `resource_standing` test does not prove `is_resource_visible` itself is
+// wired correctly.
+
+/// Falsifies a `false`-always stub: the owner of a finding must be reported visible.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn is_resource_visible_true_for_a_readable_finding(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-visible-true").await;
+    let (finding, _bases) = seed_finding_with_n_provenance(&pool, owner, emitter, home, 1).await;
+
+    let visible = temper_substrate::readback::is_resource_visible(&pool, owner, finding)
+        .await
+        .expect("visibility check must not fault");
+    assert!(visible, "the owner must see its own finding");
+}
+
+/// Falsifies a `true`-always stub: an unrelated profile with no ownership/team access to the
+/// finding's home must be reported NOT visible.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn is_resource_visible_false_for_an_unreadable_one(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-visible-false").await;
+    let (finding, _bases) = seed_finding_with_n_provenance(&pool, owner, emitter, home, 1).await;
+
+    let outsider = ProfileId::from(common::insert_profile(&pool, "es-visible-outsider").await);
+    let visible = temper_substrate::readback::is_resource_visible(&pool, outsider, finding)
+        .await
+        .expect("visibility check must not fault");
+    assert!(
+        !visible,
+        "an unrelated profile with no reach into the finding's home must not see it"
     );
 }
 

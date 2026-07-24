@@ -44,9 +44,9 @@ pub async fn resource_evidence(
 
     Ok(StandingShape {
         finding_id: row.finding_id,
-        indep_breadth: row.indep_breadth,
-        adversarial_survival: row.adversarial_survival,
-        challenge_count: row.challenge_count,
+        citation_magnitude: row.citation_magnitude,
+        audit_coverage: row.audit_coverage,
+        citation_quality: row.citation_quality,
         contradiction_balance: row.contradiction_balance,
         freshness: row.freshness,
         r_parent: row.r_parent,

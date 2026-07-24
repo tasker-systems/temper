@@ -30,14 +30,16 @@ async fn readable_finding_returns_full_shape(pool: PgPool) {
     // The shape describes the requested finding and carries the band chip WITH it.
     assert_eq!(shape.finding_id, ResourceId::from(goal), "shape: {shape:?}");
     // A finding with no emitted evidence has zeroed components and the lowest band.
-    assert_eq!(shape.challenge_count, 0, "no challenges yet: {shape:?}");
+    assert_eq!(
+        shape.audit_coverage, 0,
+        "nobody has audited a citation yet: {shape:?}"
+    );
     assert_eq!(
         shape.band, "provisional",
         "a no-evidence finding bands provisional: {shape:?}"
     );
     // Every numeric component is present (non-NaN) — `band` is a lossy summary OVER these.
-    assert!(shape.indep_breadth.is_finite(), "shape: {shape:?}");
-    assert!(shape.adversarial_survival.is_finite(), "shape: {shape:?}");
+    assert!(shape.citation_quality.is_finite(), "shape: {shape:?}");
     assert!(shape.contradiction_balance.is_finite(), "shape: {shape:?}");
     assert!(shape.freshness.is_finite(), "shape: {shape:?}");
     assert!(shape.r_parent.is_finite(), "shape: {shape:?}");
