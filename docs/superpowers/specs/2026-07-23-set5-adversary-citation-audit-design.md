@@ -640,14 +640,32 @@ resolved **against that trait and the existing impls** (`authz/read_gates.rs:30,
    audit 404s in production because the machine principal cannot see the corpus.
 
 **AS DISCHARGED (2026-07-24, after the implementation review).** `AuditAuthority`
-(`crates/temper-services/src/authz/audit_gate.rs`) resolves one admitting arm and three denials.
-Two points where the first cut fell short of the text above, both now closed:
+(`crates/temper-services/src/authz/audit_gate.rs`) resolves one admitting arm and **two** denials.
 
-- **The machine conjunct was dropped.** The first cut gated on readability and non-authorship only,
-  so *any* principal with read on a finding could write verdicts — permanently (the trail is
-  append-only), unattributed (the evidence read surfaces no auditor), and unbounded. It is now the
-  `NotMachine` arm, probing the same `kb_machine_clients` allowlist `resolve_machine_from_claims`
-  consults at the door, `revoked_at IS NULL` included.
+- **AMENDMENT — the machine conjunct is deliberately NOT enforced on the audit write.** The
+  sentence above ("plus being a registered, unrevoked machine principal with reach") describes who
+  the *auditor persona* is; it is **not** a restriction on who may assess a citation. An
+  implementation pass read it as a third denial arm and shipped one; it was removed by an explicit
+  product decision.
+
+  The reason is not tolerance of humans but a use for them: **a human audit is a distinct signal,
+  not a degraded machine one, and human-expressible audits are wanted as a promotion mechanic.** A
+  person who reads a finding and judges that a source genuinely carries the claimed connection is
+  producing exactly the assessment this whole substrate exists to record, and refusing it because
+  the principal lacks a `client_id` would discard the strongest evidence the system can receive.
+
+  **The risk this accepts, stated plainly rather than buried.** Any principal holding read on a
+  finding may post `-1.0` on each of its citations and hold it at `disputed` for as long as nobody
+  outweighs it: the trail is append-only by design (§4.1), decay means the most recent writer
+  dominates, and the evidence read surfaces **no attribution** — so there is no retraction and no
+  visible culprit. Two mitigations would close it and **neither is built**: surfacing per-audit
+  attribution on the evidence read, and rate-limiting audits per principal per finding. Whoever
+  picks this up should treat them as the price of the promotion mechanic, not as polish.
+
+  What still holds: the write is never wider than the **read** (`Unreadable`), and the citer may
+  never grade its own work (`Author`, below). The machine conjunct IS still enforced where it
+  answers an operational rather than an evidential question — `POST /api/auditor/dispatch` and
+  `POST /api/auditor/{cogmap}/complete`, which drive the auditor's own queue (§6.5).
 - **"The cheaper sufficient proxy" was not sufficient.** `can_modify_resource` answers *"can you
   write this now?"*; authorship is a fact about the past. A citer who loses write and keeps read —
   a revoked grant, a reassigned home, a role demotion — was readmitted to grading its own work.

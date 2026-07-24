@@ -442,16 +442,22 @@ async fn posting_an_audit_of_a_non_citation_returns_400(pool: PgPool) {
     assert_eq!(audited, 0, "and nothing may land");
 }
 
-// ─── Test 8: a reader that is not a registered machine principal → 404 ──────
+// ─── Test 8: a human reader who authored nothing may audit → 200 ───────────
 
-/// Spec §7's machine conjunct at the HTTP surface. This principal holds the SAME read-only grant
-/// that admits the auditor in test 1 and authored nothing — so readability and non-authorship both
-/// admit it, and the only thing refusing it is the missing `kb_machine_clients` registration.
-/// Without the conjunct a teammate with read could post `-1.0` on every citation and pin the
-/// finding to `disputed` permanently: the trail is append-only and the evidence read carries no
-/// attribution.
+/// **A human may audit, at the HTTP surface.** This test asserted 404 in an earlier pass, when spec
+/// §7 ¶1's "registered, unrevoked machine principal" was read as a third denial arm. That arm was
+/// removed by an explicit product decision: a human audit is a distinct signal rather than a
+/// degraded machine one, and human-expressible audits are wanted as a promotion mechanic.
+///
+/// The principal holds the SAME read-only grant that admits the auditor in test 1, authored
+/// nothing, and is deliberately NOT registered in `kb_machine_clients`.
+///
+/// The risk that decision accepts is recorded in `authz/audit_gate.rs`'s module doc and is real: a
+/// teammate with read can post `-1.0` on every citation and hold the finding at `disputed` until
+/// someone outweighs it, because the trail is append-only and the evidence read carries no
+/// attribution. Attribution and rate-limiting are the mitigations, and neither is built.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn posting_as_an_unregistered_principal_returns_404(pool: PgPool) {
+async fn posting_as_an_unregistered_human_reader_succeeds(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
     let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
@@ -477,8 +483,16 @@ async fn posting_as_an_unregistered_principal_returns_404(pool: PgPool) {
 
     assert_eq!(
         resp.status().as_u16(),
-        404,
-        "an unregistered principal must be refused — and with 404, so the endpoint is not an \
-         oracle for which ids are registered agents"
+        200,
+        "a reader who did not author the citation may assess it, registered machine or not"
     );
+
+    // Not vacuous: a 200 that wrote nothing would be a different bug wearing the same status.
+    let audited: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE block_id = $1")
+            .bind(block)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audited, 1, "and the verdict actually lands on the ledger");
 }

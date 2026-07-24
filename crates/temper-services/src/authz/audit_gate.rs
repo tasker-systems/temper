@@ -15,11 +15,22 @@
 //! back: *"can read the finding — the full canonical visibility predicate — plus being a registered,
 //! unrevoked machine principal with reach"*, and a **self-audit denial arm**. Both are here:
 //!
-//! * [`AuditAuthority::NotMachine`] — the machine conjunct. Without it, any principal holding read
-//!   on a finding may post `-1.0` on each of its citations and pin it to `disputed` **permanently**:
-//!   the trail is append-only by design (`20260723000010_citation_audits.sql:12-17`), the decay
-//!   weighting means the most recent writer wins, and the evidence read surfaces no attribution. An
-//!   audit is an *agent act*; the principal registry is what says which agents exist.
+//! * The machine conjunct is **deliberately NOT enforced here.** Spec §7 ¶1 describes the auditor
+//!   as a registered machine principal, and an earlier pass read that as a third denial arm. It was
+//!   removed by an explicit product decision: a **human** audit is not a degraded machine audit but
+//!   a distinct and arguably stronger signal, and human-expressible audits are wanted as a
+//!   **promotion mechanic**. §7's registration sentence describes who the *auditor persona* is; it
+//!   is not a restriction on who may assess a citation.
+//!
+//!   **OPEN RISK, recorded rather than hidden.** Dropping it means any principal holding read on a
+//!   finding may post `-1.0` on each of its citations and pin it to `disputed` **for as long as
+//!   nobody outweighs it**: the trail is append-only by design
+//!   (`20260723000010_citation_audits.sql:12-17`), decay means the most recent writer dominates,
+//!   and the evidence read surfaces **no attribution**, so there is no retraction and no visible
+//!   culprit. The two mitigations that would close it — surfacing per-audit attribution on the
+//!   evidence read, and rate-limiting audits per principal per finding — are NOT built. Whoever
+//!   picks this up should treat them as the price of the promotion mechanic, not as polish. The
+//!   `Author` arm below is unaffected and still holds: the citer may never grade its own work.
 //! * [`AuditAuthority::Author`] — the self-audit arm. The projection favours recency and the sweep
 //!   clears a finding once its citations are covered (spec §4.1, §6.3), so a citer who audits its own
 //!   work both inflates its own standing *and* removes the finding from the adversary's queue.
@@ -225,7 +236,6 @@ pub(crate) enum AuditAuthority {
     Author,
     /// DENIAL — the caller is not a registered, unrevoked machine principal. Spec §7's other
     /// conjunct: an audit is an agent act on a permanent, unattributed, unbounded trail.
-    NotMachine,
     /// DENIAL — the caller cannot see the finding at all.
     Unreadable,
 }
@@ -268,10 +278,6 @@ impl ScopedAuthority for AuditAuthority {
             return Ok(AuditAuthority::Unreadable);
         }
 
-        if !is_machine_principal(pool, caller).await? {
-            return Ok(AuditAuthority::NotMachine);
-        }
-
         // The exact question (historical): did this principal emit the event that contributed this
         // citation? Keyed on the citation, not the finding — a multi-source block has one author per
         // source, and refusing an auditor for a source it did not contribute would be wrong in the
@@ -310,10 +316,7 @@ impl ScopedAuthority for AuditAuthority {
     /// either into the admitting side — or forgetting one here — silently restores self-grading or
     /// re-opens the write to every reader.
     fn is_denial(&self) -> bool {
-        matches!(
-            self,
-            AuditAuthority::Author | AuditAuthority::NotMachine | AuditAuthority::Unreadable
-        )
+        matches!(self, AuditAuthority::Author | AuditAuthority::Unreadable)
     }
 
     /// `NotFound`, not `Forbidden` — and deliberately so on every arm.
@@ -434,7 +437,8 @@ mod tests {
         /// Direct profile-anchored `can_read` grant, registered machine, contributed nothing →
         /// admitted.
         auditor: Uuid,
-        /// Same grant as `auditor`, but NOT registered in `kb_machine_clients` → `NotMachine`.
+        /// Same grant as `auditor`, but NOT registered in `kb_machine_clients` — admitted anyway,
+        /// since the machine conjunct is deliberately not enforced (see the module doc).
         human_reader: Uuid,
         /// No home, no grant, no team → not visible at all.
         outsider: Uuid,
@@ -614,7 +618,8 @@ mod tests {
         let s = seed(&pool).await;
         let subject = subject_of(&pool, &s).await;
         let author = ProfileId::from(s.author);
-        // The author must be a registered machine too, or `NotMachine` would refuse it first and
+        // The author is registered as a machine too — harmless now that the machine conjunct is
+        // gone, and it keeps this fixture testing the `Author` arm rather than
         // this test would pass for the wrong reason.
         register_machine(&pool, s.author, "citer@clients").await;
 
@@ -781,12 +786,19 @@ mod tests {
         );
     }
 
-    /// Spec §7's machine conjunct. The human reader holds exactly the grant the auditor holds and
-    /// contributed nothing — so readability and non-authorship both admit it, and the ONLY thing
-    /// refusing it is the `kb_machine_clients` registration. Delete the `NotMachine` probe and this
-    /// is the test that reds.
+    /// **A human may audit, and that is the point.** This test used to assert the opposite: an
+    /// earlier pass read spec §7 ¶1's "registered, unrevoked machine principal" as a third denial
+    /// arm, and this was the test proving it. The arm was removed by an explicit product decision —
+    /// a human audit is not a degraded machine audit but a distinct signal, and human-expressible
+    /// audits are wanted as a promotion mechanic (see the module doc, including the open risk that
+    /// decision accepts).
+    ///
+    /// The human reader holds exactly the grant the auditor holds and contributed nothing, so the
+    /// two surviving arms both admit it. Not vacuous: it asserts readability separately, so an
+    /// `Auditor` verdict reached by the gate silently admitting everything would not look like a
+    /// pass here — the neighbouring `Unreadable` and `Author` tests still red in that world.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_reader_who_is_not_a_registered_machine_is_refused(pool: PgPool) {
+    async fn a_human_reader_who_is_not_the_author_may_audit(pool: PgPool) {
         let s = seed(&pool).await;
         let subject = subject_of(&pool, &s).await;
         let reader = ProfileId::from(s.human_reader);
@@ -795,26 +807,28 @@ mod tests {
             readback::is_resource_visible(&pool, reader, subject.finding())
                 .await
                 .unwrap(),
-            "it can read the finding — readability is not why this is refused"
+            "precondition: it can read the finding"
         );
         assert_eq!(
             AuditAuthority::resolve(&pool, reader, subject)
                 .await
                 .unwrap(),
-            AuditAuthority::NotMachine,
-            "an audit is an agent act: an unregistered principal must not write a permanent, \
-             unattributed verdict onto a visible trust signal"
+            AuditAuthority::Auditor,
+            "a reader who did not contribute the citation may assess it, registered machine or not"
         );
         assert!(authorize::<AuditAuthority>(&pool, reader, subject)
             .await
-            .is_err());
+            .is_ok());
     }
 
-    /// A revoked registration is not a registration. `lookup_by_client_id` deliberately still
-    /// resolves a revoked row (the auth gate wants the timestamp for its message), so a probe that
-    /// forgot `revoked_at IS NULL` would readmit a decommissioned agent at every site but the door.
+    /// A revoked machine is refused at the DOOR, not here. `resolve_machine_from_claims` is
+    /// lookup-or-401 and a revoked row does not authenticate, so a decommissioned agent never
+    /// reaches this gate with a token. Asserting a revocation arm HERE would be asserting a
+    /// predicate this gate deliberately no longer runs — and, now that humans may audit, revocation
+    /// is not what this gate is about. Kept as an explicit statement of where the check lives, so
+    /// its absence reads as a decision rather than an oversight.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_revoked_machine_principal_is_refused(pool: PgPool) {
+    async fn a_revoked_machine_is_still_admitted_by_this_gate_because_authn_stops_it(pool: PgPool) {
         let s = seed(&pool).await;
         let subject = subject_of(&pool, &s).await;
         sqlx::query("UPDATE kb_machine_clients SET revoked_at = now() WHERE profile_id = $1")
@@ -827,7 +841,9 @@ mod tests {
             AuditAuthority::resolve(&pool, ProfileId::from(s.auditor), subject)
                 .await
                 .unwrap(),
-            AuditAuthority::NotMachine
+            AuditAuthority::Auditor,
+            "authorization asks 'may this principal audit this citation'; whether the credential is \
+             still live is authentication's question, answered before this gate runs"
         );
     }
 
@@ -864,15 +880,13 @@ mod tests {
         register_machine(&pool, s.author, "citer@clients").await;
 
         assert!(AuditAuthority::Author.is_denial());
-        assert!(AuditAuthority::NotMachine.is_denial());
         assert!(AuditAuthority::Unreadable.is_denial());
         assert!(!AuditAuthority::Auditor.is_denial());
 
-        for (label, caller) in [
-            ("author", s.author),
-            ("human reader", s.human_reader),
-            ("outsider", s.outsider),
-        ] {
+        // `human reader` is deliberately NOT in this list: with the machine conjunct gone it is an
+        // ADMITTED principal, covered by `a_human_reader_who_is_not_the_author_may_audit`. The two
+        // arms that remain are the two that deny.
+        for (label, caller) in [("author", s.author), ("outsider", s.outsider)] {
             let err = authorize::<AuditAuthority>(&pool, ProfileId::from(caller), subject)
                 .await
                 .expect_err("every non-admitting arm denies");
