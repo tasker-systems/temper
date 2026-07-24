@@ -125,6 +125,22 @@ async fn filtered_visible_page(
         Some(h) if h != "@me" => Some(h),
         _ => None,
     };
+    // Cognitive-map scope: a CSV of cogmap UUIDs (the list GET can't carry a Vec over the query
+    // string). Parse to a `uuid[]`; the WHERE below filters on the resource's home anchor. A single
+    // home per resource means this composes with `context_ref` only to the empty set (no resource is
+    // homed in both), which the CLI guards against — here it is simply an honest empty result.
+    let cogmap_ids: Option<Vec<Uuid>> = match params.cogmap_ids.as_deref() {
+        Some(csv) if !csv.trim().is_empty() => Some(
+            csv.split(',')
+                .map(|s| {
+                    Uuid::parse_str(s.trim()).map_err(|e| {
+                        ApiError::BadRequest(format!("invalid cogmap id {:?}: {e}", s.trim()))
+                    })
+                })
+                .collect::<ApiResult<Vec<_>>>()?,
+        ),
+        _ => None,
+    };
     let sort = params.sort.unwrap_or_default();
     let dir = match params.order.unwrap_or_default() {
         SortOrder::Asc => "ASC",
@@ -167,6 +183,7 @@ async fn filtered_visible_page(
                      AND ge.target_table = 'kb_resources' AND ge.target_id = $8
                      AND ge.edge_kind = 'leads_to' AND ge.label = $9
                      AND NOT ge.is_folded))
+            AND ($10::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($10)))
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -183,6 +200,7 @@ async fn filtered_visible_page(
         .bind(params.q.as_deref())
         .bind(params.goal)
         .bind(super::db_backend::GOAL_EDGE_LABEL)
+        .bind(cogmap_ids)
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
@@ -395,9 +413,17 @@ async fn resolve_search_scope(
     profile_id: ProfileId,
     params: &SearchParams,
 ) -> ApiResult<(Option<uuid::Uuid>, Option<Vec<Uuid>>)> {
-    if params.context_ref.is_some() && params.cogmap_id.is_some() {
+    // Effective cogmap set: the plural `cogmap_ids` wins when present; otherwise a scalar `cogmap_id`
+    // is a one-element set. Empty ⇒ no cogmap scope. Reconciling the two wire fields ONCE, here, means
+    // every downstream check (exclusion, wayfind anchor, scope resolution) sees a single shape.
+    let effective_cogmaps: Vec<Uuid> = match params.cogmap_ids.as_deref() {
+        Some(ids) if !ids.is_empty() => ids.to_vec(),
+        _ => params.cogmap_id.into_iter().collect(),
+    };
+
+    if params.context_ref.is_some() && !effective_cogmaps.is_empty() {
         return Err(ApiError::BadRequest(
-            "context_ref and cogmap_id are mutually exclusive".into(),
+            "context_ref and cogmap scope are mutually exclusive".into(),
         ));
     }
 
@@ -415,14 +441,19 @@ async fn resolve_search_scope(
         None => None,
     };
 
-    // `wayfind` runs the region-salience funnel over every visible anchor of both kinds; `cogmap_id`
-    // alone is the single-map scope. Both visibility-gate inside the SQL; an empty result is deny →
-    // zero rows, never an error.
+    // `wayfind` runs the region-salience funnel over every visible anchor of both kinds; the cogmap
+    // set alone is the (single- OR multi-)map scope. Both visibility-gate inside the SQL; an empty
+    // result is deny → zero rows, never an error.
     let scope_ids: Option<Vec<Uuid>> = if params.wayfind {
         // A named anchor scopes the region pool to itself ("wayfind within this context/cogmap").
-        // The exclusion above guarantees at most one of the two is set, so this match is total and
-        // the arm order carries no hidden precedence. `None` ⇒ pool every visible anchor.
-        let anchor = match (context_id, params.cogmap_id) {
+        // Wayfind's anchor is a single home, so only a one-element cogmap set anchors it; a multi-map
+        // wayfind is rejected client-side, and a >1 set here (defensive) pools every visible anchor.
+        // The context/cogmap exclusion above guarantees at most one kind is set.
+        let single_cogmap = match effective_cogmaps.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        };
+        let anchor = match (context_id, single_cogmap) {
             (Some(ctx), _) => Some(HomeAnchor::Context(ContextId::from(ctx))),
             (_, Some(map)) => Some(HomeAnchor::Cogmap(CogmapId::from(map))),
             (None, None) => None,
@@ -445,15 +476,21 @@ async fn resolve_search_scope(
             .await
             .map_err(api_err)?,
         )
-    } else if let Some(map) = params.cogmap_id {
+    } else if !effective_cogmaps.is_empty() {
+        // Union of each map's homed, visible participants — one round-trip. Each map is independently
+        // map-read gated inside `cogmap_scope_ids`, so an unreadable map in the set adds nothing.
         Some(
-            sqlx::query_scalar!("SELECT cogmap_scope_ids($1, $2)", profile_id.uuid(), map)
-                .fetch_all(pool)
-                .await
-                .map_err(api_err)?
-                .into_iter()
-                .flatten()
-                .collect(),
+            sqlx::query_scalar!(
+                "SELECT cogmap_scope_ids_multi($1, $2)",
+                profile_id.uuid(),
+                &effective_cogmaps
+            )
+            .fetch_all(pool)
+            .await
+            .map_err(api_err)?
+            .into_iter()
+            .flatten()
+            .collect(),
         )
     } else {
         None
@@ -556,7 +593,14 @@ async fn embed_query_if_missing(params: &mut SearchParams) -> bool {
 fn classify_scope(params: &SearchParams) -> SearchScope {
     if params.wayfind {
         SearchScope::Wayfind
-    } else if params.cogmap_id.is_some() {
+    } else if params.cogmap_id.is_some()
+        || params
+            .cogmap_ids
+            .as_deref()
+            .is_some_and(|ids| !ids.is_empty())
+    {
+        // Single- or multi-map — both are `Cogmap` scope (the enum is a frozen wire contract; the
+        // plural does not earn a new variant, only a wider corpus).
         SearchScope::Cogmap
     } else if params.context_ref.is_some() {
         SearchScope::Context

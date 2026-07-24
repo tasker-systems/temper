@@ -3777,8 +3777,18 @@ export interface components {
              * @description Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
              *     Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
              *     participants the principal can see.
+             *
+             *     Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a
+             *     pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise
+             *     a set `cogmap_id` is treated as a one-element set.
              */
             cogmap_id?: string | null;
+            /**
+             * @description Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive
+             *     beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older
+             *     server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+             */
+            cogmap_ids?: string[] | null;
             /** @description Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side. */
             context_ref?: string | null;
             /** @description Filter by document type. */
@@ -6644,6 +6654,14 @@ export interface operations {
                  *     query. `None` = no goal filter.
                  */
                 goal?: string | null;
+                /**
+                 * @description Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in
+                 *     one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.
+                 *     A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the
+                 *     query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each
+                 *     `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
+                 */
+                cogmap_ids?: string | null;
                 sort?: null | components["schemas"]["ResourceSortField"];
                 order?: null | components["schemas"]["SortOrder"];
                 limit?: number | null;

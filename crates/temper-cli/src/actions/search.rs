@@ -27,8 +27,9 @@ pub struct CliSearchArgs<'a> {
     pub query: &'a str,
     pub embedding: Option<Vec<f32>>,
     pub context: Option<&'a str>,
-    /// Cogmap ref (UUID or decorated) for single-map scope. Mutually exclusive with `context`.
-    pub cogmap: Option<&'a str>,
+    /// Cogmap refs (UUID or decorated) for single- or multi-map scope — the corpus is the union of
+    /// the maps. Empty ⇒ no cogmap scope. Mutually exclusive with `context`.
+    pub cogmap: &'a [String],
     /// Wayfind region-salience scope across the principal's visible maps. Mutually exclusive
     /// with `context` and `cogmap`.
     pub wayfind: bool,
@@ -57,9 +58,17 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
     // this context" and `--cogmap Y --wayfind` "wayfind within this cogmap". This client-side guard
     // is the thing that actually gated `temper search --context @me/temper --wayfind` — the server
     // would have accepted it, but the CLI rejected it before the round-trip.
-    if args.context.is_some() && args.cogmap.is_some() {
+    if args.context.is_some() && !args.cogmap.is_empty() {
         return Err(TemperError::BadRequest(
             "--context and --cogmap are mutually exclusive; specify at most one home".into(),
+        ));
+    }
+    // Wayfind anchors on a SINGLE home, so it composes with at most one --cogmap. A multi-map
+    // --wayfind has no single anchor to pool regions within; reject it here, before the round-trip,
+    // rather than silently dropping the extra maps server-side.
+    if args.wayfind && args.cogmap.len() > 1 {
+        return Err(TemperError::BadRequest(
+            "--wayfind anchors on a single map; pass at most one --cogmap with --wayfind".into(),
         ));
     }
     // `--lens` / `--regions` only modify the wayfind funnel; they are meaningless without it.
@@ -68,14 +77,21 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
             "--lens and --regions require --wayfind".into(),
         ));
     }
-    let cogmap_id = args
-        .cogmap
-        .map(|r| {
-            temper_workflow::operations::parse_ref(r)
-                .map(|id| id.0)
-                .map_err(|e| TemperError::Config(format!("invalid cogmap ref: {e}")))
-        })
-        .transpose()?;
+    // Parse each --cogmap ref (trailing-UUID-only) into the multi-map set. Empty ⇒ no cogmap scope.
+    let cogmap_ids: Option<Vec<uuid::Uuid>> = if args.cogmap.is_empty() {
+        None
+    } else {
+        Some(
+            args.cogmap
+                .iter()
+                .map(|r| {
+                    temper_workflow::operations::parse_ref(r)
+                        .map(|id| id.0)
+                        .map_err(|e| TemperError::Config(format!("invalid cogmap ref: {e}")))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )
+    };
     let lens_id = args
         .lens
         .map(|r| {
@@ -88,7 +104,8 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
         query: Some(args.query.to_string()),
         embedding: args.embedding,
         context_ref: args.context.map(String::from),
-        cogmap_id,
+        cogmap_id: None,
+        cogmap_ids,
         wayfind: args.wayfind,
         lens_id,
         regions: args.regions,
@@ -169,7 +186,7 @@ mod tests {
             query: "hello",
             embedding: None,
             context: Some("temper"),
-            cogmap: None,
+            cogmap: &[],
             wayfind: false,
             lens: None,
             regions: None,
@@ -199,7 +216,7 @@ mod tests {
             query: "x",
             embedding: None,
             context: None,
-            cogmap: None,
+            cogmap: &[],
             wayfind: false,
             lens: None,
             regions: None,
@@ -221,7 +238,7 @@ mod tests {
             query: "x",
             embedding: None,
             context: None,
-            cogmap: None,
+            cogmap: &[],
             wayfind: false,
             lens: None,
             regions: None,
@@ -250,11 +267,12 @@ mod tests {
     #[test]
     fn test_build_search_params_cogmap_uuid() {
         let id = uuid::Uuid::now_v7();
+        let maps = [id.to_string()];
         let args = CliSearchArgs {
             query: "q",
             embedding: None,
             context: None,
-            cogmap: Some(&id.to_string()),
+            cogmap: &maps,
             wayfind: false,
             lens: None,
             regions: None,
@@ -267,19 +285,80 @@ mod tests {
             seed_only: false,
         };
         let params = build_search_params(args).expect("build_search_params");
-        assert_eq!(params.cogmap_id, Some(id));
+        // A single --cogmap lands in the plural set; the scalar stays None (the server treats a
+        // one-element set as single-map scope).
+        assert_eq!(params.cogmap_ids, Some(vec![id]));
+        assert!(params.cogmap_id.is_none());
         assert!(params.context_ref.is_none());
+    }
+
+    #[test]
+    fn test_build_search_params_multi_cogmap_union() {
+        let a = uuid::Uuid::now_v7();
+        let b = uuid::Uuid::now_v7();
+        let maps = [a.to_string(), b.to_string()];
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: None,
+            cogmap: &maps,
+            wayfind: false,
+            lens: None,
+            regions: None,
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+            seed_only: false,
+        };
+        let params = build_search_params(args).expect("build_search_params");
+        assert_eq!(
+            params.cogmap_ids,
+            Some(vec![a, b]),
+            "both maps ride into the set"
+        );
+    }
+
+    #[test]
+    fn test_build_search_params_multi_cogmap_rejects_wayfind() {
+        let maps = [
+            uuid::Uuid::now_v7().to_string(),
+            uuid::Uuid::now_v7().to_string(),
+        ];
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: None,
+            cogmap: &maps,
+            wayfind: true,
+            lens: None,
+            regions: None,
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+            seed_only: false,
+        };
+        let err = build_search_params(args).expect_err("multi-map + wayfind is rejected");
+        assert!(
+            err.to_string().contains("single map"),
+            "error should name the single-anchor requirement; got {err}"
+        );
     }
 
     #[test]
     fn test_build_search_params_context_and_cogmap_mutually_exclusive() {
         let id = uuid::Uuid::now_v7();
-        let id_str = id.to_string();
+        let maps = [id.to_string()];
         let args = CliSearchArgs {
             query: "q",
             embedding: None,
             context: Some("temper"),
-            cogmap: Some(&id_str),
+            cogmap: &maps,
             wayfind: false,
             lens: None,
             regions: None,
@@ -306,7 +385,7 @@ mod tests {
             query: "q",
             embedding: None,
             context: None,
-            cogmap: None,
+            cogmap: &[],
             wayfind: true,
             lens: Some(&lens_str),
             regions: Some(5),
@@ -324,6 +403,7 @@ mod tests {
         assert_eq!(params.regions, Some(5));
         assert!(params.context_ref.is_none());
         assert!(params.cogmap_id.is_none());
+        assert!(params.cogmap_ids.is_none());
     }
 
     /// T7 INVERTS this test. `--context X --wayfind` used to be rejected here, client-side, before any
@@ -336,7 +416,7 @@ mod tests {
             query: "q",
             embedding: None,
             context: Some("@me/temper"),
-            cogmap: None,
+            cogmap: &[],
             wayfind: true,
             lens: None,
             regions: None,
@@ -366,7 +446,7 @@ mod tests {
             query: "q",
             embedding: None,
             context: None,
-            cogmap: None,
+            cogmap: &[],
             wayfind: false,
             lens: Some(&lens_str),
             regions: None,

@@ -3778,6 +3778,18 @@
             }
           },
           {
+            "name": "cogmap_ids",
+            "in": "query",
+            "description": "Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in\none of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.\nA CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the\nquery string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each\n`--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "sort",
             "in": "query",
             "required": false,
@@ -10652,7 +10664,18 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).\nMutually exclusive with `context_ref`. When set, the corpus is the map's homed\nparticipants the principal can see."
+            "description": "Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).\nMutually exclusive with `context_ref`. When set, the corpus is the map's homed\nparticipants the principal can see.\n\nRetained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a\npre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise\na set `cogmap_id` is treated as a one-element set."
+          },
+          "cogmap_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive\nbeside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older\nserver ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`."
           },
           "context_ref": {
             "type": [

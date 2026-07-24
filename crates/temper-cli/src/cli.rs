@@ -277,9 +277,10 @@ pub enum Commands {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
-        /// Scope search to a single cognitive map (UUID or decorated ref). Mutually exclusive with --context.
-        #[arg(long)]
-        cogmap: Option<String>,
+        /// Scope search to one or more cognitive maps (UUID or decorated ref). Repeatable —
+        /// `--cogmap A --cogmap B` searches the union of both maps. Mutually exclusive with --context.
+        #[arg(long = "cogmap")]
+        cogmap: Vec<String>,
         /// Wayfind: lens-driven region-salience search across your visible maps. Mutually exclusive with --context / --cogmap.
         #[arg(long)]
         wayfind: bool,
@@ -480,6 +481,11 @@ pub enum ResourceAction {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
+        /// Scope to resources homed in one or more cognitive maps (UUID or decorated ref).
+        /// Repeatable — `--cogmap A --cogmap B` lists resources homed in either. Mutually
+        /// exclusive with --context.
+        #[arg(long = "cogmap")]
+        cogmap: Vec<String>,
         /// Maximum results (default 20; 50 with --meta-only). The response always
         /// carries `total` (the full match count) and `truncated`, so a capped
         /// page is self-evident. Conflicts with --all.
