@@ -155,14 +155,44 @@ gains a **fourth arm** so the lossy chip carries the *sign* of the auditor's wor
 "never evaluated" and "evaluated and found wanting" are not flattened together (spec §1's
 requirement, on its negative side):
 
-- `near-canonical` — high magnitude **and** high coverage ratio **and** positive quality.
-  The coverage-ratio conjunct is what stops a high-magnitude monoculture from reaching it.
-- `reinforced` — moderate magnitude, positive quality, and not under live contradiction.
+- `near-canonical` — `magnitude >= 2` **and** coverage ratio `= 1.0` **and** net-positive
+  quality **and** not under live contradiction.
+- `reinforced` — `magnitude >= 1` **and** coverage ratio `>= 0.5` **and** `quality > 0.0`
+  **and** not under live contradiction.
 - `disputed` — `audit_coverage > 0` **and** `citation_quality < 0`: the adversary examined
   it and it did not hold. Distinct from the floor.
 - `provisional` — the floor, including every unaudited finding (coverage 0).
 
-Exact thresholds are a tunable default this set owns, as Set 3 owned the freshness half-life.
+**Calibrated for the system's real dynamics — reachable in one thorough pass, not many
+rounds.** Two structural choices make the ladder achievable for a resource that is reviewed
+*well once* rather than *often*, which is the common case (most concepts/facts see only a
+handful of steward/auditor passes in their lifetime, and even the future coherence/salience
+reap pass does not change that):
+
+- **The magnitude floor for the top band is `2`, not `3`.** Two is the honest Landmesser line
+  — *more than one independent source*; a lone source can never be near-canonical no matter
+  how well-audited (that is the whole point), but demanding three would make near-canonical
+  structurally unreachable for the large fraction of an atomic KB that rests on two vetted
+  sources, even where it is deserved.
+- **Full coverage is reached in a single pass, and a lone positive audit holds without
+  eroding.** Coverage is per-distinct-source, so one thorough auditor visit audits every
+  cited source and reaches ratio `1.0` at once — the top band does **not** require repeated
+  rounds. And decay only arbitrates *between competing* audits; a single audit's weight
+  cancels in the mean, so an old lone `+0.8` still reads `+0.8` on the quality axis
+  indefinitely. Staleness is carried by the separate `freshness` component, which the band
+  deliberately does **not** gate on, precisely so infrequent review does not demote earned
+  standing.
+
+**The absolute quality threshold is co-calibrated with the auditor prompt, not fixed here.**
+`quality > 0.5` versus `> 0.3` is meaningful only *relative to how the auditor uses the
+`[-1.0, 1.0]` range* (whether it reserves the top of the range for "fully carries the claim"
+or spreads its scores differently), and that distribution does not exist until the auditor
+prompt does. So the numeric quality cut is a **provisional low default** finalized against the
+auditor's real scoring distribution during the persona work (§5), not guessed against none.
+Because the band is a read-time function over stored components (§1.3), re-tuning it later is
+a one-migration change with no backfill — the numbers are the cheapest thing in this design
+to move, and the structural choices above (floor of 2, full-coverage-in-one-pass) are the
+load-bearing part.
 
 - CONFORM — spec §1.1 (shape-primary, band as lossy chip) and §1.3 (memoized components,
   band computed at read). The band stays a read-time function over components.
@@ -573,15 +603,13 @@ Two gaps to settle in the plan, both additive:
   rejects them rather than silently no-op'ing. A coherent later extension.
 - **Time-based re-audit of already-covered findings.** The decay model (§4.1) makes it
   natural, but the first-cut sweep re-queues only on new citations (§6.3). A tuning surface.
-- **`near-canonical` reachability by the shipped write paths.** The band's top arm also
-  requires `contradiction_balance`, which depends on `supports`/`corroborates` edges that
-  nothing in the product writes today (full-repo grep: only the reader, its plan, and a
-  test). Set 5 makes the *quality* and *coverage* conjuncts reachable via the audit path but
-  does **not** ship a `supports`-edge writer, so whether `near-canonical` is reachable
-  end-to-end depends on work outside this set. The plan must include a test that asserts
-  which band the shipped write paths *can* reach, so this is a stated fact rather than a
-  surprise — and if the top band proves unreachable, that is Set 6's concern to resolve, not
-  a silent dead threshold.
+- **A `supports`/`corroborates`-edge writer.** The band's `contradiction_balance` conjunct
+  is satisfied at the default `0.0` (no contradicts edges), so near-canonical **is** reachable
+  through the audit path alone (§3.1's recalibration; the plan pins this with a
+  `near_canonical_is_reachable_in_one_pass` test). Set 5 does **not** ship a positive-edge
+  writer, so `contradiction_balance` can only ever be `<= 0` today; a finding cannot be pushed
+  *above* neutral on that axis until such a writer exists. That is a deliberate non-goal here —
+  the vector-sum contradiction axis is Set 6's/a later concern — not a blocked band.
 - **Set 4 (steward's three jobs).** Untouched. This spec adds a schedule beside the steward
   and never modifies the steward's own tick.
 
