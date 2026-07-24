@@ -37,7 +37,7 @@ on 2026-07-23:
 | Inherited debt | Ground truth |
 |---|---|
 | The challenge/survived label vocabulary | `resource_adversarial_survival` counts `express` edges labelled `'challenged'` and sums weight on `'survived-challenge'` (`migrations/20260721000010_evidential_standing_memo.sql:169-177`). Both labels appear **nowhere else in the repo**. It returns `(0, 0)` for every finding. |
-| The independence-edge writer | `refresh_independence_pairs` builds `kb_independence_pairs` from `express` / `label='independent-of'` edges between two `kb_resources` (`…memo.sql:116-134`). `'independent-of'` has **no writer**. The table is provably empty. |
+| The independence-edge writer | `refresh_independence_pairs` builds `kb_independence_pairs` from `express` / `label='independent-of'` edges between two `kb_resources` (`…memo.sql:116-134`). `'independent-of'` has **no production writer**, so the table is empty in any real database. It does have exactly **one test writer** — `crates/temper-substrate/tests/evidential_standing.rs:237` — which is what `affirmed_independence_raises_breadth` (`:227`) exercises, and which §3.4's retirement therefore breaks. Retiring the pairwise model means deleting those tests, not just the functions. |
 | The scar writer | `kb_block_provenance.is_corrected` exists with `DEFAULT false` and is read-filtered everywhere (`migrations/20260624000001_canonical_schema.sql:610`), with **no writer anywhere**. |
 | Edge-incident refresh | `TODO(Set 5)` at `crates/temper-services/src/backend/db_backend.rs:1165-1172`: the pairs memo is rebuilt only on resource create/update, never on edge writes, so `indep_breadth` would read stale after an independence-edge assert/fold. |
 
@@ -220,7 +220,9 @@ ledger firewall with no new mechanism.
 `AgentAuthorship { reasoning, confidence, rationale, persona, model }` rides
 `kb_events.metadata`, deliberately **not** the payload, "so it is invisible to projections
 (and thus affinity math) by construction"
-(`crates/temper-core/src/types/authorship.rs:9-11,56-66`; `canonical_schema.sql:473-475`).
+(`crates/temper-core/src/types/authorship.rs:9-11,56-66`). The two columns are adjacent and
+distinct: `payload` at `canonical_schema.sql:475`, whose comment at `:473-474` states that
+"the projection halves (`_project_*`) read ONLY this", and `metadata` at `:480`.
 `confidence` is non-`Option` — required whenever authorship is supplied at all.
 
 This existing invariant draws the line this design needs, so we adopt it rather than
@@ -245,8 +247,16 @@ next write. That policy is already reasoned on disk and is inherited, not re-dec
 Registering `citation_audited` with `category = 'domain'` puts audits in the element trail
 by default — an audit is inspectable and challengeable like any other act. The allowlist
 direction is load-bearing: `element_trail_node`/`_edge` filter `et.category = 'domain'`
-precisely so a future category is excluded by default
-(`migrations/20260719000010_admin_cognition_firewall_declarative.sql:105,146`).
+precisely so a future category is excluded by default (the two functions are declared at
+`migrations/20260719000010_admin_cognition_firewall_declarative.sql:105,146`; the
+`et.category = 'domain'` filters themselves are at `:139` and `:165`).
+
+**Registering the event type is not a copy-paste.** `kb_event_types.category` is `NOT NULL`
+with **no default** — `20260718000020_trail_admin_event_firewall.sql:47` added it with a
+default and `20260719000010:98` dropped that default, precisely so a registration using the
+pre-firewall idiom **aborts at apply time** rather than landing silently mis-categorized
+(`20260719000010:74-81` says so in as many words). Every post-firewall registration spells
+`category` explicitly; see `20260720000020_principal_standing_events.sql:26`.
 
 ---
 
@@ -300,10 +310,18 @@ instructions (not ledger-visible). No envelope change is required.
 ### 6.1 The queue is already persona-agnostic — **CONFORM**
 
 `kb_workflow_jobs` opens with *"Persona-agnostic durable job queue for agent dispatch"*,
-carries a `persona text` column, and enforces single-flight on
-`(cogmap_id, persona, dispatch_type)` (`migrations/20260705000001_workflow_jobs.sql:18-46`).
-The auditor takes a new persona value and inherits SKIP LOCKED claim, lease-expiry reaping,
-attempts gating, and in-flight dedup with **no new queue DDL**.
+carries a `persona text` column (`migrations/20260705000001_workflow_jobs.sql:1,22`), and
+enforces single-flight on `(cogmap_id, persona, dispatch_type)` (`:43-45`). The auditor takes
+a new persona value and inherits SKIP LOCKED claim, lease-expiry reaping, attempts gating,
+and in-flight dedup with **no new queue DDL**.
+
+**But the queue's grain is a cogmap and the auditor's unit of work is a finding**, and that
+mismatch is not free. The single-flight index means N uncovered findings in one cogmap
+enqueue **one** job, with the other N−1 silently discarded by `workflow_job_enqueue`'s
+`ON CONFLICT DO NOTHING` (`:59-62`). The resolution: enqueue **one job per cogmap whose
+payload carries the uncovered finding list**, and let the session iterate. That keeps the
+steward's one-session-per-cogmap shape and avoids an unbounded `dispatch_type` cardinality,
+which is what per-finding discrimination would cost.
 
 The schedule mirrors `schedules/steward.ts`: deterministic server-side sweep → enqueue →
 claim, a correlation id minted per tick and threaded across the app boundary, then one
