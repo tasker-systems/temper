@@ -34,8 +34,12 @@ mod two_sided;
 
 // Wired by Task 7: `DbBackend::record_citation_audit` derives the subject with `finding_of_block`
 // and gates on `AuditAuthority`. That backend command is the single chokepoint every surface funnels
-// through, so it is the only caller — a second `authorize::<AuditAuthority>` on a surface would be a
-// double gate that can drift from this one.
+// through, so it is the only caller of `authorize::<AuditAuthority>` — a second one on a surface
+// would be a double gate that can drift from this one.
+//
+// `finding_of_block` itself gained a second caller in Task 8: `citation_audit_service` reuses it
+// (never `authorize`) to refuse a path/block mismatch before dispatching to the backend above —
+// the one spelling of the lookup, used at both of `audit_gate.rs:70-71`'s named call sites.
 pub(crate) use audit_gate::{finding_of_block, AuditAuthority};
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
