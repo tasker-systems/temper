@@ -86,6 +86,16 @@ pub enum ConfigError {
          Set JWKS_URL to $AS_ISSUER/oauth/jwks."
     )]
     AsJwksMismatch,
+
+    #[error(
+        "{0} and {1} hold the SAME value. Each of this instance's shared secrets gates a different \
+         internal capability, and their being different values is the whole security property: \
+         SLACK_LINK_SECRET answers \"is this principal linked?\", SLACK_MINT_SECRET vends a token \
+         carrying that human's entire reach, and SLACK_VAULT_ENC_KEY decrypts every stored grant. \
+         Two of them sharing a value means whoever holds the cheap capability already holds the \
+         expensive one. Give each its own: `openssl rand -base64 32`."
+    )]
+    SecretCollision(&'static str, &'static str),
 }
 
 /// Read a variable, treating whitespace-only and empty as absent — uniformly, for every variable.
