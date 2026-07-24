@@ -127,6 +127,13 @@ use temper_workflow::types::resource::{
         temper_core::types::steward::DispatchTickResponse,
         temper_core::types::workflow_job::ClaimedJob,
         temper_core::types::workflow_job::EmbedDispatchSummary,
+        temper_core::types::auditor::AuditSweepRow,
+        temper_core::types::auditor::AuditorDispatchTickRequest,
+        temper_core::types::auditor::AuditorDispatchTickResponse,
+        temper_core::types::auditor::AuditorJobCompleteAck,
+        // Registered explicitly: `.routes()` collects schemas from request/response BODIES, and
+        // `ClaimedAuditJob` is only ever reached transitively through `AuditorDispatchTickResponse`.
+        temper_core::types::auditor::ClaimedAuditJob,
         temper_core::types::invitation::TeamInvitation,
         temper_core::types::invitation::InvitationStatus,
         temper_core::types::invitation::InviteeInvitation,
@@ -166,6 +173,7 @@ use temper_workflow::types::resource::{
         (name = "Invitations", description = "Team invitations (invite/list/accept/decline)"),
         (name = "Reassign", description = "Resource ownership reassignment (single + bulk team-scoped)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
+        (name = "Auditor", description = "Citation auditor dispatch — coverage sweep + per-cogmap job fan-out"),
         (name = "Access", description = "System access gate — self-service join requests and public settings"),
         (name = "Slack Link", description = "Slack account-link disconnect — self-serve and admin"),
     ),

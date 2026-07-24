@@ -24,6 +24,20 @@ pub const DEFAULT_EMBED_LEASE_SECONDS: i32 = 600;
 /// under the function timeout; the queue drains the backlog across ticks.
 pub const DEFAULT_EMBED_DISPATCH_CAP: i32 = 5;
 
+/// Lease for a claimed citation-audit job (Set 5). Same reasoning as the steward lease: it MUST
+/// exceed the Vercel function timeout (300s) so a genuinely-running auditor session is never reaped
+/// mid-flight. An auditor session weighs several citations serially, so it is not shorter.
+pub const DEFAULT_AUDITOR_LEASE_SECONDS: i32 = 600;
+
+/// Rows the auditor's sweep asks for per tick — the `p_limit` handed to `audit_drift_sweep`, and
+/// therefore a **finding** budget, not a cogmap one. The sweep is finding-grained
+/// (`migrations/20260723000030_audit_drift_sweep.sql:86-87`,
+/// `RETURNS TABLE(cogmap_id uuid, finding_id uuid, uncovered int)`) while the queue is cogmap-grained
+/// (spec §6.1), so N swept findings collapse into ≤ N jobs. Deliberately larger than
+/// [`DEFAULT_STEWARD_DISPATCH_CAP`] for that reason: a cap of 10 findings could be one cogmap's worth
+/// of work and would starve every other map.
+pub const DEFAULT_AUDITOR_DISPATCH_CAP: i64 = 50;
+
 /// Which agent persona a queued job is for. The queue is persona-agnostic; `Embed` is the
 /// non-agent, server-computed embedding worker (issue #299) and shares the queue with `Steward`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +45,11 @@ pub const DEFAULT_EMBED_DISPATCH_CAP: i32 = 5;
 pub enum Persona {
     Steward,
     Embed,
+    /// The citation auditor (Set 5). A DISTINCT persona value, not a steward dispatch_type: the
+    /// single-flight index is `(cogmap_id, persona, dispatch_type)`
+    /// (`migrations/20260705000001_workflow_jobs.sql:43-45`), so a separate persona is what lets an
+    /// auditor job and a steward job be in flight over the same cogmap at once.
+    Auditor,
 }
 
 impl Persona {
@@ -39,6 +58,7 @@ impl Persona {
         match self {
             Persona::Steward => "steward",
             Persona::Embed => "embed",
+            Persona::Auditor => "auditor",
         }
     }
 }
@@ -51,6 +71,10 @@ impl Persona {
 pub enum DispatchType {
     Steward,
     Embed,
+    /// One citation-audit pass over a single cogmap (Set 5). ONE dispatch type for the whole
+    /// persona — deliberately not one per finding: per-finding discrimination would make
+    /// `dispatch_type` unboundedly cardinal, which spec §6.1 names and rejects.
+    CitationAudit,
 }
 
 impl DispatchType {
@@ -59,6 +83,7 @@ impl DispatchType {
         match self {
             DispatchType::Steward => "steward",
             DispatchType::Embed => "embed",
+            DispatchType::CitationAudit => "citation-audit",
         }
     }
 }

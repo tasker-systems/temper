@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id AS \"id!: uuid::Uuid\"\n              FROM kb_cogmaps\n             WHERE id = $1\n               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: uuid::Uuid",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bc55da7e14969664f5c995d5f50c8009fd8b78eacbe0a2283938914518756972"
+}

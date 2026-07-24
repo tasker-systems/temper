@@ -12,8 +12,9 @@ import { fetchWithRetry, type RetryOptions } from "./fetch-retry.js";
  *
  * The MINT itself lives in `temper-ts` (`ClientCredentials`), shared with the Ruby gem's
  * `Temper::Credentials` by way of one wire contract (tests/contracts/m2m-token-request.json). What
- * stays here is what is genuinely steward-specific: the env names, and the Vercel Connect / static
- * token strategies — eve and Vercel concepts with no business in a general-purpose client.
+ * stays here is what is genuinely deployment-specific: the per-principal env names, and the Vercel
+ * Connect / static token strategies — eve and Vercel concepts with no business in a general-purpose
+ * client.
  *
  * Ordering is **machine-identity-first**, identical to what the connection declares:
  *   1. `TEMPER_M2M_CLIENT_ID` present → mint the agent's own token via the OAuth `client_credentials`
@@ -22,35 +23,95 @@ import { fetchWithRetry, type RetryOptions } from "./fetch-retry.js";
  *      own AS (`temper admin machine issue`, a `tmpr_` client id, audience omitted).
  *   2. else `TEMPER_CONNECT_CONNECTOR` → a Vercel Connect app token (instances where that works).
  *   3. else `TEMPER_TOKEN` (the already-OAuth-obtained token that drives `eve dev`).
+ *
+ * Since Set 5 this file serves **two principals**, not one. The strategy ordering above is shared;
+ * the env NAMES it reads are a parameter ([`CredentialEnv`]), because the citation auditor must
+ * authenticate as its own registered machine client. See [`AUDITOR_CREDENTIALS`] for why that is a
+ * hard requirement rather than hygiene, and why the auditor has no Connect branch.
  */
 
-let cached: Credentials | undefined;
+/**
+ * Which env names one PRINCIPAL's credential is read from.
+ *
+ * Set 5 made this a parameter rather than a set of hardcoded names, because the citation auditor
+ * must authenticate as a **second, separate machine principal** — never the steward's. One
+ * credential is one `emitter_entity_id`, so a shared client would leave the ledger unable to tell an
+ * audit from the citation it audits, collapsing "assessed by another party" into "asserted by the
+ * same party wearing a different label" (spec §5.2; `docs/auth/machine-token-contract.md` §C).
+ *
+ * `connector` is optional and is the reason this is a shape rather than a prefix string: the
+ * auditor has NO Vercel Connect branch. The Connect connector is per-deployment, not per-principal,
+ * so an auditor falling back to it would authenticate as the deployment — i.e. as the steward — which
+ * is exactly the collapse above, arriving silently through a fallback nobody chose.
+ */
+export interface CredentialEnv {
+  clientId: string;
+  clientSecret: string;
+  tokenUrl: string;
+  audience: string;
+  /** Omitted for principals that must never fall back to a deployment-scoped identity. */
+  connector?: string;
+  staticToken: string;
+}
+
+/** The steward's credential env — the names that existed before Set 5, unchanged. */
+export const STEWARD_CREDENTIALS: CredentialEnv = {
+  clientId: "TEMPER_M2M_CLIENT_ID",
+  clientSecret: "TEMPER_M2M_CLIENT_SECRET",
+  tokenUrl: "TEMPER_M2M_TOKEN_URL",
+  audience: "TEMPER_M2M_AUDIENCE",
+  connector: "TEMPER_CONNECT_CONNECTOR",
+  staticToken: "TEMPER_TOKEN",
+};
 
 /**
- * `TEMPER_M2M_AUDIENCE` is read but NOT required. Auth0 demands an audience; temper's own AS ignores
+ * The citation auditor's credential env — a wholly disjoint name set, so there is no value of the
+ * steward's env that can ever authenticate the auditor and no way to "forget" to configure it: an
+ * unset `TEMPER_AUDITOR_TOKEN` with no `TEMPER_AUDITOR_M2M_CLIENT_ID` throws rather than quietly
+ * borrowing the steward's.
+ */
+export const AUDITOR_CREDENTIALS: CredentialEnv = {
+  clientId: "TEMPER_AUDITOR_M2M_CLIENT_ID",
+  clientSecret: "TEMPER_AUDITOR_M2M_CLIENT_SECRET",
+  tokenUrl: "TEMPER_AUDITOR_M2M_TOKEN_URL",
+  audience: "TEMPER_AUDITOR_M2M_AUDIENCE",
+  staticToken: "TEMPER_AUDITOR_TOKEN",
+};
+
+/** One cached credential per principal, keyed by its client-id env name. */
+const cache = new Map<string, Credentials>();
+
+/**
+ * `<PREFIX>_AUDIENCE` is read but NOT required. Auth0 demands an audience; temper's own AS ignores
  * a request-supplied one entirely and mints with its server-side `AS_AUDIENCE`. So a temper-issued
  * (`tmpr_`) credential must be able to omit it — requiring it here is precisely what made this agent
  * unable to consume one.
  */
-function credentials(): Credentials {
-  if (cached !== undefined) {
-    return cached;
+function credentials(names: CredentialEnv = STEWARD_CREDENTIALS): Credentials {
+  const hit = cache.get(names.clientId);
+  if (hit !== undefined) {
+    return hit;
   }
 
-  const clientId = process.env.TEMPER_M2M_CLIENT_ID;
+  const built = build(names);
+  cache.set(names.clientId, built);
+  return built;
+}
+
+function build(names: CredentialEnv): Credentials {
+  const clientId = process.env[names.clientId];
   if (clientId) {
-    cached = new ClientCredentials({
-      tokenUrl: requireEnv("TEMPER_M2M_TOKEN_URL"),
+    return new ClientCredentials({
+      tokenUrl: requireEnv(names.tokenUrl),
       clientId,
-      clientSecret: requireEnv("TEMPER_M2M_CLIENT_SECRET"),
-      audience: process.env.TEMPER_M2M_AUDIENCE || undefined,
+      clientSecret: requireEnv(names.clientSecret),
+      audience: process.env[names.audience] || undefined,
     });
-    return cached;
   }
 
-  const connector = process.env.TEMPER_CONNECT_CONNECTOR;
+  const connector = names.connector ? process.env[names.connector] : undefined;
   if (connector) {
-    cached = {
+    return {
       // Connect can hand out a fresh app token on demand, so a 401 IS worth one retry here.
       canRefresh: true,
       token: () => getToken(connector, { subject: { type: "app" } }),
@@ -63,11 +124,9 @@ function credentials(): Credentials {
         expiresAt: Number.POSITIVE_INFINITY,
       }),
     };
-    return cached;
   }
 
-  cached = new BearerToken(requireEnv("TEMPER_TOKEN"));
-  return cached;
+  return new BearerToken(requireEnv(names.staticToken));
 }
 
 /**
@@ -77,6 +136,16 @@ function credentials(): Credentials {
  */
 export async function mintM2mToken(): Promise<TokenResult> {
   return credentials().tokenResult();
+}
+
+/**
+ * The auditor's twin of [`mintM2mToken`], passed as `getToken` by the auditor subagent's own MCP
+ * connection (`agent/subagents/auditor/connections/temper.ts`). Separate function rather than an
+ * argument, for the same reason the connection is separate: eve's connection config takes a
+ * zero-arg `getToken`, and a shared one would have to pick a principal from ambient state.
+ */
+export async function mintAuditorM2mToken(): Promise<TokenResult> {
+  return credentials(AUDITOR_CREDENTIALS).tokenResult();
 }
 
 /** A bearer token string for imperative temper REST/MCP `fetch`es from the code schedules. */
@@ -105,7 +174,32 @@ export async function temperFetch(
   init: RequestInit,
   opts: RetryOptions = {},
 ): Promise<Response> {
-  const creds = credentials();
+  return fetchAs(STEWARD_CREDENTIALS, url, init, opts);
+}
+
+/**
+ * [`temperFetch`] as the CITATION AUDITOR — same retry and re-mint behavior, a different principal.
+ *
+ * The auditor's dispatch tick must run under the auditor's own credential, not the steward's,
+ * because `audit_drift_sweep` is principal-scoped: the queue it fills is exactly what that principal
+ * can read, and it is the same principal the audit write gate will later evaluate. Sweeping as one
+ * identity and writing as another would hand the session work it is about to be refused.
+ */
+export async function auditorFetch(
+  url: string,
+  init: RequestInit,
+  opts: RetryOptions = {},
+): Promise<Response> {
+  return fetchAs(AUDITOR_CREDENTIALS, url, init, opts);
+}
+
+async function fetchAs(
+  names: CredentialEnv,
+  url: string,
+  init: RequestInit,
+  opts: RetryOptions,
+): Promise<Response> {
+  const creds = credentials(names);
   const headers = new Headers(init.headers);
 
   headers.set("authorization", `Bearer ${await creds.token()}`);
@@ -123,7 +217,7 @@ export async function temperFetch(
 export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`${name} is required — the steward's target/credential is never hardcoded`);
+    throw new Error(`${name} is required — this agent's targets/credentials are never hardcoded`);
   }
   return value;
 }

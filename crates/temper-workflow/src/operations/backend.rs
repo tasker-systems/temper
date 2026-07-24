@@ -22,11 +22,11 @@ use temper_core::types::ingest::{
 use temper_core::types::materialize::MaterializeAck;
 
 use super::commands::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, CloseInvocation,
-    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-    RetypeRelationship, ReweightRelationship, SearchResources, SetFacet, ShowResource,
-    StewardDispatchTick, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+    CloseInvocation, CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource,
+    FoldRelationship, ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+    RecordCitationAudit, RetypeRelationship, ReweightRelationship, SearchResources, SetFacet,
+    ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
 use super::surface::Surface;
@@ -189,6 +189,25 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: StewardDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError>;
+
+    /// Run one deterministic citation-auditor dispatch pass (reap → sweep → group-by-cogmap →
+    /// enqueue → claim) and return the claimed jobs for fan-out. See [`AuditorDispatchTick`].
+    ///
+    /// The return type is [`temper_core::types::auditor::ClaimedAuditJob`], not `ClaimedJob`:
+    /// the auditor's job carries a finding list its session must iterate, and dropping that on the
+    /// floor at the trait boundary would reintroduce the very grain collapse the grouping exists to
+    /// prevent.
+    async fn auditor_dispatch_tick(
+        &self,
+        cmd: AuditorDispatchTick,
+    ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError>;
+
+    /// Mark a cogmap's active citation-audit job done — the auditor session's last act. Returns the
+    /// completed job id, or `None` when no job was active. See [`CompleteAuditorJob`].
+    async fn complete_auditor_job(
+        &self,
+        cmd: CompleteAuditorJob,
+    ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError>;
 
     // ── cron-driven region materialize-on-threshold (T4b) ──
     // Re-materialize a cogmap's regions when its formation delta since the last materialize clears

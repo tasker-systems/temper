@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT workflow_job_enqueue($1, $2, $3, '{}'::jsonb) AS \"id: Uuid\"",
+  "query": "SELECT workflow_job_enqueue($1, $2, $3, $4) AS \"id: Uuid\"",
   "describe": {
     "columns": [
       {
@@ -13,12 +13,13 @@
       "Left": [
         "Uuid",
         "Text",
-        "Text"
+        "Text",
+        "Jsonb"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "e9750558a03841d8d169853ba97195cf67b5cf6612ecae188f72095476341d4a"
+  "hash": "0fa93c402e1a24a295fef7f5f5a2c8d00ad3db046768d7ffc557dfb7cd049495"
 }

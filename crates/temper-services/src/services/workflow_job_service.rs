@@ -5,23 +5,51 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
+use temper_core::types::auditor::{AuditJobPayload, ClaimedAuditJob};
 use temper_core::types::ids::CorrelationId;
 use temper_core::types::workflow_job::{ClaimedEmbedJob, ClaimedJob};
 
-/// Enqueue a job for `(cogmap, persona, dispatch_type)`. Returns `Some(id)` when a new row was
-/// created, `None` when one is already in-flight for the tuple (the single-flight dedup).
+/// Enqueue a payload-less job for `(cogmap, persona, dispatch_type)`. Returns `Some(id)` when a new
+/// row was created, `None` when one is already in-flight for the tuple (the single-flight dedup).
 pub async fn enqueue(
     pool: &PgPool,
     cogmap_id: Uuid,
     persona: &str,
     dispatch_type: &str,
 ) -> ApiResult<Option<Uuid>> {
-    let id = sqlx::query_scalar!(
-        r#"SELECT workflow_job_enqueue($1, $2, $3, '{}'::jsonb) AS "id: Uuid""#,
+    enqueue_with_payload(
+        pool,
         cogmap_id,
         persona,
         dispatch_type,
+        serde_json::Value::Object(serde_json::Map::new()),
+    )
+    .await
+}
+
+/// Enqueue a job for `(cogmap, persona, dispatch_type)` carrying `payload` into
+/// `kb_workflow_jobs.payload`. Returns `Some(id)` when a new row was created, `None` when one is
+/// already in-flight for the tuple.
+///
+/// **`None` is not "nothing to do" for a payload-carrying caller.** The single-flight index
+/// (`migrations/20260705000001_workflow_jobs.sql:43-45`) is keyed on the tuple alone, so an
+/// in-flight job with a *stale* payload swallows this one silently — which is exactly why the
+/// auditor groups its whole finding list into ONE enqueue per cogmap instead of calling this once
+/// per finding (spec §6.1). A caller that fans out over a payload must group first.
+pub async fn enqueue_with_payload(
+    pool: &PgPool,
+    cogmap_id: Uuid,
+    persona: &str,
+    dispatch_type: &str,
+    payload: serde_json::Value,
+) -> ApiResult<Option<Uuid>> {
+    let id = sqlx::query_scalar!(
+        r#"SELECT workflow_job_enqueue($1, $2, $3, $4) AS "id: Uuid""#,
+        cogmap_id,
+        persona,
+        dispatch_type,
+        payload,
     )
     .fetch_one(pool)
     .await?;
@@ -61,6 +89,58 @@ pub async fn claim(
             attempts: r.attempts,
         })
         .collect())
+}
+
+/// Claim up to `limit` claimable jobs and read each one's payload back as an [`AuditJobPayload`] —
+/// the auditor twin of [`claim`], the way [`claim_resource`] is the resource twin.
+///
+/// It is a separate function rather than a `payload` field on [`ClaimedJob`] because only the
+/// auditor's jobs carry one: the steward's payload is always `{}`, and widening its wire type would
+/// restale `openapi.json` and both SDKs to add a field that is permanently empty there.
+///
+/// A payload that does not deserialize is an [`ApiError::Internal`], not an empty finding list. The
+/// only writer of these rows is [`enqueue_with_payload`] from this same crate, so a malformed one
+/// means the shape drifted — and a claim that quietly reported "0 findings" would burn the job's
+/// single-flight slot and its attempt on nothing, which is precisely the silent-drop failure this
+/// whole grouping design exists to avoid.
+pub async fn claim_audit(
+    pool: &PgPool,
+    persona: &str,
+    dispatch_type: &str,
+    limit: i32,
+    lease_seconds: i32,
+    correlation: Option<CorrelationId>,
+) -> ApiResult<Vec<ClaimedAuditJob>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id AS "id!: Uuid", cogmap_id AS "cogmap_id!: Uuid", attempts AS "attempts!: i32",
+               payload AS "payload!: serde_json::Value"
+          FROM workflow_job_claim($1, $2, $3, $4, $5)
+        "#,
+        persona,
+        dispatch_type,
+        limit,
+        lease_seconds,
+        correlation.map(|c| c.uuid()),
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            let payload: AuditJobPayload = serde_json::from_value(r.payload).map_err(|e| {
+                ApiError::Internal(format!(
+                    "workflow job {} has an unreadable citation-audit payload: {e}",
+                    r.id
+                ))
+            })?;
+            Ok(ClaimedAuditJob {
+                id: r.id,
+                cogmap_id: r.cogmap_id,
+                attempts: r.attempts,
+                findings: payload.findings,
+            })
+        })
+        .collect()
 }
 
 /// Transition the one active job for the tuple → done. Returns the job id if one was active.

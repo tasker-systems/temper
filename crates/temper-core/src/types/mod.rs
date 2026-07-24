@@ -11,6 +11,7 @@ pub mod access_gate;
 pub mod admin;
 pub mod api;
 pub mod audit;
+pub mod auditor;
 pub mod auth;
 pub mod authorship;
 pub mod citation_audit;

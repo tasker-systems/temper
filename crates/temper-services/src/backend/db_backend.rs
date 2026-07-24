@@ -34,12 +34,12 @@ use temper_core::types::reconcile::{
 use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, BodyUpdate,
-    CloseInvocation, CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource,
-    FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, OpenInvocation,
-    ReconcileCognitiveMap, RecordCitationAudit, ResourceSummary, RetypeRelationship,
-    ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
-    Surface, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
+    BodyUpdate, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, ListResources,
+    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+    ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
+    SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -2582,6 +2582,132 @@ impl Backend for DbBackend {
         .await?;
 
         Ok(CommandOutput::new(claimed))
+    }
+
+    /// One citation-auditor dispatch pass (Set 5, spec §6.1): reap → sweep → GROUP BY COGMAP →
+    /// enqueue → claim.
+    ///
+    /// Structurally the steward's tick with one extra step, and that step is the whole point. The
+    /// sweep is finding-grained; the queue's single-flight index is cogmap-grained
+    /// (`migrations/20260705000001_workflow_jobs.sql:43-45`). Enqueuing per swept row would create
+    /// the first job per cogmap and let `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` (`:59-62`)
+    /// discard the rest **without an error** — N findings silently becoming 1. So
+    /// `auditor_service::group_by_cogmap` collapses the sweep first, and each cogmap's whole finding
+    /// list rides one job's payload for the session to iterate.
+    ///
+    /// Auth: the gate is the sweep, and it is the same one the audit write path will apply. Both are
+    /// principal-scoped in SQL (`audit_drift_sweep` routes through `steward_candidate_cogmaps` AND
+    /// `resources_visible_to`), so this tick can only ever enqueue work over findings this principal
+    /// could already read — never a widening.
+    async fn auditor_dispatch_tick(
+        &self,
+        cmd: AuditorDispatchTick,
+    ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError> {
+        use crate::services::{auditor_service, workflow_job_service};
+        use temper_core::types::workflow_job::{
+            DEFAULT_AUDITOR_DISPATCH_CAP, DEFAULT_AUDITOR_LEASE_SECONDS,
+        };
+
+        // 1. Reap stale leases (crashed runs → retry/dead) before claiming. Shared with the steward
+        //    tick — the reaper is persona-agnostic, exactly as the queue is.
+        workflow_job_service::reap(&self.pool, "lease expired").await?;
+
+        // 2. Deterministic, principal-scoped sweep over cogmap-homed findings with incomplete
+        //    audit coverage, most-uncovered-first.
+        let drifted = auditor_service::drift_sweep(&self.pool, self.profile_id, cmd.cap).await?;
+
+        // 3. Collapse finding grain → queue grain, then enqueue ONE job per cogmap carrying its
+        //    finding list. Already-active maps skip via the in-flight index.
+        for work in auditor_service::group_by_cogmap(&drifted) {
+            let payload = serde_json::to_value(&work.payload).map_err(|e| {
+                crate::error::ApiError::Internal(format!(
+                    "citation-audit job payload for cogmap {} is not serializable: {e}",
+                    work.cogmap_id
+                ))
+            })?;
+            workflow_job_service::enqueue_with_payload(
+                &self.pool,
+                work.cogmap_id,
+                Persona::Auditor.as_str(),
+                DispatchType::CitationAudit.as_str(),
+                payload,
+            )
+            .await?;
+        }
+
+        // 4. Claim for fan-out, stamping this tick's correlation onto each claimed row exactly as
+        //    the steward tick does — `invocation_open` inherits it, so an auditor session's
+        //    invocation joins back to its tick with nothing asked of the agent.
+        //
+        //    The claim limit is `cap` — the SAME number the sweep took as its finding budget, reused
+        //    rather than made a second knob. It can never truncate this tick's own work (grouping
+        //    only ever collapses, so jobs <= findings <= cap), and reusing it means a tick whose
+        //    sweep came back empty still drains jobs a previous, cap-limited tick left pending.
+        let limit = cmd.cap.unwrap_or(DEFAULT_AUDITOR_DISPATCH_CAP) as i32;
+        let claimed = workflow_job_service::claim_audit(
+            &self.pool,
+            Persona::Auditor.as_str(),
+            DispatchType::CitationAudit.as_str(),
+            limit,
+            DEFAULT_AUDITOR_LEASE_SECONDS,
+            cmd.correlation,
+        )
+        .await?;
+
+        Ok(CommandOutput::new(claimed))
+    }
+
+    /// Complete the cogmap's active citation-audit job — the auditor session's last act.
+    ///
+    /// AUTH BEFORE WRITE, and the gate is **readability of the cogmap**
+    /// (`anchor_readable_by_profile`), not writability. That is deliberate and it mirrors the audit
+    /// write's own widening (spec §7): the auditor is provisioned with team membership and
+    /// **read-only** cogmap reach precisely so it is not classified as `AuditAuthority::Author`
+    /// (`docs/auth/machine-token-contract.md` §C), so gating its own job's completion on cogmap-write
+    /// would 403 every auditor that is correctly provisioned. Readability is also exactly the
+    /// predicate that put the job in this principal's queue in the first place —
+    /// `audit_drift_sweep` routes through `steward_candidate_cogmaps` — so this admits no principal
+    /// the dispatch would not already have handed work to.
+    ///
+    /// A reader who is not the dispatched auditor can therefore complete the job early. The blast
+    /// radius is one skipped tick and it self-heals: completion writes nothing to the audit trail,
+    /// and coverage only moves when a verdict lands, so an unaudited finding re-enters the very next
+    /// sweep.
+    ///
+    /// `None` means no job was active — a manual audit outside the dispatch loop, or a job the
+    /// reaper already expired. Not an error: the session's work stands either way.
+    async fn complete_auditor_job(
+        &self,
+        cmd: CompleteAuditorJob,
+    ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
+        let readable = sqlx::query_scalar!(
+            r#"
+            SELECT id AS "id!: uuid::Uuid"
+              FROM kb_cogmaps
+             WHERE id = $1
+               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
+            "#,
+            *cmd.cogmap,
+            *self.profile_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?;
+        // Absent row = the cogmap does not exist OR the caller cannot read it — both 404, no
+        // existence oracle, the same dialect every other cogmap-scoped read uses.
+        readable.ok_or_else(|| {
+            TemperError::NotFound(format!("cognitive map {} not found", cmd.cogmap.uuid()))
+        })?;
+
+        let completed = crate::services::workflow_job_service::complete(
+            &self.pool,
+            *cmd.cogmap,
+            Persona::Auditor.as_str(),
+            DispatchType::CitationAudit.as_str(),
+        )
+        .await?;
+
+        Ok(CommandOutput::new(completed))
     }
 
     /// Re-materialize a cogmap's regions when its formation delta clears the threshold (T4b). AUTH

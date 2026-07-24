@@ -354,6 +354,46 @@ pub struct StewardDispatchTick {
     pub origin: Surface,
 }
 
+/// Compose one deterministic citation-auditor dispatch pass (Set 5, spec §6.1): reap stale jobs,
+/// sweep the principal's cogmap-homed findings with incomplete audit coverage
+/// (`audit_drift_sweep`), group those findings **by cogmap**, enqueue one job per cogmap carrying
+/// its finding list, and claim up to that many jobs for fan-out. Returns the claimed jobs — the
+/// caller starts one isolated session per job, and each session iterates its job's findings.
+///
+/// The grouping is not an optimization. The queue enforces single-flight on
+/// `(cogmap_id, persona, dispatch_type)`
+/// (`migrations/20260705000001_workflow_jobs.sql:43-45`), so a per-finding enqueue would create one
+/// job and let `ON CONFLICT DO NOTHING` silently discard every sibling finding in the same map.
+///
+/// `cap` is a **finding** budget (`audit_drift_sweep`'s `p_limit`), defaulting to
+/// `DEFAULT_AUDITOR_DISPATCH_CAP`. `correlation` is the auditor cron's `x-auditor-correlation-id`,
+/// stamped onto every job this tick claims exactly as the steward's is; optional and
+/// provenance-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditorDispatchTick {
+    pub cap: Option<i64>,
+    pub correlation: Option<CorrelationId>,
+    pub origin: Surface,
+}
+
+/// Mark this cogmap's active citation-audit job done — the auditor session's last act.
+///
+/// The steward has no equivalent command because its completion rides its watermark advance
+/// (`advance_steward_watermark` calls `workflow_job_complete` itself: a clean watermark advance IS
+/// steward-run completion). The auditor advances no watermark, so without an explicit completion its
+/// job would simply sit `in_progress` until `workflow_job_reap` expired the lease and re-queued it —
+/// dispatching the SAME cogmap up to `max_attempts` times
+/// (`migrations/20260705000001_workflow_jobs.sql:110-128`) and appending a duplicate verdict per
+/// re-run, since the audit trail is append-only.
+///
+/// A no-op when no job is active (e.g. a manual audit outside the dispatch loop), exactly like the
+/// steward's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompleteAuditorJob {
+    pub cogmap: CogmapId,
+    pub origin: Surface,
+}
+
 /// Re-materialize an anchor's regions when its formation delta since the last materialize clears
 /// `threshold` (T4b) — the cron-invokable trigger for the substrate's own (deterministic,
 /// non-authored) region-formation cadence. Gated on write of the anchor
