@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceBuilder;
-use tracing_subscriber::EnvFilter;
 use vercel_runtime::axum::VercelLayer;
 
 use temper_services::config::ApiConfig;
@@ -23,12 +22,7 @@ use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() -> Result<(), vercel_runtime::Error> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    temper_telemetry::init_server_logging();
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry
     // their remedy in Display. An instance that cannot state which audience it validates must not

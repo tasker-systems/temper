@@ -91,6 +91,18 @@ pub async fn run_temper_cli(
     app: &E2eTestApp,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
+    run_temper_cli_with_env(app, &[], args).await
+}
+
+/// `run_temper_cli`, plus extra environment for the spawned process.
+///
+/// Exists for the cases where the *environment* is the thing under test rather than the command —
+/// `RUST_LOG`, say, when asserting which stream the CLI's logs land on.
+pub async fn run_temper_cli_with_env(
+    app: &E2eTestApp,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
     // Materialize the test TemperConfig to a TOML file inside the test's
     // vault temp directory so the spawned CLI can read it. The path lives
     // alongside the vault projection so it shares the test's cleanup.
@@ -98,7 +110,7 @@ pub async fn run_temper_cli(
     let config_path = app.vault_dir.path().join("test-temper-config.toml");
     std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
 
-    run_temper_cli_with_token(&app.base_url(), &app.token, &config_path, args).await
+    spawn_temper(&app.base_url(), &app.token, &config_path, env, args).await
 }
 
 /// Run the real `temper` binary against an arbitrary API URL and token.
@@ -115,19 +127,39 @@ pub async fn run_temper_cli_with_token(
     config_path: &std::path::Path,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
+    spawn_temper(api_url, token, config_path, &[], args).await
+}
+
+/// The one place the `temper` binary is actually spawned. Every helper above funnels here so the
+/// env-var contract (`TEMPER_API_URL` / `TEMPER_TOKEN` / `TEMPER_GLOBAL_CONFIG`) has a single
+/// definition rather than one per convenience wrapper.
+async fn spawn_temper(
+    api_url: &str,
+    token: &str,
+    config_path: &std::path::Path,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
     let bin = temper_bin_path();
     let url = api_url.to_string();
     let token = token.to_string();
     let config_path = config_path.to_path_buf();
     let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    let env_owned: Vec<(String, String)> = env
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
 
     tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&bin)
-            .env("TEMPER_API_URL", &url)
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.env("TEMPER_API_URL", &url)
             .env("TEMPER_TOKEN", &token)
             .env("TEMPER_GLOBAL_CONFIG", &config_path)
-            .args(&args_owned)
-            .output()
+            .args(&args_owned);
+        for (key, value) in &env_owned {
+            cmd.env(key, value);
+        }
+        cmd.output()
     })
     .await
     .expect("spawn_blocking join")

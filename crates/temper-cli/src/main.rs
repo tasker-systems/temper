@@ -12,12 +12,11 @@ fn main() {
     // output (JSON/TOON) so `temper … | jq` stays clean. Without this, library
     // logs — notably ONNX Runtime's `ort` INFO chatter on embed paths — would
     // interleave with the command's JSON on stdout and break parsing.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
-        )
-        .init();
+    //
+    // That contract now lives in `temper_telemetry::init` as a named variant with tests behind it,
+    // rather than only in this comment — the servers share a seam with the CLI, and a seam is
+    // exactly where "surely these four and the fifth should match" gets acted on.
+    temper_telemetry::init_cli_logging();
 
     let cli = Cli::parse();
 

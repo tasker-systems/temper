@@ -24,9 +24,9 @@ path = "api/internal.rs"
 temper-api = { path = "crates/temper-api" }
 temper-services = { path = "crates/temper-services" }
 temper-mcp = { path = "crates/temper-mcp" }
+temper-telemetry = { path = "crates/temper-telemetry" }
 vercel_runtime = { version = "2", features = ["axum"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }

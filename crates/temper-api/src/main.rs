@@ -1,7 +1,6 @@
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tracing_subscriber::EnvFilter;
 
 use temper_api::routes::create_app;
 use temper_services::config::ApiConfig;
@@ -9,12 +8,7 @@ use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    temper_telemetry::init_server_logging();
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry
     // their remedy in Display. An instance that cannot state which audience it validates must not

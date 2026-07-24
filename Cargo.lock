@@ -5648,7 +5648,6 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
- "tracing-subscriber",
  "utoipa",
  "utoipa-axum",
  "utoipa-swagger-ui",
@@ -5698,13 +5697,13 @@ dependencies = [
  "temper-core",
  "temper-ingest",
  "temper-principal",
+ "temper-telemetry",
  "temper-workflow",
  "tempfile",
  "tokio",
  "toml 0.8.23",
  "toon-format",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
  "validator",
@@ -5745,10 +5744,10 @@ dependencies = [
  "temper-api",
  "temper-mcp",
  "temper-services",
+ "temper-telemetry",
  "tokio",
  "tower",
  "tracing",
- "tracing-subscriber",
  "vercel_runtime",
 ]
 
@@ -5936,7 +5935,9 @@ name = "temper-telemetry"
 version = "0.1.0"
 dependencies = [
  "http",
+ "serde_json",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
