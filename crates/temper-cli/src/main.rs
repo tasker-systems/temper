@@ -54,8 +54,20 @@ fn main() {
     let output_format =
         OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());
 
-    if let Err(e) = run(cli, output_format) {
-        match &e {
+    let outcome = run(cli, output_format);
+
+    // Drain spans before the process goes away — on BOTH arms.
+    //
+    // The failure arm below ends in `std::process::exit`, which runs no destructors, so a flush placed
+    // only after a success would lose exactly the traces worth having: a command that *failed* is the
+    // one someone wants to look at. A no-op when nothing is exporting
+    // (`temper_telemetry::export::shutdown_telemetry` returns early with no provider installed), so it
+    // costs an un-traced run nothing.
+    //
+    // `shutdown`, not `force_flush`: this process really is ending, unlike the Vercel functions that
+    // are frozen rather than exited and therefore flush per-request.
+    if let Err(e) = &outcome {
+        match e {
             temper_cli::error::TemperError::SystemAccessRequired(details) => {
                 temper_cli::access_gate::render_system_access_required(
                     details.email.as_deref(),
@@ -68,8 +80,11 @@ fn main() {
                 temper_cli::output::error(format!("temper: {e}"));
             }
         }
+        temper_telemetry::shutdown_telemetry();
         std::process::exit(1);
     }
+
+    temper_telemetry::shutdown_telemetry();
 }
 
 fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {

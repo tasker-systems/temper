@@ -243,7 +243,12 @@ impl HttpClient {
             path,
             has_auth: token.is_some(),
         };
-        let span = tracing::debug_span!(
+        // `info`, matching the grain of the server's root span (`temper_telemetry::root_span!` builds
+        // `info_span!`) — an outbound request and the inbound request it becomes are the same event
+        // seen from two sides, so exporting one and not the other would be arbitrary. It was
+        // `debug_span!` while the CLI could not export at all; the CLI's fmt layer still filters at
+        // `warn` by default, so this costs no extra output. See `temper_telemetry::init::EXPORT_FILTER`.
+        let span = tracing::info_span!(
             "http_request",
             request = %api_req,
             has_auth = api_req.has_auth,
@@ -260,6 +265,24 @@ impl HttpClient {
                 req.header(AUTHORIZATION, value)
             } else {
                 req
+            };
+
+            // W3C trace context, so the receiving surface can link its own root span back to this
+            // one. Must be *inside* the instrumented body: `inject_trace_context` reads
+            // `Span::current()`, and out here that would be whatever called us rather than this
+            // request's span — the receiver would link to the wrong span, which is harder to notice
+            // than linking to none. Also before `try_clone`, so every retry carries it.
+            //
+            // A no-op unless an exporter is installed (`TEMPER_CLI_TRACE` plus an OTLP endpoint), and
+            // deliberately so: a `traceparent` naming an unexported span is worse than no header.
+            let req = {
+                let mut trace_headers = reqwest::header::HeaderMap::new();
+                temper_telemetry::inject_trace_context(&mut trace_headers);
+                if trace_headers.is_empty() {
+                    req
+                } else {
+                    req.headers(trace_headers)
+                }
             };
 
             let mut attempt = 0u32;

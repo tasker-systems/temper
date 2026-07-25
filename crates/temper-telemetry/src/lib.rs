@@ -8,6 +8,8 @@
 //! - [`request_span`] — the request root span, owned so its lifetime can be ended deliberately.
 //! - [`link`] — joining a *trusted* caller's trace, by link, after authentication. The half of the
 //!   trust decision that only an authenticated request gets.
+//! - [`propagate`] — writing our trace context onto an *outbound* request. The mirror of [`link`],
+//!   and what gives a receiving surface's link an id that actually exists in the backend.
 //! - This module — reading whatever correlation context arrives on an inbound request and stamping
 //!   it onto that request's root span. The *extraction* half of W3C trace context.
 //!
@@ -24,9 +26,6 @@
 //!
 //! ## What is deliberately *not* here
 //!
-//! - **Propagation.** Nothing injects `traceparent` on outbound calls yet. `tracestate` is
-//!   consequently not read at all — vendor state exists to be forwarded, and reading it before
-//!   there is anywhere to forward it to would be storage with no reader.
 //! - **Synthesis.** When no `traceparent` arrives, the fields stay empty rather than being filled
 //!   with a locally-minted id. Minting root ids is the tracer provider's job, and doing it here
 //!   would manufacture ids that no exported span agrees with.
@@ -83,11 +82,13 @@
 pub mod export;
 pub mod init;
 pub mod link;
+pub mod propagate;
 pub mod request_span;
 
 pub use export::{force_flush_spans, shutdown_telemetry};
 pub use init::{init_cli_logging, init_server_logging};
 pub use link::link_trusted_caller;
+pub use propagate::inject_trace_context;
 pub use request_span::traced_request;
 
 use http::HeaderMap;

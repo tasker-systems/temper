@@ -122,7 +122,17 @@ real `#[act_span]` span and checks it declares every name in `ACT_SPAN_FIELDS`.
   ([../guides/open-telemetry-setup.md](../guides/open-telemetry-setup.md)). Init is one seam —
   `temper_telemetry::init_server_logging()`, with `init_cli_logging()` as the CLI's deliberately
   different variant — built on `Registry` + layers precisely so the exporter attached as one more
-  layer.
+  layer. The CLI exports too, behind its own `TEMPER_CLI_TRACE` switch, and drains on the way out of
+  `main` on both the success and failure paths.
+
+  **The exporter did not actually reach a real endpoint until later, and the test suite could not
+  see it.** As shipped, `BatchSpanProcessor`'s dedicated export thread ran an *async* HTTP client and
+  panicked with *"there is no reactor running"*, dropping every span. The flush test passed throughout
+  because an `InMemorySpanExporter` needs neither HTTP nor a runtime. Two lessons worth keeping: a
+  telemetry test whose exporter has no transport cannot observe a transport bug, and *"we are inside a
+  Tokio runtime"* was true at the call site and irrelevant to the thread doing the work.
+  `crates/temper-telemetry/tests/live_export_client.rs` now posts to a real socket, which is the
+  version of the assertion that can fail.
 
   `trace_id` keeps exactly the meaning it had before export: a **field, not a parent**. Decision
   `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` settles that temper roots every trace locally on every
@@ -133,11 +143,17 @@ real `#[act_span]` span and checks it declares every name in `ACT_SPAN_FIELDS`.
   an enumeration that has to stay correct as routes move. An unauthenticated request keeps the inert
   fields and gains no link; `crates/temper-api/tests/telemetry_link_test.rs` drives both halves
   through the real router.
-- **No propagation.** Trace context is now *extracted* (above) but never *injected*: nothing sets a
-  `traceparent` on an outbound call, so a trace still stops at the first hop temper originates
-  rather than receives. `tracestate` is therefore not read at all — vendor state exists to be
-  forwarded, and reading it before there is anywhere to forward it to would be storage with no
-  reader.
+- **Propagation has landed on the Rust side, and it is what makes the link above worth having.**
+  `temper_telemetry::propagate` injects `traceparent` onto outbound calls from the span representing
+  that call (`temper-client`'s `http_request`), so a receiving surface's link names a span that was
+  actually exported instead of one no exporter ever emitted. `tracestate` is forwarded when present and
+  omitted when empty — W3C makes it optional, and a valueless header on every request is noise.
+  `tests/e2e/tests/client_injection_link_test.rs` drives the whole loop at the production caller:
+  temper-client sends, the server links, and the two ids match.
+
+  Still missing is the **TypeScript** side. The mention flow's hops are all TS → Rust, so a trace still
+  stops at the first hop an *eve agent* originates (task
+  `019f943b-b22f-7602-a417-6df251102aa0`).
 
 ## What production actually does (measured 2026-07-24)
 

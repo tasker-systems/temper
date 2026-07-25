@@ -115,6 +115,13 @@ instead of trusting a timer. The added latency is measured, not assumed: `apply_
 already logs `latency_ms` on every response, so the cost is the before/after difference in a number
 we already have.
 
+**A link is only navigable if the span it names was exported.** The two halves have to ship together:
+the receiving side records a link to `(trace_id, span_id)`, and something has to have *sent* those ids
+from a span that reached the same backend. temper injects `traceparent` on its own outbound calls
+(`crates/temper-telemetry/src/propagate.rs`), so a link in your backend resolves to a real span rather
+than dangling. `tracestate` is forwarded when a caller sends one and omitted when empty, since W3C makes
+it optional and a valueless header on every request is noise.
+
 ## Pointing temper at a backend
 
 Configuration is entirely [spec-standard OTel environment
@@ -142,6 +149,38 @@ Two behaviours are temper's rather than the SDK's, and both are operator-visible
 Protocol is **HTTP/protobuf**, not gRPC and not OTLP/JSON. Not a style preference: JSON's
 `TimeUnixNano{low, high}` encoding is mishandled by some collectors — `@vercel/otel`'s own source
 carries a comment saying exactly that — and it surfaces as wrong timestamps rather than as an error.
+
+The HTTP client is reqwest's **blocking** one, and that is a correctness requirement rather than a
+preference. `BatchSpanProcessor` exports from a dedicated OS thread with no Tokio reactor, so the async
+client panics there with *"there is no reactor running"* and every span is silently dropped — the only
+symptom being a `warn` from temper's own flush path. Being inside a runtime at the *call site* does not
+help, which is why the mistake is easy to make in an otherwise fully-async codebase. Held in place by
+`crates/temper-telemetry/tests/live_export_client.rs`, which posts to a real local socket; it fails on
+the async client and passes on the blocking one.
+
+### Tracing the CLI
+
+The `temper` binary can export too, but it needs a **second** switch:
+
+| Variable | Purpose |
+|---|---|
+| `TEMPER_CLI_TRACE` | `true` (case-insensitive; nothing else counts) lets the CLI export. Off by default. |
+
+Both this *and* an OTLP endpoint are required. The extra switch exists because
+`OTEL_EXPORTER_OTLP_ENDPOINT` is often already exported in a developer's shell for an unrelated
+project, and `temper` should not start shipping your vault activity to a collector you configured for
+something else. The servers need no equivalent: a deployment's environment is set deliberately, per
+project.
+
+Two CLI-specific behaviours follow from a CLI being a process that actually exits:
+
+- **Spans are drained on the way out of `main`, on the success *and* failure paths.** The failure arm
+  ends in `std::process::exit`, which runs no destructors, so a flush placed after a successful run
+  would lose exactly the traces worth having.
+- **Turning on tracing does not make the CLI chatty.** The fmt layer keeps its own `warn` default while
+  the export layer filters at `info` independently, so stdout stays clean for `temper … | jq` and
+  stderr stays quiet. `RUST_LOG=info temper …` still opts into verbose logging without changing what is
+  exported, and vice versa.
 
 ### Grafana Cloud
 
@@ -219,6 +258,7 @@ asserting they match.
 |---|---|
 | Logging init, both variants | `crates/temper-telemetry/src/init.rs` |
 | Inbound trace-context extraction, `ROOT_TRACE_FIELDS` | `crates/temper-telemetry/src/lib.rs` |
+| Outbound trace-context injection (the mirror of the link) | `crates/temper-telemetry/src/propagate.rs`; called from `temper-client`'s outbound span |
 | Root span construction (HTTP) | `crates/temper-api/src/routes.rs`, `apply_transport_layers` |
 | Root span construction (MCP) | `crates/temper-mcp/src/router.rs` |
 | Act-grain span fields | `temper_services::backend::ACT_SPAN_FIELDS`, declared by `#[act_span]` (`crates/temper-macros`) |

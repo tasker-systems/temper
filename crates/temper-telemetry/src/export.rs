@@ -72,6 +72,9 @@ const OTLP_ENDPOINT_VARS: [&str; 2] = [
 /// The spec's kill switch, which `opentelemetry_sdk` 0.32 does not implement — so we do.
 const OTEL_SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
 
+/// The CLI's own opt-in to span export. See [`cli_export_opted_in`].
+const TEMPER_CLI_TRACE: &str = "TEMPER_CLI_TRACE";
+
 /// The undocumented Vercel in-sandbox collector variables. Logged, never designed around: research
 /// `019f943a` §5e records that the documentation for this path has been withdrawn and that nothing
 /// states what would be listening. If one of these ever shows up in a real deployment's log line,
@@ -97,6 +100,33 @@ static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 /// which is the failure you least want to debug later.
 fn export_disabled() -> bool {
     std::env::var(OTEL_SDK_DISABLED)
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// True when the CLI has been told it may export spans.
+///
+/// A **second** switch on top of [`configured_endpoint`], and it exists because
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` is ambient on a developer's machine. Someone with it exported for
+/// another project would otherwise have `temper` start shipping their vault activity to that
+/// collector the moment this shipped — surprising, and not theirs to have asked for. The servers need
+/// no such switch: a deployment's environment is configured deliberately, per project.
+///
+/// Same true-value discipline as [`export_disabled`]: exactly `true`, case-insensitive, so a typo
+/// leaves export off rather than silently on.
+///
+/// ## Why environment-only, with no `[cli]` config key
+///
+/// Author's judgment, not a settled decision — and reversible, so here is the obstacle rather than a
+/// verdict. The CLI's `[cli]` section (`CliSection` in temper-core) is the documented home for
+/// defaults like `format` and `color`, resolved *flag → env → config → default*, and this switch
+/// would belong there by symmetry. But the subscriber must be installed before anything logs, and
+/// `temper_core::types::config::load_config_from` itself emits a `tracing::warn!` for a config with
+/// validation issues (`crates/temper-core/src/types/config.rs:395-400`). Reading config early enough
+/// to feed this would drop that warning at the CLI's default level — trading a user-facing diagnostic
+/// for a config key. Adding a `[cli]` key needs that ordering solved first, not just the key defined.
+fn cli_export_opted_in() -> bool {
+    std::env::var(TEMPER_CLI_TRACE)
         .map(|v| v.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
@@ -215,6 +245,24 @@ where
     let _ = PROVIDER.set(provider);
 
     Some(tracing_opentelemetry::layer().with_tracer(tracer))
+}
+
+/// [`export_layer`], but for the CLI: additionally gated on the operator opting in.
+///
+/// Split from `export_layer` rather than given a boolean parameter because the two callers differ in
+/// *what they are*, not in a setting — a server exports whenever an endpoint is configured, the CLI
+/// only when its user has said so ([`cli_export_opted_in`]). Returning `None` before
+/// [`build_provider`] runs also means an un-opted-in CLI never constructs an exporter, never resolves
+/// the OTLP environment, and never logs the "span export on" line.
+pub(crate) fn cli_export_layer<S>(
+) -> Option<tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::SdkTracer>>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    if !cli_export_opted_in() {
+        return None;
+    }
+    export_layer()
 }
 
 /// Flush pending spans, blocking until they are exported or the SDK gives up.

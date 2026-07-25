@@ -8,7 +8,17 @@ description = "Shared telemetry seam for temper's deployables: logging init, inb
 axum = { version = "0.8", default-features = false }
 http = "1"
 opentelemetry = "0.32"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls", "internal-logs"] }
+# `reqwest-blocking-client`, NOT `reqwest-client`, and this is load-bearing rather than incidental.
+# `BatchSpanProcessor` exports from a dedicated OS thread ("OpenTelemetry.Traces.BatchProcessor"), which
+# has no Tokio reactor — so the *async* reqwest client panics there with "there is no reactor running",
+# no matter that the caller triggering the flush is itself inside a runtime. Every span is then lost and
+# the only symptom is a warn from our own flush. The blocking client owns its runtime internally, so it
+# works from any thread, which is what a dedicated-thread batch processor needs.
+# Measured, not deduced: `crates/temper-telemetry/tests/live_export_client.rs` fails on the async client.
+# The builder's precedence is explicit-client → reqwest-client → hyper-client → reqwest-blocking-client
+# (`opentelemetry-otlp-0.32.0/src/exporter/http/mod.rs:224-268`), so leaving `reqwest-client` enabled
+# would silently win and reinstate the bug.
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "internal-logs"] }
 opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = "0.32"
 tracing = "0.1"
@@ -27,6 +37,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 test-support = ["opentelemetry_sdk/testing"]
 
 [dev-dependencies]
+# Depend on ourselves to turn our own `test-support` on for our own tests. Without this,
+# `cargo test -p temper-telemetry` fails to compile (`cannot find function install_test_provider`) and
+# the tests in `tests/` only build because *another* workspace member — tests/e2e — happens to enable
+# the feature, which workspace unification then applies here. That is a real trap: the natural
+# per-crate command is broken while `cargo make test` passes.
+temper-telemetry = { path = ".", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
 temp-env = "0.3.6"
