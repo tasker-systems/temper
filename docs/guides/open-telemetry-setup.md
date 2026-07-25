@@ -9,8 +9,8 @@ How temper gets traces off a Vercel function and into a backend you can query.
 > | Root spans on both Rust surfaces, act spans, the field convention + its gate | **shipped** (PR #528) |
 > | Inbound `traceparent` extraction onto the root span | **shipped** (PR #529), measured in production |
 > | One logging-init seam for all five binaries | **shipped** (PR #533) |
-> | **OTLP exporter — traces to any OTLP/HTTP backend** | **shipped** (this PR), verified against an in-memory exporter through the real router. Not yet run against a live vendor. |
-> | Span links post-auth | **not shipped.** Task `019f943d`, PR C. |
+> | **OTLP exporter — traces to any OTLP/HTTP backend** | **shipped** (PR #535), verified against an in-memory exporter through the real router. Not yet run against a live vendor. |
+> | Span links post-auth | **shipped** (this PR) — every authentication gate on both Rust surfaces. |
 > | Outbound `traceparent` injection, metrics taxonomy | **not shipped.** Goal steps 5 and 6. |
 >
 > So the operator steps below are real: set the variables and traces will arrive. What has *not*
@@ -94,7 +94,11 @@ Three properties of that picture are decisions, not accidents:
 
 **Every root span roots its own trace.** temper never parents from an inbound `traceparent`, on any
 surface. A trusted caller's trace is joined with an OTel **span link** recorded after
-authentication. Full rationale and the alternatives considered: decision
+authentication — where *trusted* means the request passed an authentication gate (a JWT verified
+against our JWKS, or an HMAC signature over the body keyed on a secret only temper's own services
+hold), not a list of surfaces someone has to keep correct. So a linked trace in your backend is
+always a caller that authenticated; an anonymous request carries the inbound ids as inert log fields
+and joins nothing. Full rationale and the alternatives considered: decision
 `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c`, summarized in `crates/temper-telemetry/src/lib.rs`'s module
 docs. The short version is that every trace worth joining is one temper sent itself, so refusing
 everything else costs nothing.
@@ -217,7 +221,8 @@ asserting they match.
 | Inbound trace-context extraction, `ROOT_TRACE_FIELDS` | `crates/temper-telemetry/src/lib.rs` |
 | Root span construction (HTTP) | `crates/temper-api/src/routes.rs`, `apply_transport_layers` |
 | Root span construction (MCP) | `crates/temper-mcp/src/router.rs` |
-| Act-grain span fields | `temper_services::backend::ACT_SPAN_FIELDS` |
+| Act-grain span fields | `temper_services::backend::ACT_SPAN_FIELDS`, declared by `#[act_span]` (`crates/temper-macros`) |
+| Joining a trusted caller's trace (the link) | `crates/temper-telemetry/src/link.rs`; called from each auth gate |
 | What is enforced, and why | [span-field-conventions.md](../development/span-field-conventions.md), gated by `tests/e2e/tests/logging_test.rs` |
 | The trust decision | `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` |
 | Platform findings behind this guide | research `019f943a` §5 |
