@@ -1,9 +1,6 @@
 use axum::Router;
-use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
-use tower_http::trace::{DefaultOnFailure, TraceLayer};
-use tracing::Span;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -487,42 +484,44 @@ fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
 
     app.fallback(fallback_handler)
         .layer(RequestDecompressionLayer::new())
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(|request: &axum::extract::Request| {
-                    // The five deferred trace fields are `temper_telemetry::ROOT_TRACE_FIELDS`;
-                    // `record_inbound_trace_context` fills whichever of them the request actually
-                    // carried. Unlike the act ids — which arrive in the body and so cannot be known
-                    // here — headers are in hand at span construction, so the recording happens
-                    // right on the span just built rather than via `Span::current()` further in.
-                    let span = tracing::info_span!(
-                        "http_request",
-                        method = %request.method(),
-                        path = %request.uri().path(),
-                        version = ?request.version(),
-                        profile_id = tracing::field::Empty,
-                        trace_id = tracing::field::Empty,
-                        parent_span_id = tracing::field::Empty,
-                        trace_sampled = tracing::field::Empty,
-                        vercel_id = tracing::field::Empty,
-                        vercel_invocation_id = tracing::field::Empty,
-                    );
-                    temper_telemetry::record_inbound_trace_context(&span, request.headers());
-                    span
-                })
-                .on_response(
-                    |response: &axum::response::Response, latency: Duration, _span: &Span| {
-                        tracing::info!(
-                            status = response.status().as_u16(),
-                            latency_ms = latency.as_millis() as u64,
-                            "response",
-                        );
-                    },
-                )
-                .on_failure(DefaultOnFailure::new().level(tracing::Level::ERROR)),
-        )
+        .layer(axum::middleware::from_fn(root_span))
         .layer(cors)
         .with_state(state)
+}
+
+/// The `http_request` root span, and the end of its life.
+///
+/// Replaced `tower_http`'s `TraceLayer` when the exporter landed: `TraceLayer` clones its span into
+/// the response body, so the span outlives every middleware and no flush can ever see it. See
+/// `temper_telemetry::request_span` for the measurement behind that. The span name, the field set,
+/// and the `response` event are unchanged — this is a change of mechanism, not of the convention in
+/// `docs/development/span-field-conventions.md`.
+async fn root_span(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    temper_telemetry::traced_request(request, next, |request| {
+        // The five deferred trace fields are `temper_telemetry::ROOT_TRACE_FIELDS`;
+        // `record_inbound_trace_context` fills whichever of them the request actually carried.
+        // Unlike the act ids — which arrive in the body and so cannot be known here — headers are
+        // in hand at span construction, so the recording happens right on the span just built
+        // rather than via `Span::current()` further in.
+        let span = tracing::info_span!(
+            "http_request",
+            method = %request.method(),
+            path = %request.uri().path(),
+            version = ?request.version(),
+            profile_id = tracing::field::Empty,
+            trace_id = tracing::field::Empty,
+            parent_span_id = tracing::field::Empty,
+            trace_sampled = tracing::field::Empty,
+            vercel_id = tracing::field::Empty,
+            vercel_invocation_id = tracing::field::Empty,
+        );
+        temper_telemetry::record_inbound_trace_context(&span, request.headers());
+        span
+    })
+    .await
 }
 
 /// The API contract, derived from the router. Pure: no `AppState`, no database,

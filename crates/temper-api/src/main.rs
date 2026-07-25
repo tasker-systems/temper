@@ -31,4 +31,9 @@ async fn main() {
     tracing::info!("temper-api listening on {addr}");
 
     axum::serve(listener, app).await.expect("Server failed");
+
+    // This binary is the one deployable that actually exits. The Vercel functions are frozen rather
+    // than shut down, which is why they drain per-response instead; here a normal exit can drain
+    // once, properly.
+    temper_telemetry::shutdown_telemetry();
 }

@@ -1,22 +1,24 @@
 //! Shared telemetry seam for temper's deployables.
 //!
-//! Two things live here:
+//! Four things live here:
 //!
 //! - [`init`] — how a temper process logs. One seam for the five binaries that used to configure
-//!   `tracing_subscriber` themselves, and the place the OTLP exporter will attach.
+//!   `tracing_subscriber` themselves, and where the export layer attaches.
+//! - [`export`] — span export over OTLP: what temper decides that the OpenTelemetry SDK does not.
+//! - [`request_span`] — the request root span, owned so its lifetime can be ended deliberately.
 //! - This module — reading whatever correlation context arrives on an inbound request and stamping
-//!   it onto that request's root span. That is the *extraction* half of W3C trace context, the half
-//!   that needs no exporter, no vendor, and no dependency set.
+//!   it onto that request's root span. The *extraction* half of W3C trace context.
 //!
-//! ## Why extraction lands before export
+//! ## Extraction landed before export, and stays a field afterwards
 //!
-//! `docs/development/span-field-conventions.md` recorded the gap this closes: *"No W3C trace
+//! `docs/development/span-field-conventions.md` recorded the gap extraction closed: *"No W3C trace
 //! context. Nothing extracts or propagates `traceparent`, so spans do not yet join across
-//! deployables."* A trace id in today's JSON log lines is worth having before anything is exported —
-//! it is what lets a Slack mention's three hops be grepped into one story. When the exporter lands
-//! (`temper-telemetry`'s next increment, under goal
-//! `019f9404-2a4e-7530-8744-92ae4ab6d83e`), the same extracted context becomes the actual parent
-//! rather than a field, and nothing here is thrown away.
+//! deployables."* A trace id in a JSON log line is worth having on its own — it is what lets a Slack
+//! mention's three hops be grepped into one story.
+//!
+//! The exporter has since landed, and **that did not promote the extracted context to a parent**.
+//! It stays exactly what it was: a field. See the trust boundary below — this is the decided
+//! behaviour, not an unfinished step.
 //!
 //! ## What is deliberately *not* here
 //!
@@ -35,9 +37,8 @@
 //! still place its requests under a trace id of its choosing.
 //!
 //! As a log field that is tolerable, and it is what every OTel deployment does by default at the
-//! edge. It stops being merely a field when an exporter lands and the extracted context could become
-//! a real **parent**: at that point an unauthenticated caller could graft spans onto someone else's
-//! trace.
+//! edge. It would stop being merely a field the moment the extracted context became a real
+//! **parent**: at that point an unauthenticated caller could graft spans onto someone else's trace.
 //!
 //! **That is decided, and the answer is no.** Temper accepts `traceparent` only from itself
 //! (decision `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c`):
@@ -61,7 +62,7 @@
 //! accepted cost of links is that a linked trace is navigable but is not a single waterfall.
 //!
 //! **The constraint any counter-proposal must answer:** a span's parent is fixed at creation, and
-//! `TraceLayer` builds the root span before auth runs. So "extract after auth" can yield a field or
+//! the root span is built before auth runs. So "extract after auth" can yield a field or
 //! a link, never a parent.
 //!
 //! ## The Vercel headers, and one name that must not be reused
@@ -76,9 +77,13 @@
 //! merge under one field name, so Vercel's is recorded as `vercel_invocation_id` and never as
 //! `invocation_id`.
 
+pub mod export;
 pub mod init;
+pub mod request_span;
 
+pub use export::{force_flush_spans, shutdown_telemetry};
 pub use init::{init_cli_logging, init_server_logging};
+pub use request_span::traced_request;
 
 use http::HeaderMap;
 use tracing::Span;

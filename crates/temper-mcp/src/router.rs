@@ -9,10 +9,7 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use std::sync::Arc;
-use std::time::Duration;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::{DefaultOnFailure, TraceLayer};
-use tracing::Span;
 
 use temper_services::state::AppState;
 
@@ -88,39 +85,39 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         // `profile_id` is declared Empty and recorded in `service.rs`, not in `require_mcp_auth` —
         // that middleware only validates the JWT, and a validated token is not yet a profile. Same
         // deferred-field pattern temper-api uses in its auth middleware, one seam further in.
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(|request: &axum::extract::Request| {
-                    // Same deferred trace-field set as temper-api's root span
-                    // (`temper_telemetry::ROOT_TRACE_FIELDS`), recorded through the same helper.
-                    // Parity matters more here than anywhere: the mention flow's last hop lands on
-                    // MCP, so a trace that stops at the API boundary stops one hop short of the
-                    // work it was following.
-                    let span = tracing::info_span!(
-                        "mcp_request",
-                        method = %request.method(),
-                        path = %request.uri().path(),
-                        version = ?request.version(),
-                        profile_id = tracing::field::Empty,
-                        trace_id = tracing::field::Empty,
-                        parent_span_id = tracing::field::Empty,
-                        trace_sampled = tracing::field::Empty,
-                        vercel_id = tracing::field::Empty,
-                        vercel_invocation_id = tracing::field::Empty,
-                    );
-                    temper_telemetry::record_inbound_trace_context(&span, request.headers());
-                    span
-                })
-                .on_response(
-                    |response: &axum::response::Response, latency: Duration, _: &Span| {
-                        tracing::info!(
-                            status = response.status().as_u16(),
-                            latency_ms = latency.as_millis() as u64,
-                            "response",
-                        );
-                    },
-                )
-                .on_failure(DefaultOnFailure::new().level(tracing::Level::ERROR)),
-        )
+        .layer(axum::middleware::from_fn(root_span))
         .layer(CorsLayer::permissive())
+}
+
+/// The `mcp_request` root span, and the end of its life.
+///
+/// Replaced `tower_http`'s `TraceLayer` when the exporter landed — it clones its span into the
+/// response body, which outlives every middleware, so a flush could never see the request's own
+/// span. `temper_telemetry::request_span` carries the measurement. Name, fields, and the `response`
+/// event are unchanged.
+async fn root_span(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    temper_telemetry::traced_request(request, next, |request| {
+        // Same deferred trace-field set as temper-api's root span
+        // (`temper_telemetry::ROOT_TRACE_FIELDS`), recorded through the same helper. Parity
+        // matters more here than anywhere: the mention flow's last hop lands on MCP, so a trace
+        // that stops at the API boundary stops one hop short of the work it was following.
+        let span = tracing::info_span!(
+            "mcp_request",
+            method = %request.method(),
+            path = %request.uri().path(),
+            version = ?request.version(),
+            profile_id = tracing::field::Empty,
+            trace_id = tracing::field::Empty,
+            parent_span_id = tracing::field::Empty,
+            trace_sampled = tracing::field::Empty,
+            vercel_id = tracing::field::Empty,
+            vercel_invocation_id = tracing::field::Empty,
+        );
+        temper_telemetry::record_inbound_trace_context(&span, request.headers());
+        span
+    })
+    .await
 }
