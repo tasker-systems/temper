@@ -34,7 +34,7 @@ fiction, so clause 2 fires only where an act genuinely exists.
 ## Why acts get their own span
 
 `correlation_id` and `invocation_id` arrive in the **request body** (`ActInput` → `ActContext`), not
-in headers or the URL. The `TraceLayer` root span is constructed before the body is parsed, so it
+in headers or the URL. The root span is constructed before the body is parsed, so it
 *cannot* carry them. It would also be the wrong owner: an act is a domain concept and the root span
 is a transport one.
 

@@ -5,9 +5,23 @@ edition = "2021"
 description = "Shared telemetry seam for temper's deployables: logging init, inbound trace-context extraction, and the root-span field convention"
 
 [dependencies]
+axum = { version = "0.8", default-features = false }
 http = "1"
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls", "internal-logs"] }
+opentelemetry-semantic-conventions = "0.32"
+opentelemetry_sdk = "0.32"
 tracing = "0.1"
+tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+[features]
+# Test-only surface for installing an in-memory span exporter, so a caller's integration test can
+# assert on spans that were really exported through the real router. Same convention as the
+# workspace's `test-db` / `test-embed`.
+test-support = []
+
 [dev-dependencies]
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
+temp-env = "0.3.6"

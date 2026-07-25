@@ -10,7 +10,7 @@
 //!    behind it. Asserting act ids on every request would encode a fiction.
 //!
 //! Clause 2's "on a span of their own" is the part that has teeth. `correlation_id` and
-//! `invocation_id` arrive in the request *body*, so the `TraceLayer` root span cannot carry them —
+//! `invocation_id` arrive in the request *body*, so the transport-level root span cannot carry them —
 //! and until there were child spans, recording them onto the current span silently landed them on
 //! the root anyway. That worked, and would have kept working right up until the first nested span
 //! made it wrong. The gate pins the structure, not just the presence of a value.

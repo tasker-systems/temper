@@ -8,15 +8,15 @@ How temper gets traces off a Vercel function and into a backend you can query.
 > |---|---|
 > | Root spans on both Rust surfaces, act spans, the field convention + its gate | **shipped** (PR #528) |
 > | Inbound `traceparent` extraction onto the root span | **shipped** (PR #529), measured in production |
-> | One logging-init seam for all five binaries | **shipped** (this PR) |
-> | **OTLP exporter — anything that sends a span anywhere** | **not shipped.** Task `019f943d`. |
-> | Span links post-auth, outbound `traceparent` injection, metrics | **not shipped.** |
+> | One logging-init seam for all five binaries | **shipped** (PR #533) |
+> | **OTLP exporter — traces to any OTLP/HTTP backend** | **shipped** (this PR), verified against an in-memory exporter through the real router. Not yet run against a live vendor. |
+> | Span links post-auth | **not shipped.** Task `019f943d`, PR C. |
+> | Outbound `traceparent` injection, metrics taxonomy | **not shipped.** Goal steps 5 and 6. |
 >
-> So: temper produces well-formed, correlated spans and writes them to **stdout as JSON logs**.
-> Nothing exports yet. The "Pointing temper at a backend" section below describes the operator
-> steps for an exporter that does not exist — it is the design being built to, not a runbook you
-> can follow today. It is written down now because the *shape* of the answer is what was hard, and
-> it was hard for a reason worth recording.
+> So the operator steps below are real: set the variables and traces will arrive. What has *not*
+> happened yet is anyone pointing it at a live account, so the first person to do so should expect
+> to shake out an auth-header or endpoint-suffix detail — and is the one who can finally answer the
+> open question further down about Vercel's own infra spans.
 
 ## The thing that confuses everyone first: Vercel does not host a collector
 
@@ -113,9 +113,6 @@ we already have.
 
 ## Pointing temper at a backend
 
-> **Not yet shipped.** These variables are the design target for task `019f943d`. Setting them today
-> does nothing.
-
 Configuration is entirely [spec-standard OTel environment
 variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/). No
 temper-specific variable, and no vendor name, appears anywhere in our code.
@@ -127,6 +124,16 @@ temper-specific variable, and no vendor name, appears anywhere in our code.
 | `OTEL_SERVICE_NAME` | Which deployable this is. Set it per Vercel project; the surfaces are separate functions and want separate names. |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling, from our config only. |
 | `OTEL_SDK_DISABLED` | Turn the exporter off without a deploy. |
+
+Two behaviours are temper's rather than the SDK's, and both are operator-visible:
+
+- **No endpoint means no export — not `localhost:4318`.** The OTLP spec defaults the endpoint to a
+  local collector, which would make every unconfigured process (your laptop, CI, a self-hosted
+  install) export at something that is not there. temper treats "unset" as "off".
+- **`OTEL_SDK_DISABLED` works because temper implements it.** `opentelemetry_sdk` 0.32 contains zero
+  occurrences of that variable — it is in the spec and not in the crate. Only the literal value
+  `true` (case-insensitive) disables export; `1` and `yes` deliberately do **not**, so a typo cannot
+  silently blind you.
 
 Protocol is **HTTP/protobuf**, not gRPC and not OTLP/JSON. Not a style preference: JSON's
 `TimeUnixNano{low, high}` encoding is mishandled by some collectors — `@vercel/otel`'s own source
