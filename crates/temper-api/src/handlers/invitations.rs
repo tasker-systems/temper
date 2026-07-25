@@ -5,6 +5,11 @@
 //! Route tiers matter: `invite` / `list` are team-admin actions and live in the
 //! system-access-gated router; `accept` / `decline` live in the un-gated router
 //! so an invitee to the gating team can redeem *before* they hold system access.
+//!
+//! `accept` / `decline` take the invitation token in the **request body**, never
+//! as a path segment. The token is a bearer capability, and a path is logged by
+//! every intermediary and recorded as a span attribute that leaves the building.
+//! See `InvitationTokenRequest` for the full rationale.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -14,7 +19,8 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
-    AcceptInvitationResponse, CreateInvitationRequest, InviteeInvitation, TeamInvitation,
+    AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
+    TeamInvitation,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::invitation_service;
@@ -97,10 +103,10 @@ pub async fn list_mine(
 
 #[utoipa::path(
     post,
-    path = "/api/invitations/{token}/accept",
+    path = "/api/invitations/accept",
     tag = "Invitations",
-    params(("token" = String, Path, description = "Invitation token")),
     security(("bearer_auth" = [])),
+    request_body = InvitationTokenRequest,
     responses(
         (status = 200, description = "Invitation redeemed; caller joined the team", body = AcceptInvitationResponse),
         (status = 400, description = "Invitation expired or already declined"),
@@ -111,19 +117,23 @@ pub async fn list_mine(
 pub async fn accept(
     State(state): State<AppState>,
     auth: AuthUser,
-    Path(token): Path<String>,
+    Json(body): Json<InvitationTokenRequest>,
 ) -> ApiResult<Json<AcceptInvitationResponse>> {
-    invitation_service::accept_invitation(&state.pool, ProfileId::from(auth.0.profile().id), &token)
-        .await
-        .map(Json)
+    invitation_service::accept_invitation(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        &body.token,
+    )
+    .await
+    .map(Json)
 }
 
 #[utoipa::path(
     post,
-    path = "/api/invitations/{token}/decline",
+    path = "/api/invitations/decline",
     tag = "Invitations",
-    params(("token" = String, Path, description = "Invitation token")),
     security(("bearer_auth" = [])),
+    request_body = InvitationTokenRequest,
     responses(
         (status = 204, description = "Invitation declined"),
         (status = 400, description = "Invitation was already accepted"),
@@ -133,12 +143,12 @@ pub async fn accept(
 pub async fn decline(
     State(state): State<AppState>,
     auth: AuthUser,
-    Path(token): Path<String>,
+    Json(body): Json<InvitationTokenRequest>,
 ) -> ApiResult<StatusCode> {
     invitation_service::decline_invitation(
         &state.pool,
         ProfileId::from(auth.0.profile().id),
-        &token,
+        &body.token,
     )
     .await
     .map(|()| StatusCode::NO_CONTENT)

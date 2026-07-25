@@ -3,10 +3,16 @@
 //! invite → accept flow across two distinct profiles.
 //!
 //! Owner-authed writes go through `TemperClient` (`app.client`, bound to the
-//! owner token); the invitee's accept/decline go through raw `reqwest` with the
-//! invitee's Bearer token (the invitee is a different principal than
-//! `app.client`). Modeled on `team_member_lifecycle_test.rs` — same `provision`
-//! helper, same `#[sqlx::test(migrator = "temper_api::MIGRATOR")]` harness.
+//! owner token). The invitee is a different principal than `app.client`, and is
+//! covered at two levels deliberately: `invitation_invite_accept_flow` redeems
+//! with raw `reqwest`, pinning the **wire** shape independently of the client,
+//! while `client_accept_and_decline_drive_the_body_carrying_routes` goes through
+//! a second `TemperClient` — the path `temper team join` actually takes. Neither
+//! subsumes the other: the raw form would keep passing if the client serialized
+//! the token into the wrong place, and the client form would keep passing if both
+//! ends drifted together. Modeled on `team_member_lifecycle_test.rs` — same
+//! `provision` helper, same `#[sqlx::test(migrator = "temper_api::MIGRATOR")]`
+//! harness.
 //!
 //! Acceptance is bearer-authority: the 128-bit token is the authority and
 //! `invited_email` need not match the caller's identity, so the test invites an
@@ -35,14 +41,43 @@ async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
     body["id"].as_str().expect("id").parse().expect("uuid")
 }
 
-/// `POST /api/invitations/{token}/accept` as `token`.
+/// `POST /api/invitations/accept` as `token`, with the invite token in the body.
 async fn accept(app: &common::E2eTestApp, token: &str, invite_token: &str) -> reqwest::Response {
     app.reqwest_client
-        .post(app.url(&format!("/api/invitations/{invite_token}/accept")))
+        .post(app.url("/api/invitations/accept"))
         .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "token": invite_token }))
         .send()
         .await
         .expect("accept request failed")
+}
+
+/// A `TemperClient` bound to an arbitrary principal's token.
+///
+/// `app.client` is the owner's. The invitee is a different principal, and the CLI's real path into
+/// accept/decline is `TeamsClient`, not raw `reqwest` — so covering the invitee's side at the
+/// production caller's level needs a second client.
+fn client_for(app: &common::E2eTestApp, token: &str) -> temper_client::TemperClient {
+    use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
+
+    let stored_auth = StoredAuth {
+        provider: Provider::Auth0 {
+            domain: "test".to_string(),
+        },
+        access_token: token.to_string().into(),
+        refresh_token: None,
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        profile_id: None,
+        device_id: Some("e2e-test-device".to_string()),
+    };
+    let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
+        std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
+    temper_client::config::build_client_from(
+        &app.config,
+        store,
+        temper_workflow::operations::Surface::CliCloud,
+    )
+    .expect("build invitee client")
 }
 
 /// `GET /api/teams/{team_id}` as `token`.
@@ -160,4 +195,112 @@ async fn invitation_invite_accept_flow(pool: sqlx::PgPool) {
         "team invitations exits 0: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// The invitee's accept and decline, driven through `TeamsClient` — the path the CLI actually takes.
+///
+/// The flow test above redeems with raw `reqwest`, which asserts the *wire* shape. That leaves the
+/// client methods themselves uncovered, and they are what `temper team join` / `temper team decline`
+/// call: a wrong body field name there compiles, passes every other test, and breaks only in a user's
+/// hands. `decline_invitation` had no e2e coverage of any kind before this.
+///
+/// Both routes now carry the token in the request body rather than the path — see
+/// `InvitationTokenRequest`. Serializing it into the wrong place is exactly the regression this
+/// catches, because the server reads only the body.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn client_accept_and_decline_drive_the_body_carrying_routes(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    let owner_token = app.token.clone();
+    let _owner_id = provision(&app, &owner_token).await;
+    let invitee_token = common::generate_second_user_jwt();
+    let invitee_id = provision(&app, &invitee_token).await;
+    let invitee = client_for(&app, &invitee_token);
+
+    let team = app
+        .client
+        .teams()
+        .create(&TeamCreateRequest {
+            slug: "client-invite-team".to_owned(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        })
+        .await
+        .expect("owner creates team");
+
+    // Decline first, so the invitee is still a non-member when it runs.
+    let to_decline = app
+        .client
+        .teams()
+        .invite(
+            team.id,
+            &CreateInvitationRequest {
+                invited_email: "declines@example.com".to_owned(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("owner invites the decliner");
+
+    invitee
+        .teams()
+        .decline_invitation(&to_decline.token)
+        .await
+        .expect("client declines through the body-carrying route");
+
+    let resp = get_team(&app, &owner_token, team.id).await;
+    let body: Value = resp.json().await.expect("team detail json");
+    assert!(
+        !body["members"]
+            .as_array()
+            .expect("members array")
+            .iter()
+            .any(|m| m["profile_id"].as_str() == Some(&invitee_id.to_string())),
+        "declining must not join the team"
+    );
+
+    // Now accept, and assert the response the client deserializes.
+    let to_accept = app
+        .client
+        .teams()
+        .invite(
+            team.id,
+            &CreateInvitationRequest {
+                invited_email: "accepts@example.com".to_owned(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("owner invites the accepter");
+
+    let accepted = invitee
+        .teams()
+        .accept_invitation(&to_accept.token)
+        .await
+        .expect("client accepts through the body-carrying route");
+    assert_eq!(accepted.team_id, team.id);
+    assert_eq!(accepted.team_slug, "client-invite-team");
+    assert_eq!(accepted.role, TeamRole::Member);
+
+    let resp = get_team(&app, &owner_token, team.id).await;
+    let body: Value = resp.json().await.expect("team detail json");
+    assert!(
+        body["members"]
+            .as_array()
+            .expect("members array")
+            .iter()
+            .any(
+                |m| m["profile_id"].as_str() == Some(&invitee_id.to_string())
+                    && m["role"].as_str() == Some("member")
+            ),
+        "accepting through the client joins the team"
+    );
+
+    // An unknown token still errors, so a silently-dropped body cannot read as success.
+    let err = invitee
+        .teams()
+        .accept_invitation("deadbeefdeadbeefdeadbeefdeadbeef")
+        .await;
+    assert!(err.is_err(), "unknown token must not succeed");
 }

@@ -117,6 +117,7 @@ lib/temper/generated/models/inherited_read_grant.rb
 lib/temper/generated/models/inherited_share.rb
 lib/temper/generated/models/insufficient_authority.rb
 lib/temper/generated/models/invitation_status.rb
+lib/temper/generated/models/invitation_token_request.rb
 lib/temper/generated/models/invitee_invitation.rb
 lib/temper/generated/models/invocation_ack.rb
 lib/temper/generated/models/invocation_act_row.rb

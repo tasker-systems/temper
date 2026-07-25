@@ -131,9 +131,13 @@ if [ -n "$DIRTY" ]; then
     printf '%s' "$DIRTY" >&2
     echo >&2
     echo "       Run: cargo make generate-ts-types" >&2
-    echo "       then STAGE the result (git add). This gate compares against git, not against a" >&2
-    echo "       fresh build, so types you have just correctly regenerated still fail while they" >&2
-    echo "       sit unstaged." >&2
+    echo "       then COMMIT the result. Staging is NOT enough here, unlike the temper-rb and" >&2
+    echo "       temper-ts drift gates: those use \`git diff --exit-code\`, which compares the" >&2
+    echo "       worktree against the INDEX, so \`git add\` satisfies them. This gate uses" >&2
+    echo "       \`git status --porcelain\` (it has to — see the comment above; the diff form" >&2
+    echo "       cannot see a newly generated untracked file), and status reports staged-vs-HEAD" >&2
+    echo "       changes too. So a correctly regenerated tree keeps failing until it is committed." >&2
+    echo "       A line above with 'M ' in the first column is exactly that case." >&2
     exit 1
 fi
 
