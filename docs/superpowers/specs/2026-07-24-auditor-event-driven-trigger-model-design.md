@@ -1,7 +1,7 @@
 # The auditor's trigger model — event-driven staleness, not coverage-chasing
 
 - **Date:** 2026-07-24
-- **Status:** Design — draft for review
+- **Status:** Design — **accepted**; all eight decisions settled 2026-07-24. Ready to plan.
 - **Goal:** Evidential standing as substrate (`019f81e9-25f3-7fe1-b563-4acca2e391eb`)
 - **Relates to:** Set 4 (steward's three jobs — grow → tend → reap), Set 5 (the adversary as
   citation auditor, shipped PR #531)
@@ -130,22 +130,105 @@ information); `invocation_closed`, `delegated_launch` (envelope bookkeeping); ev
   "cannot assess" verdict is still wanted, but it is no longer load-bearing against an infinite
   loop.
 
-## Open questions — genuinely undecided
+## D4 — Facet events are metadata, not content, and are excluded
 
-1. **Do `property_*` (facet) events count as material?** A facet set on the finding or the source
-   arguably changes what the connection asserts; equally, facets are often bookkeeping. Argue it
-   either way — needs a decision, not a default.
-2. **Threshold value and shape for Tier 2.** The steward counts `resource_created` only. The
-   auditor cares about relationships too, which the steward's delta does not count. Does Tier 2
-   need its own delta function rather than a reuse?
-3. **Dispatch granularity.** The queue is per-cogmap and the job payload is a finding list. Tier 1
-   is per-*citation*. Does the payload become a citation list, or does the agent re-derive which
-   citations are stale on arrival?
-4. **First-audit selection.** Change-triggering answers "re-audit"; a never-audited citation has
-   no watermark. Coverage is still the right signal for the *first* pass — so the sweep is
-   plausibly `uncovered OR stale`, and that union needs stating.
-5. **Half-life against the new cadence.** 30 days was chosen for a clock-driven world. Under
-   change-driven refresh it should be revisited, and it is explicitly tunable (Set 5 §4.1).
+**Decision.** `property_asserted` / `_set` / `_folded` / `_retracted` / `_reweighted` are **not**
+material.
+
+`kb_properties` is `(owner_table, owner_id, property_key, property_value, weight)` — annotation
+*about* a thing, never the content *of* it. Facets are intentionally metadata, and **we are not
+auditing the content of properties, so they do not count as mutation.**
+
+This follows from the auditor's own boundary, which is the tightest available justification:
+*"assess only whether the source carries the connection claimed; never whether the claim is true,
+and never what the source says."* A facet changes neither what the block claims nor what the source
+contains. If it cannot enter the judgement, it cannot invalidate the verdict.
+
+The apparent counter-example — a facet on a *relationship*, which would bear on corroboration —
+costs nothing, because relationship changes already emit their own events (`relationship_reweighted`,
+`relationship_retyped`) and those **are** in the material set.
+
+## D5 — The auditor gets its own delta, over a shared observable space
+
+**Decision.** A new `auditor_context_delta(p_cogmap, p_watermark)` counting the **material set**;
+**not** a reuse of `steward_ingest_delta`.
+
+Reuse fails twice, and both failures are by design rather than oversight — the steward's delta
+serves a different purpose:
+
+- it counts `resource_created` only, so it is blind to the relationship churn the auditor most
+  cares about (undercount); and
+- its `new_events` counts *every* event in scope, including `citation_audited` — so wiring the
+  auditor to it would re-arm the auditor through the back door, defeating D3's exclusion.
+
+**But the observable-space definition genuinely is shared and must not drift.** Extract the
+steward's inline "team contexts, owned ∪ shared" CTE as `cogmap_observable_contexts(p_cogmap)` — a
+new function, additive, touching no shipped one — and have both deltas call it. One spelling of
+"what this cogmap can see."
+
+Threshold stays a caller-supplied parameter with a clamped default, as `clamp_auditor_cap` already
+does for the finding budget.
+
+## D6 — Dispatch a citation list, not a finding list
+
+**Decision.** The job payload becomes `[{finding_id, citations: [{block_id, source_id}]}]` — the
+stale citations themselves, not the findings that contain them.
+
+This is **context management, and it is the same discipline you would apply to a person: do not
+hand an agent something you do not want reasoned about.** Being economical with what you pass is
+not merely an efficiency measure; the information you supply is the information that gets acted on.
+
+It is also the difference between an instruction and an invariant. With a finding list, "do not
+re-audit an already-covered citation" can only ever live in a markdown file — and Set 5's Critical
+already taught this lesson: the sweep was principal-scoped and the *claim* was not, because **a gate
+is only as strong as the narrowest path around it**. Prose in an instructions file is a wider path
+than a queue payload. With a citation list the agent cannot re-audit a non-stale citation, because
+it was never handed one, and the whole defect class disappears at the queue.
+
+Cost, accepted: a larger and more coupled payload. It is bounded by the same finding budget that
+bounds the sweep today.
+
+## D7 — Selection is `uncovered OR stale`, with `uncovered` scoped to what this principal may audit
+
+**Decision.** Coverage governs the **first** audit; change governs **re-audit**. The sweep selects
+the union.
+
+Change-triggering cannot select a never-audited citation — it has no watermark to compare against —
+so coverage remains the right first-pass signal, and the union is what makes both work.
+
+**The subtlety that makes it correct:** "uncovered" is *permanent* for a citation this principal
+cannot audit. The sharpest case is a **self-authored** citation: `AuditAuthority` 404s it forever,
+so it never gains coverage, so it re-heads the queue every tick — the loop surviving its own fix.
+
+The sweep already states the governing rule, and applied it to readability only:
+
+> *"Filtering through the SAME predicate the gate uses makes the queue a SUBSET of what the gate
+> admits by construction, so the auditor is never handed work that will 404."*
+
+So `uncovered` must be scoped to citations **this principal could actually audit** — readability
+*and* non-self-authorship. Same rule, one more conjunct. Costs a join the sweep does not do today;
+worth it, because without it the queue offers work the gate refuses, which is the exact condition
+that rule exists to forbid.
+
+## D8 — The 30-day half-life stands
+
+**Decision.** Unchanged.
+
+The concern was that a half-life chosen for a clock-driven world would misbehave under change-driven
+refresh — a quiet map's good verdicts rotting while nothing was wrong. **That concern is unfounded,
+and the reason is worth stating because it is easy to get backwards.**
+
+`citation_quality` is a weighted **mean**, `sum(w·v)/sum(w)`. For a single audit that is
+`(w·v)/w = v` — full value, regardless of age. A ten-year-old lone `+1.0` still reads `+1.0`. Decay
+is therefore **purely relative**: it never fades a verdict in absolute terms, it only arbitrates
+between *competing* verdicts — exactly what `20260724000120:177` always claimed. At total underflow
+the source drops out of the mean entirely rather than decaying toward zero, which the
+`a_source_whose_every_auditor_decayed_drops_out_of_the_mean` test pins.
+
+So the half-life is cadence-independent in the way that matters. The one place cadence bit was
+within-bucket recency at hourly repeat; change-driven triggering spaces an auditor's successive
+verdicts by real change, which is precisely the interval 30 days is a sensible arbitration window
+for. It remains tunable (Set 5 §4.1) if evidence later says otherwise.
 
 ## Non-goals
 
