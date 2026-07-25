@@ -56,3 +56,17 @@ temper-telemetry = { path = ".", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
 temp-env = "0.3.6"
+# `panicking_request_still_flushes.rs` drives a real `axum::Router` through `traced_request` to prove
+# the flush survives a panicking handler. `ServiceExt::oneshot` is how you call a Router directly;
+# the alternative — binding a socket and speaking HTTP by hand — would put hyper's connection
+# teardown between the test and the thing under test, which is the middleware's ordering.
+tower = { version = "0.5", features = ["util"] }
+# `live_export_client.rs` decodes the POSTed body instead of sniffing its request line, so a
+# serialization or `service.name` regression cannot pass as "a POST arrived". `gen-tonic-messages`
+# (not `gen-tonic`) is the prost message types WITHOUT pulling tonic and a gRPC channel in — we are
+# decoding bytes off a socket, not speaking gRPC. `default-features = false` for the same reason.
+opentelemetry-proto = { version = "0.32", default-features = false, features = [
+    "gen-tonic-messages",
+    "trace",
+] }
+prost = "0.14"

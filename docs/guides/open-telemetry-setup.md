@@ -171,6 +171,14 @@ Two behaviours are temper's rather than the SDK's, and both are operator-visible
   occurrences of that variable — it is in the spec and not in the crate. Only the literal value
   `true` (case-insensitive) disables export; `1` and `yes` deliberately do **not**, so a typo cannot
   silently blind you.
+- **`RUST_LOG` does not control export in either direction — including `RUST_LOG=off`.** Both stacks
+  filter **per layer**: the fmt layer follows `RUST_LOG`, the export layer carries its own fixed
+  filter. That is deliberate, and it is what makes `RUST_LOG=debug` safe to use on a live deployment
+  — raising the log level no longer widens what is shipped to (and billed by) the vendor. The
+  consequence runs the other way too, and is the surprising half: **`RUST_LOG=off temper …` still
+  exports spans.** If you reach for it as a kill switch it will look like it worked, because your
+  terminal goes quiet. The switches that actually stop export are `OTEL_SDK_DISABLED=true` and
+  unsetting the endpoint.
 
 Protocol is **HTTP/protobuf**, not gRPC and not OTLP/JSON. Not a style preference: JSON's
 `TimeUnixNano{low, high}` encoding is mishandled by some collectors — `@vercel/otel`'s own source

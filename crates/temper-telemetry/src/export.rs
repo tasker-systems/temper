@@ -316,13 +316,36 @@ where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
     let provider = build_provider()?;
-    let tracer = provider.tracer("temper");
 
-    // Store before returning: the flush path must never observe a layer that is live while the
-    // provider it drains is still unset.
-    let _ = PROVIDER.set(provider);
+    // ## The tracer is derived from the *installed* provider, never from the local one
+    //
+    // `PROVIDER` is a `OnceLock`, so a second `set` fails and drops its argument. Taking the tracer
+    // from the local `provider` before storing it — which is what this did — meant that on a double
+    // init the returned layer fed a tracer belonging to a provider that had just been **discarded**,
+    // while `force_flush_spans` went on draining the incumbent. Spans would land in one provider and
+    // the flush would drain another: exported by neither, with nothing logged.
+    //
+    // Storing first and reading back makes the layer's tracer and the flush target the same object by
+    // construction, so the two cannot disagree — there is no ordering left to get wrong, rather than a
+    // warning telling you it went wrong.
+    //
+    // Storing first is also required for the original reason: the flush path must never observe a
+    // layer that is live while the provider it drains is still unset.
+    if PROVIDER.set(provider).is_err() {
+        // Not reachable in any deployable — every binary inits once — but a test harness or an
+        // embedder can do it, and silence here was the whole defect.
+        tracing::warn!(
+            "span export was already initialised; keeping the installed provider and discarding the \
+             new one. The returned layer feeds the installed provider, so spans and flushes still \
+             agree — but initialising telemetry twice in one process is a bug in the caller"
+        );
+    }
 
-    Some(tracing_opentelemetry::layer().with_tracer(tracer))
+    let installed = PROVIDER
+        .get()
+        .expect("PROVIDER is set immediately above, or was already set");
+
+    Some(tracing_opentelemetry::layer().with_tracer(installed.tracer("temper")))
 }
 
 /// [`export_layer`], but for the CLI: additionally gated on the operator opting in.
