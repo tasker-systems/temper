@@ -58,6 +58,11 @@ fn env_filter(default: &str) -> EnvFilter {
 ///
 /// Split from [`init_server_logging`] so tests can drive it with a capture writer and an explicit
 /// filter. `init_server_logging` supplies the two production arguments and installs it.
+///
+/// The `export_layer` call is the whole of what the OTLP increment added here — exactly the one
+/// `.with(…)` the `Registry`-over-`fmt()` decision was made to buy. `Option<Layer>` implements
+/// `Layer`, so the disabled case needs no branch: when no endpoint is configured this is `None` and
+/// the stack is what it always was.
 fn server_stack<W>(writer: W, filter: EnvFilter) -> impl Subscriber + Send + Sync
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
@@ -65,11 +70,17 @@ where
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer().json().with_writer(writer))
+        .with(crate::export::export_layer())
 }
 
 /// The CLI logging stack: human-readable records over `writer`.
 ///
 /// Split from [`init_cli_logging`] for the same reason as [`server_stack`].
+///
+/// **No export layer, deliberately.** The CLI is a short-lived process on someone else's machine;
+/// exporting from it would need its own flush-at-exit and would send a developer's local activity
+/// to a shared backend. The goal this crate serves is about the deployed surfaces. If the CLI ever
+/// should export, that is a decision with its own consequences, not an omission to tidy up.
 fn cli_stack<W>(writer: W, filter: EnvFilter) -> impl Subscriber + Send + Sync
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,

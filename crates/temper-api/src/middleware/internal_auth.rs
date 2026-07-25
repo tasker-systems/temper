@@ -106,6 +106,12 @@ async fn require_signature_with(
         ));
     }
 
+    // The signature verified against a secret only our own services hold, which is the strongest
+    // form of "one of ours" temper has — so join the caller's trace by link (decision `019f95ff`
+    // rule 2). These are the hops the whole goal exists to make navigable: the mention agent asking
+    // what to say, then asking for a token, are two of the three spans in that story.
+    temper_telemetry::link_trusted_caller(&tracing::Span::current(), &parts.headers);
+
     // Rebuild the request with the buffered body for the handler's extractor.
     let request = Request::from_parts(parts, Body::from(bytes));
     Ok(next.run(request).await)
@@ -211,6 +217,10 @@ pub async fn require_slack_mint_signature(
         &bytes,
         &signature,
     )?;
+    // Verified against the mint secret — one of ours, so link its trace (decision `019f95ff`
+    // rule 2). Spelled out here rather than inherited from `require_signature_with` because this
+    // gate deliberately does not use that helper; see the doc comment above.
+    temper_telemetry::link_trusted_caller(&tracing::Span::current(), &parts.headers);
     parts.extensions.insert(verified);
 
     let request = Request::from_parts(parts, Body::from(bytes));

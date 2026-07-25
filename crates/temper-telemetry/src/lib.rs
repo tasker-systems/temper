@@ -1,22 +1,26 @@
 //! Shared telemetry seam for temper's deployables.
 //!
-//! Two things live here:
+//! Five things live here:
 //!
 //! - [`init`] — how a temper process logs. One seam for the five binaries that used to configure
-//!   `tracing_subscriber` themselves, and the place the OTLP exporter will attach.
+//!   `tracing_subscriber` themselves, and where the export layer attaches.
+//! - [`export`] — span export over OTLP: what temper decides that the OpenTelemetry SDK does not.
+//! - [`request_span`] — the request root span, owned so its lifetime can be ended deliberately.
+//! - [`link`] — joining a *trusted* caller's trace, by link, after authentication. The half of the
+//!   trust decision that only an authenticated request gets.
 //! - This module — reading whatever correlation context arrives on an inbound request and stamping
-//!   it onto that request's root span. That is the *extraction* half of W3C trace context, the half
-//!   that needs no exporter, no vendor, and no dependency set.
+//!   it onto that request's root span. The *extraction* half of W3C trace context.
 //!
-//! ## Why extraction lands before export
+//! ## Extraction landed before export, and stays a field afterwards
 //!
-//! `docs/development/span-field-conventions.md` recorded the gap this closes: *"No W3C trace
+//! `docs/development/span-field-conventions.md` recorded the gap extraction closed: *"No W3C trace
 //! context. Nothing extracts or propagates `traceparent`, so spans do not yet join across
-//! deployables."* A trace id in today's JSON log lines is worth having before anything is exported —
-//! it is what lets a Slack mention's three hops be grepped into one story. When the exporter lands
-//! (`temper-telemetry`'s next increment, under goal
-//! `019f9404-2a4e-7530-8744-92ae4ab6d83e`), the same extracted context becomes the actual parent
-//! rather than a field, and nothing here is thrown away.
+//! deployables."* A trace id in a JSON log line is worth having on its own — it is what lets a Slack
+//! mention's three hops be grepped into one story.
+//!
+//! The exporter has since landed, and **that did not promote the extracted context to a parent**.
+//! It stays exactly what it was: a field. See the trust boundary below — this is the decided
+//! behaviour, not an unfinished step.
 //!
 //! ## What is deliberately *not* here
 //!
@@ -35,9 +39,8 @@
 //! still place its requests under a trace id of its choosing.
 //!
 //! As a log field that is tolerable, and it is what every OTel deployment does by default at the
-//! edge. It stops being merely a field when an exporter lands and the extracted context could become
-//! a real **parent**: at that point an unauthenticated caller could graft spans onto someone else's
-//! trace.
+//! edge. It would stop being merely a field the moment the extracted context became a real
+//! **parent**: at that point an unauthenticated caller could graft spans onto someone else's trace.
 //!
 //! **That is decided, and the answer is no.** Temper accepts `traceparent` only from itself
 //! (decision `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c`):
@@ -45,7 +48,8 @@
 //! 1. **Never parent from inbound context** — every root span roots its own trace, every surface,
 //!    unconditionally.
 //! 2. **Join a trusted caller's trace with an OTel span *link*, recorded post-auth**, not by
-//!    parenting.
+//!    parenting. Implemented in [`link`], which is also where "one of ours" is defined and
+//!    defended.
 //! 3. **Never let an inbound `sampled` flag drive sampling.** Record it; do not obey it. It is the
 //!    one consequence with a bill attached — honoring it lets anyone force every span to export.
 //! 4. **Field extraction below stays as it is**, on all surfaces including unauthenticated ones.
@@ -61,7 +65,7 @@
 //! accepted cost of links is that a linked trace is navigable but is not a single waterfall.
 //!
 //! **The constraint any counter-proposal must answer:** a span's parent is fixed at creation, and
-//! `TraceLayer` builds the root span before auth runs. So "extract after auth" can yield a field or
+//! the root span is built before auth runs. So "extract after auth" can yield a field or
 //! a link, never a parent.
 //!
 //! ## The Vercel headers, and one name that must not be reused
@@ -76,12 +80,71 @@
 //! merge under one field name, so Vercel's is recorded as `vercel_invocation_id` and never as
 //! `invocation_id`.
 
+pub mod export;
 pub mod init;
+pub mod link;
+pub mod request_span;
 
+pub use export::{force_flush_spans, shutdown_telemetry};
 pub use init::{init_cli_logging, init_server_logging};
+pub use link::link_trusted_caller;
+pub use request_span::traced_request;
 
 use http::HeaderMap;
 use tracing::Span;
+
+/// Re-exported so [`root_span!`] can path to it as `$crate::tracing`, which works regardless of
+/// what the calling crate happens to have in scope.
+pub use tracing;
+
+/// Build a request root span with the full field set, and stamp inbound trace context onto it.
+///
+/// ## Why a macro and not a function taking the name
+///
+/// Not a style choice. `tracing` puts a span's name into a `static Metadata` initializer, so a name
+/// that arrives as a parameter fails to compile — `error[E0435]: attempt to use a non-constant
+/// value in a constant`. And the callsite is static *per macro invocation*, so even a `const` name
+/// would give every surface one shared callsite under one name. Two span names genuinely require
+/// two expansion sites; a macro is what lets the sites differ while the *contents* are written once.
+///
+/// ## What this exists to stop
+///
+/// The name is the only thing that legitimately differs between `http_request` and `mcp_request`.
+/// Everything else — the three request fields, the six deferred fields, and the
+/// [`record_inbound_trace_context`] call — was copy-pasted into both surfaces, which meant adding a
+/// field to one and forgetting the other compiled cleanly and passed every test. [`ROOT_TRACE_FIELDS`]
+/// declared the names for the *gate*, but nothing tied the gate's list to what the constructors
+/// actually built. Now one expansion builds both, and `macro_declares_every_root_trace_field` ties
+/// it to the constant.
+///
+/// The span names stay deliberately distinct: temper-client's outbound span is *also* `http_request`,
+/// and three things under one name are unreadable once exported.
+#[macro_export]
+macro_rules! root_span {
+    ($name:literal, $request:expr) => {{
+        let request = &$request;
+        let span = $crate::tracing::info_span!(
+            $name,
+            method = %request.method(),
+            path = %request.uri().path(),
+            version = ?request.version(),
+            // Filled by the auth middleware once a token resolves to a profile — a validated token
+            // is not yet a profile, so this cannot be known at construction.
+            profile_id = $crate::tracing::field::Empty,
+            // `ROOT_TRACE_FIELDS`, filled just below from whatever headers actually arrived.
+            trace_id = $crate::tracing::field::Empty,
+            parent_span_id = $crate::tracing::field::Empty,
+            trace_sampled = $crate::tracing::field::Empty,
+            vercel_id = $crate::tracing::field::Empty,
+            vercel_invocation_id = $crate::tracing::field::Empty,
+        );
+        // Unlike the act ids — which arrive in the request *body* and so cannot be known here —
+        // headers are in hand at construction, so this records onto the span just built rather than
+        // via `Span::current()` further in, which is the trap the act-span convention exists to close.
+        $crate::record_inbound_trace_context(&span, request.headers());
+        span
+    }};
+}
 
 /// The root-span fields this crate records, declared once so the span constructors, the convention
 /// gate, and the prose documentation cannot drift apart.
@@ -101,8 +164,9 @@ pub const ROOT_TRACE_FIELDS: [&str; 5] = [
     "vercel_invocation_id",
 ];
 
-/// W3C `traceparent` header name.
-const TRACEPARENT: &str = "traceparent";
+/// W3C `traceparent` header name. Shared with [`link`], which re-parses the same header once the
+/// caller has authenticated.
+pub(crate) const TRACEPARENT: &str = "traceparent";
 /// Vercel's per-request id, surfaced on responses and in its own logs — the bridge from our trace
 /// into Vercel's per-request view. Already used by hand at the steward hop
 /// (`crates/temper-api/src/handlers/steward.rs`); this generalizes it to every request.
@@ -229,7 +293,7 @@ pub fn record_inbound_trace_context(span: &Span, headers: &HeaderMap) {
 }
 
 /// Read a header as UTF-8, treating a non-UTF-8 value as absent.
-fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
+pub(crate) fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers.get(name)?.to_str().ok()
 }
 
@@ -368,5 +432,42 @@ mod tests {
     fn root_fields_do_not_collide_with_the_act_field_set() {
         assert!(!ROOT_TRACE_FIELDS.contains(&"invocation_id"));
         assert!(!ROOT_TRACE_FIELDS.contains(&"correlation_id"));
+    }
+
+    /// Ties [`ROOT_TRACE_FIELDS`] to the macro that actually builds the span.
+    ///
+    /// The constant already existed, but nothing connected it to the constructors — they spelled
+    /// the fields out separately, in two surfaces, so the list could say one thing and the spans
+    /// carry another. Now there is one expansion, and this asserts it declares every name the
+    /// constant claims. A field added to the constant without the macro (or the reverse) fails here
+    /// instead of silently producing spans the convention gate expects fields on.
+    #[test]
+    fn macro_declares_every_root_trace_field() {
+        let subscriber = tracing_subscriber::registry();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let request = http::Request::builder()
+            .method("GET")
+            .uri("/api/health")
+            .body(())
+            .expect("request builds");
+
+        let span = crate::root_span!("test_request", request);
+        let metadata = span.metadata().expect("span is enabled under a registry");
+        let declared: Vec<&str> = metadata.fields().iter().map(|f| f.name()).collect();
+
+        for field in ROOT_TRACE_FIELDS {
+            assert!(
+                declared.contains(&field),
+                "`{field}` is in ROOT_TRACE_FIELDS but the root_span! macro does not declare it, \
+                 so the convention gate expects a field no span carries. Declared: {declared:?}"
+            );
+        }
+
+        // The request-level fields are not in ROOT_TRACE_FIELDS (that constant is inbound trace
+        // context only), but a root span without them is not a root span the convention describes.
+        for field in ["method", "path", "version", "profile_id"] {
+            assert!(declared.contains(&field), "root span lost `{field}`");
+        }
     }
 }
