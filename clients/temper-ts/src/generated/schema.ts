@@ -1073,7 +1073,24 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the finding at `{id}`'s citation-audit trail — one row per audit, each naming its auditor.
+         * @description The `GET` sibling of [`record`] on the same path, and the read that makes an audit
+         *     ATTRIBUTABLE. `GET /api/resources/{id}/evidence` returns aggregates only
+         *     (`citation_magnitude` / `audit_coverage` / `citation_quality` / `band`), so a finding pushed to
+         *     `disputed` by one auditor and one pushed there by three are indistinguishable on that surface:
+         *     the verdict is visible, the voter is not. This read is opt-in rather than more fields on
+         *     `StandingShape` because the shape is fixed-width and recomputed live on every call, while a
+         *     trail grows with every audit ever emitted.
+         *
+         *     **404 when the finding is not readable (or does not exist); `200 []` only when it IS readable and
+         *     genuinely carries no audits.** That is deliberately not the collection default — the `/provenance`
+         *     sibling answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety
+         *     argument about the pair of endpoints, not about this handler: it lives in
+         *     `temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s
+         *     equivalent lives in `evidential_standing_service`.
+         */
+        get: operations["list_citation_audits"];
         put?: never;
         /**
          * Record an auditor's signed defensibility verdict on one `(block, source)` citation of the
@@ -1795,6 +1812,11 @@ export interface components {
             team_id: string;
         };
         /**
+         * Format: uuid
+         * @description A `kb_content_blocks.id` value — a resource's addressable interior unit.
+         */
+        BlockId: string;
+        /**
          * @description One itemized block-provenance record — a single source's contribution to a resource's content
          *     block, as returned by the `resource_block_provenance` SQL function in `(block_seq, accretion_seq)`
          *     order. `source_kind` is the DDL `provenance_source_kind` enum rendered as text (`"resource"` /
@@ -1929,6 +1951,69 @@ export interface components {
              *     connection it makes, never a claim about what the source says (spec §3.3). Out-of-range is a
              *     400; the ledger column carries the same bound as a CHECK
              *     (`migrations/20260724000110_citation_audits.sql:28`).
+             */
+            value: number;
+        };
+        /**
+         * @description One audit of one citation, with its auditor named — an element of the response to
+         *     `GET /api/resources/{id}/citation-audits` (SQL `resource_citation_audit_trail`,
+         *     `migrations/20260724000220`).
+         *
+         *     **This is the attribution `StandingShape` collapses away.** `audit_coverage` and
+         *     `citation_quality` are aggregates over exactly these rows, so a finding pushed to `disputed` by
+         *     one auditor and a finding pushed there by three read identically on the shape and differently
+         *     here. Spec §5.2: identity travels on the emitting event
+         *     (`kb_events.emitter_entity_id → kb_entities.profile_id`), which Beat 1 materialized as
+         *     `kb_citation_audits.audited_by_profile_id`; this row carries that profile plus the two
+         *     human-readable columns of `kb_profiles` (`handle`, `display_name` — both `NOT NULL`), so a
+         *     caller never has to make a second round trip to name a voter.
+         *
+         *     All fields are non-nullable except `reason`, which is nullable on the ledger. The access gate is
+         *     INSIDE the SQL, so an unreadable finding produces no rows at all rather than a redacted one.
+         */
+        CitationAuditRow: {
+            /**
+             * Format: uuid
+             * @description `kb_citation_audits.id` — the same id `POST /api/resources/{id}/citation-audits` returns
+             *     (`handlers::citation_audits::record` → `Json<Uuid>`), which is why it is a bare `Uuid` here
+             *     and not a newtype. A **masked surrogate**: the replay-stable identity of an audit is its
+             *     `audited_by_event_id`, so this addresses the row in this response, not across a replay.
+             */
+            audit_id: string;
+            /** @description The auditor's `kb_profiles.display_name`. */
+            auditor_display_name: string;
+            /** @description The auditor's unique `kb_profiles.handle`. */
+            auditor_handle: string;
+            /**
+             * @description The auditor's profile. **Not the citer** — the self-audit denial arm exists precisely so the
+             *     two cannot be the same profile for a given citation.
+             */
+            auditor_profile_id: components["schemas"]["ProfileId"];
+            /**
+             * @description The audited citation's block. Carried alongside `source_id` because a citation IS the
+             *     `(block, source)` pair — one source cited by two of the finding's blocks is two citations,
+             *     separately auditable.
+             */
+            block_id: components["schemas"]["BlockId"];
+            /**
+             * Format: date-time
+             * @description When the audit was emitted, stamped from the owning event's `occurred_at` (never `now()`).
+             *     Load-bearing, not decoration: `resource_citation_quality` weights each audit by
+             *     `pow(0.5, age/30d)`, so this is the row's weight in the number the shape read returned.
+             */
+            created: string;
+            /** @description The auditor's free-text rationale, if it gave one. */
+            reason?: string | null;
+            /**
+             * @description The audited citation's cited source. Always resource-kind — only resource-kind citations are
+             *     auditable (the `citation_audit` write path rejects every other kind), so no `source_kind`
+             *     discriminator is carried.
+             */
+            source_id: components["schemas"]["ResourceId"];
+            /**
+             * Format: double
+             * @description The auditor's signed verdict in `[-1.0, 1.0]`: how much defensibility this citation confers
+             *     for the connection it makes (spec §3.3), never a claim about what the source says.
              */
             value: number;
         };
@@ -7350,6 +7435,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_citation_audits: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID (the finding whose audit trail is read) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The finding's citation audits, most recent first, each attributed to its auditor. Empty when the finding is readable but carries no audits. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationAuditRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found — the finding is unreadable or does not exist (deliberately indistinguishable, matching GET /evidence) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

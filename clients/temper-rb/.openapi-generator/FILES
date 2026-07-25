@@ -52,6 +52,7 @@ lib/temper/generated/models/change_role_request.rb
 lib/temper/generated/models/charter_block.rb
 lib/temper/generated/models/charter_disposition.rb
 lib/temper/generated/models/citation_audit_request.rb
+lib/temper/generated/models/citation_audit_row.rb
 lib/temper/generated/models/claimed_audit_job.rb
 lib/temper/generated/models/claimed_job.rb
 lib/temper/generated/models/close_invocation_request.rb

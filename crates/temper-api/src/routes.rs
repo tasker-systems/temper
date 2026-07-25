@@ -64,7 +64,12 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
         .routes(routes!(handlers::evidence::evidence))
-        .routes(routes!(handlers::citation_audits::record))
+        // Both methods on `/api/resources/{id}/citation-audits` — one `routes!` group, as with the
+        // resource CRUD trio above, so the path is declared once.
+        .routes(routes!(
+            handlers::citation_audits::record,
+            handlers::citation_audits::list
+        ))
         .routes(routes!(handlers::edges::lineage))
         .routes(routes!(handlers::edges::assert))
         .routes(routes!(handlers::edges::retype))

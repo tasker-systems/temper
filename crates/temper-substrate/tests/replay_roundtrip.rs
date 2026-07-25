@@ -206,6 +206,26 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     .await;
     let block = BlockId::from(first_block(&pool, finding).await);
 
+    // The audit is emitted by a FOREIGN principal — its own profile, its own entity — not by the
+    // `system` actor that owns the finding and the source. Without this the fixture holds exactly one
+    // profile, and the `audited_by_profile_id` assertion below would be satisfied by any projector
+    // that picked *some* profile (the finding's owner, the originator, a constant). Auditor and
+    // citer being different principals is also the real deployment shape: the auditor runs as its
+    // own registered machine client, since a steward and an auditor sharing one credential would
+    // emit acts the ledger cannot tell apart (spec §5.2, `:430`, *"One credential means one emitter
+    // entity"*).
+    let auditor_profile = common::insert_profile(&pool, "replay-adversary").await;
+    let auditor_emitter = EntityId::from(
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO kb_entities (profile_id, name, metadata) \
+             VALUES ($1, 'auditor', '{}'::jsonb) RETURNING id",
+        )
+        .bind(auditor_profile)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+    );
+
     // The `(block, source)` pair must be a LIVE citation — `citation_audit` refuses an audit of a
     // non-citation (`20260724000110_citation_audits.sql`, `citation_is_live`). `make_resource`
     // creates with no sources, so the provenance row is added here, borrowing the block's own
@@ -229,7 +249,7 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
             source: ProvenanceSource::Resource(source.uuid()),
             value: 0.75,
             reason: Some("replay proof"),
-            emitter,
+            emitter: auditor_emitter,
         },
     )
     .await
@@ -246,14 +266,26 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     // verdict by `pow(0.5, age/30d)`, so a projector that leaves `created` to `DEFAULT now()`
     // rewrites every weight on replay and can INVERT a band, while this test stayed green. `id` is
     // deliberately still excluded — see the masked-surrogate note above.
-    const BY_EVENT: &str = "SELECT block_id, source_kind::text, source_id, value, reason, created \
-                            FROM kb_citation_audits WHERE audited_by_event_id=$1";
+    //
+    // `audited_by_profile_id` joined the tuple with the column
+    // (`20260724000200_citation_audit_attribution.sql`) under that same "EVERY column" rule. It is
+    // event-derived exactly as `created` is, and it fails exactly the same way: a projector that
+    // resolved the auditor from an ambient/current principal instead of from `p_event` would make a
+    // replay re-attribute every historical audit to whoever ran the replay — collapsing a trail
+    // written by three auditors into one, which is the very signal the per-auditor collapse reads.
+    // `kb_citation_audits` is NOT in `replay.rs`'s `PROJECTION_DUMPS`, so this tuple is the only
+    // place that comparison happens; a column left out of it is a column nothing checks.
+    const BY_EVENT: &str =
+        "SELECT block_id, source_kind::text, source_id, value, reason, audited_by_profile_id, \
+                created \
+         FROM kb_citation_audits WHERE audited_by_event_id=$1";
     type AuditRow = (
         Uuid,
         String,
         Uuid,
         f64,
         Option<String>,
+        Uuid,
         chrono::DateTime<chrono::Utc>,
     );
 
@@ -314,6 +346,34 @@ async fn replay_reprojects_a_citation_audit(pool: sqlx::PgPool) {
     assert_eq!(
         created, occurred_at,
         "replay must source `created` from the event's `occurred_at`, not stamp it with now()"
+    );
+
+    // The same invariant on the attribution axis, and stated separately for the same reason: the
+    // byte-identical comparison above proves the reprojected value MATCHES the original, which a
+    // projector that is consistently wrong in both passes would also satisfy. This pins what the
+    // value must BE — the emitting event's own entity's profile, reached along spec §5.2's chain —
+    // and the foreign-auditor fixture makes it unsatisfiable by the finding's owner or by any
+    // constant.
+    let (attributed, emitter_profile): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT a.audited_by_profile_id, en.profile_id \
+           FROM kb_citation_audits a \
+           JOIN kb_events   e  ON e.id  = a.audited_by_event_id \
+           JOIN kb_entities en ON en.id = e.emitter_entity_id \
+          WHERE a.audited_by_event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        attributed, emitter_profile,
+        "replay must resolve `audited_by_profile_id` from the event's emitter, not from the \
+         replaying principal"
+    );
+    assert_eq!(
+        attributed, auditor_profile,
+        "the reprojected audit must still belong to the foreign auditor that emitted it — a replay \
+         that re-attributed it to the finding's owner would collapse the auditor axis"
     );
 
     // ...and exactly once — meaning ONE event yields ONE row on a replay walk, which falsifies a
