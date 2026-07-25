@@ -6,32 +6,50 @@ description: Use when tending the team self-cognition map — choosing a node's 
 
 ## The loop
 
+> **Every argument below is spelled exactly as the tool schema names it, and every
+> required one is shown.** This block is a call recipe, not prose — what it writes is what
+> gets sent. Where it once used positional or arrow forms (`facet_set(node, f)`,
+> `node -> src`), the model had to guess the binding, and it guessed wrong in production:
+> dropped `title`, `source`, `resource`. Keep the names literal when editing this.
+
 ```
-delta = temper__steward_ingest_delta(cogmap, threshold)   # skip if under threshold
-inv   = temper__invocation_open(cogmap, trigger="scheduled")
-telos = temper__cogmap_read_charter(cogmap)               # orient
+delta = temper__steward_ingest_delta(cogmap=cogmap, threshold=threshold)   # skip if under threshold
+
+# OMIT parent_cogmap. A scheduled tick is not spawned beneath another map, and the only other
+# id in your prompt is the DISPATCH JOB id — not a cogmap. Passing it here trips the delegation
+# gate ("cogmaps ... share no team") and the whole tick fails before it authors anything.
+inv   = temper__invocation_open(originating_cogmap=cogmap, trigger_kind="scheduled")
+telos = temper__cogmap_read_charter(cogmap=cogmap)        # orient
 
 # act = { invocation_id: inv.id, reasoning: "<why>", confidence: <band> }
 # EVERY authored-4 call below carries `act`. No exceptions — see Authorship.
 
-for source in delta.new_or_changed:
-  existing = temper__search(cogmap, source)               # dedup — and find PRIOR-RUN nodes to link into
-  if materially_changed(source, existing):                # your judgment (below)
-    temper__fold_relationship(existing.derived_from, act)
+# NOTE the three senses of "source" — they are different things, keep them apart:
+#   `src`       the source DOC being distilled (this loop's item)
+#   `source=`   an edge's SOURCE ENDPOINT (for derived_from that is the NODE, not the doc)
+#   `sources=`  block PROVENANCE: which docs a node distills from
+for src in delta.new_or_changed:
+  existing = temper__search(query=<what src is about>, cogmap_id=cogmap)  # dedup — and find PRIOR-RUN nodes to link into
+  if materially_changed(src, existing):                   # your judgment (below)
+    temper__fold_relationship(edge_handle=existing.derived_from, act)
     existing = none
   if not existing:
-    identity = understand(source.body)                    # resolve from the BODY, not frontmatter; see "Understand before distilling"
+    identity = understand(src.body)                       # resolve from the BODY, not frontmatter; see "Understand before distilling"
     # `sources` = every resource this node distills from (block provenance); see Source attribution.
-    node = temper__create_resource(cogmap=cogmap, type=<label>, sources=[<source id(s)>], act)
-    temper__assert_relationship(node -> source, label="derived_from", kind="leads_to", polarity="inverse", act)
+    node = temper__create_resource(cogmap=cogmap, doc_type_name=<label>, title=<node title>,
+                                   sources=[<src id(s)>], act)
+    temper__assert_relationship(source=node, target=src, label="derived_from",
+                                edge_kind="leads_to", polarity="inverse", weight=<0.0-1.0>, act)
     for other in inter_node_relationships(node) + prior_run_nodes(node):  # link into EARLIER runs too; see "Link across runs"
-      temper__assert_relationship(node -> other, kind, polarity, label, weight, act)
-    for f in facets(node): temper__facet_set(node, f, act)   # stamp `as_of` on any volatile claim; see "Dated grounding"
+      temper__assert_relationship(source=node, target=other, edge_kind=<kind>, polarity=<pol>,
+                                  label=<label>, weight=<0.0-1.0>, act)
+    for f in facets(node):                                # stamp `as_of` on any volatile claim; see "Dated grounding"
+      temper__facet_set(resource=node, values=f, act)
 
 # Before closing, self-check: every act this tick carried invocation_id + confidence.
 # LAST and ONCE — a real kb_events.id (delta.max_event_id), never a resource_id.
-temper__steward_advance_watermark(cogmap, delta.max_event_id)   # see "Advancing the watermark"
-temper__invocation_close(inv, outcome)
+temper__steward_advance_watermark(cogmap=cogmap, event_id=delta.max_event_id)   # see "Advancing the watermark"
+temper__invocation_close(invocation=inv.id, disposition="completed", outcome=<outcome>)
 ```
 
 ## Understand before distilling
