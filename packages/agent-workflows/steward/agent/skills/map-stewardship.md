@@ -199,17 +199,17 @@ the whole).
 Worked examples — label + polarity + weight, each with the act envelope:
 
     # a concept answers an open question — strong, directional
-    temper__assert_relationship(concept → question, edge_kind="leads_to", polarity="forward",
+    temper__assert_relationship(source=concept, target=question, edge_kind="leads_to", polarity="forward",
         label="answers", weight=0.9, invocation_id=inv.id, confidence="confident",
         reasoning="answers: this concept resolves the question's open ask")
 
     # two nodes in tension — inverse polarity carries "contradicts"
-    temper__assert_relationship(node_a → node_b, edge_kind="leads_to", polarity="inverse",
+    temper__assert_relationship(source=node_a, target=node_b, edge_kind="leads_to", polarity="inverse",
         label="contradicts", weight=0.7, invocation_id=inv.id, confidence="probable",
         reasoning="contradicts: a's stance reverses b's")
 
     # a loose thematic affinity — real but weak
-    temper__assert_relationship(node → theme, edge_kind="near", polarity="forward",
+    temper__assert_relationship(source=node, target=theme, edge_kind="near", polarity="forward",
         label="relates_to", weight=0.45, invocation_id=inv.id, confidence="tentative",
         reasoning="relates_to: tangential thematic overlap, noted not leaned on")
 
