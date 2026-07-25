@@ -93,7 +93,13 @@ impl fmt::Debug for HttpClient {
 /// Describes an outgoing HTTP request for structured logging.
 ///
 /// Constructed inside [`HttpClient::send`] from method and path parameters.
-/// Never contains sensitive data (tokens, bodies).
+///
+/// **The path is redacted before it is rendered.** This comment used to claim the type "never
+/// contains sensitive data (tokens, bodies)" — it did: `accept_invitation` puts a bearer capability
+/// token in the URL path (`teams.rs`), and this `Display` is a span attribute that now leaves the
+/// process for a telemetry vendor. `temper_telemetry::redact::redact_path` is the one line of defence
+/// until goal `019f99dd-dc9c-79f1-947c-e61bde2148a9` builds the real registry; bodies are still never
+/// rendered here.
 struct ApiRequest<'a> {
     method: &'a reqwest::Method,
     path: &'a str,
@@ -102,7 +108,12 @@ struct ApiRequest<'a> {
 
 impl fmt::Display for ApiRequest<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.method, self.path)
+        write!(
+            f,
+            "{} {}",
+            self.method,
+            temper_telemetry::redact::redact_path(self.path)
+        )
     }
 }
 
@@ -249,7 +260,12 @@ impl HttpClient {
         // `debug_span!` while the CLI could not export at all; the CLI's fmt layer still filters at
         // `warn` by default, so this costs no extra output. See `temper_telemetry::init::EXPORT_FILTER`.
         let span = tracing::info_span!(
-            "http_request",
+            // NOT `http_request`: temper-api's root span already owns that name, and once both are
+            // exported a trace-detail view shows two rows reading the same thing. `temper_telemetry`'s
+            // `root_span!` docs give this exact reason for temper-mcp being `mcp_request` — the
+            // collision it avoided between two of the three was simply shipped between the other two
+            // when this span was promoted to `info` and started being exported.
+            "http_client_request",
             request = %api_req,
             has_auth = api_req.has_auth,
             status = tracing::field::Empty,

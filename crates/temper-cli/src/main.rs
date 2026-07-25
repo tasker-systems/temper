@@ -1270,6 +1270,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             if let Err(e) = temper_cli::commands::update::run(check, version, force, output_format)
             {
                 temper_cli::output::error(format!("temper: {e}"));
+                // Drain here too: `process::exit` runs no destructors, and this arm is one of the
+                // four exits, not one of the two the invariant originally claimed.
+                temper_telemetry::shutdown_telemetry();
                 std::process::exit(1);
             }
             Ok(())

@@ -89,11 +89,14 @@ opens — which is true of every identifier worth correlating on.
 
 ### Naming: `http_request` is already overloaded
 
-Both temper-api's root span and temper-client's outbound request span are named `http_request`. In a
-single process's logs that is survivable; in an exported trace it is two different things under one
-name, and in the e2e suite — which runs client and server in one process — you can watch both appear
-side by side. temper-mcp's root span is therefore `mcp_request`, not a third `http_request`. Prefer a
-name that says which side of the wire you are on.
+temper-api's root span is `http_request`; temper-mcp's is `mcp_request`, not a second one, for exactly
+this reason. temper-client's outbound span **was** a third `http_request` — survivable while it was
+`debug` and nothing exported, and not survivable once it became `info` and started reaching a vendor,
+where a trace-detail view would show two rows reading the same word. It is now
+**`http_client_request`**.
+
+The rule: prefer a name that says which side of the wire you are on. The collision this design avoided
+between two of the three had simply been shipped between the other two.
 
 ## Adding a write command
 
@@ -145,9 +148,17 @@ real `#[act_span]` span and checks it declares every name in `ACT_SPAN_FIELDS`.
   through the real router.
 - **Propagation has landed on the Rust side, and it is what makes the link above worth having.**
   `temper_telemetry::propagate` injects `traceparent` onto outbound calls from the span representing
-  that call (`temper-client`'s `http_request`), so a receiving surface's link names a span that was
-  actually exported instead of one no exporter ever emitted. `tracestate` is forwarded when present and
-  omitted when empty — W3C makes it optional, and a valueless header on every request is noise.
+  that call (`temper-client`'s `http_client_request`), so a receiving surface's link names a span that
+  was actually exported instead of one no exporter ever emitted.
+
+  Injection is gated on the span being **sampled**. A span sampled *out* has a perfectly valid
+  `SpanContext` and will never be exported, so injecting for it manufactures exactly the dangling link
+  this exists to prevent — dormant under the default `AlwaysOn` sampler, live the moment anyone sets
+  `OTEL_TRACES_SAMPLER`, which the setup guide offers as the cost-control knob.
+
+  `tracestate` is omitted rather than sent empty (W3C makes it optional, and a valueless header on
+  every request is noise). It is not *forwarded* today: nothing reads it inbound, and since temper never
+  parents from inbound context, every `SpanContext` it builds carries an empty one.
   `tests/e2e/tests/client_injection_link_test.rs` drives the whole loop at the production caller:
   temper-client sends, the server links, and the two ids match.
 

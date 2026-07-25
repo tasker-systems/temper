@@ -34,6 +34,7 @@
 
 use http::{HeaderMap, HeaderName, HeaderValue};
 use opentelemetry::propagation::{Injector, TextMapPropagator};
+use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -77,7 +78,39 @@ pub fn inject_trace_context(headers: &mut HeaderMap) {
 
 /// [`inject_trace_context`] against an explicit span, so a test can drive it without entering one.
 pub fn inject_from(span: &Span, headers: &mut HeaderMap) {
-    TraceContextPropagator::new().inject_context(&span.context(), &mut HeaderInjector(headers));
+    inject_context(&span.context(), headers)
+}
+
+/// Inject a context's trace parent, **if that context describes a span that will be exported**.
+///
+/// ## The sampling gate, and why the module's stated invariant needed it
+///
+/// The docs above say a `traceparent` naming a span that was never recorded is worse than no header,
+/// and cite `injects_nothing_without_a_provider`. That test pins only the *no provider* case, where the
+/// `SpanContext` is invalid. There is a second way to name an unexported span, and it produces a
+/// perfectly **valid** `SpanContext`: the span was sampled *out*.
+///
+/// Measured with an `AlwaysOff` sampler before this gate existed:
+///
+/// ```text
+/// injected: 00-53f03b1f569809a3769651197aeb94b2-5ea27fc7c0490c25-00
+/// spans actually exported: 0
+/// ```
+///
+/// The receiving side links unconditionally — `link::inbound_span_context` never consults the sampled
+/// bit — so every one of those becomes a link to a span no backend holds. Dormant under the default
+/// `ParentBased(AlwaysOn)` sampler, and live the moment an operator sets `OTEL_TRACES_SAMPLER`, which
+/// `docs/guides/open-telemetry-setup.md` explicitly offers as the cost-control knob. At
+/// `traceidratio=0.1` that is 90% of temper's inter-service links pointing at nothing, while the guide
+/// promises the opposite.
+///
+/// Split from [`inject_from`] so the gate is testable against a constructed context, without needing to
+/// install a provider with a particular sampler.
+fn inject_context(cx: &opentelemetry::Context, headers: &mut HeaderMap) {
+    if !cx.span().span_context().is_sampled() {
+        return;
+    }
+    TraceContextPropagator::new().inject_context(cx, &mut HeaderInjector(headers));
 }
 
 #[cfg(test)]
@@ -144,6 +177,34 @@ mod tests {
         assert!(
             !headers.contains_key("tracestate"),
             "an empty tracestate was injected: {headers:?}"
+        );
+    }
+
+    /// A span that was sampled **out** has a perfectly valid `SpanContext` and will never be exported.
+    /// Injecting for it manufactures the dangling link this module exists to prevent — see
+    /// [`inject_context`].
+    #[test]
+    fn a_context_that_will_not_be_exported_injects_nothing() {
+        use opentelemetry::trace::{
+            SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState,
+        };
+
+        let unsampled = opentelemetry::Context::new().with_remote_span_context(SpanContext::new(
+            TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").expect("valid trace id"),
+            SpanId::from_hex("00f067aa0ba902b7").expect("valid span id"),
+            // The only difference from the test above: the sampled bit is clear.
+            TraceFlags::default(),
+            true,
+            TraceState::default(),
+        ));
+
+        let mut headers = HeaderMap::new();
+        inject_context(&unsampled, &mut headers);
+
+        assert!(
+            headers.is_empty(),
+            "injected a traceparent for a span that will not be exported, so the receiver will link \
+             to an id no backend holds: {headers:?}"
         );
     }
 }

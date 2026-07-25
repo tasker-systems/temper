@@ -86,14 +86,63 @@ fn env_filter(default: &str) -> EnvFilter {
 /// `.with(…)` the `Registry`-over-`fmt()` decision was made to buy. `Option<Layer>` implements
 /// `Layer`, so the disabled case needs no branch: when no endpoint is configured this is `None` and
 /// the stack is what it always was.
+///
+/// ## Per-layer filters here too, and for a worse reason than the CLI's
+///
+/// This stack originally put one `EnvFilter` in front of every layer, on the reasoning that both of
+/// its consumers want the same level. They do — *until an operator narrows `RUST_LOG`*, at which point
+/// a subscriber-wide filter starves the export layer and **the servers silently export nothing.**
+/// Measured with the real exporter, one span per case:
+///
+/// | `RUST_LOG` | spans exported |
+/// |---|---|
+/// | unset (⇒ `info`) | 1 |
+/// | `warn` | **0** |
+/// | `temper_api=info` | **0** |
+///
+/// The third row is the dangerous one: the level is `info`, the operator has done nothing that looks
+/// wrong, and tracing is dead — because a root span's target is `temper_telemetry`, not `temper_api`.
+/// Quieting a chatty deployment is an ordinary thing to do, and it would have turned off the trace
+/// export it has no visible relationship to, while `span export on` kept appearing at startup.
+///
+/// So the fmt layer owns `RUST_LOG` and the export layer owns [`EXPORT_FILTER`], exactly as in
+/// [`cli_stack`]. What gets *logged* and what gets *exported* are now independent on both stacks,
+/// which is the only arrangement where neither knob silently disables the other.
 fn server_stack<W>(writer: W, filter: EnvFilter) -> impl Subscriber + Send + Sync
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
     tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer().json().with_writer(writer))
-        .with(crate::export::export_layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_filter(filter),
+        )
+        .with(export_layer_filtered(crate::export::export_layer()))
+}
+
+/// Attach [`EXPORT_FILTER`] to an export layer **only when there is one**.
+///
+/// `Option<L>` is itself a `Layer`, so `opt.with_filter(f)` compiles and looks equivalent — but the
+/// resulting `Filtered` advertises `f`'s level to the global max-level hint *even when the inner layer
+/// is `None`*. That silently raised the un-opted-in CLI from `warn` to `info`: every `info!` /
+/// `info_span!` callsite in the process became live, formatting its fields and allocating span data in
+/// the `Registry` before throwing it away — including the `ort` INFO chatter the CLI's `warn` default
+/// exists to suppress. Measured: with no export layer, the old arrangement reported an `INFO` event as
+/// disabled and this one reported it enabled.
+///
+/// Mapping instead means the disabled case constructs no `Filtered` at all, so a process with export
+/// off is byte-identical to one built before any of this existed.
+/// `export_filter_does_not_raise_the_max_level_when_export_is_off` pins it.
+fn export_layer_filtered<L, S>(
+    layer: Option<L>,
+) -> Option<tracing_subscriber::filter::Filtered<L, EnvFilter, S>>
+where
+    L: Layer<S>,
+    S: Subscriber,
+{
+    layer.map(|l| l.with_filter(EnvFilter::new(EXPORT_FILTER)))
 }
 
 /// The CLI logging stack: human-readable records over `writer`, plus opt-in span export.
@@ -127,7 +176,7 @@ where
                 .with_writer(writer)
                 .with_filter(filter),
         )
-        .with(crate::export::cli_export_layer().with_filter(EnvFilter::new(EXPORT_FILTER)))
+        .with(export_layer_filtered(crate::export::cli_export_layer()))
 }
 
 /// Install the server logging stack as this process's global subscriber.
@@ -136,7 +185,34 @@ where
 /// subscriber is already installed, which is the same failure the five `fmt().init()` calls this
 /// replaced would have produced.
 pub fn init_server_logging() {
-    server_stack(std::io::stdout, env_filter(SERVER_DEFAULT_FILTER)).init();
+    init_server_with(std::io::stdout);
+}
+
+/// [`init_server_logging`], with the writer injected.
+///
+/// Behind `test-support` so it cannot be reached from a production build — the same convention as
+/// `export::install_test_provider`. It exists because the ordering below is the thing under test:
+/// whether the export resolution is logged *after* a subscriber exists. A test that rebuilt this
+/// sequence itself would prove nothing about the sequence that ships, which is exactly how two of this
+/// crate's fixes came to be covered by tests that could not fail.
+#[cfg(feature = "test-support")]
+pub fn init_server_logging_with_writer<W>(writer: W)
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    init_server_with(writer);
+}
+
+/// The server init sequence, shared so the production entry point and the test-support one cannot
+/// drift in the order they do things.
+fn init_server_with<W>(writer: W)
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    server_stack(writer, env_filter(SERVER_DEFAULT_FILTER)).init();
+    // AFTER `.init()`, necessarily: the layer constructors run while the subscriber is being built, so
+    // anything they logged went nowhere. See `export::ExportResolution`.
+    crate::export::log_resolution();
 }
 
 /// Install the CLI logging stack as this process's global subscriber.
@@ -150,6 +226,7 @@ pub fn init_server_logging() {
 /// ends in `std::process::exit`, which runs no destructors.
 pub fn init_cli_logging() {
     cli_stack(std::io::stderr, env_filter(CLI_DEFAULT_FILTER)).init();
+    crate::export::log_resolution();
 }
 
 #[cfg(test)]
@@ -157,6 +234,47 @@ mod tests {
     use super::*;
     use std::io;
     use std::sync::{Arc, Mutex};
+
+    /// Turning export **off** must leave the CLI exactly as quiet as it was before export existed.
+    ///
+    /// `Option<L>` is a `Layer`, so `opt.with_filter(info)` compiles and reads as equivalent — but the
+    /// resulting `Filtered` advertises `info` to `tracing`'s global max-level hint **even when the
+    /// inner layer is `None`**. That silently made every `info!` / `info_span!` callsite in an
+    /// un-opted-in `temper` process live: fields formatted, span data allocated in the `Registry`, then
+    /// discarded — including the `ort` INFO chatter [`CLI_DEFAULT_FILTER`] exists to suppress.
+    ///
+    /// This calls the **real** `cli_stack`, not a replica of it. A version of this file's sibling test
+    /// hand-built the stack from the same layers, and an adversarial review showed that proves nothing:
+    /// reverting `cli_stack` itself to the broken arrangement left the whole suite green.
+    ///
+    /// No provider is needed — with `TEMPER_CLI_TRACE` unset, `cli_export_layer` returns `None` before
+    /// it ever resolves the OTLP environment, which is the case under test.
+    ///
+    /// **Probed via `max_level_hint`, deliberately, not `event_enabled!`.** The hint is the exact
+    /// mechanism at issue: it is what a stack advertises, and what `tracing` folds into its global
+    /// max-level atomic. That atomic only ever *rises* and is never reset, so any sibling test in this
+    /// binary that installs an `info` subscriber contaminates `event_enabled!` for every test after it —
+    /// an earlier draft of this test passed alone and failed in-suite for exactly that reason. Asking
+    /// the subscriber directly has no such coupling.
+    #[test]
+    fn export_filter_does_not_raise_the_max_level_when_export_is_off() {
+        let hint = temp_env::with_vars(
+            [
+                ("TEMPER_CLI_TRACE", None::<&str>),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", None),
+            ],
+            || cli_stack(io::sink, EnvFilter::new("warn")).max_level_hint(),
+        );
+
+        assert_eq!(
+            hint,
+            Some(tracing::level_filters::LevelFilter::WARN),
+            "a CLI stack with export OFF advertises {hint:?} instead of WARN — the export layer's \
+             filter is raising the max level with no layer behind it, so every info! callsite does \
+             work the `warn` default exists to avoid (fields formatted, span data allocated in the \
+             Registry, then discarded — including the `ort` chatter)"
+        );
+    }
 
     /// A `MakeWriter` that appends to a shared buffer, so a test can read what a stack rendered.
     #[derive(Clone, Default)]
