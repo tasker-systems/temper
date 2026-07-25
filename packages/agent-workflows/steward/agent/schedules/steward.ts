@@ -109,7 +109,9 @@ export default defineSchedule({
                 target: {},
                 auth: appAuth,
                 message:
-                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id}). ` +
+                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id} — ` +
+                  `an internal queue id, NOT a cogmap: never pass it to a temper tool, and in ` +
+                  `particular never as \`parent_cogmap\`, which you must omit entirely). ` +
                   `This map was already selected by the deterministic drift sweep, so its ingest delta ` +
                   `has cleared threshold — you do not need to re-check it. Pass this SINGLE cogmap id ` +
                   `as the \`cogmap\` argument to every temper tool. Load the map-stewardship skill, ` +
