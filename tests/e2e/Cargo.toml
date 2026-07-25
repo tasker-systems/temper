@@ -54,7 +54,10 @@ temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
 temper-substrate = { path = "../../crates/temper-substrate" }
 temper-workflow = { path = "../../crates/temper-workflow" }
 temper-mcp = { path = "../../crates/temper-mcp" }
-temper-telemetry = { path = "../../crates/temper-telemetry" }
+# `test-support` installs an in-memory span exporter so `mcp_span_link_test` can read the spans the
+# MCP router really exported, rather than a replica of its layer stack.
+temper-telemetry = { path = "../../crates/temper-telemetry", features = ["test-support"] }
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }

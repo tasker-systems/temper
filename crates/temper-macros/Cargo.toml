@@ -1,0 +1,13 @@
+[package]
+name = "temper-macros"
+version = "0.1.0"
+edition = "2021"
+description = "Attribute macros for temper's span conventions — one declaration of a field set that many call sites would otherwise copy"
+
+[lib]
+proc-macro = true
+
+# No syn/quote/proc-macro2, deliberately. `act_span` prepends an attribute and passes the annotated
+# item through untouched, so it never parses the item — which is both why it is a dozen lines and why
+# it composes with `#[async_trait]` regardless of which expands first.
+[dependencies]

@@ -19,7 +19,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Test-only surface for installing an in-memory span exporter, so a caller's integration test can
 # assert on spans that were really exported through the real router. Same convention as the
 # workspace's `test-db` / `test-embed`.
-test-support = []
+#
+# It enables `opentelemetry_sdk/testing` itself rather than leaning on a caller's dev-dependencies to
+# supply it: `InMemorySpanExporter` is gated behind that feature, so the surface only compiles where
+# something else happened to turn it on. That made `cargo check -p temper-telemetry --all-features`
+# fail on an item the feature itself names.
+test-support = ["opentelemetry_sdk/testing"]
 
 [dev-dependencies]
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }

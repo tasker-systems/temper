@@ -15,6 +15,7 @@ use crate::backend::region_clocks;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
+use temper_macros::act_span;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
@@ -1312,13 +1313,7 @@ impl DbBackend {
     /// [`Backend::begin_segmented_ingest`] (`segmented = true`) — the only caller that needs a resource
     /// born `ingest_state = 'in_progress'`, because its body arrives across many acts and only
     /// `resource_finalize` can say the last one landed.
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn create_resource_inner(
         &self,
         cmd: CreateResource,
@@ -1531,13 +1526,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(detail))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn update_resource(
         &self,
         cmd: UpdateResource,
@@ -1753,13 +1742,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(row))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
         // The inbound id IS the substrate resource id (no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
@@ -1780,13 +1763,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(()))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn annotate_resource(
         &self,
         cmd: AnnotateResource,
@@ -1891,13 +1868,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(hits))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
@@ -1941,13 +1912,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(edge))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn retype_relationship(
         &self,
         cmd: RetypeRelationship,
@@ -1979,13 +1944,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn reweight_relationship(
         &self,
         cmd: ReweightRelationship,
@@ -2015,13 +1974,7 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn fold_relationship(
         &self,
         cmd: FoldRelationship,
@@ -2073,6 +2026,7 @@ impl Backend for DbBackend {
     /// 3. **Write** — append-only; the projector never supersedes an earlier verdict.
     /// 4. **Tick** — the standing memo, AFTER the write, so it recomputes over the landed audit.
     ///    Ticking earlier would refresh the pre-audit state and leave the memo stale.
+    #[act_span]
     async fn record_citation_audit(
         &self,
         cmd: RecordCitationAudit,
@@ -2149,11 +2103,11 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = EventContext {
-            invocation: cmd.act.invocation,
-            correlation: cmd.act.correlation,
-            authorship: cmd.act.authorship,
-        };
+        // Through the shared mapping, like every other authored write. This built the same three
+        // fields by hand until PR C — the eleventh copy of an intention nine others had already
+        // extracted — which is why an audit's ids reached no span at all: `act_context` is where the
+        // recording lives, so bypassing it silently opted out of the act-span convention.
+        let act_ctx = act_context(&cmd.act);
         // 3. WRITE. Append-only: `_project_citation_audited` inserts a new row and supersedes
         //    nothing, so a later verdict never erases an earlier one.
         let audit = writes::record_citation_audit_with(
@@ -2183,13 +2137,7 @@ impl Backend for DbBackend {
     /// Upserts the clustering `facet` property (`kb_properties`) on a resource — one row holding the
     /// whole `values` object. Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter
     /// resolution, gated on the TARGET resource directly (facets have no source/target split).
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError> {
         let resource_next = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): gate on the resource the facet is being set on.
@@ -2225,13 +2173,7 @@ impl Backend for DbBackend {
     /// SERIALIZABLE makes concurrent reconciles abort-and-retry (SQLSTATE 40001 → `Conflict`) instead of
     /// corrupting state — the old app-level open-invocation "mutex" is gone. No HTTP/authz here (the
     /// handler gates first); this is the backend command.
-    // Act span: the parent for this write's events. `skip_all` because the command carries
-    // bodies and secrets that must never reach a log; the ids are recorded explicitly by
-    // `act_context`/`record_act_span` once the ActContext is resolved.
-    #[tracing::instrument(
-        skip_all,
-        fields(correlation_id = tracing::field::Empty, invocation_id = tracing::field::Empty)
-    )]
+    #[act_span]
     async fn reconcile_cognitive_map(
         &self,
         cmd: ReconcileCognitiveMap,
@@ -3276,6 +3218,96 @@ mod tests {
         fn assert_obj(_: &dyn Backend) {}
         let _ = assert_obj;
         // If DbBackend were not object-safe, the boxed `dyn Backend` dispatch would not compile.
+    }
+
+    /// Ties [`ACT_SPAN_FIELDS`] to the attribute that actually builds the act spans.
+    ///
+    /// The constant existed to give the convention one definition, but nothing connected it to the
+    /// eleven write commands that spelled the fields out for themselves — so it could have claimed a
+    /// field no span carried, and the e2e gate (which asserts on fields it *finds*) would still have
+    /// passed. Same defect `macro_declares_every_root_trace_field` closed for the root span.
+    mod act_span_convention {
+        use super::*;
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, Layer};
+        use tracing_subscriber::prelude::*;
+
+        /// What a span's static metadata promises: its name, and the fields it declares.
+        #[derive(Clone, Debug)]
+        struct SpanShape {
+            name: String,
+            fields: Vec<String>,
+        }
+
+        /// Records the *declared* metadata of every span opened while it is installed — declared,
+        /// not recorded, because a deferred field is `Empty` until something fills it and the
+        /// question here is what the attribute promises.
+        #[derive(Clone, Default)]
+        struct DeclaredSpans(Arc<Mutex<Vec<SpanShape>>>);
+
+        impl<S: tracing::Subscriber> Layer<S> for DeclaredSpans {
+            fn on_new_span(
+                &self,
+                attrs: &tracing::span::Attributes<'_>,
+                _id: &tracing::Id,
+                _ctx: Context<'_, S>,
+            ) {
+                let metadata = attrs.metadata();
+                self.0.lock().expect("not poisoned").push(SpanShape {
+                    name: metadata.name().to_string(),
+                    fields: metadata
+                        .fields()
+                        .iter()
+                        .map(|field| field.name().to_string())
+                        .collect(),
+                });
+            }
+        }
+
+        /// Stands in for a write command. The body is irrelevant; the attribute is the subject.
+        /// The argument is named for what a real command carries — bodies, tokens, secrets — so the
+        /// `skip_all` assertion below reads as the thing it is protecting.
+        #[act_span]
+        fn a_write_command(_secret: &str) {}
+
+        #[test]
+        fn act_span_declares_every_act_field() {
+            let captured = DeclaredSpans::default();
+            let subscriber = tracing_subscriber::registry().with(captured.clone());
+            tracing::subscriber::with_default(subscriber, || a_write_command("hunter2"));
+
+            let spans = captured.0.lock().expect("not poisoned");
+            let act = spans
+                .first()
+                .expect("`#[act_span]` opened no span at all")
+                .clone();
+            let declared = &act.fields;
+
+            for field in ACT_SPAN_FIELDS {
+                assert!(
+                    declared.iter().any(|d| d == field),
+                    "`{field}` is in ACT_SPAN_FIELDS but `#[act_span]` does not declare it, so the \
+                     convention names a field no act span carries. Declared: {declared:?}"
+                );
+            }
+
+            // The span is named for the command, which is the whole reason this is an attribute
+            // rather than a shared span-building function: `tracing` bakes the name into static
+            // metadata, so one function would give all eleven commands one name.
+            assert_eq!(
+                act.name, "a_write_command",
+                "the act span lost its per-command name"
+            );
+
+            // `skip_all` is folded into the macro precisely so it cannot be forgotten at a new call
+            // site. Commands hold request bodies and secrets; `#[instrument]` records every argument
+            // by default.
+            assert!(
+                !declared.iter().any(|d| d == "_secret"),
+                "an argument reached the span's fields — `skip_all` is not in the expansion, and \
+                 the next command to carry a token will log it. Declared: {declared:?}"
+            );
+        }
     }
 
     mod create_sources {

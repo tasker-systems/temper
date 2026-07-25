@@ -73,6 +73,15 @@ pub async fn require_auth(
         })?;
     let raw = token_data.claims;
 
+    // 3b. The token verified, so this caller is one of ours: join its trace by *link*, never by
+    //     parenting (decision `019f95ff` rule 2). Deliberately here rather than after
+    //     `authenticate_token` below — the trust event is the signature verifying, not the profile
+    //     resolving, which is what lets the same sentence describe all four gates and keeps a
+    //     deactivated-profile 401 joined to the trace that will be used to debug it.
+    //     `Span::current()` is the `http_request` root span, the same deferred seam `profile_id`
+    //     uses further down. See `temper_telemetry::link` for what "one of ours" means.
+    temper_telemetry::link_trusted_caller(&tracing::Span::current(), request.headers());
+
     // 4. Authenticate through the shared seam: classification, the human email
     //    ladder (token claim → cached link → OIDC /userinfo), claim construction and
     //    the deactivation gate all live in temper-services::auth. This surface no
