@@ -19,7 +19,7 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 - **temper-client** — Auth-aware HTTP client for the cloud API. Handles Auth0 PKCE device flow, token caching, and all API calls.
 - **temper-ingest** — Embedding (ort/ONNX with BAAI/bge-base-en-v1.5, 768-dim) and document extraction (kreuzberg). Both behind feature flags: `embed`, `extract`. **The CLI is the primary embed path** — it depends on temper-ingest directly and computes embeddings client-side (`compute_body_chunks`). The server does **not** recompute them: chunks supplied by the client ride through **verbatim** (`db_backend.rs`, the `chunks_packed: Some(..)` arm), and the server embeds **only when chunks are absent** (MCP and any programmatic client without an embedder). Because temper-substrate pulls `temper-ingest(embed)` non-optionally, ort is always linked into temper-api and temper-services (there is no embed feature flag to toggle on those crates).
 
-  **Both surfaces must embed with the same model**, and this is enforced, not assumed. `temper-ingest/build.rs` derives the expected model sha256 from the LFS-pinned `model_quantized.onnx` **as committed** (from the git-lfs pointer when the blob is unsmudged — its `oid` *is* the sha256 — from the file when it is), and every model loaded from disk is verified against it. A mismatch is a hard error. This exists because it silently went wrong: the CLI's `embed-download` used to fetch the **fp32** model from Hugging Face `main` while the server used the quantized one, so the index filled with vectors from two different models with nothing recording which. `embed-download` no longer downloads anything — it resolves the model from disk next to the binary (the release archive ships it there, which is why the release checkout needs `lfs: true`).
+  **Both surfaces must embed with the same model**, and this is enforced, not assumed — see [crates/temper-ingest/CLAUDE.md](crates/temper-ingest/CLAUDE.md).
 - **temper-substrate** — Persistence write/readback core (`writes`/`readback`) plus the cognitive-map / telos-lens region producer and the YAML scenario DSL. Pulls `temper-ingest(embed)` unconditionally, so every crate depending on it links ort.
 - **temper-telemetry** — How a temper process observes itself. Two concerns: `init` (the single logging seam for all five binaries — `init_server_logging()` JSON/stdout/`info`, `init_cli_logging()` plain/**stderr**/`warn`; the CLI's divergence is an output contract, since its stdout belongs to `temper … | jq`), and inbound W3C trace-context extraction (`ROOT_TRACE_FIELDS`, `TraceParent::parse`, `record_inbound_trace_context`), called from both root-span constructors. Built on `Registry` + layers, not `tracing_subscriber::fmt()`, so the OTLP exporter attaches as one more layer rather than a rewrite. **No exporter yet** — see [docs/guides/open-telemetry-setup.md](docs/guides/open-telemetry-setup.md), and note that Vercel hosts no collector to export *to*: its OTel product is a drain that pushes to your vendor, and its span channel is a JS call unreachable from Rust. Inbound trace context is never a parent (decision `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c`).
 - **temper-mcp** — Remote MCP server (Streamable HTTP via rmcp). Deployed as a Vercel serverless function alongside temper-api. Auth0 JWT validation, OAuth discovery endpoints (RFC 8414/9728). Tools delegate to temper-services for DB access (services-direct reads, `DbBackend` writes) — it no longer depends on temper-api. Config in `src/config.rs`, tools in `src/tools/`.
@@ -84,32 +84,9 @@ cargo make generate-ts-types
 cargo make openapi
 ```
 
-> **OpenAPI + the temper-rb gem + temper-ts's `schema.ts` are all products of the router.** A
-> new/changed response DTO (a new field, a renamed type) restales **three** committed artifacts:
-> `openapi.json`, the generated Ruby gem under `clients/temper-rb/lib/temper/generated`, and
-> `clients/temper-ts/src/generated/schema.ts` (emitted by `openapi-typescript`, pinned exactly —
-> no caret — in temper-ts's devDependencies). `cargo make openapi` regenerates all three in one
-> step (gem regen needs Docker; the TS schema needs only Node). `cargo make check` gates all
-> three: `openapi-check` (spec), `openapi-rb-drift` (gem — Docker-based, **skips** without Docker;
-> the `test-ruby` CI job is the never-skipping backstop), and `openapi-ts-drift` (schema — and
-> unlike the gem's gate, this one **never skips**: `openapi-typescript` needs only Node, so there
-> is no environment in which `cargo make check` would rather guess than check). Never assume that
-> because one SDK's gate is best-effort, the other is too — they have different skip semantics for
-> different reasons, and `openapi-ts-drift` is the strict one. The generator pin + params for the
-> gem live in one place — `.github/scripts/generate-temper-rb.sh` — shared by cargo-make and the
-> gem's Rakefile; the TS equivalent is `.github/scripts/generate-temper-ts.sh`, shared by
-> `cargo make openapi-ts`, `check-temper-ts-drift.sh`, and the `test-agents-ts` CI job's drift
-> step. `detect-ci-scope.sh` carries `^openapi\.json$` in **both** `test-ruby`'s and
-> `test-agents-ts`'s trigger sets, for the identical reason: a contract change that does not run
-> the job whose gate catches the stale artifact is a gate that runs nowhere. (`test-agents-ts` got
-> this later than `test-ruby` did — the same rot the gem discovered in `tests/contracts/`.)
->
-> **The drift gate compares against git, not against a fresh build.** Both `check-temper-rb-drift.sh`
-> and `check-temper-ts-drift.sh` regenerate their artifact and then run `git diff --exit-code` over
-> it. So an artifact you have *just correctly regenerated* still fails `cargo make check` while it
-> sits unstaged — the error reads "generated core/schema is out of date with openapi.json", which
-> sounds like you forgot to run `cargo make openapi` when in fact you need to `git add` (or commit)
-> its output. Stage the regenerated files, then re-run `check`.
+> **`cargo make openapi` and `cargo make generate-ts-types` each restale multiple committed
+> artifacts, and `cargo make check` gates every one of them.** Read the `generated-artifacts`
+> skill before changing a response DTO, a route, or a ts-rs-derived type.
 
 ### Running a single Rust test
 ```bash
@@ -126,31 +103,9 @@ cargo nextest run -p temper-api --features test-db test_name  # specific crate w
 cargo make test-e2e-embed
 ```
 
-> **CI runs everything, by construction.** Jobs are split by **intention** (what they need from the environment), never by feature flag: **Unit** (no DB) · **Integration & E2E** (Postgres + LFS — the whole DB-backed workspace in ONE `--workspace` command) · **Substrate Artifacts** (a different feature set). Coverage is nightly (`coverage.yml`), out of the PR path, so an instrumented-build OOM can never block a merge.
->
-> There is **no "the job with ONNX"** any more — that was a historical constraint and it is gone. Confining `test-embed` to one job is precisely what let `streaming_ingest_test` rot: its tests were *compiled out* of the integration job and *filtered out* of the embed job's allowlist, so they ran **nowhere**, and a 484-second test hid behind a green tick for months.
->
-> **Never add a `-E 'binary(...)'` filter to a CI test job.** Selection is `--workspace` so a new crate or test is picked up with no CI edit. A filter that makes CI green is hiding a test, not fixing one.
->
-> Shared CI behavior lives in composite actions (`.github/actions/install-onnx`, `.github/actions/setup-rust`) rather than being copy-pasted per job — the ONNX install had drifted into **five** near-identical copies.
+> **Never add a `-E 'binary(...)'` filter to a CI test job.** Selection is `--workspace` so a new crate or test is picked up with no CI edit. A filter that makes CI green is hiding a test, not fixing one. CI jobs are split by **intention** (what they need from the environment), never by feature flag — see [.github/workflows/CLAUDE.md](.github/workflows/CLAUDE.md).
 
-### TypeScript (temper-cloud)
-```bash
-cd packages/temper-cloud
-bun run test           # unit tests
-bun run test:integration  # integration tests
-bun run check          # biome lint + format check
-bun run check:fix      # auto-fix
-bun run typecheck      # tsc
-```
-
-### SvelteKit UI (temper-ui)
-```bash
-cd packages/temper-ui
-bun run dev            # dev server
-bun run build          # production build
-bun run check          # svelte-check
-```
+### TypeScript & UI checks
 
 > **`cargo make check` does NOT cover temper-ui.** Its TypeScript step runs `tsc` on temper-cloud, not
 > `svelte-check` on temper-ui. So a change to a **generated shared type** (`cargo make generate-ts-types`
@@ -160,26 +115,6 @@ bun run check          # svelte-check
 > yourself. (If it reds on `d3-*` "implicit any" / "cannot find package" in `graph/atlas/layout/*`, that
 > is a stale local `node_modules`, not your change — `bun install` first; CI installs fresh. See
 > [[project_ci_flake_signatures]].)
-
-> **`generate-ts-types` writes TWO trees, and both are gated.** Besides temper-ui's
-> `src/lib/types/generated/`, it emits `packages/agent-workflows/mention/agent/generated/` — the
-> mention agent is workspace-isolated (not a bun `workspaces` member), so no import path reaches
-> temper-ui's tree and it needs its own copy. That export is **filtered to one type**
-> (`export_bindings_linkrefusal`) because ts-rs exports each type's transitive closure: two files
-> instead of the 36 an unfiltered crate export deposits. It also runs with `ts-rs/import-esm`, since
-> the agent is `moduleResolution: NodeNext` where an extensionless relative import is TS2835 — a flag
-> temper-ui neither needs nor gets, so the two trees differ in import style **by design**.
->
-> `check-ts-rs-drift.sh` (task `ts-rs-drift`, in `cargo make check` and the `rust-quality` CI job)
-> regenerates every tree and fails on any difference. It derives the tree list from main.toml's
-> `TS_RS_EXPORT_DIR` lines, so a third consumer is covered with no edit — and refuses to run over
-> zero trees rather than passing having checked nothing. It uses `git status`, not
-> `git diff --exit-code`, because the diff form cannot see a **newly generated untracked** file:
-> temper-ui's `slack_link.ts` sat in exactly that state for a full PR cycle. **This is the repo's
-> only cross-LANGUAGE gate** — every other check lives inside one language, which is how PR #498
-> merged with `tsc` clean and 79/79 tests green while the agent spoke a retired wire contract. It
-> does **not** cover the wire `status` tags: those live in temper-api, which has no ts-rs (task
-> `019f910b-579b-74c2-bf05-702aaed0a011`).
 
 ## Branch and Commit Conventions
 
@@ -220,9 +155,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - `artifact-tests` — enables temper-substrate's **scenario write-path** integration tests (bootseed, seed/scenario load + roundtrip + equivalence, charter, content, ledger, replay) plus ONNX. Tests run on ephemeral `public`-schema databases via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]` — each test gets its own isolated database. CI runs it in its own **Substrate Artifact Tests** job (a distinct feature set, so it cannot fold into the `--workspace` integration run); run locally with **`cargo make test-artifacts`**. temper-substrate's pure core tests (affinity, cluster) are ungated and run in CI.
 - `scenario-schema` — enables `schemars::JsonSchema` derives for temper-substrate's **two** JSON-Schema snapshot suites: `tests/scenario_schema.rs` (the scenario YAML model) and `tests/payload_schema.rs` (the **event payload wire contract** — the boot-seed stamps those fixtures into `kb_event_types.payload_schema`, so repo == registry == Rust types). Runs in the **Unit** CI job and via **`cargo make test-schema`** (which `cargo make test` depends on). Regenerate with `UPDATE_SCHEMA=1 cargo make test-schema`.
 
-  > **Run it package-scoped — `-p temper-substrate`, never `--workspace`.** The emitted schema depends on **feature unification**: under `--workspace`, temper-core's `mcp` feature (schemars derives) unifies in and the id newtypes emit **inline**; under `-p temper-substrate` they emit as `$ref`s into `$defs`. Same structs, two different schemas, decided by the cargo invocation. `-p` is authoritative because it is what the regen emits and what the boot-seed stamps — gating the workspace shape would gate a schema nothing ever writes. This is the one place the "selection is `--workspace`" rule does **not** apply, and it is not an exception to *"CI runs everything by intention"*: the intention (no DB, no ONNX) is why it lives in the Unit job; the scoping is about matching the producer.
-  >
-  > This feature was wired into **no job and no task** until 2026-07-16, so all four snapshot tests ran **nowhere** and sat **red on `main`** — the same rot as `streaming_ingest_test`, via a feature flag instead of an `-E` filter. It was not cosmetic: `segmented`, `telos_centroid`, and `TelosConstants` shipped with no schema, and prod's `kb_event_types` still describes an older payload than the code writes (re-stamping prod is its own task). **A test no job enables is a test that runs nowhere.**
+  > **Run it package-scoped — `-p temper-substrate`, never `--workspace`.** Feature unification changes the emitted schema; `-p` is what the regen emits and what the boot-seed stamps. See [crates/temper-substrate/CLAUDE.md](crates/temper-substrate/CLAUDE.md).
 
 ## Key Patterns
 
@@ -268,23 +201,12 @@ These rules apply to all code in this repository. Subagents and implementation p
 
 ## SQL Query Checking
 
-Production SQL queries use `sqlx::query!()` / `sqlx::query_as!()` / `sqlx::query_scalar!()` macros for compile-time verification against the actual schema. Exception: the `unified_search` query in `search_service.rs` uses runtime `query_as` due to pgvector `::vector` type cast incompatibility. Trivial test-fixture lookups may use runtime `sqlx::query()`; substantive test queries keep macros, cached per-crate (below).
-
-- **Local dev:** Set `DATABASE_URL` — macros check against the live database. Note `cargo make` tasks force `SQLX_OFFLINE=true`, so `cargo make check` is the honest local probe of the committed caches.
-- **CI builds:** `SQLX_OFFLINE=true` with committed `.sqlx/` cache for test jobs; the `code-quality` clippy job compiles against a **live** DB, so it will NOT catch a missing cache entry — only offline `cargo make check` does.
-- **After changing any SQL:** Regenerate the workspace cache with `cargo sqlx prepare --workspace -- --all-features`
-- **Test-target macro queries** (temper-services' service queries, the e2e suite) are NOT captured by the workspace ritual — plain `cargo sqlx prepare` skips test targets, and adding `--all-targets` to the *workspace* invocation does not fix it (measured: the root cache is unchanged and every test-target entry is still missing). They live in per-crate caches regenerated with `--all-targets`: `cargo make prepare-services` (`crates/temper-services/.sqlx`) and `cargo make prepare-e2e` (`tests/e2e/.sqlx`). Run the matching task after changing test SQL or schema it touches. After a merge that moves service code between crates, run the ritual in order: `cargo sqlx prepare --workspace -- --all-features` → `cargo make prepare-services` (per-crate last).
-
-  Each `prepare` **rewrites its cache directory wholesale** — it prunes entries no longer emitted, so orphans clean themselves up; no manual pruning is needed. The corollary is that a per-crate cache silently rots whenever a *lib* query's signature changes and only the workspace ritual is run (macro resolution falls back to the workspace root `.sqlx`, so nothing fails — the stale entries just sit there until the next per-crate `prepare` sweeps them). Expect an unrelated-looking pile of `.sqlx` churn on the first run after such a drift, and check that each pruned entry has a same-query replacement rather than assuming the diff is noise.
-
-  > **temper-api has no per-crate cache, deliberately.** It once did; the queries it existed for moved into temper-services during that extraction, leaving a directory whose every entry was already duplicated in the workspace root. temper-api's test targets now contain **no** `query!`-family macros at all, so the workspace cache covers it entirely. Running a per-crate `prepare` there also emitted the whole *dependency closure* — 255 files against 11 committed — so the task was a trap that invited 244 files of noise into a diff. Do not recreate the directory or the task. Verify with a cold `cargo clean -p temper-api && SQLX_OFFLINE=true cargo check -p temper-api --all-targets --features test-db`.
-- **Tests always run against a real database** (Docker Postgres locally, CI database in GitHub Actions)
+Production SQL uses `sqlx::query!()`-family macros, verified at compile time against the real schema. **After changing any SQL or a migration, the `.sqlx` caches must be regenerated — and the workspace ritual does NOT cover test-target queries.** Read the `sqlx-query-cache` skill before touching a query macro or a migration. Tests always run against a real database (Docker Postgres locally, CI database in GitHub Actions).
 
 ## Environment
 
 - Docker Postgres on port **5437** (not 5432, to avoid conflicts).
 - `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`
-- Linting: Rust uses clippy with `-D warnings`; TypeScript uses Biome.
 - Pre-commit hook in `githooks/pre-commit`.
 
 ## Cloud Agents
