@@ -108,12 +108,44 @@ flood traffic and bill us for exporting every span of it. (Note that Vercel's *o
 consider the inbound decision — see the instrumentation docs' sampling table. That is the platform's
 choice about the platform's spans, not ours.)
 
-**Spans are flushed inside the invocation.** Vercel *freezes* the sandbox after a response rather
-than exiting the process, so a batch-export timer may simply never fire — spans queued at freeze are
-lost silently and non-deterministically. temper exports on an explicit flush at the response seam
-instead of trusting a timer. The added latency is measured, not assumed: `apply_transport_layers`
-already logs `latency_ms` on every response, so the cost is the before/after difference in a number
-we already have.
+**Spans are flushed inside the invocation, on a budget.** Vercel *freezes* the sandbox after a
+response rather than exiting the process, so a batch-export timer may simply never fire — spans queued
+at freeze are lost silently and non-deterministically. temper exports on an explicit flush at the
+response seam instead of trusting a timer.
+
+That flush is a real network round trip, and it is bounded on purpose. It runs on `spawn_blocking` (so
+it cannot stall a Tokio worker — measured: a blocking flush froze a one-worker runtime for its whole
+duration, zero timer ticks), under a **500ms budget**, and single-flight (one `BatchSpanProcessor`
+thread serves everyone, so concurrent flushes would otherwise each pay the sum of those ahead —
+measured at 16 concurrent requests against a 300ms endpoint: median 1.226s for one round trip's work).
+Past the budget the response goes out and the span rides the next flush or is lost. **Losing a span is
+the right trade against stalling a request**, and the SDK's own ceiling — 5 seconds, hardcoded and not
+configurable — is what that budget exists to cap.
+
+**The budget is deliberately not configurable.** 500ms is a best-bet default we intend to *watch*
+rather than a knob to turn — a knob nobody can yet evaluate is complexity bought on credit, and its
+too-low setting is a silent kill switch (every flush times out, nothing exports, the logs still say
+`span export on`). The signal to watch is a **`warn`**: *"span flush exceeded its budget; spans may be
+lost."* If that fires routinely in a healthy deployment, the constant is wrong and by then there is a
+number to replace it with. For the finer distribution, `RUST_LOG=debug` samples `flush_ms` per request
+— safe on a live deployment, because both stacks filter per-layer, so raising the log level no longer
+widens what is exported or billed.
+
+The cost is reported as **`flush_ms`**, a field of its own. It is deliberately *not* folded into
+`latency_ms`: the flush can only happen after the request span closes (until then there is nothing
+queued to flush), so it is genuinely not part of the span it flushes. A caller's observed latency is
+`latency_ms + flush_ms`. An earlier version of this guide named `latency_ms` alone as the meter for the
+exporter's cost — that was structurally impossible, since it is taken before the flush runs.
+
+**A link is only navigable if the span it names was exported.** The two halves have to ship together:
+the receiving side records a link to `(trace_id, span_id)`, and something has to have *sent* those ids
+from a span that reached the same backend. temper injects `traceparent` on its own outbound calls
+(`crates/temper-telemetry/src/propagate.rs`), so a link in your backend resolves to a real span rather
+than dangling. `tracestate` is omitted rather than sent empty, since W3C makes it optional and a valueless header on
+every request is noise. Note that temper never *forwards* a caller's `tracestate` today: nothing reads
+it inbound, and because temper never parents from inbound context, every `SpanContext` it builds carries
+an empty one. Using the standard propagator is still right — it owns the wire format and the sampled
+bit — but forwarding vendor state is a property this setup does not yet have.
 
 ## Pointing temper at a backend
 
@@ -123,7 +155,8 @@ temper-specific variable, and no vendor name, appears anywhere in our code.
 
 | Variable | Purpose |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Where spans go. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` overrides it for traces specifically. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Where spans go — **the base**, to which the SDK appends `/v1/traces`. Use this one; the vendor examples below assume it. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The trace endpoint **verbatim** — nothing is appended. Copying a vendor's base URL into this variable POSTs to `/` and 404s. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | `key=value,key=value`. **This is where vendor auth lives** — which is what makes the setup vendor-agnostic. |
 | `OTEL_SERVICE_NAME` | Which deployable this is. Set it per Vercel project; the surfaces are separate functions and want separate names. |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling, from our config only. |
@@ -142,6 +175,42 @@ Two behaviours are temper's rather than the SDK's, and both are operator-visible
 Protocol is **HTTP/protobuf**, not gRPC and not OTLP/JSON. Not a style preference: JSON's
 `TimeUnixNano{low, high}` encoding is mishandled by some collectors — `@vercel/otel`'s own source
 carries a comment saying exactly that — and it surfaces as wrong timestamps rather than as an error.
+
+The HTTP client is reqwest's **blocking** one, and that is a correctness requirement rather than a
+preference. `BatchSpanProcessor` exports from a dedicated OS thread with no Tokio reactor, so the async
+client panics there with *"there is no reactor running"* and every span is silently dropped — the only
+symptom being a `warn` from temper's own flush path. Being inside a runtime at the *call site* does not
+help, which is why the mistake is easy to make in an otherwise fully-async codebase. Held in place by
+`crates/temper-telemetry/tests/live_export_client.rs`, which posts to a real local socket; it fails on
+the async client and passes on the blocking one.
+
+### Tracing the CLI
+
+The `temper` binary can export too, but it needs a **second** switch:
+
+| Variable | Purpose |
+|---|---|
+| `TEMPER_CLI_TRACE` | `true` (case-insensitive; nothing else counts) lets the CLI export. Off by default. |
+
+Compression is supported (`OTEL_EXPORTER_OTLP_COMPRESSION=gzip`). Worth stating because it was *not*
+until recently: without the `gzip-http` feature the exporter does not ignore that variable, it fails to
+build — and export goes silently off. Grafana Cloud's own OTLP examples commonly set it.
+
+Both this *and* an OTLP endpoint are required. The extra switch exists because
+`OTEL_EXPORTER_OTLP_ENDPOINT` is often already exported in a developer's shell for an unrelated
+project, and `temper` should not start shipping your vault activity to a collector you configured for
+something else. The servers need no equivalent: a deployment's environment is set deliberately, per
+project.
+
+Two CLI-specific behaviours follow from a CLI being a process that actually exits:
+
+- **Spans are drained on the way out of `main`, on the success *and* failure paths.** The failure arm
+  ends in `std::process::exit`, which runs no destructors, so a flush placed after a successful run
+  would lose exactly the traces worth having.
+- **Turning on tracing does not make the CLI chatty.** The fmt layer keeps its own `warn` default while
+  the export layer filters at `info` independently, so stdout stays clean for `temper … | jq` and
+  stderr stays quiet. `RUST_LOG=info temper …` still opts into verbose logging without changing what is
+  exported, and vice versa.
 
 ### Grafana Cloud
 
@@ -191,8 +260,11 @@ variables. Two options:
   with debug traces.
 
 With no `OTEL_*` variables set at all, temper logs to stdout as it does today and exports nothing.
-An unreachable endpoint degrades to that same behavior with a warning — an exporter that cannot
-reach its backend must never lengthen a request or fail a startup.
+An unreachable endpoint costs each request **at most the 500ms flush budget** and then degrades to the
+same behaviour with a warning — an exporter that cannot reach its backend must never fail a startup, and
+must never lengthen a request without bound. (Before that budget existed, an unreachable endpoint added
+the SDK's full 5s to *every* request. `crates/temper-telemetry/tests/flush_budget.rs` is what keeps the
+bound honest — it drives a listener that accepts and never answers.)
 
 ## Logging, which is what exists today
 
@@ -219,6 +291,9 @@ asserting they match.
 |---|---|
 | Logging init, both variants | `crates/temper-telemetry/src/init.rs` |
 | Inbound trace-context extraction, `ROOT_TRACE_FIELDS` | `crates/temper-telemetry/src/lib.rs` |
+| Outbound trace-context injection (the mirror of the link) | `crates/temper-telemetry/src/propagate.rs`; called from `temper-client`'s outbound span |
+| Keeping credentials out of span attributes | `crates/temper-telemetry/src/redact.rs` — a stopgap for one route family; goal `019f99dd-dc9c-79f1-947c-e61bde2148a9` owns the real registry |
+| The flush budget | `export::flush_within_budget`, gated by `tests/flush_budget.rs` |
 | Root span construction (HTTP) | `crates/temper-api/src/routes.rs`, `apply_transport_layers` |
 | Root span construction (MCP) | `crates/temper-mcp/src/router.rs` |
 | Act-grain span fields | `temper_services::backend::ACT_SPAN_FIELDS`, declared by `#[act_span]` (`crates/temper-macros`) |

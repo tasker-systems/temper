@@ -8,9 +8,27 @@ description = "Shared telemetry seam for temper's deployables: logging init, inb
 axum = { version = "0.8", default-features = false }
 http = "1"
 opentelemetry = "0.32"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls", "internal-logs"] }
+# `reqwest-blocking-client`, NOT `reqwest-client`, and this is load-bearing rather than incidental.
+# `BatchSpanProcessor` exports from a dedicated OS thread ("OpenTelemetry.Traces.BatchProcessor"), which
+# has no Tokio reactor — so the *async* reqwest client panics there with "there is no reactor running",
+# no matter that the caller triggering the flush is itself inside a runtime. Every span is then lost and
+# the only symptom is a warn from our own flush. The blocking client owns its runtime internally, so it
+# works from any thread, which is what a dedicated-thread batch processor needs.
+# Measured, not deduced: `crates/temper-telemetry/tests/live_export_client.rs` fails on the async client.
+# The builder's precedence is explicit-client → reqwest-client → hyper-client → reqwest-blocking-client
+# (`opentelemetry-otlp-0.32.0/src/exporter/http/mod.rs:224-268`), so leaving `reqwest-client` enabled
+# would silently win and reinstate the bug.
+#
+# `gzip-http` because without it `OTEL_EXPORTER_OTLP_COMPRESSION=gzip` is not merely ignored — the
+# exporter fails to build (`UnsupportedCompressionAlgorithm`) and export is silently OFF. Grafana
+# Cloud's own OTLP examples commonly set that variable, so an operator following vendor docs would get
+# a total blackout. It also shrinks the payload, which is billed.
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "internal-logs", "gzip-http"] }
 opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = "0.32"
+# `rt` for `spawn_blocking` and `time` for the flush budget — see `export::flush_within_budget`,
+# which exists so a vendor round trip cannot block a Tokio worker or lengthen a response without bound.
+tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -27,6 +45,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 test-support = ["opentelemetry_sdk/testing"]
 
 [dev-dependencies]
+# `flush_budget.rs` drives the async `flush_within_budget` and needs a runtime to block on.
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+# Depend on ourselves to turn our own `test-support` on for our own tests. Without this,
+# `cargo test -p temper-telemetry` fails to compile (`cannot find function install_test_provider`) and
+# the tests in `tests/` only build because *another* workspace member — tests/e2e — happens to enable
+# the feature, which workspace unification then applies here. That is a real trap: the natural
+# per-crate command is broken while `cargo make test` passes.
+temper-telemetry = { path = ".", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
 temp-env = "0.3.6"

@@ -72,6 +72,9 @@ const OTLP_ENDPOINT_VARS: [&str; 2] = [
 /// The spec's kill switch, which `opentelemetry_sdk` 0.32 does not implement — so we do.
 const OTEL_SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
 
+/// The CLI's own opt-in to span export. See [`cli_export_opted_in`].
+const TEMPER_CLI_TRACE: &str = "TEMPER_CLI_TRACE";
+
 /// The undocumented Vercel in-sandbox collector variables. Logged, never designed around: research
 /// `019f943a` §5e records that the documentation for this path has been withdrawn and that nothing
 /// states what would be listening. If one of these ever shows up in a real deployment's log line,
@@ -81,6 +84,93 @@ const VERCEL_COLLECTOR_VARS: [&str; 3] = [
     "VERCEL_OTEL_ENDPOINTS_PORT",
     "VERCEL_OTEL_ENDPOINTS_PROTOCOL",
 ];
+
+/// What the exporter resolved to at startup, recorded so it can be logged **after** the subscriber is
+/// installed.
+///
+/// ## Why this is data and not a log call
+///
+/// `export_layer()` runs *while the subscriber is being constructed* — it is an argument to
+/// `.with(…)`, evaluated before `.init()`. So every `tracing::` statement inside `build_provider` ran
+/// with no global subscriber and went nowhere: `"span export on"`, the exporter-build failure warning,
+/// and the `OTEL_SDK_DISABLED` notice were all silently discarded, in production, on every start.
+///
+/// That is the difference between an operator seeing *"span export on, endpoint=…"* and seeing
+/// nothing at all — and a misconfiguration was indistinguishable from a working setup with no traffic.
+/// It is also most of what made the unusable-HTTP-client bug survive: the module says *"a telemetry
+/// init should state what it resolved — otherwise 'why are there no spans' is answered by redeploying
+/// with more logging"*, and it could not state anything.
+///
+/// Recording the outcome and having [`init`](crate::init) log it after `.init()` is what makes that
+/// sentence true. Proven by `the_resolution_is_logged_after_the_subscriber_exists`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExportResolution {
+    /// `OTEL_SDK_DISABLED=true`.
+    Disabled,
+    /// No endpoint configured — the ordinary local/CI case.
+    NoEndpoint,
+    /// An endpoint was configured but the exporter could not be built. **This is the one an operator
+    /// most needs to see**, and it was the one most reliably lost.
+    BuildFailed { endpoint: String, error: String },
+    /// The CLI has an endpoint but no `TEMPER_CLI_TRACE` opt-in.
+    NotOptedIn,
+    /// Export is on.
+    On {
+        endpoint: String,
+        vercel_collector_vars: Vec<&'static str>,
+    },
+}
+
+impl ExportResolution {
+    /// Emit this resolution. Called by the init seams once a subscriber exists.
+    fn log(&self) {
+        match self {
+            Self::Disabled => tracing::info!(
+                reason = "OTEL_SDK_DISABLED",
+                "span export off; logging to stdout only"
+            ),
+            Self::NoEndpoint => tracing::debug!(
+                "span export off; no OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT configured. \
+                 Not defaulting to localhost:4318 — see temper_telemetry::export docs"
+            ),
+            Self::BuildFailed { endpoint, error } => tracing::warn!(
+                %error,
+                %endpoint,
+                "OTLP exporter could not be built; continuing without span export"
+            ),
+            Self::NotOptedIn => tracing::debug!(
+                reason = "TEMPER_CLI_TRACE",
+                "span export off; an OTLP endpoint is configured but the CLI has not opted in"
+            ),
+            Self::On {
+                endpoint,
+                vercel_collector_vars,
+            } => tracing::info!(
+                %endpoint,
+                protocol = "http/protobuf",
+                vercel_collector_vars = ?vercel_collector_vars,
+                "span export on"
+            ),
+        }
+    }
+}
+
+/// Set once, by whichever of the layer constructors ran.
+static RESOLUTION: OnceLock<ExportResolution> = OnceLock::new();
+
+fn record_resolution(resolution: ExportResolution) {
+    let _ = RESOLUTION.set(resolution);
+}
+
+/// Log what export resolved to, if anything did.
+///
+/// Call **after** installing the subscriber — that is the entire point. A no-op when no layer
+/// constructor ran (a process that never touches export at all).
+pub fn log_resolution() {
+    if let Some(resolution) = RESOLUTION.get() {
+        resolution.log();
+    }
+}
 
 /// The installed provider, kept so the request path can flush it.
 ///
@@ -97,6 +187,33 @@ static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 /// which is the failure you least want to debug later.
 fn export_disabled() -> bool {
     std::env::var(OTEL_SDK_DISABLED)
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// True when the CLI has been told it may export spans.
+///
+/// A **second** switch on top of [`configured_endpoint`], and it exists because
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` is ambient on a developer's machine. Someone with it exported for
+/// another project would otherwise have `temper` start shipping their vault activity to that
+/// collector the moment this shipped — surprising, and not theirs to have asked for. The servers need
+/// no such switch: a deployment's environment is configured deliberately, per project.
+///
+/// Same true-value discipline as [`export_disabled`]: exactly `true`, case-insensitive, so a typo
+/// leaves export off rather than silently on.
+///
+/// ## Why environment-only, with no `[cli]` config key
+///
+/// Author's judgment, not a settled decision — and reversible, so here is the obstacle rather than a
+/// verdict. The CLI's `[cli]` section (`CliSection` in temper-core) is the documented home for
+/// defaults like `format` and `color`, resolved *flag → env → config → default*, and this switch
+/// would belong there by symmetry. But the subscriber must be installed before anything logs, and
+/// `temper_core::types::config::load_config_from` itself emits a `tracing::warn!` for a config with
+/// validation issues (`crates/temper-core/src/types/config.rs:395-400`). Reading config early enough
+/// to feed this would drop that warning at the CLI's default level — trading a user-facing diagnostic
+/// for a config key. Adding a `[cli]` key needs that ordering solved first, not just the key defined.
+fn cli_export_opted_in() -> bool {
+    std::env::var(TEMPER_CLI_TRACE)
         .map(|v| v.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
@@ -142,18 +259,12 @@ fn deployment_resource() -> Resource {
 /// let an observability vendor take down the API.
 fn build_provider() -> Option<SdkTracerProvider> {
     if export_disabled() {
-        tracing::info!(
-            reason = "OTEL_SDK_DISABLED",
-            "span export off; logging to stdout only"
-        );
+        record_resolution(ExportResolution::Disabled);
         return None;
     }
 
     let Some(endpoint) = configured_endpoint() else {
-        tracing::debug!(
-            "span export off; no OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT configured. \
-             Not defaulting to localhost:4318 — see temper_telemetry::export docs"
-        );
+        record_resolution(ExportResolution::NoEndpoint);
         return None;
     };
 
@@ -165,11 +276,10 @@ fn build_provider() -> Option<SdkTracerProvider> {
     {
         Ok(exporter) => exporter,
         Err(error) => {
-            tracing::warn!(
-                %error,
-                %endpoint,
-                "OTLP exporter could not be built; continuing without span export"
-            );
+            record_resolution(ExportResolution::BuildFailed {
+                endpoint,
+                error: error.to_string(),
+            });
             return None;
         }
     };
@@ -188,12 +298,10 @@ fn build_provider() -> Option<SdkTracerProvider> {
         .copied()
         .filter(|var| std::env::var(var).is_ok())
         .collect();
-    tracing::info!(
-        %endpoint,
-        protocol = "http/protobuf",
-        vercel_collector_vars = ?vercel_collector,
-        "span export on"
-    );
+    record_resolution(ExportResolution::On {
+        endpoint,
+        vercel_collector_vars: vercel_collector,
+    });
 
     Some(provider)
 }
@@ -215,6 +323,25 @@ where
     let _ = PROVIDER.set(provider);
 
     Some(tracing_opentelemetry::layer().with_tracer(tracer))
+}
+
+/// [`export_layer`], but for the CLI: additionally gated on the operator opting in.
+///
+/// Split from `export_layer` rather than given a boolean parameter because the two callers differ in
+/// *what they are*, not in a setting — a server exports whenever an endpoint is configured, the CLI
+/// only when its user has said so ([`cli_export_opted_in`]). Returning `None` before
+/// [`build_provider`] runs also means an un-opted-in CLI never constructs an exporter, never resolves
+/// the OTLP environment, and never logs the "span export on" line.
+pub(crate) fn cli_export_layer<S>(
+) -> Option<tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::SdkTracer>>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    if !cli_export_opted_in() {
+        record_resolution(ExportResolution::NotOptedIn);
+        return None;
+    }
+    export_layer()
 }
 
 /// Flush pending spans, blocking until they are exported or the SDK gives up.
@@ -248,7 +375,7 @@ pub fn force_flush_spans() {
 /// way to check that is to run a real request through `create_app` and look at what came out. A
 /// replica of the layer stack inside this crate would be testing tower, not temper.
 ///
-/// Returns `false` if a provider is already installed, since [`PROVIDER`] is set once per process.
+/// Returns `false` if a provider is already installed, since `PROVIDER` is set once per process.
 /// **Batch, not simple, and that is what makes the flush test able to fail.** A
 /// `SimpleSpanProcessor` exports on span *close*, so a test using one would see the span whether
 /// the flush ran before or after the root span ended — it could not tell a correct layer ordering
@@ -287,12 +414,95 @@ pub fn shutdown_telemetry() {
     }
 }
 
-/// How long a flush may block a response before we accept losing spans instead.
+/// How long a flush may delay a response before we accept losing spans instead.
 ///
-/// Unused until the measurement described in task `019f943d` says it is needed; recorded here so
-/// the number has one home when it is.
-#[allow(dead_code)]
+/// **The measurement arrived, and it says this is needed.** With export actually reaching a vendor —
+/// which it never did before the blocking-client fix — the flush is a synchronous network round trip,
+/// and the SDK's own ceiling is a hardcoded, non-configurable 5 seconds
+/// (`opentelemetry_sdk-0.32.1/src/trace/span_processor.rs:476`, whose comment reads
+/// `// TODO: make this configurable`). Measured against an unreachable endpoint, every request paid
+/// `5.01s`. On a Vercel function with `maxDuration: 60` that is 8% of the budget per request, for a
+/// telemetry backend that is not a dependency of serving traffic.
+///
+/// 500ms is chosen to be well above a warm vendor round trip (~20–40ms measured to a real OTLP
+/// endpoint, ~80–120ms cold, and the sandbox freeze means many flushes pay the cold path) and well
+/// below anything a user would call a stall.
 const FLUSH_BUDGET: Duration = Duration::from_millis(500);
+
+/// Whether a flush is already in flight.
+///
+/// One `BatchSpanProcessor` thread serves every caller, so N concurrent requests each issuing their own
+/// flush do not parallelize — they queue, and each pays the *sum* of the ones ahead of it. Measured at
+/// 16 concurrent requests against a 300ms endpoint: median 1.226s per request for what is one 300ms
+/// round trip's worth of work.
+///
+/// A flush drains the **whole** queue, not one span, so a second concurrent flush has nothing of its
+/// own to do. Skipping it costs at most that this request's span rides out on the next request's flush
+/// (or, at a freeze, is lost — which is the trade batching already accepts).
+static FLUSHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Flush pending spans without letting the response wait longer than `FLUSH_BUDGET`.
+///
+/// Three things this does that [`force_flush_spans`] cannot, all of which only started mattering once
+/// export actually reached a vendor:
+///
+/// 1. **Off the reactor.** `force_flush` blocks the calling thread. Called directly from a request
+///    handler that is a Tokio task, it blocks a *worker*, and on a small function (Vercel sizes workers
+///    from the cgroup CPU quota — often 1–2) that stalls the accept loop and every other in-flight
+///    invocation. Measured on a one-worker runtime: **zero** timer ticks during a 1.2s flush.
+///    `spawn_blocking` moves it to the blocking pool, which exists for exactly this.
+/// 2. **Bounded.** `tokio::time::timeout` caps what the response waits for. The blocking task keeps
+///    running to the SDK's own ceiling — it cannot be cancelled — but nobody is waiting on it.
+/// 3. **Single-flight.** See `FLUSHING`.
+///
+/// Returns how long the caller actually waited, so the seam can report its own cost rather than
+/// leaving it to be inferred.
+pub async fn flush_within_budget() -> Duration {
+    let started = std::time::Instant::now();
+
+    // Nothing installed ⇒ nothing to flush. Checked before the atomic so an un-exported process pays
+    // literally nothing, which is every local dev shell and every CI job.
+    if PROVIDER.get().is_none() {
+        return Duration::ZERO;
+    }
+
+    use std::sync::atomic::Ordering;
+    if FLUSHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Duration::ZERO;
+    }
+
+    let task = tokio::task::spawn_blocking(|| {
+        force_flush_spans();
+        FLUSHING.store(false, Ordering::Release);
+    });
+
+    if tokio::time::timeout(FLUSH_BUDGET, task).await.is_err() {
+        // The blocking task owns clearing the flag; it is still running and will clear it when the
+        // SDK's own timeout expires. Clearing it here would let a second flush pile in behind the
+        // first, which is the serialization this exists to prevent.
+        //
+        // **`warn`, not `debug`, and that level is the whole feasibility plan.** `FLUSH_BUDGET` is a
+        // deliberately un-tunable constant — a best-bet default we intend to *watch* rather than a knob
+        // to turn (a knob nobody can evaluate is complexity bought on credit). Watching requires the
+        // signal to be visible at the level production actually runs, and the servers default to
+        // `info`, so a `debug` line here would have meant observing nothing and concluding all was
+        // well.
+        //
+        // This fires only when the budget is actually exceeded, which also means **spans were
+        // dropped** — the same condition `force_flush_spans` already warns about. If it floods, that is
+        // the finding, not noise: either the vendor is degraded or 500ms is wrong for this deployment.
+        tracing::warn!(
+            budget_ms = FLUSH_BUDGET.as_millis() as u64,
+            "span flush exceeded its budget; spans may be lost. If this is frequent, the exporter's \
+             endpoint is degraded or FLUSH_BUDGET is wrong for this deployment"
+        );
+    }
+
+    started.elapsed()
+}
 
 #[cfg(test)]
 mod tests {

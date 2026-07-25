@@ -88,6 +88,9 @@ pub fn run(config: &Config, quiet: bool, fmt: OutputFormat) -> Result<()> {
     println!("{rendered}");
 
     if has_errors {
+        // `process::exit` runs no destructors, so spans from this command's HTTP calls would be lost.
+        // See `main`'s drain comment: there are four exit paths, not two.
+        temper_telemetry::shutdown_telemetry();
         std::process::exit(1);
     }
     Ok(())
