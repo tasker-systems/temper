@@ -382,11 +382,38 @@ to be actor × act, and the act column is not enumerable from the spec — it to
 handlers. The schema should require the **act partition** to be enumerated before the actor
 partition, or EC2-shaped inconsistencies stay invisible.
 
-**B-5 — Cost note for C3, honestly.** The register did not make the corrections in §10; **the
-grounding pass did**. What the register contributed was *requiring* that pass and giving the findings
-somewhere to land. That is a real contribution and a smaller claim than "the register found six
-bugs." A reader deciding whether to adopt this convention should know the expensive, load-bearing
-part is the grounding, and the register is what makes grounding non-optional.
+**B-5 — Cost note for C3 (⟲ corrected 2026-07-25; the first draft of this clause was wrong).**
+
+*The original text read: "the register did not make the corrections in §10; the grounding pass did.
+What the register contributed was merely requiring that pass." Left visible as a scar because the
+error is instructive — it is an **understatement** defect in a register whose job is calibrated
+claims, and an understated finding miscalibrates exactly as badly as an inflated one.*
+
+The correction, from Pete: *"if the discipline-as-workflow forced a grounding pass as non-optional,
+and not doing that is what has routinely led to drift, then it did what it was supposed to. That's
+like saying all the hand did was wield the hammer."* Correct. The original conflated **where the
+cost lives** with **what caused the finding**, and answered the second question with the first.
+
+The causal decomposition, stated exactly, because the credit is not uniform:
+
+| Finding | Cause |
+|---|---|
+| C-5 — the premise is false (deployed + firing + inert) | **Element 7 (exercise status)**. No generic grounding pass asks *"has this ever run?"* — that is register content, and the newest element. |
+| C-4 — eight unclassified `domain` event types | **The closure discipline** (named remainder, never silent), which forced enumeration of all 38 registry members. |
+| C-3 — four inert "material" events | **Exceeded the register.** An agent asked a question no register section specified — which is why it is filed as schema break B-2, the emittability axis closure lacks. |
+| C-1/C-2 — D5's stale extraction and void justification | **Adjacent existing discipline** — the temper skill's `plan-verification.md` (*"does this codebase already have a name for this concept?"*), not the register. |
+
+Two findings caused by register elements, one that exceeded the register and became an amendment,
+two from discipline already in the skill.
+
+**The control condition is in the evidence and was underweighted**: three adversarial review lenses
+ran over the prior PR and caught none of these. Not proof, but the closest available counterfactual,
+and it points *toward* the convention rather than away.
+
+**What survives of the original, and it is worth keeping:** the expensive, load-bearing part of
+adopting this convention is the **grounding pass**, not the prose. Budget four read-only subagents
+and a production log read, not an afternoon of document authoring. That is a cost statement, and it
+is compatible with the register deserving the credit.
 
 ---
 
