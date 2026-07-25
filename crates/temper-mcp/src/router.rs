@@ -99,25 +99,11 @@ async fn root_span(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // One expansion of the same macro temper-api uses, so the field set cannot drift between the
+    // surfaces. Parity matters more here than anywhere: the mention flow's last hop lands on MCP,
+    // so a trace that stops at the API boundary stops one hop short of the work it was following.
     temper_telemetry::traced_request(request, next, |request| {
-        // Same deferred trace-field set as temper-api's root span
-        // (`temper_telemetry::ROOT_TRACE_FIELDS`), recorded through the same helper. Parity
-        // matters more here than anywhere: the mention flow's last hop lands on MCP, so a trace
-        // that stops at the API boundary stops one hop short of the work it was following.
-        let span = tracing::info_span!(
-            "mcp_request",
-            method = %request.method(),
-            path = %request.uri().path(),
-            version = ?request.version(),
-            profile_id = tracing::field::Empty,
-            trace_id = tracing::field::Empty,
-            parent_span_id = tracing::field::Empty,
-            trace_sampled = tracing::field::Empty,
-            vercel_id = tracing::field::Empty,
-            vercel_invocation_id = tracing::field::Empty,
-        );
-        temper_telemetry::record_inbound_trace_context(&span, request.headers());
-        span
+        temper_telemetry::root_span!("mcp_request", request)
     })
     .await
 }
