@@ -109,6 +109,33 @@ commented out in `slack-app-manifest.yml`'s phase-2 block, but `im:history` is a
 scope, so it is three uncommented lines away. **Enabling `message.im` requires wiring the identity
 pipeline into that handler first.**
 
+## The reply is Slack `mrkdwn`, and it cites with in-app links
+
+The turn's answer is delivered verbatim as the `text` of `chat.postEphemeral`
+(`lib/ephemeral.ts`), which Slack renders as **`mrkdwn`** — *not* standard Markdown. So the model
+must emit `mrkdwn` directly: `*bold*` not `**bold**`, `<url|label>` not `[label](url)`, `• ` bullets,
+no `#` headings. Those rules, plus the discipline to **cite every claim as a clickable link**, live in
+the always-on `agent/instructions.md`. This is guidance for the *output*, orthogonal to the whole
+inbound-identity pipe above.
+
+**The site URL is injected at runtime, never committed.** A citation links a resource at
+`{BASE}/vault/r/{ref}` — the web app's `(app)/vault/r/[ident]` route, which takes a bare UUID or the
+decorated `slug-<uuid>` `ref` verbatim (its `parseRef` keeps only the trailing UUID). `{BASE}` is the
+deployment's own site URL (temperkb.io for the community app, the customer's host when self-hosted),
+so it **cannot** be baked into the committed prompt. `agent/instructions/citations.ts` is a
+`defineDynamic` instructions resolver that binds `{BASE}` from `TEMPER_API_URL` on `session.started`
+(pure shaping in `agent/lib/citation-link.ts`, unit-tested in `tests/citation-link.test.ts`).
+
+> **`agent/instructions/` is a DISCOVERY directory too**, the third after `channels/` and
+> `connections/`. A root `agent/instructions.md` and the directory **coexist** — the root text comes
+> first, then the sorted directory entries — so the static rules that reference `{BASE}` are followed
+> by the dynamic line that binds it. Dynamic, not build-time `instructions.ts`: eve captures an
+> `instructions.ts` at `eve build` (where CI has no `TEMPER_API_URL`), whereas a `defineDynamic`
+> resolver reads the deployed function's own env, matching this agent's "read every deployment
+> variable at request time" rule. The env read is INSIDE the `session.started` handler, so `eve build`
+> discovery does not require `TEMPER_API_URL` present. An unset base degrades to a link-less "cite by
+> title, never invent a URL" instruction rather than emitting a broken host.
+
 ## The `temper` connection (`agent/connections/temper.ts`)
 
 Registered by **filesystem convention** — there is no manifest to edit. The filename gives the
