@@ -63,6 +63,10 @@ where
 
     // `parent: &span` rather than entering it: the event belongs to this request's span, and
     // entering here would be a second way to say so that only works while the span is current.
+    //
+    // Emitted **before** `drop(span)`, necessarily: an event recorded after the span closes cannot be
+    // attached to it, and this event is the convention `docs/development/span-field-conventions.md`
+    // describes and `tests/e2e/tests/logging_test.rs` gates.
     if status.is_server_error() {
         tracing::error!(parent: &span, status = status.as_u16(), latency_ms, "response");
     } else {
@@ -74,7 +78,32 @@ where
     // the processor. Until this runs there is nothing queued, and a flush would export nothing.
     drop(span);
 
-    crate::export::force_flush_spans();
+    // ## Why the flush cost is its own event, and `latency_ms` is not it
+    //
+    // The guide used to name `latency_ms` as the meter for the exporter's own cost — *"the cost is the
+    // before/after difference in a number we already have."* That difference is **structurally zero**:
+    // `latency_ms` is taken above, and the flush can only run after `drop(span)`, because until the span
+    // closes there is nothing queued to flush. No ordering fixes that; the flush is genuinely not part
+    // of the span it flushes.
+    //
+    // It is, however, part of what the **client** waits for — the response is returned after this line —
+    // so the cost is real and had to become visible some other way. `flush_ms` is that way, and a
+    // caller's observed latency is `latency_ms + flush_ms`.
+    //
+    // Worth naming the pattern: an instrument that is real, on the real path, and blind to the one
+    // thing it was cited for is the same shape as an exporter whose test could not reach a transport.
+    // Per-flush timing stays at `debug`: it is one extra line **per request**, and the servers already
+    // emit a `response` event per request — doubling that at `info` would be a real log bill for a
+    // distribution nobody reads most days. The condition worth seeing by default is *the budget being
+    // exceeded*, which `flush_within_budget` warns about, because that one means spans were dropped.
+    //
+    // `RUST_LOG=debug` is now a safe way to sample this distribution on a live deployment: since both
+    // stacks filter per-layer, raising the log level no longer widens what is exported (or billed).
+    // That was not true before — a subscriber-wide filter meant asking for detail also shipped it.
+    let flush = crate::export::flush_within_budget().await;
+    if !flush.is_zero() {
+        tracing::debug!(flush_ms = flush.as_millis() as u64, "span flush");
+    }
 
     response
 }

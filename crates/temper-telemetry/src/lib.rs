@@ -8,6 +8,8 @@
 //! - [`request_span`] — the request root span, owned so its lifetime can be ended deliberately.
 //! - [`link`] — joining a *trusted* caller's trace, by link, after authentication. The half of the
 //!   trust decision that only an authenticated request gets.
+//! - [`propagate`] — writing our trace context onto an *outbound* request. The mirror of [`link`],
+//!   and what gives a receiving surface's link an id that actually exists in the backend.
 //! - This module — reading whatever correlation context arrives on an inbound request and stamping
 //!   it onto that request's root span. The *extraction* half of W3C trace context.
 //!
@@ -24,9 +26,6 @@
 //!
 //! ## What is deliberately *not* here
 //!
-//! - **Propagation.** Nothing injects `traceparent` on outbound calls yet. `tracestate` is
-//!   consequently not read at all — vendor state exists to be forwarded, and reading it before
-//!   there is anywhere to forward it to would be storage with no reader.
 //! - **Synthesis.** When no `traceparent` arrives, the fields stay empty rather than being filled
 //!   with a locally-minted id. Minting root ids is the tracer provider's job, and doing it here
 //!   would manufacture ids that no exported span agrees with.
@@ -83,11 +82,16 @@
 pub mod export;
 pub mod init;
 pub mod link;
+pub mod propagate;
+pub mod redact;
 pub mod request_span;
 
 pub use export::{force_flush_spans, shutdown_telemetry};
+#[cfg(feature = "test-support")]
+pub use init::init_server_logging_with_writer;
 pub use init::{init_cli_logging, init_server_logging};
 pub use link::link_trusted_caller;
+pub use propagate::inject_trace_context;
 pub use request_span::traced_request;
 
 use http::HeaderMap;
@@ -117,8 +121,10 @@ pub use tracing;
 /// actually built. Now one expansion builds both, and `macro_declares_every_root_trace_field` ties
 /// it to the constant.
 ///
-/// The span names stay deliberately distinct: temper-client's outbound span is *also* `http_request`,
-/// and three things under one name are unreadable once exported.
+/// The span names stay deliberately distinct, and that rule had to be applied twice. temper-mcp's root
+/// span is `mcp_request` rather than a second `http_request`; temper-client's outbound span was a third
+/// until export made the collision visible, and is now `http_client_request`. Three things under one
+/// name are unreadable once exported.
 #[macro_export]
 macro_rules! root_span {
     ($name:literal, $request:expr) => {{
@@ -126,7 +132,7 @@ macro_rules! root_span {
         let span = $crate::tracing::info_span!(
             $name,
             method = %request.method(),
-            path = %request.uri().path(),
+            path = %$crate::redact::redact_path(request.uri().path()),
             version = ?request.version(),
             // Filled by the auth middleware once a token resolves to a profile — a validated token
             // is not yet a profile, so this cannot be known at construction.
