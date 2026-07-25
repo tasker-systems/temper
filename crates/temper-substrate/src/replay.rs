@@ -612,10 +612,17 @@ pub async fn recorded_materializations(
 }
 
 /// The CONTENT events: a member's prose moved (new chunk embeddings) without changing any
-/// membership input — the readout-only formation inputs (drift §1). `block_created`/`block_folded`
-/// are listed forward-compatibly (no mutation fires them yet); when they land they are already a
-/// content touch. The readout-refresh gate and the formation gate share this set so they can never
-/// disagree on "what is a content touch" (the bug they'd otherwise drift into).
+/// membership input — the readout-only formation inputs (drift §1). The readout-refresh gate and
+/// the formation gate share this set so they can never disagree on "what is a content touch" (the
+/// bug they'd otherwise drift into).
+///
+/// Emittability, since this list mixes both and a stale claim here is load-bearing:
+/// `block_mutated` and `block_created` **fire today** — `block_created` since
+/// `20260708000012_streaming_ingest.sql` ("activate the dormant `block_created` event"), via
+/// `SeedAction::BlockAppend`. Only `block_folded` is still forward-compatible, and it is named in
+/// `events.rs`'s `NO_WRITE_PATH_YET`, which is the authority for that claim — prefer it over prose.
+/// (This comment previously said `block_created` had no write path, seventeen days after it gained
+/// one; see the auditor trigger-model register §8.2a — "is commented inert ≠ is inert".)
 const CONTENT_EVENTS: &[&str] = &["block_mutated", "block_created", "block_folded"];
 
 /// The STRUCTURAL events: they change a region-formation input that lives in the component

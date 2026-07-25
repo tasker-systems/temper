@@ -298,6 +298,24 @@ two bear directly on the subject: **`resource_deleted`** tombstones a *cited sou
 **`resource_finalized`** is the moment a segmented source *becomes* citable. Named here as a
 remainder; not silently dropped.
 
+#### Discharged 2026-07-25 — the partition is now exhaustive over `domain`
+
+Classified against D1's four judgement inputs and D4's boundary (*"if it cannot enter the
+judgement, it cannot invalidate the verdict"*). The material set goes **13 → 17** (still 4 inert).
+
+| event | verdict | ground |
+|---|---|---|
+| `block_created` | **material** | Content touch. `replay.rs`'s own `CONTENT_EVENTS` already groups it with `block_mutated` and `block_folded`, both material. Live via `block_append` (`20260708000012`). Input 1. |
+| `resource_deleted` | **material** | Two inputs at once: the cited source stops being live (1), and `resource_live_citations` filters `src.is_active`, so `citation_magnitude` moves mechanically (4). |
+| `resource_finalized` | **material** | The moment an `in_progress` resource enters list/search — `20260714000001`: *"`ingest_state = 'complete'` goes exactly where `r.is_active` already goes."* Input 3. |
+| `context_reassigned` | **material** | Changes `kb_contexts.owner_id`, i.e. the OWNS half of `steward_team_contexts`. Input 3 — but see C-7: admitting it is necessary and **not sufficient**. |
+| `resource_reassigned` | excluded | Owner on the home row. D4 exactly: metadata-*about*, not content-*of*. |
+| `cogmap_seeded` | excluded | Map genesis — no citations and no audits exist yet, so there is no verdict to stale. Structural, not judgemental. |
+| `charter_set` | excluded | Changes what the map is *for*, not what a source says. Barred by the auditor's own boundary; also fires on ordinary map operations (every charter, incl. L0), so admitting it would add standing noise. |
+| `relationship_decayed` | excluded, pending phase 4 | Inert; D3's tripwire already governs it. Now *classified* rather than unclassified. |
+
+**C-4 is resolved by this table.** Left in §10 as a visible scar, per B-5's precedent.
+
 ### 8.2 Schema amendment — the closure section needs an **emittability** axis
 
 Finding (a) is neither actor-shaped nor rate-shaped, so neither the original closure discipline nor
@@ -309,6 +327,32 @@ the scar the goal added to it would catch it. The generalization:
 
 This is the closure analogue of exercise status: §7 asks whether a *behavior* ever ran, §8.2 asks
 whether a *vocabulary term* ever can. Both are "the corpus describes more than the system does."
+
+#### 8.2a — the converse, found while discharging §8.1(b)
+
+The emittability axis has a mirror, and the codebase carries a live instance of it.
+`crates/temper-substrate/src/replay.rs:615-619` declares:
+
+```rust
+/// `block_created`/`block_folded` are listed forward-compatibly (no mutation fires them yet)
+const CONTENT_EVENTS: &[&str] = &["block_mutated", "block_created", "block_folded"];
+```
+
+`block_created` has fired since **`20260708000012_streaming_ingest.sql`** — whose own header reads
+*"activate the dormant `block_created` event"* — via `SeedAction::BlockAppend → EventKind::BlockCreated`
+and `_event_append('block_created', …)`. The comment is stale by seventeen days.
+
+Where §8.2 says *"is registered ≠ can occur,"* this says:
+
+> **"is commented inert ≠ is inert."** A prose claim about emittability decays exactly as a prose
+> claim about behavior does (§7), and in the same direction — toward *understating* what the system
+> now does, because a comment is written once and the write path is added later.
+
+Both directions matter and they fail differently: §8.2's error admits a term that can never fire
+(a silently dead axis); §8.2a's error **excludes a term that fires constantly** (a silently missed
+one). Neither is visible to a reader who trusts the corpus. This was caught only because the
+classification checked the write path instead of either comment — the two comments disagreed, so
+neither could be trusted, which is the tell.
 
 ---
 
@@ -357,6 +401,61 @@ Minor, but the spec cites it as a SQL precedent.
 
 None of these were caught by three adversarial review lenses on the prior PR. All six fell out of one
 grounding pass whose *shape* the register dictates.
+
+**C-7 — D2 tier 2 counts events *inside* a boundary that itself moves uncounted.** Found 2026-07-25
+while discharging §8.1(b); this one changes a decision rather than a citation, and it is not fixable
+by any choice of allow-list membership.
+
+The observable space is `steward_team_contexts(cogmap)` =
+
+```
+OWNS    — kb_contexts.owner_table/owner_id = the joined team
+  ∪
+SHARED  — kb_team_contexts, inherited down the team DAG via team_ancestors()
+```
+
+Both halves move, and neither is countable:
+
+- **OWNS** moves via `context_reassigned` — **one** event standing for **N** resources. Admitting it
+  to the material set (§8.1(b)) is necessary but not sufficient: a threshold over a count
+  under-weights it by an unbounded factor.
+- **SHARED** moves via `share_context` / unshare — **zero** events. `context_service.rs` states the
+  reason outright: *"Context creation is a plain INSERT (no event emission — product decision 5:
+  contexts are infrastructure)."* The write is `INSERT … ON CONFLICT DO NOTHING` on
+  `kb_team_contexts`, with no `_event_append` anywhere on the path.
+
+**Counting events inside a boundary cannot detect the boundary moving.** So this is a category error
+in the measurement, not a tuning parameter — which is why no weighting rule resolves it, and why
+"just event the share path" is the wrong reflex: it argues against a standing product decision, needs
+a projector + replay arm + backfill, and *still* leaves the one-event-N-resources problem on the OWNS
+half.
+
+**Blast radius — inference, not data.** Nothing mutates. `kb_citation_audits` is append-only,
+attribution is projector-filled from the owning event, recorded `confidence` is immutable by D1, and
+the three standing axes are **not** visibility- or boundary-scoped (`resource_live_citations` gates
+only on `is_corrected` / `is_active` / `is_folded` / `source_kind`). The defect is confined to
+*selection*, and it strictly **under**-triggers — the direction `steward_team_contexts`'s own comment
+names as the dangerous one (*"would UNDER-trigger … and silently stale the map"*).
+
+But it is worth fixing rather than tolerating, because of what D1 makes absence *mean*: under
+change-triggering, *"an unrefreshed verdict is a verdict about **something that has not changed**"* —
+that is the whole reason a 30-day half-life is defensible rather than arbitrary. When the boundary
+moves invisibly, the absent re-audit is still read as stability. The staleness is not merely missed,
+it is **misreported as stability**, in precisely the model that converts that absence into a signal.
+
+**Proposed remedy — split the question.** Content *churn* stays a counted threshold. Boundary
+*change* is detected directly: a fingerprint of `steward_team_contexts(cogmap)`
+(`md5(array_agg(context_id ORDER BY context_id))` — the function is already `STABLE`) snapshotted
+beside `auditor_watermark_event_id`. Tier 2 fires on `count >= threshold` **OR**
+`fingerprint <> stored`.
+
+This is D2's own move for tier 1 — *observe the thing, do not reconstruct it from a proxy* — with one
+asymmetry that is the actual design content: **tier 1 could derive because the trail has history; the
+boundary has none.** `kb_team_contexts` is current-state only, so the boundary cannot be
+reconstructed as-of a past watermark and must be *snapshotted*. Costs, stated: a second piece of tier-2
+state; a fingerprint reports *that* it moved, never *how much* (a 1-resource context fires as loudly
+as a 10,000-resource one — deliberate over-approximation); and the snapshot must advance in the same
+act as the watermark, or the two diverge into a permanent re-fire.
 
 ---
 
