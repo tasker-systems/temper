@@ -64,6 +64,14 @@ pub async fn require_mcp_auth(
 
     match decode::<RawJwtClaims>(&token, &vk.key, &validation) {
         Ok(data) => {
+            // The token verified, so this caller is one of ours: join its trace by link, never by
+            // parenting (decision `019f95ff` rule 2). Here rather than beside `profile_id` in
+            // `service.rs` because the trust event is the token verifying — and because
+            // `Span::current()` is unambiguously the `mcp_request` root span in a middleware,
+            // whereas inside a tool call it is whatever span the rmcp dispatch has entered.
+            // MCP is the mention flow's last hop, so a link missing here loses the join the goal
+            // exists to prove.
+            temper_telemetry::link_trusted_caller(&tracing::Span::current(), request.headers());
             request.extensions_mut().insert(data.claims);
             request.extensions_mut().insert(BearerToken(token));
             next.run(request).await

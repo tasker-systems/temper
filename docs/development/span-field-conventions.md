@@ -50,7 +50,7 @@ requires the carrying span **not** to be the root, identified by the absence of 
 |---|---|---|
 | `http_request` | `apply_transport_layers`, `crates/temper-api/src/routes.rs` | `method`, `path`, `version`, `profile_id` (deferred), plus `ROOT_TRACE_FIELDS` (deferred) |
 | `mcp_request` | `build_router`, `crates/temper-mcp/src/router.rs` | same set; `profile_id` recorded in `service.rs` on profile resolution |
-| act spans | `#[tracing::instrument]` on each write command in `crates/temper-services/src/backend/db_backend.rs` | `ACT_SPAN_FIELDS` — `correlation_id`, `invocation_id` (both deferred) |
+| act spans | `#[act_span]` (`temper-macros`) on each write command in `crates/temper-services/src/backend/db_backend.rs` | `ACT_SPAN_FIELDS` — `correlation_id`, `invocation_id` (both deferred) |
 
 Act spans take the **method name** as the span name (`update_resource`, `set_facet`, …) rather than a
 uniform `act`, because the command is the most useful thing to see in a trace UI. The gate keys on
@@ -97,29 +97,42 @@ name that says which side of the wire you are on.
 
 ## Adding a write command
 
-1. Put `#[tracing::instrument(skip_all, fields(correlation_id = tracing::field::Empty,
-   invocation_id = tracing::field::Empty))]` on the method.
-   `skip_all` is not optional — commands carry bodies and secrets that must never reach a log.
+1. Put `#[act_span]` on the method. It expands to the `#[tracing::instrument]` with the field set —
+   including `skip_all`, which is not optional, because commands carry bodies and secrets that must
+   never reach a log.
 2. Build the `EventContext` via `act_context(&cmd.act)`, which does the mapping *and* records the
    ids. Do not hand-roll the three-field struct; ten copies of it is what this helper replaced.
 3. If the command fires under an invocation it opens itself rather than the caller's — as
    `reconcile_cognitive_map` does — build the `EventContext` explicitly and call `record_act_span`
    on **it**, so the span never reports an envelope the events do not carry.
 
+Both of the first two steps used to be spelled out by hand at every site, and both drifted. The
+attribute was copy-pasted eleven times minus one: `record_citation_audit` shipped with neither the
+attribute nor the `act_context` call, hand-rolling the `EventContext` instead — so a citation
+audit's ids reached no span at all, and no gate noticed, because the constant that named the field
+set was asserted only against a copy of itself. The rule worth carrying: **a constant that exists
+"so things cannot drift" prevents nothing unless something asserts its consumers against it.**
+`act_span_declares_every_act_field` (in `db_backend.rs`'s own tests) is that assertion — it opens a
+real `#[act_span]` span and checks it declares every name in `ACT_SPAN_FIELDS`.
+
 ## What this does not cover yet
 
-- **No exporter.** These spans go to stdout as JSON. That init is no longer five copies — it is
+- **The exporter has landed; `trace_id` did not become a parent.** Spans go to stdout as JSON and,
+  when `OTEL_EXPORTER_OTLP_ENDPOINT` is configured, over OTLP to whatever vendor it names
+  ([../guides/open-telemetry-setup.md](../guides/open-telemetry-setup.md)). Init is one seam —
   `temper_telemetry::init_server_logging()`, with `init_cli_logging()` as the CLI's deliberately
-  different variant — and it is built on `Registry` + layers precisely so the exporter attaches as
-  one more layer. The exporter itself is still the next increment, under goal
-  `019f9404-2a4e-7530-8744-92ae4ab6d83e` (task `019f943d`); operator-facing shape is sketched in
-  [../guides/open-telemetry-setup.md](../guides/open-telemetry-setup.md). Until it lands `trace_id`
-  is a **log field, not a parent**: it makes today's JSON lines joinable across deployables, and
-  nothing is exported anywhere.
+  different variant — built on `Registry` + layers precisely so the exporter attached as one more
+  layer.
 
-  When it does land, `trace_id` still will not become a parent — decision
-  `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` settles that temper roots every trace locally and joins a
-  trusted caller by span *link*. The field keeps exactly the meaning it has now.
+  `trace_id` keeps exactly the meaning it had before export: a **field, not a parent**. Decision
+  `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` settles that temper roots every trace locally on every
+  surface and joins a *trusted* caller by span **link**, recorded after authentication
+  (`temper_telemetry::link_trusted_caller`, called from each auth gate). "Trusted" means the request
+  passed an authentication gate — a JWT verified against our JWKS, or an HMAC signature over the
+  body keyed on a secret only our own services hold — not an allowlist of surfaces, which would be
+  an enumeration that has to stay correct as routes move. An unauthenticated request keeps the inert
+  fields and gains no link; `crates/temper-api/tests/telemetry_link_test.rs` drives both halves
+  through the real router.
 - **No propagation.** Trace context is now *extracted* (above) but never *injected*: nothing sets a
   `traceparent` on an outbound call, so a trace still stops at the first hop temper originates
   rather than receives. `tracestate` is therefore not read at all — vendor state exists to be

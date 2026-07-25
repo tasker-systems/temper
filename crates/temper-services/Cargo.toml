@@ -7,6 +7,8 @@ description = "Shared business-logic + auth-infra layer for temper-api and tempe
 [dependencies]
 temper-auth = { path = "../temper-auth" }
 temper-core = { path = "../temper-core", features = ["web-api"] }
+# `#[act_span]` — the one declaration of the act-grain span field set that `ACT_SPAN_FIELDS` names.
+temper-macros = { path = "../temper-macros" }
 temper-principal = { path = "../temper-principal" }
 temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-substrate = { path = "../temper-substrate" }
@@ -60,6 +62,9 @@ trybuild = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+# `act_span_declares_every_act_field` reads the metadata of a span the attribute really opened,
+# which needs a subscriber to open it against.
+tracing-subscriber = "0.3"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"

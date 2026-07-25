@@ -172,13 +172,25 @@ async fn act_ids_land_on_an_act_span_not_the_root(pool: sqlx::PgPool) {
     );
 }
 
-/// The act-span field set has one definition, and it is the producer's.
+/// A rename tripwire for the act-span field set — and **not** the gate that ties the constant to
+/// the spans.
 ///
-/// `ACT_SPAN_FIELDS` is exported from `temper-services` precisely so this gate cannot drift from the
-/// `#[instrument]` attributes it describes: a copy of the list here would let the two disagree
-/// silently, which is how a convention becomes documentation-only.
+/// The doc comment here used to claim that exporting `ACT_SPAN_FIELDS` from `temper-services` meant
+/// this gate "cannot drift from the `#[instrument]` attributes it describes", warning that *"a copy
+/// of the list here would let the two disagree silently."* The assertion below **is** that copy. It
+/// compares the constant to a literal and says nothing whatever about what any span declares: the
+/// constant could name a third field, no command would carry it, and this would still pass. That is
+/// how a convention becomes documentation with a `const` keyword.
+///
+/// What it is genuinely good for is the other direction — a *rename* of one of these fields has to
+/// be a deliberate edit in two places rather than a silent change of the wire vocabulary that log
+/// queries are written against. Kept for that, described honestly.
+///
+/// The consumer tie now lives where the producer does:
+/// `temper_services::backend::db_backend::tests::act_span_convention::act_span_declares_every_act_field`
+/// opens a real `#[act_span]` span and asserts it declares every name in this constant.
 #[test]
-fn act_span_field_set_is_declared_once() {
+fn act_span_field_names_are_a_deliberate_edit() {
     assert_eq!(ACT_SPAN_FIELDS, ["correlation_id", "invocation_id"]);
 }
 

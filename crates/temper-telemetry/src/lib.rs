@@ -1,11 +1,13 @@
 //! Shared telemetry seam for temper's deployables.
 //!
-//! Four things live here:
+//! Five things live here:
 //!
 //! - [`init`] — how a temper process logs. One seam for the five binaries that used to configure
 //!   `tracing_subscriber` themselves, and where the export layer attaches.
 //! - [`export`] — span export over OTLP: what temper decides that the OpenTelemetry SDK does not.
 //! - [`request_span`] — the request root span, owned so its lifetime can be ended deliberately.
+//! - [`link`] — joining a *trusted* caller's trace, by link, after authentication. The half of the
+//!   trust decision that only an authenticated request gets.
 //! - This module — reading whatever correlation context arrives on an inbound request and stamping
 //!   it onto that request's root span. The *extraction* half of W3C trace context.
 //!
@@ -46,7 +48,8 @@
 //! 1. **Never parent from inbound context** — every root span roots its own trace, every surface,
 //!    unconditionally.
 //! 2. **Join a trusted caller's trace with an OTel span *link*, recorded post-auth**, not by
-//!    parenting.
+//!    parenting. Implemented in [`link`], which is also where "one of ours" is defined and
+//!    defended.
 //! 3. **Never let an inbound `sampled` flag drive sampling.** Record it; do not obey it. It is the
 //!    one consequence with a bill attached — honoring it lets anyone force every span to export.
 //! 4. **Field extraction below stays as it is**, on all surfaces including unauthenticated ones.
@@ -79,10 +82,12 @@
 
 pub mod export;
 pub mod init;
+pub mod link;
 pub mod request_span;
 
 pub use export::{force_flush_spans, shutdown_telemetry};
 pub use init::{init_cli_logging, init_server_logging};
+pub use link::link_trusted_caller;
 pub use request_span::traced_request;
 
 use http::HeaderMap;
@@ -159,8 +164,9 @@ pub const ROOT_TRACE_FIELDS: [&str; 5] = [
     "vercel_invocation_id",
 ];
 
-/// W3C `traceparent` header name.
-const TRACEPARENT: &str = "traceparent";
+/// W3C `traceparent` header name. Shared with [`link`], which re-parses the same header once the
+/// caller has authenticated.
+pub(crate) const TRACEPARENT: &str = "traceparent";
 /// Vercel's per-request id, surfaced on responses and in its own logs — the bridge from our trace
 /// into Vercel's per-request view. Already used by hand at the steward hop
 /// (`crates/temper-api/src/handlers/steward.rs`); this generalizes it to every request.
@@ -287,7 +293,7 @@ pub fn record_inbound_trace_context(span: &Span, headers: &HeaderMap) {
 }
 
 /// Read a header as UTF-8, treating a non-UTF-8 value as absent.
-fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
+pub(crate) fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers.get(name)?.to_str().ok()
 }
 

@@ -5894,6 +5894,7 @@ dependencies = [
  "filetime",
  "hex",
  "jsonwebtoken",
+ "opentelemetry_sdk",
  "reqwest 0.12.28",
  "rmp-serde",
  "serde",
@@ -5947,6 +5948,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "temper-macros"
+version = "0.1.0"
 
 [[package]]
 name = "temper-mcp"
@@ -6003,12 +6008,14 @@ dependencies = [
  "temper-auth",
  "temper-core",
  "temper-ingest",
+ "temper-macros",
  "temper-principal",
  "temper-substrate",
  "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "trybuild",
  "utoipa",
  "uuid",
