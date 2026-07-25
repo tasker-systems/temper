@@ -778,26 +778,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/invitations/mine": {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
-                "X-Temper-Surface"?: "cli" | "sdk";
-            };
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["list_mine"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/invitations/{token}/accept": {
+    "/api/invitations/accept": {
         parameters: {
             query?: never;
             header?: {
@@ -816,7 +797,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/invitations/{token}/decline": {
+    "/api/invitations/decline": {
         parameters: {
             query?: never;
             header?: {
@@ -829,6 +810,25 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["decline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invitations/mine": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_mine"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1536,7 +1536,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description Response from `POST /api/invitations/{token}/accept` — the team the caller
+         * @description Response from `POST /api/invitations/accept` — the team the caller
          *     just joined and at what role.
          */
         AcceptInvitationResponse: {
@@ -2935,6 +2935,29 @@ export interface components {
          * @enum {string}
          */
         InvitationStatus: "pending" | "accepted" | "declined" | "expired";
+        /**
+         * @description Request body for `POST /api/invitations/accept` and
+         *     `POST /api/invitations/decline`.
+         *
+         *     ## Why the token is a body field and not a path segment
+         *
+         *     The token is a **bearer capability** — `invitation_service` mints 128 CSPRNG
+         *     bits and the authority to join the team *is* the token, for seven days. A URL
+         *     path is the least private part of a request: intermediaries log it as a matter
+         *     of course, it rides in `Referer` headers, it lands in browser history, and it
+         *     is recorded as a span attribute that leaves the building on export. A request
+         *     body goes to none of those places.
+         *
+         *     ## One type for both routes
+         *
+         *     Accept and decline differ in what they *do*, and that difference is carried by
+         *     the route and the verb. What the body means is identical in both — "which
+         *     invitation, named by the capability token that authorizes acting on it" — so
+         *     this is one intent written once, not two shapes that happen to match.
+         */
+        InvitationTokenRequest: {
+            token: string;
+        };
         /**
          * @description A pending invitation resolved to the *invitee's* view — the `TeamInvitation`
          *     fields plus the team's slug/name for display. Returned by
@@ -4477,10 +4500,18 @@ export interface components {
         /**
          * @description A pending or resolved invitation to join a team.
          *
-         *     Primary flow is link-based: invite generates a token-bearing URL,
-         *     recipient clicks, authenticates, profile auto-created if needed,
-         *     joins team. CLI commands: `temper team invite`, `temper team join`,
-         *     `temper team request-join`.
+         *     **The flow is not link-based, and never has been.** `invited_email` is a
+         *     *correlator*, matched at sign-in — nothing mails a token-bearing URL, and no
+         *     UI route redeems one. The invitee authenticates, reads their own pending
+         *     invitations from `GET /api/invitations/mine` (which returns `token`, since it
+         *     is legitimately theirs), and redeems it through `POST /api/invitations/accept`
+         *     with the token in the **request body**. CLI: `temper team invite`,
+         *     `temper team join`, `temper team request-join`.
+         *
+         *     This comment previously described the link-based flow as the primary one. It
+         *     was aspirational, it was load-bearing in the wrong direction — it is what made
+         *     a reviewer believe retiring the old token-in-path route had to account for
+         *     invitation URLs sitting in inboxes — and there are none.
          *
          *     Constraints:
          *     - `role` cannot be `Owner` — ownership is only transferred, never invited
@@ -6440,7 +6471,7 @@ export interface operations {
             };
         };
     };
-    list_mine: {
+    accept: {
         parameters: {
             query?: never;
             header?: {
@@ -6450,33 +6481,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
-        responses: {
-            /** @description The caller's own pending invitations */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InviteeInvitation"][];
-                };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationTokenRequest"];
             };
         };
-    };
-    accept: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
-                "X-Temper-Surface"?: "cli" | "sdk";
-            };
-            path: {
-                /** @description Invitation token */
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
             /** @description Invitation redeemed; caller joined the team */
             200: {
@@ -6517,13 +6526,14 @@ export interface operations {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
             };
-            path: {
-                /** @description Invitation token */
-                token: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationTokenRequest"];
+            };
+        };
         responses: {
             /** @description Invitation declined */
             204: {
@@ -6545,6 +6555,29 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_mine: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's own pending invitations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteeInvitation"][];
+                };
             };
         };
     };

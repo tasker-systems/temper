@@ -6,7 +6,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::invitation::{
-    AcceptInvitationResponse, CreateInvitationRequest, InviteeInvitation, TeamInvitation,
+    AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
+    TeamInvitation,
 };
 use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, RemoveMemberOutcome, ResidualOwnedReach,
@@ -197,25 +198,36 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
-    /// POST /api/invitations/{token}/accept — redeem an invitation token.
+    /// POST /api/invitations/accept — redeem an invitation token.
+    ///
+    /// The invite token rides in the **body**, not the path: it is a bearer
+    /// capability, and this client records `"{method} {path}"` as a span
+    /// attribute that is exported. See `InvitationTokenRequest`.
     pub async fn accept_invitation(&self, invite_token: &str) -> Result<AcceptInvitationResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/invitations/{invite_token}/accept");
-        let req = self.http.post(&path);
+        let path = "/api/invitations/accept";
+        let body = InvitationTokenRequest {
+            token: invite_token.to_string(),
+        };
+        let req = self.http.post(path).json(&body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&Method::POST, path, req, Some(&token))
             .await
     }
 
-    /// POST /api/invitations/{token}/decline — decline an invitation token.
+    /// POST /api/invitations/decline — decline an invitation token.
     ///
+    /// Body-carried for the same reason as `accept_invitation`.
     /// Returns `()` on a 204; `send` errors on any non-2xx.
     pub async fn decline_invitation(&self, invite_token: &str) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/invitations/{invite_token}/decline");
-        let req = self.http.post(&path);
+        let path = "/api/invitations/decline";
+        let body = InvitationTokenRequest {
+            token: invite_token.to_string(),
+        };
+        let req = self.http.post(path).json(&body);
         self.http
-            .send(&Method::POST, &path, req, Some(&token))
+            .send(&Method::POST, path, req, Some(&token))
             .await?;
         Ok(())
     }

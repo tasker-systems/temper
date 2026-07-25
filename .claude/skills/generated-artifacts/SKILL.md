@@ -41,14 +41,28 @@ run the job whose gate catches the stale artifact is a gate that runs nowhere.
 (`test-agents-ts` got this later than `test-ruby` did — the same rot the gem discovered in
 `tests/contracts/`.)
 
-### The drift gate compares against git, not against a fresh build
+### The drift gates compare against git, not against a fresh build — and they do not all want the same thing
 
 Both `check-temper-rb-drift.sh` and `check-temper-ts-drift.sh` regenerate their artifact
 and then run `git diff --exit-code` over it. So an artifact you have *just correctly
 regenerated* still fails `cargo make check` while it sits unstaged — the error reads
 "generated core/schema is out of date with openapi.json", which sounds like you forgot to
-run `cargo make openapi` when in fact you need to `git add` (or commit) its output. Stage
-the regenerated files, then re-run `check`.
+run `cargo make openapi` when in fact you need to `git add` its output. Stage the
+regenerated files, then re-run `check`.
+
+**`check-ts-rs-drift.sh` needs a `git commit`, not just a `git add`** — do not generalize
+the paragraph above onto it. `git diff --exit-code` compares the worktree against the
+*index*, so staging satisfies the two SDK gates. The ts-rs gate cannot use that form (a
+newly derived, untracked `.ts` is invisible to it — that is the `slack_link.ts` incident
+in its header), so it uses `git status --porcelain`, which reports **staged-vs-HEAD**
+changes as well. A correctly regenerated tree therefore keeps failing `cargo make check`
+after `git add` and only goes green once committed. The tell is a `M ` line — `M` in the
+first column, space in the second — in the gate's own output: that is "staged, worktree
+clean", i.e. the content is already right and the commit is what is missing.
+
+The three gates having three different git comparisons is not an inconsistency to tidy;
+each is the weakest form that still catches its artifact's failure mode. But it does mean
+"stage it and re-run check" is only two-thirds of the story.
 
 ## `generate-ts-types` writes TWO trees, and both are gated
 

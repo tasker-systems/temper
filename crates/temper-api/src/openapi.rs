@@ -308,8 +308,8 @@ mod tests {
         assert!(json.contains("/api/teams/{id}/invite"));
         assert!(json.contains("/api/teams/{id}/invitations"));
         assert!(json.contains("/api/invitations/mine"));
-        assert!(json.contains("/api/invitations/{token}/accept"));
-        assert!(json.contains("/api/invitations/{token}/decline"));
+        assert!(json.contains("/api/invitations/accept"));
+        assert!(json.contains("/api/invitations/decline"));
         assert!(json.contains("/api/resources/{id}/reassign"));
         assert!(json.contains("/api/teams/{id}/reassign"));
 
@@ -386,6 +386,75 @@ mod tests {
                 params.iter().any(|p| p.name == SURFACE_HEADER),
                 "{path} does not document {SURFACE_HEADER}",
             );
+        }
+    }
+
+    /// No invitation route carries a credential in its path.
+    ///
+    /// The invitation token is a bearer capability — 128 CSPRNG bits, seven days, and per
+    /// `invitation_service` *"the token IS the authority"*. It used to travel as a path segment
+    /// (`POST /api/invitations/{token}/accept`), which put it in access logs, proxy logs, `Referer`
+    /// headers, and — how it was found — an exported span attribute. It now travels in the request
+    /// body (`InvitationTokenRequest`).
+    ///
+    /// Keyed on the **bug**, not on a value shape: the invariant is that this route family takes no
+    /// path parameter at all, so a future `/api/invitations/{anything}` fails here whatever the
+    /// parameter is called. `temper_telemetry::redact` remains as defence in depth for the case where
+    /// a credential-bearing path is reintroduced somewhere this test does not reach.
+    ///
+    /// Asserted against the router-derived structure, not a substring: `{token}` appears inside
+    /// several doc-comment descriptions in the serialized document, so a `json.contains` check here
+    /// would be worse than nothing.
+    #[test]
+    fn no_invitation_route_carries_a_credential_in_its_path() {
+        use utoipa::openapi::path::ParameterIn;
+
+        let spec = crate::routes::openapi_spec();
+
+        let invitation_paths: Vec<&String> = spec
+            .paths
+            .paths
+            .keys()
+            .filter(|p| p.starts_with("/api/invitations/"))
+            .collect();
+        assert!(
+            !invitation_paths.is_empty(),
+            "no /api/invitations/ paths found — this guard would pass vacuously"
+        );
+
+        for path in invitation_paths {
+            assert!(
+                !path.contains('{'),
+                "{path} takes a path parameter; the invitation token is a bearer credential and \
+                 must ride in the request body, never in a URL path"
+            );
+
+            let item = &spec.paths.paths[path];
+            // `PathItem` exposes one field per verb rather than a map, so name them all: a verb
+            // omitted here would be a hole in the guard.
+            let operations = [
+                &item.get,
+                &item.put,
+                &item.post,
+                &item.delete,
+                &item.options,
+                &item.head,
+                &item.patch,
+                &item.trace,
+            ];
+            let path_params = item.parameters.iter().flatten();
+            let op_params = operations
+                .into_iter()
+                .flatten()
+                .filter_map(|op| op.parameters.as_ref())
+                .flatten();
+            for param in path_params.chain(op_params) {
+                assert!(
+                    param.parameter_in != ParameterIn::Path,
+                    "{path} documents path parameter `{}`; the invitation family must take none",
+                    param.name
+                );
+            }
         }
     }
 
