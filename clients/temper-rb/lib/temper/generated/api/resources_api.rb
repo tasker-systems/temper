@@ -463,6 +463,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List the finding at `{id}`'s citation-audit trail — one row per audit, each naming its auditor.
+    # The `GET` sibling of [`record`] on the same path, and the read that makes an audit ATTRIBUTABLE. `GET /api/resources/{id}/evidence` returns aggregates only (`citation_magnitude` / `audit_coverage` / `citation_quality` / `band`), so a finding pushed to `disputed` by one auditor and one pushed there by three are indistinguishable on that surface: the verdict is visible, the voter is not. This read is opt-in rather than more fields on `StandingShape` because the shape is fixed-width and recomputed live on every call, while a trail grows with every audit ever emitted.  **404 when the finding is not readable (or does not exist); `200 []` only when it IS readable and genuinely carries no audits.** That is deliberately not the collection default — the `/provenance` sibling answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety argument about the pair of endpoints, not about this handler: it lives in `temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s equivalent lives in `evidential_standing_service`.
+    # @param id [String] Resource ID (the finding whose audit trail is read)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<CitationAuditRow>]
+    def list_citation_audits(id, opts = {})
+      data, _status_code, _headers = list_citation_audits_with_http_info(id, opts)
+      data
+    end
+
+    # List the finding at &#x60;{id}&#x60;&#39;s citation-audit trail — one row per audit, each naming its auditor.
+    # The &#x60;GET&#x60; sibling of [&#x60;record&#x60;] on the same path, and the read that makes an audit ATTRIBUTABLE. &#x60;GET /api/resources/{id}/evidence&#x60; returns aggregates only (&#x60;citation_magnitude&#x60; / &#x60;audit_coverage&#x60; / &#x60;citation_quality&#x60; / &#x60;band&#x60;), so a finding pushed to &#x60;disputed&#x60; by one auditor and one pushed there by three are indistinguishable on that surface: the verdict is visible, the voter is not. This read is opt-in rather than more fields on &#x60;StandingShape&#x60; because the shape is fixed-width and recomputed live on every call, while a trail grows with every audit ever emitted.  **404 when the finding is not readable (or does not exist); &#x60;200 []&#x60; only when it IS readable and genuinely carries no audits.** That is deliberately not the collection default — the &#x60;/provenance&#x60; sibling answers &#x60;200 []&#x60; for an unreadable resource. Why this one refuses instead is a leak-safety argument about the pair of endpoints, not about this handler: it lives in &#x60;temper_services::services::citation_audit_service&#x60;&#39;s module doc, beside where &#x60;/evidence&#x60;&#39;s equivalent lives in &#x60;evidential_standing_service&#x60;.
+    # @param id [String] Resource ID (the finding whose audit trail is read)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(Array<CitationAuditRow>, Integer, Hash)>] Array<CitationAuditRow> data, response status code and response headers
+    def list_citation_audits_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: ResourcesApi.list_citation_audits ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling ResourcesApi.list_citation_audits"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/resources/{id}/citation-audits'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'Array<CitationAuditRow>'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"ResourcesApi.list_citation_audits",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: ResourcesApi#list_citation_audits\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

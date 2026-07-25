@@ -4567,6 +4567,66 @@
           }
         }
       ],
+      "get": {
+        "tags": [
+          "Resources"
+        ],
+        "summary": "List the finding at `{id}`'s citation-audit trail — one row per audit, each naming its auditor.",
+        "description": "The `GET` sibling of [`record`] on the same path, and the read that makes an audit\nATTRIBUTABLE. `GET /api/resources/{id}/evidence` returns aggregates only\n(`citation_magnitude` / `audit_coverage` / `citation_quality` / `band`), so a finding pushed to\n`disputed` by one auditor and one pushed there by three are indistinguishable on that surface:\nthe verdict is visible, the voter is not. This read is opt-in rather than more fields on\n`StandingShape` because the shape is fixed-width and recomputed live on every call, while a\ntrail grows with every audit ever emitted.\n\n**404 when the finding is not readable (or does not exist); `200 []` only when it IS readable and\ngenuinely carries no audits.** That is deliberately not the collection default — the `/provenance`\nsibling answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety\nargument about the pair of endpoints, not about this handler: it lives in\n`temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s\nequivalent lives in `evidential_standing_service`.",
+        "operationId": "list_citation_audits",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID (the finding whose audit trail is read)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The finding's citation audits, most recent first, each attributed to its auditor. Empty when the finding is readable but carries no audits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CitationAuditRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — the finding is unreadable or does not exist (deliberately indistinguishable, matching GET /evidence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "Resources"
@@ -7047,6 +7107,11 @@
           }
         }
       },
+      "BlockId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit."
+      },
       "BlockProvenanceRow": {
         "type": "object",
         "description": "One itemized block-provenance record — a single source's contribution to a resource's content\nblock, as returned by the `resource_block_provenance` SQL function in `(block_seq, accretion_seq)`\norder. `source_kind` is the DDL `provenance_source_kind` enum rendered as text (`\"resource\"` /\n`\"event\"`; `\"remote\"` arrives in T7c). Access-scoped in SQL — a principal who cannot read the\nresource gets an empty set, never an error. The shared read shape for the MCP `get_block_provenance`\ntool, the CLI `--provenance` view, and the HTTP provenance endpoint.",
@@ -7262,6 +7327,64 @@
             "type": "number",
             "format": "double",
             "description": "The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the\nconnection it makes, never a claim about what the source says (spec §3.3). Out-of-range is a\n400; the ledger column carries the same bound as a CHECK\n(`migrations/20260724000110_citation_audits.sql:28`)."
+          }
+        }
+      },
+      "CitationAuditRow": {
+        "type": "object",
+        "description": "One audit of one citation, with its auditor named — an element of the response to\n`GET /api/resources/{id}/citation-audits` (SQL `resource_citation_audit_trail`,\n`migrations/20260724000220`).\n\n**This is the attribution `StandingShape` collapses away.** `audit_coverage` and\n`citation_quality` are aggregates over exactly these rows, so a finding pushed to `disputed` by\none auditor and a finding pushed there by three read identically on the shape and differently\nhere. Spec §5.2: identity travels on the emitting event\n(`kb_events.emitter_entity_id → kb_entities.profile_id`), which Beat 1 materialized as\n`kb_citation_audits.audited_by_profile_id`; this row carries that profile plus the two\nhuman-readable columns of `kb_profiles` (`handle`, `display_name` — both `NOT NULL`), so a\ncaller never has to make a second round trip to name a voter.\n\nAll fields are non-nullable except `reason`, which is nullable on the ledger. The access gate is\nINSIDE the SQL, so an unreadable finding produces no rows at all rather than a redacted one.",
+        "required": [
+          "audit_id",
+          "block_id",
+          "source_id",
+          "value",
+          "created",
+          "auditor_profile_id",
+          "auditor_handle",
+          "auditor_display_name"
+        ],
+        "properties": {
+          "audit_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "`kb_citation_audits.id` — the same id `POST /api/resources/{id}/citation-audits` returns\n(`handlers::citation_audits::record` → `Json<Uuid>`), which is why it is a bare `Uuid` here\nand not a newtype. A **masked surrogate**: the replay-stable identity of an audit is its\n`audited_by_event_id`, so this addresses the row in this response, not across a replay."
+          },
+          "auditor_display_name": {
+            "type": "string",
+            "description": "The auditor's `kb_profiles.display_name`."
+          },
+          "auditor_handle": {
+            "type": "string",
+            "description": "The auditor's unique `kb_profiles.handle`."
+          },
+          "auditor_profile_id": {
+            "$ref": "#/components/schemas/ProfileId",
+            "description": "The auditor's profile. **Not the citer** — the self-audit denial arm exists precisely so the\ntwo cannot be the same profile for a given citation."
+          },
+          "block_id": {
+            "$ref": "#/components/schemas/BlockId",
+            "description": "The audited citation's block. Carried alongside `source_id` because a citation IS the\n`(block, source)` pair — one source cited by two of the finding's blocks is two citations,\nseparately auditable."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the audit was emitted, stamped from the owning event's `occurred_at` (never `now()`).\nLoad-bearing, not decoration: `resource_citation_quality` weights each audit by\n`pow(0.5, age/30d)`, so this is the row's weight in the number the shape read returned."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The auditor's free-text rationale, if it gave one."
+          },
+          "source_id": {
+            "$ref": "#/components/schemas/ResourceId",
+            "description": "The audited citation's cited source. Always resource-kind — only resource-kind citations are\nauditable (the `citation_audit` write path rejects every other kind), so no `source_kind`\ndiscriminator is carried."
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "The auditor's signed verdict in `[-1.0, 1.0]`: how much defensibility this citation confers\nfor the connection it makes (spec §3.3), never a claim about what the source says."
           }
         }
       },

@@ -481,6 +481,529 @@ async fn citation_audit_rejects_a_corrected_citation(pool: sqlx::PgPool) {
     );
 }
 
+// ── Beat 1 — audited_by_profile_id, the per-auditor collapse's grouping key ─────────────────────
+
+/// A SECOND, foreign auditor: its own `kb_profiles` row and its own `kb_entities` row.
+///
+/// Entity spelling copied from the established fixture idiom in this suite
+/// (`charter_set_writes.rs:29`, `content_multichunk.rs:26`, `cogmap_genesis_charter.rs:29`:
+/// `INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, …, '{}'::jsonb)`).
+///
+/// `_event_append` applies NO gate to `p_emitter` beyond the FK
+/// (`20260624000002_canonical_functions.sql:765-787`), and the self-audit denial arm lives in
+/// `temper-services`' `AuditAuthority`, not in SQL — so at this layer any real entity can emit an
+/// audit. That is what lets this test put two different principals on one citation, which is the
+/// only way to falsify the attribution.
+async fn make_auditor(pool: &sqlx::PgPool, handle: &str) -> (ProfileId, EntityId) {
+    let profile = common::insert_profile(pool, handle).await;
+    let entity: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_entities (profile_id, name, metadata) \
+         VALUES ($1, 'auditor', '{}'::jsonb) RETURNING id",
+    )
+    .bind(profile)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (ProfileId::from(profile), EntityId::from(entity))
+}
+
+/// The profile a given audit row is attributed to.
+async fn attributed_profile(pool: &sqlx::PgPool, audit: Uuid) -> Uuid {
+    sqlx::query_scalar("SELECT audited_by_profile_id FROM kb_citation_audits WHERE id=$1")
+        .bind(audit)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// LOAD-BEARING: falsifies "the projector attributes every audit to the same profile."
+///
+/// `audited_by_profile_id` exists so the next migration can collapse a citation's audits *within an
+/// auditor* before averaging across sources — the echo/actor-count fallacy
+/// (`20260724000120_standing_citation_components.sql:154-224`) re-entering on the auditor axis. That
+/// collapse is only as good as the grouping key, and a key that is constant per finding silently
+/// merges every auditor into one, which is the exact opposite of what it is for.
+///
+/// TWO AUDITS OF ONE CITATION FROM TWO DIFFERENT PRINCIPALS is the minimum shape that bites. A
+/// single-auditor test cannot: in the fixtures of this file the resource owner, the originator and
+/// the emitter are ALL the `system` profile, so a projector that read `audited_by_profile_id` off
+/// the finding's owner, off the source's owner, or off any other single-profile path would pass it.
+/// The foreign auditor breaks that degeneracy — for its row the emitter's profile is the ONLY
+/// profile in the fixture that is not `system`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_projector_attributes_each_audit_to_its_own_emitters_profile(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, system_emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "ca-attrib").await;
+    let finding = make_resource(
+        &pool,
+        owner,
+        system_emitter,
+        home,
+        "finding",
+        "temper://ca/attrib-finding",
+    )
+    .await;
+    let source = make_resource(
+        &pool,
+        owner,
+        system_emitter,
+        home,
+        "source",
+        "temper://ca/attrib-source",
+    )
+    .await;
+    let block = first_block(&pool, finding).await;
+    cite(&pool, block, source.uuid()).await;
+
+    let (auditor_profile, auditor_emitter) = make_auditor(&pool, "adversary").await;
+
+    // The SAME citation, audited by two different principals — the shape the per-auditor collapse
+    // has to be able to tell apart. Opposite-signed, mirroring
+    // `two_audits_of_one_citation_both_persist`, so neither row can be mistaken for the other by
+    // value either.
+    let audit_system = fire_audit(&pool, system_emitter, block, source.uuid(), 0.6)
+        .await
+        .unwrap();
+    let audit_foreign = fire_audit(&pool, auditor_emitter, block, source.uuid(), -0.4)
+        .await
+        .unwrap();
+
+    let by_system = attributed_profile(&pool, audit_system).await;
+    let by_foreign = attributed_profile(&pool, audit_foreign).await;
+
+    assert_eq!(
+        by_system,
+        owner.uuid(),
+        "the system-emitted audit must be attributed to the system profile"
+    );
+    // THE HALF THAT BITES. `auditor_profile` is the only non-`system` profile in this fixture, so
+    // this equality cannot be satisfied by the finding's owner, the source's owner, the originator,
+    // or any constant — only by the emitting event's own entity.
+    assert_eq!(
+        by_foreign,
+        auditor_profile.uuid(),
+        "the foreign auditor's audit must be attributed to THAT auditor, not to the finding's owner"
+    );
+    assert_ne!(
+        by_system, by_foreign,
+        "two auditors of one citation must not collapse to a single profile — that collapse is \
+         precisely what the column exists to prevent"
+    );
+
+    // Stated once more as the TOTAL invariant rather than as two point checks, so a projector that
+    // got these two rows right by coincidence and any future row wrong still fails here.
+    let mismatched: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_citation_audits a \
+           JOIN kb_events   e  ON e.id  = a.audited_by_event_id \
+           JOIN kb_entities en ON en.id = e.emitter_entity_id \
+          WHERE a.audited_by_profile_id <> en.profile_id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        mismatched, 0,
+        "every audit's audited_by_profile_id must equal its owning event's emitter's profile"
+    );
+}
+
+// ── Beat 2 — the per-auditor collapse in resource_citation_quality ──────────────────────────────
+//
+// `migrations/20260724000210_citation_quality_per_auditor.sql` replaces the shipped TWO-stage
+// aggregate (`20260724000120_standing_citation_components.sql:201-224`) with THREE stages: collapse
+// within an AUDITOR, then across auditors weighted by each auditor's freshest-audit weight, then the
+// plain mean across distinct audited sources.
+//
+// These tests live here rather than in `evidential_standing.rs` because the axis under test is the
+// AUDITOR, and this file is where a second principal exists: every fixture in `evidential_standing.rs`
+// emits as the one `system` entity, so a per-auditor collapse is invisible there by construction. The
+// `make_auditor` fixture above (Beat 1) is what makes these shapes expressible at all.
+
+/// The finding's live `citation_quality`. Read straight off the SQL producer rather than through
+/// `resource_standing_shape`: the access gate is not what these tests are about and
+/// `evidential_standing.rs::standing_shape_returns_none_for_an_unreadable_finding` already covers it.
+async fn citation_quality(pool: &sqlx::PgPool, finding: ResourceId) -> f64 {
+    sqlx::query_scalar("SELECT resource_citation_quality($1)")
+        .bind(finding.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn audit_coverage(pool: &sqlx::PgPool, finding: ResourceId) -> i32 {
+    sqlx::query_scalar("SELECT resource_audit_coverage($1)")
+        .bind(finding.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Back-date one audit's decay clock — the only way to exercise decay without sleeping.
+///
+/// It is the AUDIT's `created` that moves, never the owning event's `occurred_at`:
+/// `kb_citation_audits` carries no append-only trigger (the trigger `kb_events_append_only` is on
+/// `kb_events`, `20260624000001_canonical_schema.sql:504-506`, and rejects every UPDATE), so ageing
+/// the event would simply fail. Same idiom as `evidential_standing.rs:899`.
+async fn age_audit(pool: &sqlx::PgPool, audit: Uuid, age: &str) {
+    sqlx::query("UPDATE kb_citation_audits SET created = now() - $2::interval WHERE id = $1")
+        .bind(audit)
+        .bind(age)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A finding citing one source, ready to audit: returns `(finding, source, block)`.
+async fn one_citation(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    home: ContextId,
+    slug: &str,
+) -> (ResourceId, ResourceId, Uuid) {
+    let finding = make_resource(
+        pool,
+        owner,
+        emitter,
+        home,
+        &format!("{slug}-finding"),
+        &format!("temper://pa/{slug}-finding"),
+    )
+    .await;
+    let source = make_resource(
+        pool,
+        owner,
+        emitter,
+        home,
+        &format!("{slug}-source"),
+        &format!("temper://pa/{slug}-source"),
+    )
+    .await;
+    let block = first_block(pool, finding).await;
+    cite(pool, block, source.uuid()).await;
+    (finding, source, block)
+}
+
+/// Every near-zero / equality assertion below uses `1e-4`, not an exact compare, and the slack is
+/// principled rather than nervous: the decay clock is CONTINUOUS, so two audits fired microseconds
+/// apart do not carry byte-identical weights. Ten audits landing over even a full second differ by
+/// ~3e-7 in weight (30-day half-life), so the residual is ~1e-7. `1e-4` is four orders of magnitude
+/// clear of that and four orders clear of the `-0.818182` this beat exists to eliminate — it can only
+/// be exceeded by an aggregation change, never by test-runner latency.
+const NEAR_ZERO: f64 = 1e-4;
+
+/// LOAD-BEARING. **Volume no longer wins.** One griefer emits TEN `-1.0` audits of a citation; one
+/// honest auditor emits a single `+1.0`. The aggregate must read what a plain 1-vs-1 disagreement
+/// reads — because that is what it IS: two principals disagreed.
+///
+/// THIS FALSIFIES THE SHIPPED FUNCTION, not merely a hypothetical one. The two-stage aggregate groups
+/// by `source_id` alone (`20260724000120_standing_citation_components.sql:218-222`), so all eleven
+/// audits land in one weighted mean and it reads **-0.818182** — measured, not estimated, by running
+/// both bodies side by side against this exact fixture. `-0.818182` is `disputed` under the band gate
+/// (`:312-314`). The 1-vs-1 baseline reads `0.0`. So the equality assertion below is a difference of
+/// **0.818** under the old body: it cannot pass by accident.
+///
+/// Both shapes are built IN THIS TEST rather than the baseline being hard-coded, so the assertion is
+/// "volume changed nothing" — a claim about the function — instead of "the number is 0.0", a claim
+/// about a constant that a future re-tune would falsify for the wrong reason.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn one_auditors_volume_no_longer_outweighs_a_single_dissenter(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, honest) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "pa-volume").await;
+    let (_griefer_profile, griefer) = make_auditor(&pool, "pa-volume-griefer").await;
+
+    // Shape 1 — the attack: ten `-1.0` from ONE principal, one `+1.0` from another.
+    let (loud, loud_src, loud_block) = one_citation(&pool, owner, honest, home, "loud").await;
+    for _ in 0..10 {
+        fire_audit(&pool, griefer, loud_block, loud_src.uuid(), -1.0)
+            .await
+            .unwrap();
+    }
+    fire_audit(&pool, honest, loud_block, loud_src.uuid(), 1.0)
+        .await
+        .unwrap();
+
+    // Shape 2 — the honest baseline, identical in every respect but the griefer's persistence.
+    let (quiet, quiet_src, quiet_block) = one_citation(&pool, owner, honest, home, "quiet").await;
+    fire_audit(&pool, griefer, quiet_block, quiet_src.uuid(), -1.0)
+        .await
+        .unwrap();
+    fire_audit(&pool, honest, quiet_block, quiet_src.uuid(), 1.0)
+        .await
+        .unwrap();
+
+    let loud_q = citation_quality(&pool, loud).await;
+    let quiet_q = citation_quality(&pool, quiet).await;
+
+    assert!(
+        quiet_q.abs() < NEAR_ZERO,
+        "precondition: one +1.0 against one -1.0 cancels to ~0.0 (got {quiet_q})"
+    );
+    assert!(
+        (loud_q - quiet_q).abs() < NEAR_ZERO,
+        "ten audits from one principal must weigh exactly what one does: 1-vs-1 read {quiet_q}, \
+         10-vs-1 read {loud_q}. Under the shipped two-stage function 10-vs-1 read -0.818182 — \
+         nine extra POSTs bought most of the way to the floor of the scale."
+    );
+    assert!(
+        loud_q > -0.5,
+        "stated once more as the direct falsification of the two-stage body, which produced \
+         -0.818182 (band 'disputed') for this exact fixture: got {loud_q}"
+    );
+
+    // The LEDGER is untouched by any of this — the collapse changes influence, never history
+    // (spec §4.1; `two_audits_of_one_citation_both_persist` above pins the two-row case).
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE block_id=$1")
+        .bind(loud_block)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, 11,
+        "all eleven audits persist: the per-auditor collapse is a READ-time aggregation, not a \
+         write-time deduplication"
+    );
+}
+
+/// LOAD-BEARING. **Repeated agreement, spread across the decay window, still counts once.** One
+/// auditor posts `+1.0` on the SAME citation five times — today and at 15, 30, 45 and 60 days — and a
+/// second principal posts a single `-1.0` today. One principal, one vote: the two verdicts cancel.
+///
+/// THIS IS THE LARGEST BEHAVIORAL DELTA THE BEAT SHIPS, and it is measured rather than estimated.
+/// Under the shipped two-stage aggregate all six audits land in ONE weighted mean grouped by
+/// `source_id` alone (`20260724000120_standing_citation_components.sql:218-222`), so the five `+1.0`s
+/// carry `1 + 0.7071 + 0.5 + 0.3536 + 0.25 = 2.8107` of weight against the dissenter's `1.0` and it
+/// reads **0.475157** — `reinforced` under the band gate (`:280-284`: magnitude 1, coverage 1,
+/// quality > 0.0). Three-staged it reads **0.000000**, which is `disputed` (`:312-314`). The
+/// assertion below is a difference of 0.475 AND a band flip: it cannot pass against the old body.
+///
+/// Distinct from `one_auditors_volume_no_longer_outweighs_a_single_dissenter` above, whose repeats
+/// all land at once and therefore carry near-identical weights — a collapse that merely deduplicated
+/// by count would satisfy that one. STAGGERING the repeats over two half-lives is what makes this a
+/// test of the WEIGHTED within-auditor collapse: the five weights differ 4x end to end, and stage 1
+/// still has to arrive at exactly `+1.0`, because every one of them says `+1.0`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn repeated_agreement_across_the_decay_window_still_counts_once(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, system_emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "pa-repeat").await;
+    let (_pr, repeater) = make_auditor(&pool, "pa-repeat-repeater").await;
+    let (_pd, dissenter) = make_auditor(&pool, "pa-repeat-dissenter").await;
+
+    let (finding, source, block) = one_citation(&pool, owner, system_emitter, home, "repeat").await;
+
+    // ONE principal, five `+1.0`s, staggered across the decay window. Ageing moves the AUDIT's
+    // `created` (never the owning event's `occurred_at` — `kb_events` is append-only); see
+    // `age_audit`.
+    for days in [0, 15, 30, 45, 60] {
+        let audit = fire_audit(&pool, repeater, block, source.uuid(), 1.0)
+            .await
+            .unwrap();
+        if days > 0 {
+            age_audit(&pool, audit, &format!("{days} days")).await;
+        }
+    }
+    // A DIFFERENT principal, one `-1.0`, today.
+    fire_audit(&pool, dissenter, block, source.uuid(), -1.0)
+        .await
+        .unwrap();
+
+    let q = citation_quality(&pool, finding).await;
+    assert!(
+        q.abs() < NEAR_ZERO,
+        "five `+1.0`s from one principal weigh exactly what one weighs, so the lone fresh `-1.0` \
+         cancels them: got {q}. The shipped two-stage body read 0.475157 for this exact fixture — \
+         `reinforced` instead of `disputed`, bought by re-posting the same verdict four more times."
+    );
+
+    // Coverage is untouched: it asks *"did anyone look?"*, not *"how many times?"* — one distinct
+    // source, evaluated, however many audits it carries.
+    assert_eq!(
+        audit_coverage(&pool, finding).await,
+        1,
+        "one covered source, before and after the collapse"
+    );
+
+    // And the ledger keeps every row: the collapse is a READ-time aggregation, never a write-time
+    // deduplication (spec §4.1 — no supersession, nothing erased).
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE block_id=$1")
+        .bind(block)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 6, "all six audits persist");
+}
+
+/// LOAD-BEARING. **Retraction.** With no supersession and no `is_superseded` column
+/// (`20260724000110_citation_audits.sql:12-17`), the ONLY way an auditor changes its mind is to
+/// append a new verdict — so the within-auditor collapse has to be decay-weighted, or "I was wrong"
+/// is inexpressible and an auditor is bound to its first impression forever.
+///
+/// THE BITE IS AGAINST THE NEW CODE, and it is the obvious wrong simplification of it: write stage 1
+/// as a plain `avg(value)` per (source, auditor) — which "collapses one auditor to one vote" just as
+/// truthfully — and this fixture reads **0.0**, because `-1.0` and `+1.0` average out however old the
+/// first one is. Only `sum(w*value)/sum(w)` gets it right.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_auditors_later_verdict_dominates_its_own_earlier_one(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, system_emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "pa-retract").await;
+    let (_p, auditor) = make_auditor(&pool, "pa-retract-auditor").await;
+
+    let (finding, source, block) =
+        one_citation(&pool, owner, system_emitter, home, "retract").await;
+
+    // The SAME principal, twice, opposite-signed — a retraction, not a disagreement.
+    let first = fire_audit(&pool, auditor, block, source.uuid(), -1.0)
+        .await
+        .unwrap();
+    age_audit(&pool, first, "365 days").await;
+    fire_audit(&pool, auditor, block, source.uuid(), 1.0)
+        .await
+        .unwrap();
+
+    let q = citation_quality(&pool, finding).await;
+    assert!(
+        q > 0.9,
+        "a year-old -1.0 has faded to ~2e-4 of today's +1.0 weight (30-day half-life), so the \
+         auditor's current position is what shows: got {q}. A plain avg() at the within-auditor \
+         stage reads 0.0 here."
+    );
+
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE block_id=$1")
+        .bind(block)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, 2,
+        "the retracted verdict is still a permanent row — changing your mind is an append"
+    );
+}
+
+/// LOAD-BEARING. **Cross-auditor recency still arbitrates**, and this is the test that defends the
+/// one genuinely contestable judgment in the migration: stage 2 is a mean WEIGHTED by each auditor's
+/// freshest-audit weight, not a plain mean.
+///
+/// The shipped header states the invariant — *"decay only arbitrates BETWEEN competing audits"*
+/// (`20260724000120_standing_citation_components.sql:177`). Two auditors disagreeing about one source
+/// are the textbook competing audits. A plain `avg(auditor_value)` at stage 2 reads **0.0** here: a
+/// verdict from last year counting equally with a verdict from today.
+///
+/// And it would be a REGRESSION, which is what makes this test non-negotiable rather than a
+/// preference: the shipped TWO-stage function gets this case right (`-0.999565`, measured), because
+/// with one audit each the flat weighted mean already arbitrates by recency. A per-auditor collapse
+/// that dropped the weighting would fix the volume attack by breaking a guarantee that already
+/// worked — trading one defect for another and calling it a repair.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_stale_verdict_does_not_outweigh_a_fresh_one_from_another_auditor(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, system_emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "pa-recency").await;
+    let (_px, stale_auditor) = make_auditor(&pool, "pa-recency-stale").await;
+    let (_py, fresh_auditor) = make_auditor(&pool, "pa-recency-fresh").await;
+
+    let (finding, source, block) =
+        one_citation(&pool, owner, system_emitter, home, "recency").await;
+
+    // ONE audit each — so the per-auditor stage collapses nothing, and the ONLY thing that can
+    // separate these two verdicts is their age.
+    let stale = fire_audit(&pool, stale_auditor, block, source.uuid(), 1.0)
+        .await
+        .unwrap();
+    age_audit(&pool, stale, "365 days").await;
+    fire_audit(&pool, fresh_auditor, block, source.uuid(), -1.0)
+        .await
+        .unwrap();
+
+    let q = citation_quality(&pool, finding).await;
+    assert!(
+        q < -0.9,
+        "today's -1.0 must dominate last year's +1.0 across auditors as it does within one: got \
+         {q}. A PLAIN mean at the across-auditor stage reads exactly 0.0 here, and the shipped \
+         two-stage function read -0.999565 — so 0.0 is a regression, not a simplification."
+    );
+}
+
+/// **An all-decayed source drops OUT of the mean rather than becoming `0.0`** — the shipped
+/// null-handling (`20260724000120_standing_citation_components.sql:179-183`: *"it was evaluated, but
+/// the verdict no longer carries numeric weight"*), preserved across the extra stage.
+///
+/// PRESERVATION, NOT FALSIFICATION — and the label matters, because the two siblings above are the
+/// other kind. The shipped TWO-stage body reads **1.000000** on this identical fixture (measured):
+/// its single `nullif(sum(w), 0)` already drops an all-decayed source, so there is no old-body
+/// number here to falsify. Like `an_auditors_later_verdict_dominates_its_own_earlier_one` above, the
+/// bite is against a mutation of the NEW code:
+///   * stage 1's `nullif` removed — every weight in the group is `0`, so `sum(w*value)/0` is
+///     `0.0/0`, which RAISES `division by zero` in a READ path;
+///   * `coalesce(auditor_value, 0.0)` anywhere in the collapse — the decayed source votes as a
+///     neutral verdict instead of dropping out, and the fixture reads `0.5`.
+/// Stage 2's `nullif` is NOT what this fixture pins: a NULL `auditor_value` implies that auditor's
+/// `max(w)` is `0` (the header's equivalence), and `NULL / 0` is NULL rather than an error because
+/// division is strict — so the source drops out through the NULL numerator whether or not the second
+/// guard is there. That guard states the invariant; this test does not falsify its removal.
+///
+/// Two auditors on the decayed source, not one, so the NULL arrives through the per-auditor grouping
+/// and not merely through a single degenerate group.
+///
+/// The age is 500 years, not the ~88 the shipped header cites. That is measured, not arbitrary:
+/// `pow(0.5, …)` here is NUMERIC, so it does not underflow to a float zero — it reaches exactly `0`
+/// only around 5000 half-lives (~410 years), and in the band between them the numeric→`double
+/// precision` cast RAISES `out of range` instead. That gap is an incumbent property of the shipped
+/// `weighted` CTE, which this beat carries over verbatim and does not address.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_source_whose_every_auditor_decayed_drops_out_of_the_mean(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, system_emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "pa-decayed").await;
+    let (_pa, auditor_a) = make_auditor(&pool, "pa-decayed-a").await;
+    let (_pb, auditor_b) = make_auditor(&pool, "pa-decayed-b").await;
+
+    let (finding, decayed_src, block) =
+        one_citation(&pool, owner, system_emitter, home, "decayed").await;
+    let fresh_src = make_resource(
+        &pool,
+        owner,
+        system_emitter,
+        home,
+        "decayed-fresh-source",
+        "temper://pa/decayed-fresh-source",
+    )
+    .await;
+    cite(&pool, block, fresh_src.uuid()).await;
+
+    for emitter in [auditor_a, auditor_b] {
+        let old = fire_audit(&pool, emitter, block, decayed_src.uuid(), -1.0)
+            .await
+            .unwrap();
+        age_audit(&pool, old, "500 years").await;
+    }
+    fire_audit(&pool, auditor_a, block, fresh_src.uuid(), 1.0)
+        .await
+        .unwrap();
+
+    let q = citation_quality(&pool, finding).await;
+    assert!(
+        (q - 1.0).abs() < 1e-9,
+        "the fully-decayed source must drop out of the mean, leaving the fresh +1.0 alone. \
+         Counting it as a neutral 0.0 reads 0.5; counting its weight in the denominator reads \
+         something between. Got {q}"
+    );
+
+    // The other half of the shipped reading, and the reason dropping out is honest rather than
+    // lossy: the source is STILL COVERED. Someone did look; the verdict simply no longer carries
+    // numeric weight (`20260724000120:181-183`). The mean's denominator is therefore not
+    // `audit_coverage`, and that gap is recorded there, not fixed here.
+    assert_eq!(
+        audit_coverage(&pool, finding).await,
+        2,
+        "a decayed verdict still counts as coverage — decay changes weight, never whether it \
+         happened"
+    );
+}
+
 // ── Task 2 — the Rust write path (writes::record_citation_audit[_with]) ─────────────────────────
 
 /// LOAD-BEARING: falsifies "the Rust write path never reaches `_project_citation_audited`" — the

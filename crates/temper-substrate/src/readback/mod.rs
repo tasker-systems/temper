@@ -29,7 +29,9 @@ use sqlx::{PgPool, Row};
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
-use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId};
+use crate::ids::{
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId,
+};
 use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
@@ -975,6 +977,97 @@ pub async fn resource_standing(
         r_parent: r.get("r_parent"),
         band: r.get("band"),
     }))
+}
+
+/// One citation audit of a finding, with its auditor's identity joined in — as returned by
+/// `resource_citation_audit_trail` (Set 5 per-auditor collapse, migration `20260724000220`).
+/// Substrate-local, the same split [`StandingShapeRow`] above uses: this struct is the DB read's
+/// shape, and `CitationAuditRow` (`temper_core::types::citation_audit`) is the API contract — serde
+/// field names, utoipa/ts-rs derives, the JSON a client parses. The `temper-services` wrapper maps
+/// one to the other. NOT a dependency constraint: `temper-substrate` does depend on `temper-core`
+/// (`crates/temper-substrate/Cargo.toml:23`) and re-exports its id newtypes (`crate::ids`). Keeping
+/// the two apart is what lets the wire contract change without the readback changing with it.
+///
+/// This is the ATTRIBUTION that [`StandingShapeRow`]'s scalars collapse away: `audit_coverage` and
+/// `citation_quality` are aggregates over exactly these rows, so two auditors disagreeing about one
+/// citation reach the shape read as a single blended number and reach this read as two rows with two
+/// different `auditor_profile_id`s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CitationAuditRecord {
+    /// `kb_citation_audits.id`. A masked surrogate — the replay-stable identity of an audit is its
+    /// `audited_by_event_id` (`20260724000110_citation_audits.sql:32-34`), so treat this as an
+    /// addressing handle for this response only, never as a durable key.
+    pub audit_id: Uuid,
+    /// The audited citation's block. A citation is a `(block, source)` pair, so both halves are
+    /// carried — a source cited by two of the finding's blocks is two auditable citations.
+    pub block_id: BlockId,
+    /// The audited citation's cited source. Always resource-kind: only resource-kind citations are
+    /// auditable (`20260724000110_citation_audits.sql`, the `citation_audit` kind guard), which is
+    /// why no `source_kind` is carried.
+    pub source_id: ResourceId,
+    /// The auditor's signed verdict in `[-1.0, 1.0]` (CHECK-constrained on the ledger column).
+    pub value: f64,
+    /// The auditor's optional free-text rationale.
+    pub reason: Option<String>,
+    /// When the audit was emitted — `kb_citation_audits.created`, which the projector stamps from
+    /// the OWNING EVENT's `occurred_at`, never `now()`. It is the age the decay weight in
+    /// `resource_citation_quality` is computed from, so it is the row's weight, not decoration.
+    pub created: DateTime<Utc>,
+    /// The auditor: `kb_citation_audits.audited_by_profile_id` (Beat 1). NOT the citer — the
+    /// self-audit rule is precisely that the two must differ.
+    pub auditor_profile_id: ProfileId,
+    /// The auditor's `kb_profiles.handle` (unique, `NOT NULL`).
+    pub auditor_handle: String,
+    /// The auditor's `kb_profiles.display_name` (`NOT NULL`).
+    pub auditor_display_name: String,
+}
+
+/// Access-gated read of a finding's citation-audit trail (SQL `resource_citation_audit_trail`). The
+/// gate is INSIDE the SQL — the same `gated` CTE over `resources_readable_by` that
+/// [`resource_standing`] runs, carried over byte-for-byte — so an unreadable finding yields ZERO
+/// rows, never an error.
+///
+/// **An empty `Vec` here is three-way ambiguous by construction**: unreadable, absent, or readable
+/// with no audits. That is deliberate at this layer (it is what makes the read leak-safe); a caller
+/// that must tell those apart asks the readability question separately via
+/// [`is_resource_visible`] — the Rust-callable spelling of the same predicate — rather than reading
+/// a discriminator out of this function. `temper-services`' `citation_audit_service` does exactly
+/// that.
+///
+/// Rows are the audits the standing axes actually summed (joined through `resource_live_citations`
+/// on the full citation key), most recent first.
+///
+/// Runtime `sqlx::query` (NOT the `query!` macro) — the SQL is unqualified and self-gating; see the
+/// module-level note. Read-only.
+pub async fn citation_audit_trail(
+    pool: &PgPool,
+    principal: ProfileId,
+    finding: ResourceId,
+) -> Result<Vec<CitationAuditRecord>> {
+    let rows = sqlx::query(
+        "SELECT audit_id, block_id, source_id, value, reason, created,
+                auditor_profile_id, auditor_handle, auditor_display_name
+           FROM resource_citation_audit_trail($1, 'profile', $2)",
+    )
+    .bind(finding)
+    .bind(principal)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| CitationAuditRecord {
+            audit_id: r.get("audit_id"),
+            block_id: r.get("block_id"),
+            source_id: r.get("source_id"),
+            value: r.get("value"),
+            reason: r.get("reason"),
+            created: r.get("created"),
+            auditor_profile_id: r.get("auditor_profile_id"),
+            auditor_handle: r.get("auditor_handle"),
+            auditor_display_name: r.get("auditor_display_name"),
+        })
+        .collect())
 }
 
 /// One act folded under an invocation envelope's show projection: a `kb_events` row stamped with this
