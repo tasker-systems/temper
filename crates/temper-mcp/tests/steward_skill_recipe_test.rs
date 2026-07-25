@@ -136,7 +136,7 @@ fn call_sites(doc: &str) -> Vec<(String, String)> {
             .collect();
         let open = after + name.len();
         idx = open.max(start + 1);
-        if doc[open..].chars().next() != Some('(') {
+        if !doc[open..].starts_with('(') {
             continue; // prose mention, not a call
         }
         let open_char = doc[..open].chars().count();
