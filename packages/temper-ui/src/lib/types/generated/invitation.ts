@@ -2,7 +2,7 @@
 import type { TeamRole } from "./team";
 
 /**
- * Response from `POST /api/invitations/{token}/accept` — the team the caller
+ * Response from `POST /api/invitations/accept` — the team the caller
  * just joined and at what role.
  */
 export type AcceptInvitationResponse = { team_id: string, team_slug: string, role: TeamRole, };
@@ -23,6 +23,28 @@ export type CreateInvitationRequest = { invited_email: string, role: TeamRole, }
 export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
 
 /**
+ * Request body for `POST /api/invitations/accept` and
+ * `POST /api/invitations/decline`.
+ *
+ * ## Why the token is a body field and not a path segment
+ *
+ * The token is a **bearer capability** — `invitation_service` mints 128 CSPRNG
+ * bits and the authority to join the team *is* the token, for seven days. A URL
+ * path is the least private part of a request: intermediaries log it as a matter
+ * of course, it rides in `Referer` headers, it lands in browser history, and it
+ * is recorded as a span attribute that leaves the building on export. A request
+ * body goes to none of those places.
+ *
+ * ## One type for both routes
+ *
+ * Accept and decline differ in what they *do*, and that difference is carried by
+ * the route and the verb. What the body means is identical in both — "which
+ * invitation, named by the capability token that authorizes acting on it" — so
+ * this is one intent written once, not two shapes that happen to match.
+ */
+export type InvitationTokenRequest = { token: string, };
+
+/**
  * A pending invitation resolved to the *invitee's* view — the `TeamInvitation`
  * fields plus the team's slug/name for display. Returned by
  * `GET /api/invitations/mine`; the caller is authorized to redeem these, so the
@@ -33,10 +55,18 @@ export type InviteeInvitation = { id: string, team_id: string, team_slug: string
 /**
  * A pending or resolved invitation to join a team.
  *
- * Primary flow is link-based: invite generates a token-bearing URL,
- * recipient clicks, authenticates, profile auto-created if needed,
- * joins team. CLI commands: `temper team invite`, `temper team join`,
- * `temper team request-join`.
+ * **The flow is not link-based, and never has been.** `invited_email` is a
+ * *correlator*, matched at sign-in — nothing mails a token-bearing URL, and no
+ * UI route redeems one. The invitee authenticates, reads their own pending
+ * invitations from `GET /api/invitations/mine` (which returns `token`, since it
+ * is legitimately theirs), and redeems it through `POST /api/invitations/accept`
+ * with the token in the **request body**. CLI: `temper team invite`,
+ * `temper team join`, `temper team request-join`.
+ *
+ * This comment previously described the link-based flow as the primary one. It
+ * was aspirational, it was load-bearing in the wrong direction — it is what made
+ * a reviewer believe retiring the old token-in-path route had to account for
+ * invitation URLs sitting in inboxes — and there are none.
  *
  * Constraints:
  * - `role` cannot be `Owner` — ownership is only transferred, never invited

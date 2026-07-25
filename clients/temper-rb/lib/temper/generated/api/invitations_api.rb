@@ -19,33 +19,33 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # @param token [String] Invitation token
+    # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [AcceptInvitationResponse]
-    def accept(token, opts = {})
-      data, _status_code, _headers = accept_with_http_info(token, opts)
+    def accept(invitation_token_request, opts = {})
+      data, _status_code, _headers = accept_with_http_info(invitation_token_request, opts)
       data
     end
 
-    # @param token [String] Invitation token
+    # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(AcceptInvitationResponse, Integer, Hash)>] AcceptInvitationResponse data, response status code and response headers
-    def accept_with_http_info(token, opts = {})
+    def accept_with_http_info(invitation_token_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: InvitationsApi.accept ...'
       end
-      # verify the required parameter 'token' is set
-      if @api_client.config.client_side_validation && token.nil?
-        fail ArgumentError, "Missing the required parameter 'token' when calling InvitationsApi.accept"
+      # verify the required parameter 'invitation_token_request' is set
+      if @api_client.config.client_side_validation && invitation_token_request.nil?
+        fail ArgumentError, "Missing the required parameter 'invitation_token_request' when calling InvitationsApi.accept"
       end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/invitations/{token}/accept'.sub('{token}', CGI.escape(token.to_s))
+      local_var_path = '/api/invitations/accept'
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -54,13 +54,18 @@ module Temper::Generated
       header_params = opts[:header_params] || {}
       # HTTP header 'Accept' (if needed)
       header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
       header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
 
       # form parameters
       form_params = opts[:form_params] || {}
 
       # http body (model)
-      post_body = opts[:debug_body]
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(invitation_token_request)
 
       # return_type
       return_type = opts[:debug_return_type] || 'AcceptInvitationResponse'
@@ -162,46 +167,51 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # @param token [String] Invitation token
+    # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [nil]
-    def decline(token, opts = {})
-      decline_with_http_info(token, opts)
+    def decline(invitation_token_request, opts = {})
+      decline_with_http_info(invitation_token_request, opts)
       nil
     end
 
-    # @param token [String] Invitation token
+    # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
-    def decline_with_http_info(token, opts = {})
+    def decline_with_http_info(invitation_token_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: InvitationsApi.decline ...'
       end
-      # verify the required parameter 'token' is set
-      if @api_client.config.client_side_validation && token.nil?
-        fail ArgumentError, "Missing the required parameter 'token' when calling InvitationsApi.decline"
+      # verify the required parameter 'invitation_token_request' is set
+      if @api_client.config.client_side_validation && invitation_token_request.nil?
+        fail ArgumentError, "Missing the required parameter 'invitation_token_request' when calling InvitationsApi.decline"
       end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/invitations/{token}/decline'.sub('{token}', CGI.escape(token.to_s))
+      local_var_path = '/api/invitations/decline'
 
       # query parameters
       query_params = opts[:query_params] || {}
 
       # header parameters
       header_params = opts[:header_params] || {}
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
       header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
 
       # form parameters
       form_params = opts[:form_params] || {}
 
       # http body (model)
-      post_body = opts[:debug_body]
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(invitation_token_request)
 
       # return_type
       return_type = opts[:debug_return_type]

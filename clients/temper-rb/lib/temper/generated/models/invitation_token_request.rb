@@ -14,42 +14,14 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Response from `POST /api/invitations/accept` — the team the caller just joined and at what role.
-  class AcceptInvitationResponse < ApiModelBase
-    attr_accessor :role
-
-    attr_accessor :team_id
-
-    attr_accessor :team_slug
-
-    class EnumAttributeValidator
-      attr_reader :datatype
-      attr_reader :allowable_values
-
-      def initialize(datatype, allowable_values)
-        @allowable_values = allowable_values.map do |value|
-          case datatype.to_s
-          when /Integer/i
-            value.to_i
-          when /Float/i
-            value.to_f
-          else
-            value
-          end
-        end
-      end
-
-      def valid?(value)
-        !value || allowable_values.include?(value)
-      end
-    end
+  # Request body for `POST /api/invitations/accept` and `POST /api/invitations/decline`.  ## Why the token is a body field and not a path segment  The token is a **bearer capability** — `invitation_service` mints 128 CSPRNG bits and the authority to join the team *is* the token, for seven days. A URL path is the least private part of a request: intermediaries log it as a matter of course, it rides in `Referer` headers, it lands in browser history, and it is recorded as a span attribute that leaves the building on export. A request body goes to none of those places.  ## One type for both routes  Accept and decline differ in what they *do*, and that difference is carried by the route and the verb. What the body means is identical in both — \"which invitation, named by the capability token that authorizes acting on it\" — so this is one intent written once, not two shapes that happen to match.
+  class InvitationTokenRequest < ApiModelBase
+    attr_accessor :token
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'role' => :'role',
-        :'team_id' => :'team_id',
-        :'team_slug' => :'team_slug'
+        :'token' => :'token'
       }
     end
 
@@ -66,9 +38,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'role' => :'TeamRole',
-        :'team_id' => :'String',
-        :'team_slug' => :'String'
+        :'token' => :'String'
       }
     end
 
@@ -82,34 +52,22 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::AcceptInvitationResponse` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::InvitationTokenRequest` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::AcceptInvitationResponse`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::InvitationTokenRequest`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'role')
-        self.role = attributes[:'role']
+      if attributes.key?(:'token')
+        self.token = attributes[:'token']
       else
-        self.role = nil
-      end
-
-      if attributes.key?(:'team_id')
-        self.team_id = attributes[:'team_id']
-      else
-        self.team_id = nil
-      end
-
-      if attributes.key?(:'team_slug')
-        self.team_slug = attributes[:'team_slug']
-      else
-        self.team_slug = nil
+        self.token = nil
       end
     end
 
@@ -118,16 +76,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @role.nil?
-        invalid_properties.push('invalid value for "role", role cannot be nil.')
-      end
-
-      if @team_id.nil?
-        invalid_properties.push('invalid value for "team_id", team_id cannot be nil.')
-      end
-
-      if @team_slug.nil?
-        invalid_properties.push('invalid value for "team_slug", team_slug cannot be nil.')
+      if @token.nil?
+        invalid_properties.push('invalid value for "token", token cannot be nil.')
       end
 
       invalid_properties
@@ -137,40 +87,18 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @role.nil?
-      return false if @team_id.nil?
-      return false if @team_slug.nil?
+      return false if @token.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] role Value to be assigned
-    def role=(role)
-      if role.nil?
-        fail ArgumentError, 'role cannot be nil'
+    # @param [Object] token Value to be assigned
+    def token=(token)
+      if token.nil?
+        fail ArgumentError, 'token cannot be nil'
       end
 
-      @role = role
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] team_id Value to be assigned
-    def team_id=(team_id)
-      if team_id.nil?
-        fail ArgumentError, 'team_id cannot be nil'
-      end
-
-      @team_id = team_id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] team_slug Value to be assigned
-    def team_slug=(team_slug)
-      if team_slug.nil?
-        fail ArgumentError, 'team_slug cannot be nil'
-      end
-
-      @team_slug = team_slug
+      @token = token
     end
 
     # Checks equality by comparing each attribute.
@@ -178,9 +106,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          role == o.role &&
-          team_id == o.team_id &&
-          team_slug == o.team_slug
+          token == o.token
     end
 
     # @see the `==` method
@@ -192,7 +118,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [role, team_id, team_slug].hash
+      [token].hash
     end
 
     # Builds the object from hash

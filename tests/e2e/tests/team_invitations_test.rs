@@ -35,11 +35,12 @@ async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
     body["id"].as_str().expect("id").parse().expect("uuid")
 }
 
-/// `POST /api/invitations/{token}/accept` as `token`.
+/// `POST /api/invitations/accept` as `token`, with the invite token in the body.
 async fn accept(app: &common::E2eTestApp, token: &str, invite_token: &str) -> reqwest::Response {
     app.reqwest_client
-        .post(app.url(&format!("/api/invitations/{invite_token}/accept")))
+        .post(app.url("/api/invitations/accept"))
         .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "token": invite_token }))
         .send()
         .await
         .expect("accept request failed")
