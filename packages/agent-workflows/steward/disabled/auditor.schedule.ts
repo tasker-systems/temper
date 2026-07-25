@@ -1,10 +1,61 @@
 import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION } from "temper-ts";
 
-import auditorWorker from "../channels/auditor-worker.js";
-import { auditorFetch, requireEnv } from "../lib/temper-auth.js";
+import auditorWorker from "../agent/channels/auditor-worker.js";
+import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
 
 /**
+ * ═══ DISABLED 2026-07-25 — this file is deliberately OUTSIDE the eve agent root. ═══
+ *
+ * eve registers exactly one Vercel Cron Job per file under `agent/schedules/`
+ * (`node_modules/eve/docs/schedules.mdx`: *"Each one is a single file under `agent/schedules/`
+ * carrying a cron expression"*). Moving it out is therefore the only way to stop the cron
+ * EXISTING. Guarding the `run` body would have left an hourly job that fires and no-ops, which is
+ * still an enabled schedule — and "enabled" is the thing being withdrawn here, not "erroring".
+ *
+ * It sits here rather than in `agent/disabled/` because eve warns
+ * `[discover/unsupported-directory]` on any unrecognized directory inside the agent root, and a
+ * warning printed on every production build is noise that teaches people to skip warnings. It is
+ * still typechecked — `tsconfig.json` includes this directory — so it cannot rot silently while
+ * it waits.
+ *
+ * **Why it was turned off.** It shipped enabled in PR #531 and began firing in production on
+ * 2026-07-24T23:16Z. Every tick since died at `requireEnv("TEMPER_AUDITOR_TOKEN")` before its
+ * outbound fetch — ~18 consecutive failures, unannounced, while the subsystem is still being
+ * designed. The credential requirement is real (see below), documented in
+ * `docs/auth/machine-token-contract.md` §C, and was never surfaced as a deploy action item:
+ * `DEPLOYING.md` mentions the auditor only for its migration cutover. Enabling a scheduled agent
+ * against production is an operator decision, and it was never taken.
+ *
+ * **This is not a fix for the credential.** Nothing here is broken in a way a token would repair.
+ * Three independent gates stand between this file and a single audit row, and the token is only
+ * the first:
+ *
+ *   1. A SECOND machine principal, provisioned per `machine-token-contract.md` §C — its own IdP
+ *      application, `--team <ref>:member`, and cogmap reach absent or `:ro`. Never the steward's
+ *      client_id: one credential is one `kb_events.emitter_entity_id`, so a shared client makes
+ *      every steward-authored citation self-authored to the auditor (`AuditAuthority::Author`)
+ *      and 404s every audit. A *writable* `--cogmap` grant does the same thing through
+ *      `can_modify_resource`.
+ *   2. Registration in `kb_machine_clients` — `resolve_machine_from_claims` is lookup-or-401,
+ *      with no JIT create branch.
+ *   3. The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
+ *      ride an auto-deploy of `main`. Until an operator runs it, `/api/auditor/dispatch` 500s.
+ *
+ * **Do not restore this file by itself.** Its trigger model is being redesigned — task
+ * `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`, register
+ * `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md` — and that work
+ * changes the cadence, the selection predicate, and the dispatch payload this handler sends. The
+ * register also records that the dispatch prompt below tells the agent not to re-check whether a
+ * finding needs auditing (finding grain) while its unit of work is a citation (citation grain),
+ * which duplicates verdicts on already-audited citations. Restoring is `git mv` back into
+ * `agent/schedules/`, and it should happen as part of that work, after the three gates above.
+ *
+ * The auditor subagent, its channel, its tools and its instructions are all untouched and still
+ * build; only the trigger is withdrawn.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────────────────────
+ *
  * Citation-auditor fan-out dispatcher (Set 5; spec
  * `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6).
  *
