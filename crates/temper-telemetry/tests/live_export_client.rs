@@ -23,24 +23,45 @@
 //! the blocking one, so nobody can restore `reqwest-client` — the more natural-looking choice for an
 //! async codebase — without a red build.
 //!
-//! ## Scope, stated so it is not mistaken for more
+//! ## What it asserts, and what it deliberately does not
 //!
-//! A local socket is not a vendor. This asserts that a well-formed OTLP/HTTP POST leaves the process
-//! and that the export thread does not die — the two things that were broken. Endpoint suffixes,
-//! authentication headers, and whether a vendor accepts the payload are still the first live-vendor
-//! run's job (goal `019f9404-2a4e-7530-8744-92ae4ab6d83e`, operator step 1).
+//! It used to read one 4096-byte chunk and check the request line said `POST /v1/traces` with a
+//! protobuf content type. That would have passed with an **empty body, a mangled protobuf, or the
+//! resource attributes dropped** — so the only live-transport test in the repo could not see a
+//! serialization or `service.name` regression. It now reads the whole body by `Content-Length` and
+//! decodes it as an `ExportTraceServiceRequest`, asserting the span name and `service.name` survive
+//! the round trip.
+//!
+//! Still out of scope, and stated so this is not mistaken for more: a local socket is not a vendor.
+//! Endpoint suffixes, authentication headers, and whether a vendor *accepts* the payload are the
+//! first live-vendor run's job (goal `019f9404-2a4e-7530-8744-92ae4ab6d83e`, operator step 1).
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// Accept exactly one request, answer `200`, and report its first bytes.
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueInner;
+use prost::Message;
+
+/// One captured request: its head (for the request line and headers) and its full body bytes.
+struct Captured {
+    head: String,
+    body: Vec<u8>,
+}
+
+/// Accept exactly one request, answer `200`, and report the request line, headers, and **whole body**.
 ///
 /// Hand-rolled rather than reaching for a mock-HTTP crate because the assertion is *"a real socket
 /// received a real POST"* — a library that intercepts at a higher level would re-introduce the very
 /// gap this test exists to close.
-fn one_shot_http_sink() -> (u16, mpsc::Receiver<String>) {
+///
+/// Reading to `Content-Length` rather than taking one `read()` is what makes the body decodable: a
+/// single read returns whatever happened to arrive in the first segment, which for a payload split
+/// across TCP segments is a truncated protobuf that fails to decode for reasons that have nothing to
+/// do with the exporter.
+fn one_shot_http_sink() -> (u16, mpsc::Receiver<Captured>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
     let port = listener
         .local_addr()
@@ -50,15 +71,45 @@ fn one_shot_http_sink() -> (u16, mpsc::Receiver<String>) {
 
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
-            let mut buf = [0u8; 4096];
-            let read = stream.read(&mut buf).unwrap_or(0);
-            let head = String::from_utf8_lossy(&buf[..read]).to_string();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+
+            // Read until the header terminator is in hand.
+            let header_end = loop {
+                if let Some(at) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break at + 4;
+                }
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break buf.len(),
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            };
+
+            let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+
+            let mut body = buf[header_end..].to_vec();
+            while body.len() < content_length {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&chunk[..n]),
+                }
+            }
+
             // Answer so the exporter sees success rather than a transport error.
             let _ = stream.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\n\r\n",
             );
             let _ = stream.flush();
-            let _ = tx.send(head);
+            let _ = tx.send(Captured { head, body });
         }
     });
 
@@ -88,7 +139,7 @@ fn a_span_reaches_a_real_endpoint_over_otlp_http() {
         },
     );
 
-    let request = rx
+    let captured = rx
         .recv_timeout(Duration::from_secs(10))
         .unwrap_or_else(|e| {
             panic!(
@@ -99,12 +150,66 @@ fn a_span_reaches_a_real_endpoint_over_otlp_http() {
         )
         });
 
+    let head = &captured.head;
     assert!(
-        request.starts_with("POST /v1/traces"),
-        "expected an OTLP/HTTP trace POST, got: {request:?}"
+        head.starts_with("POST /v1/traces"),
+        "expected an OTLP/HTTP trace POST, got: {head:?}"
     );
     assert!(
-        request.contains("application/x-protobuf"),
-        "expected the protobuf encoding `http-proto` selects, got: {request:?}"
+        head.contains("application/x-protobuf"),
+        "expected the protobuf encoding `http-proto` selects, got: {head:?}"
+    );
+
+    // The body is uncompressed here because the test sets no `OTEL_EXPORTER_OTLP_COMPRESSION`. Assert
+    // it rather than assume it: with gzip on, the decode below would fail with a confusing protobuf
+    // error rather than a legible one.
+    assert!(
+        !head.to_ascii_lowercase().contains("content-encoding: gzip"),
+        "this test decodes the body directly, so it must not be compressed: {head:?}"
+    );
+    assert!(
+        !captured.body.is_empty(),
+        "the POST carried an empty body — the request line alone is not evidence that any span was \
+         serialized, which is exactly what this test used to accept"
+    );
+
+    let decoded = ExportTraceServiceRequest::decode(captured.body.as_slice())
+        .expect("the POSTed body decodes as an OTLP ExportTraceServiceRequest");
+
+    let resource_spans = decoded
+        .resource_spans
+        .first()
+        .expect("the export carries at least one ResourceSpans");
+
+    // `service.name` rides on the Resource, not the span. Dropping it is the single most consequential
+    // silent regression available here: every span still exports, and a vendor files them all under
+    // "unknown_service", which looks like a vendor problem for as long as it takes to find.
+    let service_name = resource_spans
+        .resource
+        .as_ref()
+        .expect("ResourceSpans carries a Resource")
+        .attributes
+        .iter()
+        .find(|kv| kv.key == "service.name")
+        .and_then(|kv| kv.value.as_ref())
+        .and_then(|v| match v.value.as_ref() {
+            Some(AnyValueInner::StringValue(s)) => Some(s.as_str()),
+            _ => None,
+        })
+        .expect("the Resource carries a string service.name");
+    assert_eq!(
+        service_name, "temper-telemetry-live-test",
+        "OTEL_SERVICE_NAME must reach the wire as the Resource's service.name"
+    );
+
+    let span_names: Vec<&str> = resource_spans
+        .scope_spans
+        .iter()
+        .flat_map(|scope| scope.spans.iter())
+        .map(|span| span.name.as_str())
+        .collect();
+    assert!(
+        span_names.contains(&"http_request"),
+        "the exported payload must contain the span that was recorded; got {span_names:?}"
     );
 }

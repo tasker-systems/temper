@@ -33,10 +33,31 @@
 //! change of *mechanism* rather than of contract. `latency_ms` in particular has to survive: it is
 //! the meter the exporter's own cost is measured with.
 
+use std::future::{poll_fn, Future};
+use std::panic::AssertUnwindSafe;
+use std::pin::pin;
+use std::task::Poll;
+
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use tracing::{Instrument, Span};
+
+/// End the span and drain the queue — the ordering the module exists to own.
+///
+/// Extracted because it now runs on **two** paths (a returned response and a propagating panic) and
+/// the ordering is the whole invariant: `drop` before flush, because until the span closes there is
+/// nothing queued to flush. Two copies of an invariant is how an invariant decoheres.
+async fn end_span_and_flush(span: Span) {
+    // Dropping the last handle closes the tracing span, which is what makes `tracing-opentelemetry`
+    // end the OpenTelemetry span and hand it to the processor.
+    drop(span);
+
+    let flush = crate::export::flush_within_budget().await;
+    if !flush.is_zero() {
+        tracing::debug!(flush_ms = flush.as_millis() as u64, "span flush");
+    }
+}
 
 /// Run `next` inside a root span built by `make_span`, then end the span and flush.
 ///
@@ -54,9 +75,64 @@ where
     let span = make_span(&request);
     let started = std::time::Instant::now();
 
-    // The instrumented future holds its own clone; it is dropped when the await completes, leaving
-    // `span` as the only handle.
-    let response = next.run(request).instrument(span.clone()).await;
+    // ## Why the handler is polled inside `catch_unwind`
+    //
+    // A panicking handler unwinds through this `await`. `drop(span)` and the flush below are ordinary
+    // statements, and unwinding skips ordinary statements — so the span was queued (the local *is*
+    // dropped during unwind) but nothing drained the queue. It rode out on a later request's flush, or
+    // was lost when the sandbox froze. The trace missing was the one for the request that failed.
+    //
+    // The obvious fix — a `Drop` scope guard — is not available: `flush_within_budget` is `async` and
+    // `Drop::drop` cannot await. Blocking inside `drop` on a Tokio worker would be worse than the bug.
+    //
+    // So the unwind is caught, the flush runs, and the unwind is **resumed** below. The panic still
+    // propagates exactly as it did, so nothing a caller can observe changes. This is deliberately not
+    // `CatchPanicLayer`, which would turn a panic into a 500 and change the surface's behaviour — a
+    // decision that belongs to the surfaces, not to a telemetry seam.
+    //
+    // Hand-rolled rather than `futures_util::FutureExt::catch_unwind`: no temper crate depends on
+    // `futures` directly, and this is the whole of what that combinator does. The future is never
+    // polled again after a panic — the `Ready` arm below ends the poll loop — which is the one rule
+    // that makes catching an unwind mid-poll sound.
+    //
+    // ## The inner block is load-bearing — do not flatten it
+    //
+    // The instrumented future holds its **own clone** of the span. Previously it was a temporary
+    // (`next.run(request).instrument(span.clone()).await`) dropped at the end of the await expression,
+    // leaving `span` as the only handle — which is what makes `drop(span)` actually close the span.
+    //
+    // Binding it to a local for `poll_fn` keeps it alive to the end of the function, so its clone
+    // outlives `end_span_and_flush(span)`: the span never closes, nothing is queued, and the flush
+    // exports nothing. That is not hypothetical — it broke the *healthy* path the moment this
+    // middleware was rewritten, and `panicking_request_still_flushes`'s baseline assertion is what
+    // caught it. The block scopes the future so it is dropped before `span` is used.
+    let outcome = {
+        let mut instrumented = pin!(next.run(request).instrument(span.clone()));
+        poll_fn(|cx| {
+            match std::panic::catch_unwind(AssertUnwindSafe(|| instrumented.as_mut().poll(cx))) {
+                Ok(Poll::Pending) => Poll::Pending,
+                Ok(Poll::Ready(response)) => Poll::Ready(Ok(response)),
+                Err(payload) => Poll::Ready(Err(payload)),
+            }
+        })
+        .await
+    };
+
+    let response = match outcome {
+        Ok(response) => response,
+        Err(payload) => {
+            // The span carries no `status`: there is no response, and inventing one would make a
+            // panic indistinguishable from a handler that returned 500. `latency_ms` stays, so the
+            // panic's timing is comparable with every other request.
+            tracing::error!(
+                parent: &span,
+                latency_ms = started.elapsed().as_millis() as u64,
+                "panic"
+            );
+            end_span_and_flush(span).await;
+            std::panic::resume_unwind(payload);
+        }
+    };
 
     let status = response.status();
     let latency_ms = started.elapsed().as_millis() as u64;
@@ -72,11 +148,6 @@ where
     } else {
         tracing::info!(parent: &span, status = status.as_u16(), latency_ms, "response");
     }
-
-    // **This line is the reason the module exists.** Dropping the last handle closes the tracing
-    // span, which is what makes `tracing-opentelemetry` end the OpenTelemetry span and hand it to
-    // the processor. Until this runs there is nothing queued, and a flush would export nothing.
-    drop(span);
 
     // ## Why the flush cost is its own event, and `latency_ms` is not it
     //
@@ -100,10 +171,10 @@ where
     // `RUST_LOG=debug` is now a safe way to sample this distribution on a live deployment: since both
     // stacks filter per-layer, raising the log level no longer widens what is exported (or billed).
     // That was not true before — a subscriber-wide filter meant asking for detail also shipped it.
-    let flush = crate::export::flush_within_budget().await;
-    if !flush.is_zero() {
-        tracing::debug!(flush_ms = flush.as_millis() as u64, "span flush");
-    }
+    //
+    // **This call is the reason the module exists** — see `end_span_and_flush`, which owns the
+    // `drop`-then-flush ordering for both this path and the panicking one.
+    end_span_and_flush(span).await;
 
     response
 }
