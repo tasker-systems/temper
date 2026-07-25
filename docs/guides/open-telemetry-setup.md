@@ -122,6 +122,15 @@ Past the budget the response goes out and the span rides the next flush or is lo
 the right trade against stalling a request**, and the SDK's own ceiling — 5 seconds, hardcoded and not
 configurable — is what that budget exists to cap.
 
+**The budget is deliberately not configurable.** 500ms is a best-bet default we intend to *watch*
+rather than a knob to turn — a knob nobody can yet evaluate is complexity bought on credit, and its
+too-low setting is a silent kill switch (every flush times out, nothing exports, the logs still say
+`span export on`). The signal to watch is a **`warn`**: *"span flush exceeded its budget; spans may be
+lost."* If that fires routinely in a healthy deployment, the constant is wrong and by then there is a
+number to replace it with. For the finer distribution, `RUST_LOG=debug` samples `flush_ms` per request
+— safe on a live deployment, because both stacks filter per-layer, so raising the log level no longer
+widens what is exported or billed.
+
 The cost is reported as **`flush_ms`**, a field of its own. It is deliberately *not* folded into
 `latency_ms`: the flush can only happen after the request span closes (until then there is nothing
 queued to flush), so it is genuinely not part of the span it flushes. A caller's observed latency is

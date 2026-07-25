@@ -483,9 +483,21 @@ pub async fn flush_within_budget() -> Duration {
         // The blocking task owns clearing the flag; it is still running and will clear it when the
         // SDK's own timeout expires. Clearing it here would let a second flush pile in behind the
         // first, which is the serialization this exists to prevent.
-        tracing::debug!(
+        //
+        // **`warn`, not `debug`, and that level is the whole feasibility plan.** `FLUSH_BUDGET` is a
+        // deliberately un-tunable constant — a best-bet default we intend to *watch* rather than a knob
+        // to turn (a knob nobody can evaluate is complexity bought on credit). Watching requires the
+        // signal to be visible at the level production actually runs, and the servers default to
+        // `info`, so a `debug` line here would have meant observing nothing and concluding all was
+        // well.
+        //
+        // This fires only when the budget is actually exceeded, which also means **spans were
+        // dropped** — the same condition `force_flush_spans` already warns about. If it floods, that is
+        // the finding, not noise: either the vendor is degraded or 500ms is wrong for this deployment.
+        tracing::warn!(
             budget_ms = FLUSH_BUDGET.as_millis() as u64,
-            "span flush exceeded its budget; continuing without it"
+            "span flush exceeded its budget; spans may be lost. If this is frequent, the exporter's \
+             endpoint is degraded or FLUSH_BUDGET is wrong for this deployment"
         );
     }
 

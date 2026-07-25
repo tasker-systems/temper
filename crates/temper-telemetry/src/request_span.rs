@@ -92,6 +92,14 @@ where
     //
     // Worth naming the pattern: an instrument that is real, on the real path, and blind to the one
     // thing it was cited for is the same shape as an exporter whose test could not reach a transport.
+    // Per-flush timing stays at `debug`: it is one extra line **per request**, and the servers already
+    // emit a `response` event per request — doubling that at `info` would be a real log bill for a
+    // distribution nobody reads most days. The condition worth seeing by default is *the budget being
+    // exceeded*, which `flush_within_budget` warns about, because that one means spans were dropped.
+    //
+    // `RUST_LOG=debug` is now a safe way to sample this distribution on a live deployment: since both
+    // stacks filter per-layer, raising the log level no longer widens what is exported (or billed).
+    // That was not true before — a subscriber-wide filter meant asking for detail also shipped it.
     let flush = crate::export::flush_within_budget().await;
     if !flush.is_zero() {
         tracing::debug!(flush_ms = flush.as_millis() as u64, "span flush");
