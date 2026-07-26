@@ -422,16 +422,71 @@ should exist. The query caught it.** That is the non-vacuity evidence §9 asks f
 more cheaply than expected, and it is worth more than a green run would have been.
 
 This is the audit's own type specimen — same shape, two spellings, nothing linking them — sitting
-inside the mechanism meant to catch it. It is **not** resolved here. Three options, none costed:
+inside the mechanism meant to catch it.
 
-1. **The citation is derived from the edge.** One authority; `--goal` stays the enumerator.
-2. **The edge is derived from the citation.** The witness convention becomes authoritative and the
-   edge is a projection.
-3. **Both stay, and a check ties them** — the rung-2 move, at the cost of a third thing to maintain.
+#### 5.1.1 Resolution: the citation becomes a facet on the `advances` edge
 
-Until it is resolved, **any query over goal membership must read the citation, not the edge**, because
-the citation is what the discipline actually uses — and a query built on `--goal` will silently
-under-report.
+**Decided 2026-07-26 (Pete).** The clause citation is a `kb_properties` row owned by the `advances`
+edge (`owner_table = 'kb_edges'`). The link is the edge; the clause **qualifies the link**.
+
+Grounding for the decision:
+
+| Fact | Evidence |
+|---|---|
+| `advances` is a **label** on a `leads_to` edge, not an `edge_kind` | `db_backend.rs:94`; `substrate_read.rs:201` |
+| The goal *link* being an edge and **not** a property is already settled | `keys.rs:20` — `KeyFate::Edge`, for `temper-goal` |
+| `kb_properties` admits `owner_table='kb_edges'`, by design | `canonical_schema.sql:656` — *"§4a edges carry facets"* |
+| The event and payload schema admit `kb_edges` as owner | `property_asserted` · `AnchorTable` enum |
+| Uniqueness is `(owner, key, value) WHERE NOT is_folded` | so N clauses = N rows, no encoding needed |
+
+**Why this over the alternatives.** It makes the divergence **unrepresentable** rather than detected:
+a citation's owner *must* be an edge id, so a citation without an edge cannot exist. That is rung 4
+against a checked-pair's rung 2. Putting the clause in the edge `label` would also work — `label` is
+part of `uq_kb_edges_assertion` — but it puts structure in a string, against this repo's own rule, and
+`list --goal` binds `label = 'advances'` exactly. Making the edge a projection of the `open_meta`
+citation was rejected outright: it reverses `KeyFate::Edge` with no evidence against that decision.
+
+#### 5.1.2 The precondition, and why "never run" is not "wrong"
+
+**Production has zero edge-owned properties.** `kb_resources` 10,590 · `kb_content_blocks` 37 ·
+`kb_edges` **0** · `kb_cogmaps` **0**. No surface can write one: `FacetSetInput` takes a `resource`.
+
+**That is a second instance of a confident DDL comment describing something nobody has executed** —
+after `init.rs`'s *"No export layer, deliberately."* One instance was an anecdote; two is the species
+the discipline names, and it is worth recording that the pattern reaches production DDL and not only
+Rust doc comments.
+
+**But unexercised is not wrong.** Element 7 exists precisely to convert a never-run artifact from an
+apparent constraint into **open design space**. Edges were always intended to carry facets; the write
+path simply never got built. So this goal takes on a **precondition**: expand the read and write
+surfaces so an edge can own a property — across MCP, API and CLI, per the standing parity intention.
+
+The citation moves onto that path once it exists. Until then `open_meta` holds, and the standing rule
+is unchanged: **any query over goal membership must read the citation, not the edge**, because a query
+built on `--goal` silently under-reports.
+
+#### 5.1.3 A task either *witnesses* a clause or *enables* one
+
+Surfaced by 5.1.2's precondition, which is neither evidence nor a clause: it is build work that makes
+a clause witnessable.
+
+The model as inherited says tasks carry witness declarations, full stop. That forces enabling work to
+**pretend to be evidence**, and there is evidence it already did: the deleted child task *"Make the
+material-event set a first-class enumerable object (**unblocks** W2 and W8)"* declared itself a
+witness while its own title says it *unblocks* two others. It witnessed nothing. It was enabling work
+miscast as evidence, and that miscasting is part of how a decomposition pass produced ten unbuildable
+witnesses.
+
+So a task declares one of two relations to a clause:
+
+- **`witnesses`** — this task is the evidence. Subject to the bite requirement and to
+  `no-witness-precedes-its-mechanism`.
+- **`enables`** — this task builds the mechanism that makes a clause witnessable. **Not** evidence,
+  **not** subject to the bite requirement, and legitimately filed before the witness exists — indeed
+  it is what `no-witness-precedes-its-mechanism` implies must exist first.
+
+Without the distinction, the clause forbidding premature witnesses would also forbid the work that
+makes witnesses possible, which is incoherent.
 
 ---
 
@@ -626,6 +681,8 @@ remains untaken, and this spec does not supply it.
 | D13 | **Witness decomposition is a separately authorized act, inside the build** | The register's shape invites decomposition and an author will decompose. An explicit instruction not to was given and not held, so the constraint must be structural, not instructional |
 | D14 | **Element 8 — the negative face:** what must never become true | Distinct from the refusal face (acts declined) and from the three-way Then (positive postconditions). Nearly every expensive finding in the audited window was a standing negative that no element had a slot for |
 | D15 | **The clause-level floor is a meaning test — split when halves can be violated independently** | The demonstrability floor cannot govern clause splitting once witnesses come later. Granularity of *how* needs judgment; a hard rule there manufactures false precision. The demonstrability floor survives, relocated to witness decomposition |
+| D16 | **The clause citation is a facet on the `advances` edge** (`kb_properties`, `owner_table='kb_edges'`) | Makes the two-spellings divergence *unrepresentable* rather than detected — rung 4, not rung 2. The link is the edge (settled by `KeyFate::Edge`); the clause qualifies the link. Alternatives put structure in a string or reverse a decided thing |
+| D17 | **A task declares `witnesses` OR `enables`** | Enabling work is not evidence. Without the split, `no-witness-precedes-its-mechanism` would forbid the very work that makes witnesses possible. Evidenced: the deleted "material-event set (**unblocks** W2 and W8)" task declared itself a witness and witnessed nothing |
 
 ---
 
@@ -689,6 +746,9 @@ Deliberately not specified here:
 
 ## 13. Sequencing
 
+0. **Precondition — edge-owned properties get a read and write surface** (§5.1.2). Nothing has ever
+   written one; `FacetSetInput` takes a `resource`. MCP + API + CLI, per the standing parity
+   intention. Everything in §5.1.1 waits on this, and nothing else here does.
 1. The discipline as a shipped skill file plus router entry (§3, §8) — self-contained, no dependency
    on anything below.
 2. The recognized `open_meta` conventions (§4.2) — an `open_meta.schema.json` version bump.
