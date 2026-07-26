@@ -133,6 +133,19 @@ semantics across surfaces.
 backend-gated today; whether it should be is a separate question (the cascade decided here
 is about *modify*, not context *create*) — noted as a follow-up, explicitly **out of scope**.
 
+> **Follow-up landed (2026-07-25).** The 2026-07-18 authn/authz audit re-found this deferral as
+> finding **F-2** and measured its consequence: a `watcher`, a transitive-ancestor team member, or a
+> read-only grant holder could place content in a context they could not write. The separate question
+> is now settled — and it was settled *here*, in the test matrix below, which already required
+> `reader only (membership read, no write) → create ❌` for **context** homes as well as cogmap ones.
+> The deferral was of the implementation, never of the intent.
+>
+> `create_resource_inner` now gates both home kinds (`check_context_authorable`), and the same
+> predicate gates the **re-home** destination in `update_resource` — a second placement verb this
+> spec did not enumerate, where `check_can_modify_next` authorizes the resource being moved but
+> nothing authorized where it was moved *to*. Regression coverage:
+> `crates/temper-api/tests/context_placement_authz_test.rs`.
+
 ### F2 — `invocation_open` read-vs-write
 
 Resolved by the rule the cascade makes natural:
