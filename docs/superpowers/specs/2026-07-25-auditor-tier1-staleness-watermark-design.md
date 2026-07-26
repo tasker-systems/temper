@@ -1,16 +1,24 @@
 # Auditor tier-1 staleness — the watermark the substrate already keeps
 
-**Date:** 2026-07-25 (rev. 2026-07-26 after adversarial review) · **Status:** design, ready to implement
+**Date:** 2026-07-25 (rev. 2 — 2026-07-26) · **Status:** design, ready to implement
 **Supersedes in part:** `2026-07-24-auditor-event-driven-trigger-model-design.md` (D1–D8)
 **Branch:** `jct/auditor-tier1-staleness-watermark`
 
-> **Revision note.** The first draft of this document was reviewed by three adversarial passes
+> **Revision note.** The first draft was reviewed by three adversarial passes
 > (attack-the-narrowing · attack-the-predicate · verify-every-citation). It **failed**: the predicate
 > did not compile, its watermark was at the wrong grain on two axes, and §2.1's grounding table —
 > the load-bearing justification for one of its decisions — was derived from `grep` rather than
-> `pg_proc` and was wrong on two of four members. Everything below is the repaired version. Findings
-> that survived review unchanged are marked **[held]**; findings that changed are marked
-> **[revised]** with what was wrong. Session note: `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6`.
+> `pg_proc` and was wrong on two of four members. Findings that survived unchanged are marked
+> **[held]**; findings that changed are marked **[revised]**.
+>
+> **Rev. 2 repairs the repair.** Rev. 1's grain fix (§3.2(b)) was itself defective: it re-keyed the
+> watermark to `(finding, source)`, which recreates rev. 1's own §3.2(a) defect one grain over — an
+> audit of one block masks a sibling block's mutation permanently. Both grains leak, in opposite
+> directions; §3.2(b) below carries the executed four-scenario probe and the predicate that passes
+> all four. Rev. 2 also **settles the ordering key** (§3.4), which rev. 1 declared "not an open
+> sub-decision" and then left to the implementer, and **ratifies D7's conjunct as separable** — for
+> a reason rev. 1 did not give. Sections changed in rev. 2 are marked **[rev2]**.
+> Session notes: `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6`, and this session's.
 
 ---
 
@@ -142,17 +150,18 @@ path writes `kb_content_blocks`; the only three writers are `_project_blocks`,
 ## 3. The change
 
 **AMEND** — `audit_drift_sweep` is shipped and this changes its selection. Authorized by D7
-(*"Selection is `uncovered OR stale`"*). **[revised] D7 is honoured whole, not halved** — see §3.4.
+(*"Selection is `uncovered OR stale`"*). **[rev2] D7's union ships; D7's conjunct is a ratified
+fast-follow** — see §3.5 for why it cannot be what bounds *k*, and therefore why it is separable.
 
 One migration, DROP+CREATE (`20260724000130` sets the precedent by DROP+CREATE-ing
 `workflow_job_claim`).
 
-### 3.1 The predicate — executed before being written here **[revised]**
+### 3.1 The predicate — executed before being written here **[rev2]**
 
-The first draft's body used `max(uuid)`, **which does not exist in PostgreSQL**, so the migration
-would have failed at `sqlx migrate run` (`LANGUAGE sql` bodies parse at CREATE time). It was written
-into a spec and the plan told the implementer not to re-derive it. The body below was **executed
-against the live database and creates cleanly**:
+Rev. 1's body used `max(uuid)`, **which does not exist in PostgreSQL**, so the migration would have
+failed at `sqlx migrate run` (`LANGUAGE sql` bodies parse at CREATE time). Rev. 1 fixed that and got
+the grain wrong instead. The body below was **executed against the live database, creates cleanly,
+and passes the four-scenario probe in §3.2(b)**:
 
 ```sql
 CREATE FUNCTION resource_has_stale_citation(p_finding uuid, p_principal uuid)
@@ -162,8 +171,14 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         FROM resource_live_citations(p_finding) lc
         JOIN kb_content_blocks b ON b.id = lc.block_id
         CROSS JOIN LATERAL (
-            SELECT (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC))[1]
-                   AS watermark
+            SELECT
+                -- This principal's freshest audit anywhere on this (finding, source)...
+                (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC))[1]
+                    AS finding_wm,
+                -- ...and its freshest audit of THIS citation specifically.
+                (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC)
+                     FILTER (WHERE a.block_id = lc.block_id))[1]
+                    AS block_wm
               FROM kb_citation_audits a
               JOIN kb_content_blocks ab
                 ON ab.id = a.block_id AND ab.resource_id = p_finding
@@ -171,11 +186,12 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                AND a.source_id   = lc.source_id
                AND a.audited_by_profile_id = p_principal
         ) w
-        WHERE w.watermark IS NOT NULL
-          AND ( b.last_event_id > w.watermark
+        WHERE w.finding_wm IS NOT NULL      -- this principal has engaged this (finding, source)
+          AND ( w.block_wm IS NULL          -- ...but never at THIS block
+             OR b.last_event_id > w.block_wm
              OR EXISTS (SELECT 1 FROM kb_content_blocks sb
                          WHERE sb.resource_id   = lc.source_id
-                           AND sb.last_event_id > w.watermark) )
+                           AND sb.last_event_id > w.block_wm) )
     );
 $$;
 ```
@@ -185,7 +201,13 @@ gets pulled up and evaluated **three times per citation row** (measured: `SubPla
 `InitPlan 3`), which is exactly what `20260724000130:23-28` forbids. `array_agg` produces one
 `Aggregate` node.
 
-### 3.2 Two grain corrections, both load-bearing **[revised]**
+**Both watermarks come from ONE aggregate, via `FILTER`.** The naive shape is two `CROSS JOIN
+LATERAL` blocks over the same audit set, which is two `Aggregate` nodes for one question — the same
+multiplication `:23-28` forbids, arrived at from the other direction. `EXPLAIN` on the body above
+shows a single `Aggregate`; the two subscript operations in the join filter are array indexing, not
+re-aggregation.
+
+### 3.2 Two grain corrections, both load-bearing **[(a) revised · (b) rev2]**
 
 **(a) Scope the watermark to the sweeping principal** — `a.audited_by_profile_id = p_principal`.
 
@@ -201,14 +223,55 @@ protects the **quality** grain (*is each principal's vote about the current text
 were deliberately separated by `20260724000210`. `audit_drift_sweep(p_principal, …)` already asks a
 principal-scoped question; the staleness half must ask the same one.
 
-**(b) Key the watermark on `(finding, source)`, not `(block, source)`** — hence the join
-`ab.resource_id = p_finding`.
+**(b) Resolve the watermark at `(block, source)`, and add a guarded arm for citations this
+principal has engaged elsewhere on the finding but not here.** **[rev2 — rev. 1 got this wrong.]**
 
-`resource_audit_coverage` is `count(DISTINCT source_id)` with a per-row `EXISTS` on
-`(block_id, source_id)`, so auditing a source on **one** block marks it covered across **all** blocks
-of the finding. A `(block, source)`-keyed watermark therefore has a blind spot: a two-block finding,
-or a `block_append` adding new text citing an already-audited source, is selected by **neither**
-disjunct, permanently. Matching coverage's grain closes it.
+The underlying asymmetry: **an audit is keyed `(block_id, source_kind, source_id)`** — block grain,
+per `kb_citation_audits` — **but `resource_audit_coverage` collapses it to
+`count(DISTINCT source_id)`**, so auditing a source on one block marks it covered across all blocks
+of the finding.
+
+Rev. 1 responded by coarsening the watermark to `(finding, source)` to match coverage. That closes
+the gap coverage opens and **opens a new one inside the block set**: the coarse key takes the
+*latest* audit across every block, so an audit of one block sits above another block's mutation and
+hides it permanently — §3.2(a)'s defect, one grain over. Rev. 1 carried the block grain into the
+*join* (`b.last_event_id`, the source-side `EXISTS`) but not into the *watermark resolution*, so the
+comparand stayed resource-scoped while both things it is compared against became block-scoped.
+
+Executed, dev PG 18.3, rolled-back transaction. `uncovered` is false in **every** row, so no scenario
+is rescued by the other disjunct:
+
+| scenario | rev. 1 `(finding, source)` | pure `(block, source)` | §3.1 as written |
+|---|---|---|---|
+| 1 · an audit of a sibling block masks a mutated block | **false** ✗ | true | true |
+| 2 · block appended after the audit (the F2b case) | true | **false** ✗ | true |
+| 3 · quiet fully-covered finding — *must stay green* | false | false | false |
+| 4 · principal who has never audited this finding | false | false | false |
+
+**Neither pure grain is sufficient**, and the reason is structural: a compensation applied at a
+different grain than the defect leaks in the other direction. §3.1 therefore resolves the watermark
+at the grain an audit actually has (`block_wm`) and adds one arm for the gap coverage leaves —
+`block_wm IS NULL`, *this principal has never audited this citation* — guarded by
+`finding_wm IS NOT NULL` so it fires only for a principal already engaged with this
+`(finding, source)`. Row 4 is what that guard buys: without it, every finding would read stale for
+every principal who has not yet audited it, converting staleness into per-principal **coverage** — a
+far larger behaviour change than tier 1 claims.
+
+**Scenario 1 needs no skipped citation, and this is the part rev. 1's scope table gets wrong.** Read
+its three events as one audit run: the auditor audits block b1, someone edits b1 while the run is
+still going — runs are LLM-paced minutes — the auditor audits b2 and finishes. Ordinary behaviour on
+both sides. See §4's *block mutated mid-session* row, whose "benign race" assessment rev. 1
+invalidated without revisiting it.
+
+**What bounds this, and what does not.** The queue payload is
+`AuditJobPayload { findings: Vec<Uuid> }` — finding ids, no citation list — and the auditor's step 8
+is *"emit one verdict per auditable citation"*
+(`packages/agent-workflows/steward/agent/subagents/auditor/instructions.md:36-73`). So a visit that
+**completes** refreshes every citation and the coarse watermark re-converges with reality;
+dispatching at the finding grain is a real mitigation. What fails is *"the next tick will catch
+it"*: after the masking event `stale = false` **and** `uncovered = 0`, so the sweep does not return
+the finding at all. It returns only on a new material event touching the finding or one of its
+sources — and for a settled finding, the state §1 exists to condemn, that may be never.
 
 ### 3.3 One additive index, and why the obvious filter is wrong **[revised]**
 
@@ -234,7 +297,7 @@ invariant. Verified:
    Index Cond: ((resource_id = …) AND (last_event_id > …))
 ```
 
-### 3.4 Selection and ordering — D7 whole **[revised]**
+### 3.4 Selection and ordering **[rev2]**
 
 ```sql
      WHERE s.magnitude > 0
@@ -244,27 +307,88 @@ invariant. Verified:
 with `stale` computed **once per candidate inside the existing `scored` CTE** — CONFORM to that
 file's *"EACH PRODUCER RUNS ONCE PER CANDIDATE ROW"* rule (`:23-28`).
 
-**The ordering key must change, and this is not an implementer's sub-decision.** A stale finding is
-by construction fully covered, so `uncovered = magnitude - coverage = 0` — the **minimum** of the
-carried-forward `ORDER BY uncovered DESC`. Every stale finding sorts behind every uncovered one.
-With `DEFAULT_AUDITOR_DISPATCH_CAP = 50` and *k* permanently-stuck findings sitting at
-`uncovered >= 1` forever, stale rows get `50 − k` slots, allocated by `finding_id` ASC — UUIDv7, so
-**oldest-first deterministically**, meaning newer stale findings are *structurally excluded* rather
-than delayed. At `k >= 50` the disjunct returns nothing, silently, forever: the exact sentence §1
-uses to condemn the incumbent.
+**The ordering key must change.** A stale finding is by construction fully covered, so
+`uncovered = magnitude - coverage = 0` — the **minimum** of the carried-forward
+`ORDER BY uncovered DESC`. Every stale finding sorts behind every uncovered one. With
+`DEFAULT_AUDITOR_DISPATCH_CAP = 50` (`crates/temper-core/src/types/workflow_job.rs:39`) and *k*
+permanently-stuck findings sitting at `uncovered >= 1` forever, stale rows get `50 − k` slots,
+allocated by `finding_id` ASC — UUIDv7, so **oldest-first deterministically**, meaning newer stale
+findings are *structurally excluded* rather than delayed. At `k >= 50` the disjunct returns nothing,
+silently, forever: the exact sentence §1 uses to condemn the incumbent.
 
-The ordering must rank a class whose `uncovered` is always 0. The shape is the implementer's to
-choose and **must be recorded in the migration**, not settled in their head.
+**The key: rank within class, interleave by rank. [rev2]** Rev. 1 left this to the implementer while
+asserting it was not an open sub-decision. It is settled here.
 
-**D7's second half comes back.** *"'uncovered' is permanent for a citation this principal cannot
-audit … the loop surviving its own fix."* Scoping `uncovered` to citations this principal could
-actually audit is what bounds *k*. `citation_contributed_by_profile` already exists and is the exact
-question the gate asks, so this is a `NOT EXISTS` join, not a new predicate.
+```sql
+), ranked AS (
+    SELECT s.*, (s.coverage < s.magnitude) AS is_uncovered,
+           row_number() OVER (PARTITION BY (s.coverage < s.magnitude)
+                              ORDER BY (s.magnitude - s.coverage) DESC, s.finding_id) AS rn
+      FROM scored s
+     WHERE s.magnitude > 0 AND (s.coverage < s.magnitude OR s.stale)
+)
+SELECT cogmap_id, finding_id, (magnitude - coverage) AS uncovered
+  FROM ranked
+ ORDER BY rn, is_uncovered DESC, (magnitude - coverage) DESC, finding_id
+ LIMIT p_limit;
+```
 
-> **Open — Pete to ratify.** I judged this *separable* from the ordering fix (with an honest ordering
-> key, stale findings get slots regardless of *k*, and the stuck population is a **pre-existing**
-> pathology this change does not introduce), against a reviewer who called them inseparable. If that
-> judgement is wrong, the conjunct is a blocker rather than a fast-follow. **Not settled.**
+Executed — 6 stuck findings against 4 stale ones at a cap of 5, the starvation shape scaled down:
+stale takes **2 of 5 slots**, where today it takes 0. It is **self-balancing rather than
+reserving** — only 3 findings stale means 3 stale and 47 uncovered, no slots wasted — and with
+nothing stale it is **byte-identical to today's ordering** (verified by string comparison of the two
+orderings, not by inspection), so the change is invisible until the new disjunct has something to
+contribute.
+
+Three constraints, each checked rather than assumed:
+
+- **CONFORM `:23-28`** — window functions over `scored`; no additional producer calls.
+- **CONFORM the determinism claim** — `rn`'s window ordering terminates in `finding_id`, so `rn` is
+  total. `auditor_service::drift_sweep`'s *"deterministic, principal-scoped sweep"* and
+  `group_by_cogmap`'s *"the cogmaps come out in the order their first finding appeared"* both hold.
+- **Signature unchanged** — `RETURNS TABLE(cogmap_id, finding_id, uncovered)`, so the `sqlx::query!`
+  at `auditor_service.rs:55-60` and `AuditSweepRow` do not move, and D6 stays deferred.
+
+**A rejected alternative, recorded because it is the tempting one.** A single composite axis —
+`attention = uncovered + stale_citation_count` — is semantically cleaner and **does not work**: a
+stuck finding sits at `attention >= 1` and a stale finding sits at `attention >= 1`, they tie, and
+the tie-break is `finding_id` ASC. Stuck findings are older *by construction* (they have been stuck),
+so they win every tie and `k >= 50` starves the disjunct exactly as before.
+
+**Persona ripple — must ride in the same PR.** `instructions.md:37` tells the auditor *"The list is
+ordered by how much of each finding's evidence is still unweighed; work it in that order."*
+Interleaving makes that false, and a stale row arrives carrying `uncovered = 0`. One-line edit:
+*unweighed **or out of date***. This is prose *describing* a gate, not prose *standing in for* one —
+the direction §5 warns against is the other one — but it is exactly the kind of thing that gets
+dropped.
+
+### 3.5 D7's conjunct — separable. Ratified. **[rev2]**
+
+D7's second half: *"'uncovered' is permanent for a citation this principal cannot audit … the loop
+surviving its own fix."* Rev. 1 judged it separable from the ordering fix; a reviewer judged them
+inseparable because the conjunct is what bounds *k*. **Both were wrong about the mechanism, and the
+conclusion is separable.**
+
+`20260724000130:70-82`, the shipped KNOWN FIRST-CUT LIMITATION comment, already characterises *k*:
+
+> The filters above remove the common causes of permanent unauditability (a remote/deleted source, a
+> half-uploaded resource, an unreachable cogmap), but **a citation that is readable, live, and simply
+> never gets audited will re-head this queue every tick with the SAME `uncovered` count forever.**
+> The real fix — a terminal "cannot assess" verdict, or a per-finding backoff — is deferred to the
+> future reaper pass…
+
+*k* has at least three members and the conjunct reaches one:
+
+| member of *k* | reached by D7's conjunct? |
+|---|---|
+| source the principal cannot read (`019f9bfb`) | **yes** — the conjunct's entire content |
+| readable, live, auditable, never verdicted | **no** — deferred to a reaper pass that does not exist |
+| self-authored citations | ~empty for the auditor, which authors nothing (`instructions.md:162`) |
+
+**So the conjunct does not bound *k*** — the dominant member is the one the shipped comment defers.
+The ordering must therefore bound starvation structurally and independently of *k*, which is what
+§3.4 does. The conjunct remains worth doing on its own merits (it stops offering work the gate will
+404), but it is a **fast-follow, not a blocker**, and `019f9bfb` carries it.
 
 ---
 
@@ -283,7 +407,7 @@ hole requires an honest description of the hole.
 | **F7 — `resource_live_citations` has no `ingest_state` gate** | Its own header quotes the rule it violates. A half-uploaded source confers standing *and* re-queues its citers once per arriving block. **Must NOT ride along** — all three standing axes read this function; far wider blast radius than this change earns. **Own task.** |
 | **F8 — source-side clause fires on ANY block of the source** | Including self-citations and high-churn sources (a telos: `_project_charter_set` folds and reinserts every block per `charter_set`). In a self-cognition KB, findings-citing-findings is the normal case. **Unquantified — nobody has measured how often findings cite their own telos.** |
 | **F9 — same-millisecond ordering unverified on prod** | `20260624000001:48-70` branches: **PG17/Neon ⇒ `pg_uuidv7` extension; PG18/local ⇒ native `uuidv7()`.** Different generators. Local is monotone within a millisecond (0 out-of-order pairs in 50k). If `pg_uuidv7` fills `rand_a` randomly, same-ms comparisons are arbitrary. **Verify against Neon before shipping.** |
-| block mutated mid-session | Benign race; under-triggers by one tick. |
+| block mutated mid-session **[rev2]** | **Rev. 1 marked this "benign race; under-triggers by one tick" and then invalidated it in §3.2(b) without revisiting the row.** At the block grain the assessment is correct — a verdict written after the mutation sits above that block's own watermark by one tick and the next material event clears it. At rev. 1's `(finding, source)` grain it was *permanent*, because a later sibling audit put the watermark above the mutation forever. §3.1 restores "one tick." **Still deferred:** the residual one-tick under-trigger is not solved here. If it shows up in practice, write-action timestamps exist for every agent and document, so the options are ordering them outright or defining a suspect "within" window that emits a bump-for-re-audit event to refresh the watermark. Judged not worth solving today (Pete, 2026-07-26). |
 
 ---
 
@@ -309,13 +433,17 @@ around it. Prose in an instructions file is a wider path than a queue payload."*
 **So R10 decomposes into two, and only the first is withdrawn:**
 
 1. **Evidential inability → a verdict.** Withdrawn. No mechanism needed.
-2. **Structural inability → D7's conjunct** (§3.4). Self-authored citations, and citations whose
-   source the principal cannot read (`019f9bfb`). These genuinely never gain coverage, and they are
-   the population that starves the stale disjunct.
+2. **Structural inability → D7's conjunct** (§3.5). Self-authored citations, and citations whose
+   source the principal cannot read (`019f9bfb`). These genuinely never gain coverage.
+   **[rev2] They are not, however, "the population that starves the stale disjunct"** — rev. 1 said
+   so and §3.5 refutes it from the shipped code's own comment: the dominant stuck population is the
+   readable, live, auditable citation that simply never gets verdicted, which this conjunct does not
+   reach. Self-authorship in particular should be ~empty for the auditor, which authors nothing
+   (`instructions.md:162`). The conjunct is worth doing; it is not load-bearing for §3.4.
 
 ---
 
-## 6. Witnesses **[revised]**
+## 6. Witnesses **[rev2]**
 
 Failing-before / passing-after, extending `citation_audits.rs`'s Task-5 family (`:1174+`) —
 **CONFORM**, not a parallel suite.
@@ -324,16 +452,32 @@ Failing-before / passing-after, extending `citation_audits.rs`'s Task-5 family (
    `block_mutated`. Today: never re-offered.
 2. **`sweep_reoffers_a_covered_finding_after_its_cited_source_changes`** — the source-side arm;
    would pass vacuously if only clause one existed.
-3. **`sweep_reoffers_a_two_block_finding_when_the_unaudited_pair_s_block_changes`** — **new, and
-   required.** Witnesses §3.2(b). The first draft's witness set used single-block fixtures
-   throughout and **could not observe the primary blind spot**.
-4. **`sweep_stale_is_scoped_to_the_sweeping_principal`** — **new.** Witnesses §3.2(a): auditor A
-   audits, block mutates, auditor B re-audits; the finding must still read stale *for A* and not
-   *for B*.
+3. **`sweep_reoffers_a_two_block_finding_when_the_unaudited_pair_s_block_changes`** — witnesses the
+   `block_wm IS NULL` arm of §3.2(b). Rev. 1's witness set used single-block fixtures throughout and
+   **could not observe the blind spot it was written for**.
+4. **`sweep_stale_is_scoped_to_the_sweeping_principal`** — witnesses §3.2(a): auditor A audits, block
+   mutates, auditor B re-audits; the finding must still read stale *for A* and not *for B*.
+5. **`sweep_reoffers_when_a_sibling_audit_lands_after_another_blocks_mutation`** — **new in rev. 2,
+   and the one that falsifies rev. 1.** Two blocks citing a **shared** source: audit b1, mutate b1,
+   audit b2. Must read stale. **Run it against rev. 1's `(finding, source)` body as well as the
+   pre-change migration** — a witness that only fails against "the feature is absent" discriminates
+   nothing, which is the bar W1 was cancelled for missing, and this one has a *second* wrong
+   implementation available to bite.
+6. **`sweep_ordering_gives_stale_findings_slots_under_a_stuck_backlog`** — **new in rev. 2.**
+   Witnesses §3.4: seed more permanently-stuck findings (`uncovered >= 1`) than the cap, plus stale
+   ones, and assert stale findings appear. Under today's `ORDER BY uncovered DESC` this returns none
+   of them — the F4 starvation, which no other witness observes because every other fixture is
+   smaller than the cap.
 
-Must **stay green** — `sweep_omits_a_fully_covered_finding` (`:1374`), verified unaffected (the
-fixture creates the source before the finding and audits last, so both cursors precede the
-watermark). A predicate that fires on a quiet finding is worse than the defect it replaces.
+Must **stay green**:
+
+- `sweep_omits_a_fully_covered_finding` (`:1374`) — verified unaffected (the fixture creates the
+  source before the finding and audits last, so both cursors precede the watermark). A predicate that
+  fires on a quiet finding is worse than the defect it replaces.
+- **A principal who has never audited a finding must not see it as stale** — scenario 4 of §3.2(b),
+  the guard on the `block_wm IS NULL` arm. Without a witness, a later simplification that drops
+  `finding_wm IS NOT NULL` reads as a tidy-up and silently converts staleness into per-principal
+  coverage.
 
 ---
 
@@ -342,7 +486,10 @@ watermark). A predicate that fires on a quiet finding is worse than the defect i
 - **D3** (material-event allow-list) — not built; §2.2. Unanimously upheld on review.
 - **D6** (citation-list payload), **D2 tier 2**, **C-7** — deferred; §4.
 - **R10** — half withdrawn, half promoted to D7's conjunct; §5.
+- **D7's conjunct** — **[rev2]** ratified *separable*; a fast-follow, not part of this PR. §3.5.
 - Witness tasks **W1** (`019f9bce-9a7f-79b3-8b2b-77e9ee064730`) and
   **W3** (`019f9bcf-30c0-7772-8833-340b90f22f6b`) — cancelled 2026-07-25, reasons on the tasks.
 - Task `019f9bd0-c9e9-7aa3-95ad-bc8b11325428` (material-event set) — closed by §2.2, not implemented.
-- `019f9bfb-62e2-7c62-85b2-e309ac1b18c1` (source-visibility) — **promoted**: part of D7's conjunct.
+- `019f9bfb-62e2-7c62-85b2-e309ac1b18c1` (source-visibility) — carries D7's conjunct. **[rev2]** Not
+  in this PR: §3.5 shows the conjunct does not bound *k*, so the ordering key had to stand alone
+  anyway. Worth doing on its own merits — it stops the queue offering work the gate will 404.
