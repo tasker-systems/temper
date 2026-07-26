@@ -185,6 +185,9 @@ cell is in one of three states:
 - **Examined-and-deliberately-excluded** — with emitter, timestamp, and stated reason
 - **Unexamined** — a *visible* remainder, not a silent one
 
+*A fourth state — **examined-and-inexpressible** — is added in §3.4.2. It is deliberately not folded
+into the second: an exclusion is settled, an inexpressible cell is a pending fork.*
+
 The deterministic property is that there is **no ambiguity between the last two**. An unmarked gap is
 the most dangerous kind of undocumented negative decision, because it re-litigates itself as an
 incident.
@@ -262,6 +265,55 @@ Both are "present in the corpus, never chosen," and neither is caught by checkin
 spec makes no framework decision: the vocabulary must be expressed in the idiom the workspace already
 carries, and introducing a parametrized-test framework is a separate, costed decision.
 **Goal `019f9a34-3306-70d1-b07a-f23c99943751` needs its executable-spine clause amended accordingly.**
+
+### 3.4.2 The inexpressible intersection — where a goal exceeds the system's affordances
+
+A goal states an outcome. Sometimes the system **as designed cannot express it** — the persona does
+not exist, the act has no affordance, the projection the Then-clause asserts over is not built, the
+refusal named is one the system cannot make.
+
+**That intersection is a first-class, detectable state, and it has exactly two honest exits:**
+
+- **Evolve the system.** The affordance is missing and should exist. Produces an **`enables`** task
+  (§5.1.3) — a precondition, legitimately filed before any witness.
+- **Change the goal.** The affordance should not exist, or the clause was reaching wrongly. Produces
+  a **supersession**, via a decision.
+
+**The dishonest third exit is to assume the affordance and write clauses against it.** That is what
+produces mechanism-shaped clauses and premature witnesses, and it is the deeper account of §9.1 than
+"witnesses were authored too early": a register met the edge of what the system could express and,
+instead of forking, **hallucinated the affordance**. Ten witnesses were written against a
+material-event set, a partition, and a tier 2 — none of which existed. Neither honest exit was taken
+because neither was named.
+
+**Both exits already have worked instances in this corpus, and neither was recognised as a fork at
+the time:**
+
+| Exit | Instance |
+|---|---|
+| Evolve the system | The witness citation wants to be a facet on the `advances` edge; edges have never carried properties and no surface can write one. Precondition filed (§5.1.2) |
+| Change the goal | The auditor register's R10 — *"the refusal the system cannot make"* — recorded in its own table as **inexpressible**, *"does not exist"*. Dissolved by argument: an assertion that cannot be concluded is simply unsupported, which is a verdict, not a refusal |
+
+**This is not an ontology feature.** An earlier draft framed the detection narrowly, as situated
+actors failing to resolve against a persona list. That is one instance. The general form needs no
+ontology: *any* register element can hit the edge, and R10 hit it in the refusal face.
+
+#### Closure gains a fourth cell state
+
+The three states in §3.3 cannot express this. *Examined-and-deliberately-excluded* would swallow it,
+and that is the trap: exclusion-because-out-of-scope is **settled**, whereas
+exclusion-because-the-system-cannot-express-it is a **pending fork**. Collapsing them is how the
+dishonest third exit gets taken by default — the cell looks decided when it is actually waiting.
+
+- **Examined-and-specified**
+- **Examined-and-deliberately-excluded** — emitter, timestamp, stated reason. *Settled.*
+- **Examined-and-inexpressible** — the cell is wanted; the system cannot express it. **Carries a
+  pending fork: evolve, or change the goal.** Not a hole (it was examined) and not an exclusion (it
+  was not chosen).
+- **Unexamined** — a visible remainder.
+
+A register with inexpressible cells and no fork recorded against them is incomplete in a way a
+coverage count will not show.
 
 ### 3.5 Two disciplines throughout, and they cut against the rest
 
@@ -683,6 +735,8 @@ remains untaken, and this spec does not supply it.
 | D15 | **The clause-level floor is a meaning test — split when halves can be violated independently** | The demonstrability floor cannot govern clause splitting once witnesses come later. Granularity of *how* needs judgment; a hard rule there manufactures false precision. The demonstrability floor survives, relocated to witness decomposition |
 | D16 | **The clause citation is a facet on the `advances` edge** (`kb_properties`, `owner_table='kb_edges'`) | Makes the two-spellings divergence *unrepresentable* rather than detected — rung 4, not rung 2. The link is the edge (settled by `KeyFate::Edge`); the clause qualifies the link. Alternatives put structure in a string or reverse a decided thing |
 | D17 | **A task declares `witnesses` OR `enables`** | Enabling work is not evidence. Without the split, `no-witness-precedes-its-mechanism` would forbid the very work that makes witnesses possible. Evidenced: the deleted "material-event set (**unblocks** W2 and W8)" task declared itself a witness and witnessed nothing |
+| D18 | **The inexpressible intersection is first-class, with exactly two honest exits** — evolve the system (`enables` task) or change the goal (supersession) | The third exit, assuming the affordance, is the deeper account of §9.1: a register met the edge of what the system could express and hallucinated it. Both honest exits already have worked instances (edge facets; R10) and neither was recognised as a fork |
+| D19 | **Closure gains a fourth cell state — examined-and-inexpressible** | *Excluded-with-reason* is settled; *inexpressible* is a pending fork. Collapsing them makes a waiting cell look decided, which is how the third exit gets taken by default |
 
 ---
 
