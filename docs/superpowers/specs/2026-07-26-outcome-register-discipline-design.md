@@ -403,6 +403,36 @@ already thinking about the outcome, which is the only moment the answer is cheap
 > open_meta? eventually facets?)."* Answered: recognized `open_meta` conventions on `domain`-typed
 > resources, and the query is a set difference.
 
+### 5.1 A defect the first run of this query found, in the convention's own plumbing
+
+**Two spellings of "this task belongs to that goal" exist, and nothing ties them.**
+
+- the `advances` **edge**, asserted by `resource create/update --goal`, and the only thing
+  `resource list --goal <ref>` filters on;
+- `open_meta.witnesses.goal`, the **citation** the witness convention uses.
+
+They can disagree, silently. Found empirically on 2026-07-26, on the first run of the uncovered-clause
+query: task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` cites goal
+`019f9a34-3306-70d1-b07a-f23c99943751` through `open_meta` and carries **no** `advances` edge. It
+therefore does not appear in `list --goal`, and a clause migration built from that list missed it and
+left a dangling citation.
+
+**The migration was hand-built by the author of this spec, an hour after specifying that the query
+should exist. The query caught it.** That is the non-vacuity evidence §9 asks for, taken earlier and
+more cheaply than expected, and it is worth more than a green run would have been.
+
+This is the audit's own type specimen — same shape, two spellings, nothing linking them — sitting
+inside the mechanism meant to catch it. It is **not** resolved here. Three options, none costed:
+
+1. **The citation is derived from the edge.** One authority; `--goal` stays the enumerator.
+2. **The edge is derived from the citation.** The witness convention becomes authoritative and the
+   edge is a projection.
+3. **Both stay, and a check ties them** — the rung-2 move, at the cost of a third thing to maintain.
+
+Until it is resolved, **any query over goal membership must read the citation, not the edge**, because
+the citation is what the discipline actually uses — and a query built on `--goal` will silently
+under-report.
+
 ---
 
 ## 6. The workflow vocabulary and the loop
@@ -632,6 +662,9 @@ remains untaken, and this spec does not supply it.
   question on purpose. That leaves genuinely unresolved how the right granularity of mechanism is
   conveyed up and down a decomposition ladder — the thing that most needs subjective judgement and
   most resists a hard boundary. No mechanism is proposed here; naming it as open is the honest state.
+- **Goal membership has two spellings** (§5.1) — the `advances` edge and `open_meta.witnesses.goal` —
+  and nothing ties them. Found by the first run of the uncovered-clause query, on a migration the
+  author of this spec had just built by hand. Three resolutions are named in §5.1; none is costed.
 - **Whether the negative face is one element or an arm of the three-way Then.** Element 8 is
   introduced as standing rather than act-scoped (§3.1). A standing negative outlives any act, which is
   what regressions are — but it has not been exercised in a real register yet, and the first one may
