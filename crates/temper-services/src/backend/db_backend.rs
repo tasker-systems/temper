@@ -658,20 +658,91 @@ impl DbBackend {
         }
     }
 
-    /// The source resource an edge mutation is authorized against. Production gates edge
-    /// retype/reweight/fold on "can modify the SOURCE resource" (`handlers::edges` → 403 "Cannot modify
-    /// source resource"); the parity-era write path only ever asserts resource→resource edges, so the
-    /// source is always a `kb_resources` endpoint.
-    async fn edge_source_resource(&self, edge_id: uuid::Uuid) -> Result<uuid::Uuid, TemperError> {
-        sqlx::query_scalar!(
-            "SELECT source_id FROM kb_edges \
+    /// Auth-before-writes gate for MUTATING an existing edge — retype / reweight / fold.
+    ///
+    /// Replaces the former `edge_source_resource` lookup, which returned only the source id for the
+    /// caller to gate on. Production gates these verbs on "can modify the SOURCE resource"
+    /// (`handlers::edges` → 403 "Cannot modify source resource"); the write path only ever asserts
+    /// resource→resource edges, so the source is always a `kb_resources` endpoint.
+    ///
+    /// Gates the source resource (the tombstone floor + baseline authority) and container-write on
+    /// the edge's home, mirroring the clauses [`Self::assert_edge_from_source_home`] applies when the
+    /// edge is created. Without this, mutating an edge would be *easier* than creating the identical
+    /// one — a caller with a direct resource grant but no container authority could not assert an
+    /// edge, yet could retype one that already exists, silently changing its meaning in a container
+    /// they may not author. A gate set is only as strong as its weakest verb.
+    ///
+    /// The home comes from `kb_edges` itself, not re-derived from the source's current home: the
+    /// stored anchor is where the edge actually lives, and the two can differ if the source was
+    /// re-homed after the edge was asserted.
+    ///
+    /// No target-read clause: these verbs do not change endpoints, so the target was already
+    /// authorized at assert time. Retracting or reweighting an edge you can see, in a container you
+    /// author, discloses nothing new about the target.
+    async fn check_edge_mutable(&self, edge_id: uuid::Uuid) -> Result<(), TemperError> {
+        let home = sqlx::query!(
+            "SELECT source_id, home_anchor_table, home_anchor_id FROM kb_edges \
              WHERE id = $1 AND source_table = 'kb_resources'",
             edge_id,
         )
         .fetch_optional(&self.pool)
         .await
         .map_err(api_err)?
-        .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))
+        .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
+        self.check_can_modify_next(home.source_id).await?;
+        self.check_container_authorable(&home.home_anchor_table, home.home_anchor_id)
+            .await
+    }
+
+    /// Container-write gate for an **anchor of either kind** — the arm-dispatching wrapper over
+    /// [`Self::check_context_authorable`] / [`Self::check_cogmap_authorable`]. Used where the anchor
+    /// kind is data (an edge's home, read from a row) rather than a static branch in the code.
+    async fn check_container_authorable(
+        &self,
+        anchor_table: &str,
+        anchor_id: uuid::Uuid,
+    ) -> Result<(), TemperError> {
+        match anchor_table {
+            "kb_contexts" => self.check_context_authorable(anchor_id).await,
+            "kb_cogmaps" => self.check_cogmap_authorable(anchor_id).await,
+            // `kb_edges`/`kb_resource_homes` both CHECK-constrain the anchor table to those two, so
+            // this arm is unreachable through the schema. Deny rather than admit an unknown kind:
+            // a third anchor kind must arrive with its own authorization decision, not inherit one.
+            _ => Err(TemperError::Forbidden),
+        }
+    }
+
+    /// **F-1, target clause** — the caller must be able to READ an edge's target endpoint.
+    ///
+    /// `endpoint_readable_by_profile` is the incumbent predicate for exactly this question: it is
+    /// what `edges_visible_to` applies to both endpoints, and what the lineage reader and the two
+    /// admin firewalls use. Calling it (rather than restating "is the target visible") keeps edge
+    /// *authorship* and edge *visibility* answering to one definition — otherwise a caller could
+    /// author an edge that the same rules then hide from them.
+    async fn check_endpoint_readable(
+        &self,
+        endpoint_table: &str,
+        endpoint_id: uuid::Uuid,
+    ) -> Result<(), TemperError> {
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT endpoint_readable_by_profile($1, $2, $3)",
+            *self.profile_id,
+            endpoint_table,
+            endpoint_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if can.unwrap_or(false) {
+            Ok(())
+        } else {
+            // NotFound, not Forbidden: the caller cannot read this endpoint, so confirming it exists
+            // would make the write an existence oracle over resources they have no standing to see.
+            // Mirrors the citation-audit gate's treatment of the same disclosure problem.
+            Err(TemperError::NotFound(format!(
+                "{endpoint_table} {endpoint_id} not found"
+            )))
+        }
     }
 
     /// Assert an edge from `edge.src` to `edge.tgt`, homing it on the SOURCE resource's
@@ -679,10 +750,25 @@ impl DbBackend {
     /// cogmap-homed nodes. Reads the source's home WITHOUT assuming a context (an
     /// `anchor_table='kb_contexts'` filter returns zero rows for cogmap-homed sources).
     ///
-    /// Auth on the source is the CALLER's responsibility — this helper does NOT gate.
-    /// Callers already hold it: `assert_relationship` runs its source modify-check first;
-    /// the create/update goal projection owns the resource under mutation. Shared so the
-    /// home-detect + kernel-vs-context branch lives in exactly one place.
+    /// **This helper OWNS edge-creation authorization (F-1).** It did not gate at all until the
+    /// 2026-07-18 audit's F-1 was closed; the contract was "callers hold the source check", which
+    /// left the *target* unauthorized on every path and left the goal-edge projections with no
+    /// endpoint check whatsoever. Three clauses, all before any write:
+    ///
+    /// 1. **`can_modify_resource(src)`** — retained, and load-bearing for a reason clause 2 does not
+    ///    cover: it carries the soft-delete WRITE floor (`r.is_active`). Container-write alone would
+    ///    happily assert an edge out of a tombstone.
+    /// 2. **container-write on the resolved home** — an edge is an object *homed* in a context or
+    ///    cogmap, so authoring one is authoring into that container. Same rule F-2 established for
+    ///    placing a resource. This subsumes clause 1's non-tombstone arms (container-write is
+    ///    `can_modify_resource`'s arm 4), so the effective source authority is container authority.
+    /// 3. **`endpoint_readable_by_profile(tgt)`** — you may point at what you can see. Closes F-1's
+    ///    "a caller who can modify A can attach A→B to any B by id, including resources they cannot
+    ///    read".
+    ///
+    /// Gating **here** rather than at the three call sites is deliberate: the home is authorized as
+    /// the same value it is then written to (no gap between the check and the write it protects),
+    /// and the two goal-edge projections inherit the target clause instead of each needing their own.
     async fn assert_edge_from_source_home(
         &self,
         edge: SourceHomedEdge<'_>,
@@ -698,6 +784,17 @@ impl DbBackend {
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
         let (home_id, home_table) = (home.anchor_id, home.anchor_table);
+
+        // Auth before any write (F-1). See this function's doc for why all three clauses exist and
+        // why clause 1 is not redundant despite clause 2 subsuming its non-tombstone arms.
+        self.check_can_modify_next(edge.src).await?;
+        self.check_container_authorable(&home_table, home_id)
+            .await?;
+        // Edge targets are resources on every production path (the cogmap-as-endpoint form is not
+        // reachable from this helper, whose source is always a resource), so the endpoint table is
+        // fixed here rather than threaded through `SourceHomedEdge`.
+        self.check_endpoint_readable("kb_resources", edge.tgt)
+            .await?;
 
         let label = (!edge.label.is_empty()).then_some(edge.label);
         let src = ResourceId::from(edge.src);
@@ -1479,8 +1576,10 @@ impl DbBackend {
             .map_err(api_err)?;
 
         // Project the first-class goal link to a live `advances`→goal edge (issue 019f3d55). The
-        // new resource is the source (owned by the caller, so the shared assert helper's "auth is
-        // the caller's responsibility" contract holds); the edge homes on the resource's anchor.
+        // new resource is the source and the edge homes on its anchor. The shared helper authorizes
+        // all three F-1 clauses itself — which is what gives this path a check on the GOAL: a caller
+        // may only link to a goal they can read, and `--goal` takes a bare id that nothing else here
+        // would have gated.
         if let Some(goal) = cmd.goal {
             self.assert_edge_from_source_home(
                 SourceHomedEdge {
@@ -1720,8 +1819,9 @@ impl Backend for DbBackend {
 
         // Project the goal-edge patch (issue 019f3d55). `Set` folds any existing `advances`→goal
         // edge and asserts the new one (replace-in-place); `Clear` folds without re-asserting;
-        // `None` leaves the goal edge untouched. The modify-gate above is this update's own auth,
-        // so the shared assert helper's "caller owns auth" contract holds.
+        // `None` leaves the goal edge untouched. The modify-gate above is this update's own auth;
+        // the shared assert helper adds the edge's own three clauses (F-1), including the read check
+        // on the goal being linked to.
         match cmd.goal {
             Some(GoalPatch::Set(goal)) => {
                 self.fold_goal_edges(new_id, emitter, &act_ctx).await?;
@@ -1926,10 +2026,14 @@ impl Backend for DbBackend {
         // — used directly, no origin_uri remap (the prior bimap collapsed empty-origin_uri resources
         // onto one arbitrary id).
         let src_next = uuid::Uuid::from(cmd.source);
-        // Auth before any write (WS2): edge mutations gate on the SOURCE resource (production's
-        // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
-        self.check_can_modify_next(src_next).await?;
-        // Correlation-integrity gate — additive to the modify-source authz above, never a substitute.
+        // Auth before any write (WS2) lives in `assert_edge_from_source_home` below, which owns all
+        // three edge-creation clauses (source modify + container write + target read, F-1). It is
+        // NOT duplicated here on purpose: the source check alone was this command's entire gate
+        // before F-1, and leaving a copy behind would leave two places to keep in step while only
+        // one of them is reached by the goal-edge projections.
+        //
+        // Correlation-integrity gate — additive to that authz, never a substitute. It runs first
+        // because it validates the act envelope rather than the subject, and it writes nothing.
         self.check_act_invocation(cmd.act.invocation).await?;
 
         let tgt_next = uuid::Uuid::from(cmd.target);
@@ -1942,8 +2046,8 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
         // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
-        // projection via `assert_edge_from_source_home`. The source modify-gate above is this
-        // command's own auth; the helper does not re-gate.
+        // projection via `assert_edge_from_source_home`, which is also where this command's
+        // authorization now lives (F-1).
         let edge = self
             .assert_edge_from_source_home(
                 SourceHomedEdge {
@@ -1968,9 +2072,9 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         // The edge handle on the substrate backend IS the substrate edge id (returned by assert).
         let handle = uuid::Uuid::from(cmd.edge_handle);
-        // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(handle).await?;
-        self.check_can_modify_next(src).await?;
+        // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
+        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`.
+        self.check_edge_mutable(handle).await?;
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -1999,9 +2103,9 @@ impl Backend for DbBackend {
         cmd: ReweightRelationship,
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         let handle = uuid::Uuid::from(cmd.edge_handle);
-        // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(handle).await?;
-        self.check_can_modify_next(src).await?;
+        // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
+        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`.
+        self.check_edge_mutable(handle).await?;
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -2029,9 +2133,9 @@ impl Backend for DbBackend {
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         let handle = uuid::Uuid::from(cmd.edge_handle);
-        // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(handle).await?;
-        self.check_can_modify_next(src).await?;
+        // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
+        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`.
+        self.check_edge_mutable(handle).await?;
         // Correlation-integrity gate — additive to the modify-source authz above.
         self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)

@@ -176,8 +176,8 @@ Ordered by severity.
 > and the evidence; the snapshot above each block is not edited to match. A finding with no such
 > block is still open.
 >
-> Status as of 2026-07-25: **F-0 resolved**, **F-3 resolved**, **T-1 resolved**. **F-1 and F-4
-> remain open** — both are decisions (sign off or tighten), not fixes, tracked as
+> Status as of 2026-07-25: **F-0, F-1, F-2, F-3 and T-1 resolved**. **F-4 alone remains open** — it
+> is a decision (sign off or tighten), not a fix, tracked as
 > `019f7674-c8a2-7481-b1c1-18c07788309f`.
 
 ### F-0 — capability amplification / self-escalation via the grant path (HIGH — live on `main`, fixed in draft #482)
@@ -267,6 +267,43 @@ contained: the edge is homed on A's home, does not mutate B, and `edges_visible_
 **both** endpoints visible to any viewer (so an edge to an invisible target is invisible even
 to its creator). Documented as production parity. Recommend an explicit sign-off that
 one-sided edge authorship is intended.
+
+> **RESOLVED** — tightened, not signed off. One-sided edge authorship is **not** intended. The rule
+> decided 2026-07-25: *creating an edge requires write on the source side and read on the target;
+> and since an edge is homed in a context or cogmap — the source side's home — it requires write on
+> that container too.* All three clauses now live in `assert_edge_from_source_home`, the single
+> funnel every creation path goes through.
+>
+> **The finding understated its own reach.** It framed this as edge asserts only. But the create and
+> update **goal-edge projections** also reach that helper, and its contract was "callers hold the
+> source check" — so `--goal`, which takes a bare resource id, had *no* endpoint authorization at
+> all. A caller could link their resource to a goal they cannot see. That path is now gated by the
+> same clause.
+>
+> The target clause calls `endpoint_readable_by_profile` — the predicate `edges_visible_to`, the
+> lineage reader and both admin firewalls already use — so edge *authorship* and edge *visibility*
+> answer to one definition, rather than a restatement that could drift from it.
+>
+> Denials on the target render **NotFound**, not Forbidden: confirming an unreadable resource exists
+> would turn the write into an existence oracle.
+>
+> The mutation verbs (`retype`/`reweight`/`fold`) carry the source and container clauses via
+> `check_edge_mutable`, because otherwise this change would have made *mutating* an edge easier than
+> *creating* it — a delegate holding a direct resource grant but no container authority could not
+> assert an edge, yet could retype an existing one and silently change its meaning in a container
+> they may not author.
+>
+> Measured over every live production edge before shipping: of 2929 created by real (non-`system`)
+> principals, **0** fail container-write and **0** point at a target their creator cannot read. The
+> 14 that trip the target clause do so because the target was deleted *after* the edge was made —
+> nobody exercised this vector. The 382 `system` edges are migration-born (migrations call the
+> `relationship_assert` SQL function directly, never `DbBackend`), so a backend gate cannot reach
+> them.
+>
+> **Left open deliberately:** the gate calls `cogmap_authorable_by_profile`, not
+> `require_cogmap_write_admin`, so the L0 admin gate is not applied on the edge path. Strictly better
+> than the no-container-check status quo, but whether edge authorship into a root-joined map should
+> route through the admin gate is its own decision.
 
 ### F-4 — `change_role`/`remove_member` don't compare caller rank to target rank (low)
 A **maintainer** may demote or remove an **owner** (except the last owner, which is guarded)
