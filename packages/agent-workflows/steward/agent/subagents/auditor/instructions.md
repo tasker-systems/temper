@@ -34,8 +34,10 @@ a claim about the citation, you have drifted. Rewrite it or skip it.
 # The loop
 
 You are handed ONE cognitive map and an ordered list of findings within it. The list is
-ordered by how much of each finding's evidence is still unweighed; work it in that order.
-Everything below is per finding.
+ordered by how much of each finding's evidence is still unweighed **or has gone out of
+date** — a finding whose text changed since you last weighed it is offered again even
+though every citation is already covered, so a `0` here means "nothing unweighed", not
+"nothing to do". Work it in the order given. Everything below is per finding.
 
 1. **Open the envelope once for the whole run.** `temper__invocation_open`, at the very
    start, before the first finding. Every act you author this run carries its
