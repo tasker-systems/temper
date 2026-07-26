@@ -60,7 +60,9 @@ should automate.
 This section is the backbone. It is enumerated exhaustively because a partial restatement of the
 research document would be the serialization loss the document itself diagnoses.
 
-### 3.1 The register — seven elements
+### 3.1 The register — eight elements
+
+Seven from the research document, plus a negative face this spec adds (element 8).
 
 A goal carries an outcome register:
 
@@ -88,6 +90,22 @@ A goal carries an outcome register:
    X") and to supersession ("X was decided and is now replaced"). The third state is **unexercised**:
    specified, merged, present in the corpus, never executed.
    *Extended by this spec*: exercise status also applies to ontology entries (§4.2).
+8. **The negative face — what must never become true.** *Added by this spec.* A standing regression
+   boundary, not a consequence of any particular act.
+
+   It is **distinct from the refusal face**, which covers acts the system declines. A negative-face
+   clause is a state that must not obtain regardless of which act was attempted or whether anything
+   was refused: *"a read-only context member must never create a resource homed in that context"*,
+   *"standing must never be recomputed from its own prior value"*, *"a folded source block must never
+   become invisible to the staleness check."*
+
+   It is also distinct from the three-way Then, which is entirely positive postconditions.
+
+   **Why it earns a place**: across the audited window, nearly every expensive finding was the
+   violation of a standing negative that no element of the register had a slot for. The create-into-
+   context gate (`READ` where `WRITE` was required), the auditor dispatch callable by any principal,
+   the proposed `NOT sb.is_folded` filter that would have made content removal invisible — each is a
+   boundary crossed, and none is expressible as a postcondition or a refusal.
 
 > **Element 7 needs two axes, not one value.** Established the hard way: the citation auditor's
 > schedule had fired ~18 times and died every tick before doing any work. *"Has the schedule fired?"*
@@ -103,8 +121,60 @@ A goal carries an outcome register:
 - **Drift is locally scoped.** When implementation reality forces divergence the question is precise:
   *does this break my witness-duty to clause N, or is clause N itself now wrong?* The first is a
   task-level fix; the second is a supersession event, visible to sibling tasks.
-- **The decomposition floor is demonstrability, not size.** Stop when a criterion's witnesses are
-  directly demonstrable. If a child still needs children to be checkable, keep going.
+
+#### 3.2.1 Clauses are invariants; witnesses are statements about mechanism
+
+**This is the load-bearing correction, and it was paid for.** A register authored over a subject that
+did not exist produced ten witnesses, most of them unwritable, filed against an explicit instruction
+not to file unvetted tasks — and cost four working sessions to recover the intent the decomposition
+had buried. Full accounting in §9.1.
+
+The distinction that prevents it:
+
+- **A clause states what must be true, or what must never be true. It names no mechanism.** It has to
+  survive any implementation, because *the how is the part most likely to mutate*. The clause that
+  survived every revision of the auditor work — *"an unrefreshed verdict is a verdict about something
+  that has not changed"* — names nothing that could be built two ways.
+- **A witness states how we know. It is a claim about mechanism, so it can only be authored once the
+  mechanism is known — which is during or after the doing, never before.**
+
+Every one of the ten hallucinated witnesses was a *how* wearing a clause's clothes: *"every member of
+the material-event set has a production write path"* presumes a material-event set exists as an
+object; *"the partition is exhaustive over `domain`"* presumes a partition. Neither had been built and
+neither could be known yet.
+
+**The bite requirement proves the timing rather than merely suggesting it.** A witness must be shown
+to fail against the state the clause claims to change. When the mechanism does not exist, "fails
+against current state" is satisfied by *the absence of the feature* — vacuously, by anything. A
+witness that fails only because nothing exists discriminates nothing.
+
+**Consequences:**
+
+- **Decomposition into witnesses is not a preamble step.** It happens inside the doing (§6, loop
+  step 5), and it is a **separately authorized act** — the register's shape invites decomposition and
+  an author will decompose, so the constraint has to be structural rather than an instruction.
+- **A clause whose mechanism is unbuilt carries a declared hole, not a filed task.** "One clause with
+  a named remainder" is the honest state; "nine witnesses" was not.
+- **The termination worry dissolves rather than being gated.** Witnesses cannot proliferate up front
+  because they are not authored up front.
+
+#### 3.2.2 The decomposition floor — a meaning test, not a demonstrability test
+
+The research document's floor — *stop when a criterion's witnesses are directly demonstrable* — cannot
+govern clause decomposition once witnesses come later. The clause-level rule is:
+
+> **Split a clause when its halves can be violated independently. If two sub-clauses can only ever
+> fail together, they are one clause.**
+
+This is deliberately a **question judgment can answer, not a boundary that pretends to**. The
+granularity of *how* is the thing hardest to communicate up and down a decomposition ladder, and a
+hard rule there produces false precision. The demonstrability floor survives, relocated: it governs
+**witness** decomposition, during the doing, where mechanism is known.
+
+**The boundary this whole section defends**: too much decomposition or verification up front is the
+task performed in preamble. The only way to know what will work, how it will work, and how to prove
+it, is ultimately to do it. The methodology's job is to state what must be true and what must never
+be true — direction, and the means to validate success and failure — and to leave the *how* alone.
 
 ### 3.3 The closure discipline
 
@@ -152,6 +222,9 @@ Each terminal criterion carries a mode marker.
   A test that passes identically before and after discriminates nothing, however well it is named.
   Witness-coverage without a bite requirement degenerates into a coverage metric — precisely the
   instrument this convention exists to escape.
+  **The bite requirement is also what fixes *when* a witness may be authored** (§3.2.1): when the
+  mechanism does not exist, "fails against current state" is satisfied by the absence of the feature,
+  vacuously, by anything. A bite against nothing is not a bite.
 - **Replay-verified.** Eventual stable-state cases: run the cascade to quiescence deterministically
   against the test ledger, then assert. Event-sourcing makes this deterministic rather than
   timing-dependent.
@@ -343,9 +416,17 @@ already thinking about the outcome, which is the only moment the answer is cheap
 | **Decision** | The supersession vehicle |
 | **Session** | Opens with the criteria-in-force projection; closes by updating exercise status and carrying a status on every closing note |
 
-**Goal, sub-goal and task are one kind of node at three heights.** The demonstrability floor decides
-which you are writing: a task when its witnesses are directly demonstrable, a sub-goal when they still
-need children. This replaces *"how big is this"* with a question that has an answer.
+**Goal, sub-goal and task are one kind of node at three heights, but two different floors govern the
+descent** (§3.2.1, §3.2.2):
+
+- **Goal → sub-goal** is clause decomposition, before the doing. Governed by the **meaning test**:
+  split while the halves can be violated independently. A sub-goal names no mechanism.
+- **Sub-goal → task** is witness decomposition, inside the doing, once mechanism is known. Governed by
+  the **demonstrability floor**, which is where that floor belongs and the only place it can be
+  honestly applied.
+
+So *"which am I writing?"* has an answer at both heights, and neither answer is "how big is this."
+A task filed before its mechanism exists is the failure §9.1 records.
 
 **Research is placed by evidence.** The research document leaves it unplaced. Across the audited
 sessions the expensive findings all came from grounding passes, and they had nowhere to live but a
@@ -361,14 +442,23 @@ concepts, not a drifted spelling.
 
 1. **Open** — the criteria-in-force projection: which clauses hold for this region, which are
    superseded, where the scars are.
-2. **Author or resume** — write or reload the register. The expressibility check fires here.
-3. **Decompose** — witnesses down to the demonstrability floor.
+2. **Author or resume** — write or reload the register: the invariants (what must be true) and the
+   negative face (what must never become true). No mechanism named. The expressibility check fires
+   here.
+3. **Decompose the clauses** — by the meaning test (§3.2.2), not to a demonstrability floor. Stop
+   when halves can no longer be violated independently. A clause whose mechanism is unbuilt carries a
+   **declared hole**, not a filed task.
 4. **Ground** — a grounding pass lands as research.
-5. **Build** — tasks execute; witnesses must bite.
+5. **Build — and author the witnesses here.** Mechanism becomes known by building, so this is the
+   first point at which a witness can be written honestly, and it is a **separately authorized act**.
+   Witnesses must bite against a state that exists.
 6. **Contradict** — measurement refutes a clause ⇒ decision, supersession, visible scar. Never a
    silent edit.
 7. **Close** — exercise status updates to what actually ran; every closing note carries
    **hard follow** / **accepted** / **for the record** / **nothing**.
+
+> **Steps 3 and 5 were one step in the draft of this spec, and that was the defect.** Collapsing them
+> is what lets a preamble pass emit mechanism-shaped tasks for a mechanism nobody has built.
 
 ---
 
@@ -442,9 +532,48 @@ The discipline demands non-vacuity and bite of everything else, so it owes both 
   maintainer, across several sessions. It cannot be made executable, and claiming otherwise would be
   the flattening the discipline forbids elsewhere.
 
-**The kill-switch is unchanged and still unmet.** Goal `019f9a34`'s revision-economics clause needs a
-reading from a clause superseded *after* witnesses are filed and code written against it. Three data
-points exist; none is that. **This spec does not supply it and must not be read as supplying it.**
+### 9.1 A reading on the kill-switch — negative, and it is why §3.2.1 exists
+
+Goal `019f9a34-3306-70d1-b07a-f23c99943751`'s revision-economics clause is the kill-switch: *when
+measurement contradicted a clause, what did the supersession cost?* It specifies the reading it needs
+as one taken from a clause superseded **after witnesses are filed and code written against it**.
+
+**A reading now exists, and by the goal's own criteria it does not qualify — yet it is worse in the
+dimension that matters.**
+
+What happened: a decomposition pass over a register authored against an unbuilt subject produced ten
+witnesses, filed against an explicit instruction not to create unvetted tasks. Grounding showed most
+were **not expressible and not implementable** — they did not fall out of any design, because there
+was no design to fall out of. Six were subsequently deleted; two had already been cancelled with
+reasons; the remainder stand.
+
+**Cost: four working sessions on a sibling machine, recovering the original intent.**
+
+Why it does not qualify, stated honestly: no code was written against the clauses, and nothing built
+was discarded. Why it is nevertheless the more serious reading: **the cost was not correcting a
+clause. It was recovering the intent the decomposition had buried** — which is precisely the drift
+this convention exists to prevent, produced by the convention's own instrument.
+
+Against the goal's why-anchor — *"if register-authoring itself becomes ritual costlier than the drift
+it prevents, the goal has failed by its own anchor and should be superseded, not persisted with"* —
+this is the anchor's stated failure condition.
+
+**The verdict is separable, and the separation is the finding.** The register's *elements* earned
+their keep on the record: exercise status found a schedule firing hourly and dying, for a day, while
+the spec asserted nothing was deployed; the closure discipline found eight unclassified event types;
+the Set 5 Critical was a situated-actors omission. Those were attributed to specific elements at the
+time. **It is the decomposition instrument that failed, not the register** — which is why §3.2.1
+changes the instrument rather than abandoning the convention.
+
+**Two prior warnings existed and neither became a rule.** The goal's own C3 section recorded the
+termination worry as a counter-observation (*"a convention that generates work under use is not
+obviously cheap… no stated termination proof"*). Arc 3 concluded *"the ambitious route has no ground
+to build on so the shape evolves too much in unbuilt futures"* and *"the fail-before/pass-after bar is
+trivially met by anything when 'before' means 'unbuilt.'"* Both were written down as observations.
+Neither was written down as a constraint. **§3.2.1 is that constraint.**
+
+**What is still unmet.** The reading the clause actually specified — a supersession *after code* —
+remains untaken, and this spec does not supply it.
 
 ---
 
@@ -460,9 +589,13 @@ points exist; none is that. **This spec does not supply it and must not be read 
 | D6 | Exercise status extends to ontology entries | Lets a research pass be generous without inflating the domain closure is computed against |
 | D7 | Expressibility fires at authoring time, not in a sweep | Puts discovery at the only moment the answer is cheap |
 | D8 | Reach extends by relocation, not governance | Prose has no compiler; a marker-presence gate would read as coverage. The load-bearing content moves instead |
-| D9 | Sub-goals need no new mechanism — a sub-goal is a non-leaf witness | The demonstrability floor already describes a tree of arbitrary depth |
+| D9 | Sub-goals need no new mechanism — a sub-goal is a non-leaf node in the same tree | Amended by D12/D15: a sub-goal decomposes **clauses** by the meaning test, before the doing. Only the sub-goal→task descent is witness decomposition, and only that descent uses the demonstrability floor |
 | D10 | The register does not become a seventh mode×effort workflow | Orthogonal axes: how much process vs. what the outcome is |
 | D11 | No framework decision on the fixture vocabulary | The `rstest` claim was a think-with reference mistaken for an affordance. The vocabulary survives; the framework claim does not |
+| D12 | **Clauses are invariants and name no mechanism; witnesses name mechanism and are authored during or after the doing** | The *how* is what mutates. Ten mechanism-shaped witnesses over an unbuilt subject cost four sessions (§9.1). The bite requirement proves the timing: "fails against current state" is vacuous when the mechanism does not exist |
+| D13 | **Witness decomposition is a separately authorized act, inside the build** | The register's shape invites decomposition and an author will decompose. An explicit instruction not to was given and not held, so the constraint must be structural, not instructional |
+| D14 | **Element 8 — the negative face:** what must never become true | Distinct from the refusal face (acts declined) and from the three-way Then (positive postconditions). Nearly every expensive finding in the audited window was a standing negative that no element had a slot for |
+| D15 | **The clause-level floor is a meaning test — split when halves can be violated independently** | The demonstrability floor cannot govern clause splitting once witnesses come later. Granularity of *how* needs judgment; a hard rule there manufactures false precision. The demonstrability floor survives, relocated to witness decomposition |
 
 ---
 
@@ -484,11 +617,25 @@ points exist; none is that. **This spec does not supply it and must not be read 
 - **The register's authoring cost** — the convention must be cheaper than the drift it prevents.
 - **Generated scenario prose** — deferred; only worth building if a stakeholder audience materializes.
 
-**Opened by this spec:**
+**Closed by evidence during this spec's own authoring:**
 
-- **Termination of witness generation.** A convention that generates witnesses under use has no stated
-  termination proof. Observed once: a decomposition pass produced two *new* witnesses. Nothing shows
-  it expanding faster than it closes; named so a later reader checks rather than assumes.
+- **Termination of witness generation.** An earlier draft of this section read: *"Nothing shows it
+  expanding faster than it closes; named so a later reader checks rather than assumes."* **That is
+  false, and it was false when written.** The check came back positive — see §9.1. The resolution is
+  §3.2.1: witnesses are not authored up front, so they cannot proliferate up front.
+  Left as a visible scar rather than an edit, because a spec about drift that silently corrected its
+  own would be the specimen.
+
+**Still open, and newly opened:**
+
+- **Where the granularity of *how* is communicated.** §3.2.2 makes clause splitting a judgment
+  question on purpose. That leaves genuinely unresolved how the right granularity of mechanism is
+  conveyed up and down a decomposition ladder — the thing that most needs subjective judgement and
+  most resists a hard boundary. No mechanism is proposed here; naming it as open is the honest state.
+- **Whether the negative face is one element or an arm of the three-way Then.** Element 8 is
+  introduced as standing rather than act-scoped (§3.1). A standing negative outlives any act, which is
+  what regressions are — but it has not been exercised in a real register yet, and the first one may
+  argue for folding it into element 4.
 
 ---
 
@@ -514,7 +661,22 @@ Deliberately not specified here:
 2. The recognized `open_meta` conventions (§4.2) — an `open_meta.schema.json` version bump.
 3. The two queries (§5).
 4. Dogfood: hand-author Temper's own ontology (§9), which produces spec 2's requirements.
-5. Amend goal `019f9a34-3306-70d1-b07a-f23c99943751`'s executable-spine clause (§3.4.1).
+5. **Redraft goal `019f9a34-3306-70d1-b07a-f23c99943751` as an outcome register under this
+   discipline** — the first register authored against a subject with **no incumbent substrate**, which
+   is the test that goal's own overfit clause asks for. It must:
+   - preserve the accumulated discovery — the three revision-cost data points, the superseded pilot
+     subject, and the named remainders (the greenfield instance, the third refusal ground);
+   - amend the executable-spine clause per §3.4.1;
+   - record §9.1's verdict as a clause, not a footnote;
+   - carry an element-8 negative face, which the current goal has nowhere to put;
+   - migrate the four live clause citations (`019f9bcf-bdba-…`, `019f9bcf-e4ba-…`, `019f9a34-c8ca-…`,
+     `019f9a34-8098-…`) and give clauses **readable names rather than letter-number indices**, since an
+     index carries no information to a reader who does not have the document open.
+
+   Landed through a **decision** resource — the discipline's own supersession vehicle — not as an
+   in-place edit.
 
 Steps 1 and 2 are independent and can land in either order. Step 3 depends on 2. Step 4 depends on all
-three and is where the non-vacuity and bite checks in §9 are actually taken.
+three and is where the non-vacuity and bite checks in §9 are actually taken. Step 5 depends on nothing
+technical and can run at any point; it is sequenced last because a register written before §3.2.1 was
+understood is what §9.1 records.
