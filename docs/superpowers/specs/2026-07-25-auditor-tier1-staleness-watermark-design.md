@@ -18,6 +18,14 @@
 > all four. Rev. 2 also **settles the ordering key** (§3.4), which rev. 1 declared "not an open
 > sub-decision" and then left to the implementer, and **ratifies D7's conjunct as separable** — for
 > a reason rev. 1 did not give. Sections changed in rev. 2 are marked **[rev2]**.
+>
+> **Rev. 3 changes the comparand and deletes F9.** Pete asked why the predicate was comparing UUIDs
+> at all when record-level timestamps exist. It should not have been: `occurred_at` is the
+> substrate's own name for when an event happened, and comparing ids made a correctness-critical
+> comparison depend on an id generator that **differs between PG17/Neon and PG18/local**. Switching
+> to timestamps removes that dependency (F9 dissolves — §4), and removes the `array_agg(…)[1]`
+> workaround with it, since `max()` exists for `timestamptz` and not for `uuid`. Sections changed in
+> rev. 3 are marked **[rev3]**.
 > Session notes: `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6`, and this session's.
 
 ---
@@ -156,12 +164,7 @@ fast-follow** — see §3.5 for why it cannot be what bounds *k*, and therefore 
 One migration, DROP+CREATE (`20260724000130` sets the precedent by DROP+CREATE-ing
 `workflow_job_claim`).
 
-### 3.1 The predicate — executed before being written here **[rev2]**
-
-Rev. 1's body used `max(uuid)`, **which does not exist in PostgreSQL**, so the migration would have
-failed at `sqlx migrate run` (`LANGUAGE sql` bodies parse at CREATE time). Rev. 1 fixed that and got
-the grain wrong instead. The body below was **executed against the live database, creates cleanly,
-and passes the four-scenario probe in §3.2(b)**:
+### 3.1 The predicate — executed before being written here **[rev3]**
 
 ```sql
 CREATE FUNCTION resource_has_stale_citation(p_finding uuid, p_principal uuid)
@@ -169,16 +172,14 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
         SELECT 1
         FROM resource_live_citations(p_finding) lc
-        JOIN kb_content_blocks b ON b.id = lc.block_id
+        JOIN kb_content_blocks b  ON b.id  = lc.block_id
+        JOIN kb_events         be ON be.id = b.last_event_id
         CROSS JOIN LATERAL (
             SELECT
                 -- This principal's freshest audit anywhere on this (finding, source)...
-                (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC))[1]
-                    AS finding_wm,
+                max(a.created)                                         AS finding_wm,
                 -- ...and its freshest audit of THIS citation specifically.
-                (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC)
-                     FILTER (WHERE a.block_id = lc.block_id))[1]
-                    AS block_wm
+                max(a.created) FILTER (WHERE a.block_id = lc.block_id) AS block_wm
               FROM kb_citation_audits a
               JOIN kb_content_blocks ab
                 ON ab.id = a.block_id AND ab.resource_id = p_finding
@@ -188,24 +189,61 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         ) w
         WHERE w.finding_wm IS NOT NULL      -- this principal has engaged this (finding, source)
           AND ( w.block_wm IS NULL          -- ...but never at THIS block
-             OR b.last_event_id > w.block_wm
+             OR be.occurred_at > w.block_wm
              OR EXISTS (SELECT 1 FROM kb_content_blocks sb
-                         WHERE sb.resource_id   = lc.source_id
-                           AND sb.last_event_id > w.block_wm) )
+                          JOIN kb_events se ON se.id = sb.last_event_id
+                         WHERE sb.resource_id = lc.source_id
+                           AND se.occurred_at > w.block_wm) )
     );
 $$;
 ```
 
-**`array_agg(…)[1]`, not `ORDER BY … LIMIT 1`.** The obvious repair is also wrong: a scalar subquery
-gets pulled up and evaluated **three times per citation row** (measured: `SubPlan 1` + `SubPlan 2` +
-`InitPlan 3`), which is exactly what `20260724000130:23-28` forbids. `array_agg` produces one
-`Aggregate` node.
+**The comparand is a timestamp, not an event id. [rev3 — the change that dissolved F9.]**
 
-**Both watermarks come from ONE aggregate, via `FILTER`.** The naive shape is two `CROSS JOIN
-LATERAL` blocks over the same audit set, which is two `Aggregate` nodes for one question — the same
-multiplication `:23-28` forbids, arrived at from the other direction. `EXPLAIN` on the body above
-shows a single `Aggregate`; the two subscript operations in the join filter are array indexing, not
-re-aggregation.
+Revs. 1 and 2 compared `kb_content_blocks.last_event_id` against
+`kb_citation_audits.audited_by_event_id` directly. A UUIDv7 is timestamp-prefixed, so that *looks*
+like comparing times — and it genuinely helps btree locality — but it makes a correctness-critical
+comparison depend on the **id generator**, which is not the same in both environments:
+`20260624000001:48-70` branches on `pg_available_extensions`, giving PG17/Neon `pg_uuidv7` and
+PG18/local an alias for the native `uuidv7()`. That is F9, and it was a standing prod gate on this
+predicate *and on every future change to it*.
+
+**The deciding argument is not the generator, though — it is that the substrate already has a name
+for this.** `occurred_at` is the event's own "when this happened", replay-stable by construction
+(`replay.rs`: *"projected timestamps come from the event's `occurred_at`, never `now()`"*) and
+already read exactly this way by `20260626000001_fts_search_index.sql:48`. Comparing ids
+reimplemented an ordering the system already exposes under a name — the drift-site test in
+`plan-verification.md`, which this design failed for two revisions and which no amount of
+*verifying the claim* would have caught, because the claim was true.
+
+Three things follow, in descending order of importance:
+
+1. **F9 is deleted, not deferred.** No generator dependency, so nothing to verify against Neon.
+2. **`max()` just works**, and a trap goes with it. `max(uuid)` **does not exist** in PostgreSQL and
+   a `LANGUAGE sql` body parses at CREATE time, so rev. 0's body would have failed at
+   `sqlx migrate run`. Its workaround was `(array_agg(… ORDER BY … DESC))[1]` — because
+   `ORDER BY … LIMIT 1` becomes a scalar subquery the planner evaluates **three times per citation
+   row** (measured: `SubPlan 1` + `SubPlan 2` + `InitPlan 3`), the producer multiplication
+   `20260724000130:23-28` forbids. That entire hazard existed only to serve the uuid comparand.
+3. **Both watermarks still come from ONE aggregate**, now via `FILTER` on `max()`. Two `CROSS JOIN
+   LATERAL` blocks over the same audit set would be two `Aggregate` nodes for one question — the
+   same multiplication `:23-28` forbids, from the other direction.
+
+**The cost, stated honestly.** Two primary-key joins to `kb_events`, and it **could not be measured
+here**: `kb_content_blocks` has **0 rows** on the dev database, so local plans are meaningless. The
+structural claim is only that PK joins are the cheapest join available and that
+`resource_live_citations` already performs several per call. **If profiling objects, denormalize a
+`last_event_at` onto `kb_content_blocks` (additive column, three writers, total backfill from
+`kb_events`) — do not go back to comparing ids.**
+
+**Neither comparand is commit order.** The uuid was minted mid-transaction; `occurred_at` is
+transaction start. Both are approximations, and the gap between them sits below the resolution of
+what this predicate means. `occurred_at` wins because it is *named and replay-stable*, not because
+it is more precise.
+
+`kb_citation_audits.created` needs no join of its own: `_project_citation_audited` sets it
+explicitly from `e.occurred_at`, so it is the audit event's own time and is replay-stable for the
+same reason.
 
 ### 3.2 Two grain corrections, both load-bearing **[(a) revised · (b) rev2]**
 
@@ -273,12 +311,17 @@ it"*: after the masking event `stale = false` **and** `uncovered = 0`, so the sw
 the finding at all. It returns only on a new material event touching the finding or one of its
 sources — and for a settled finding, the state §1 exists to condemn, that may be never.
 
-### 3.3 One additive index, and why the obvious filter is wrong **[revised]**
+### 3.3 One additive index, and why the obvious filter is wrong **[revised · still required in rev. 3]**
 
 Both existing `resource_id` indexes are **partial on `NOT is_folded`**, so the source-side clause can
 use neither — confirmed with `enable_seqscan = off`, which still yields a `Seq Scan`. That is a
 correlated sequential scan of the largest table in the schema, once per citation row, for every
 candidate.
+
+**[rev3] The move to timestamps does not retire this index — both columns still earn their place.**
+`resource_id` selects the cited source's blocks, and carrying `last_event_id` keeps that an
+**index-only** scan, so the `kb_events` step is a plain primary-key probe with no heap fetch on
+`kb_content_blocks`. The comparison moved to the joined row; the lookup did not.
 
 **Do NOT add `NOT sb.is_folded` to fix it.** Folding a source block **is content removal** — *the
 source deleted the passage you cited* — and `_project_charter_set` folds and bumps in one statement.
@@ -406,7 +449,7 @@ hole requires an honest description of the hole.
 | **F6 — no content-hash dedup** | `update_resource_in_tx` gates on `p.body.is_some()`, not "the body changed", and neither `block_mutate` nor its projector guards. CLAUDE.md's own show-edit-`cat` idiom therefore fires staleness on **byte-identical** content. `_project_block_mutated` already computes `v_block_hash`, so the fact is available. **Own task.** |
 | **F7 — `resource_live_citations` has no `ingest_state` gate** | Its own header quotes the rule it violates. A half-uploaded source confers standing *and* re-queues its citers once per arriving block. **Must NOT ride along** — all three standing axes read this function; far wider blast radius than this change earns. **Own task.** |
 | **F8 — source-side clause fires on ANY block of the source** | Including self-citations and high-churn sources (a telos: `_project_charter_set` folds and reinserts every block per `charter_set`). In a self-cognition KB, findings-citing-findings is the normal case. **Unquantified — nobody has measured how often findings cite their own telos.** |
-| **F9 — same-millisecond ordering unverified on prod** | `20260624000001:48-70` branches: **PG17/Neon ⇒ `pg_uuidv7` extension; PG18/local ⇒ native `uuidv7()`.** Different generators. Local is monotone within a millisecond (0 out-of-order pairs in 50k). If `pg_uuidv7` fills `rand_a` randomly, same-ms comparisons are arbitrary. **Verify against Neon before shipping.** |
+| ~~**F9 — same-millisecond ordering unverified on prod**~~ | **DISSOLVED in rev. 3 — not verified, removed.** The predicate no longer compares event ids, so there is no generator to verify: see §3.1. Kept here rather than deleted because the *reasoning* is the reusable part. F9 was framed as "verify `pg_uuidv7` against Neon before shipping", and the framing was the error — it accepted a dependency the design never needed and promoted it to a permanent gate on every future edit to this predicate. Pete, 2026-07-26: *"why are we looking for `max(uuid)` anyway — we should already have record-level timestamps that do not rely on the ids."* The local measurement stands as a fact about PG18 and is now trivia: **49,951 same-millisecond pairs across 49 distinct milliseconds, 0 out of order.** |
 | block mutated mid-session **[rev2]** | **Rev. 1 marked this "benign race; under-triggers by one tick" and then invalidated it in §3.2(b) without revisiting the row.** At the block grain the assessment is correct — a verdict written after the mutation sits above that block's own watermark by one tick and the next material event clears it. At rev. 1's `(finding, source)` grain it was *permanent*, because a later sibling audit put the watermark above the mutation forever. §3.1 restores "one tick." **Still deferred:** the residual one-tick under-trigger is not solved here. If it shows up in practice, write-action timestamps exist for every agent and document, so the options are ordering them outright or defining a suspect "within" window that emits a bump-for-re-audit event to refresh the watermark. Judged not worth solving today (Pete, 2026-07-26). |
 
 ---

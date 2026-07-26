@@ -43,7 +43,10 @@ CREATE INDEX idx_kb_content_blocks_resource_cursor
 COMMENT ON INDEX idx_kb_content_blocks_resource_cursor IS
     'Non-partial (resource_id, last_event_id) — deliberately covers FOLDED blocks too, because '
     'folding a cited block is content removal and is precisely what `resource_has_stale_citation` '
-    'must be able to see. The two partial `NOT is_folded` indexes cannot serve that probe.';
+    'must be able to see. The two partial `NOT is_folded` indexes cannot serve that probe. '
+    'Both columns earn their place: `resource_id` selects the cited source''s blocks, and carrying '
+    '`last_event_id` makes that an index-only scan, so the following `kb_events` lookup is a plain '
+    'primary-key probe with no heap fetch on `kb_content_blocks`.';
 
 -- ── 2. The staleness predicate ───────────────────────────────────────────────────────────────────
 CREATE FUNCTION resource_has_stale_citation(p_finding uuid, p_principal uuid)
@@ -51,16 +54,14 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
         SELECT 1
         FROM resource_live_citations(p_finding) lc
-        JOIN kb_content_blocks b ON b.id = lc.block_id
+        JOIN kb_content_blocks b  ON b.id  = lc.block_id
+        JOIN kb_events         be ON be.id = b.last_event_id
         CROSS JOIN LATERAL (
             SELECT
                 -- This principal's freshest audit anywhere on this (finding, source)...
-                (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC))[1]
-                    AS finding_wm,
+                max(a.created)                                         AS finding_wm,
                 -- ...and its freshest audit of THIS citation specifically.
-                (array_agg(a.audited_by_event_id ORDER BY a.audited_by_event_id DESC)
-                     FILTER (WHERE a.block_id = lc.block_id))[1]
-                    AS block_wm
+                max(a.created) FILTER (WHERE a.block_id = lc.block_id) AS block_wm
               FROM kb_citation_audits a
               JOIN kb_content_blocks ab
                 ON ab.id = a.block_id AND ab.resource_id = p_finding
@@ -70,28 +71,42 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         ) w
         WHERE w.finding_wm IS NOT NULL
           AND ( w.block_wm IS NULL
-             OR b.last_event_id > w.block_wm
+             OR be.occurred_at > w.block_wm
              OR EXISTS (SELECT 1 FROM kb_content_blocks sb
-                         WHERE sb.resource_id   = lc.source_id
-                           AND sb.last_event_id > w.block_wm) )
+                          JOIN kb_events se ON se.id = sb.last_event_id
+                         WHERE sb.resource_id = lc.source_id
+                           AND se.occurred_at > w.block_wm) )
     );
 $$;
 
 COMMENT ON FUNCTION resource_has_stale_citation(uuid, uuid) IS
 $c$Has anything material happened to this finding's citations since THIS principal weighed them?
 
-Reads the cursors the substrate already keeps -- `kb_content_blocks.last_event_id` for content and
-`kb_citation_audits.audited_by_event_id` for the audit -- and compares them as UUIDv7, which is
-time-sortable. No material-event allow-list is needed; see this migration's header for why the
-`citation_audited` self-cycle is structurally impossible.
+Reads the cursors the substrate already keeps -- `kb_content_blocks.last_event_id`, resolved to its
+event's `occurred_at`, against `kb_citation_audits.created` -- and compares them as TIMESTAMPS. No
+material-event allow-list is needed; see this migration's header for why the `citation_audited`
+self-cycle is structurally impossible.
 
 FOUR THINGS HERE ARE LOAD-BEARING. Each was arrived at by breaking the alternative.
 
-1. `array_agg(... ORDER BY ... DESC)[1]`, NOT `max()` and NOT `ORDER BY ... LIMIT 1`.
-   `max(uuid)` DOES NOT EXIST in PostgreSQL, and a `LANGUAGE sql` body parses at CREATE time, so
-   that spelling fails at `sqlx migrate run`. The obvious repair is also wrong: a scalar subquery is
-   pulled up and evaluated three times per citation row (`SubPlan 1` + `SubPlan 2` + `InitPlan 3`),
-   the producer multiplication `20260724000130` forbids. `array_agg` yields one `Aggregate` node.
+1. The comparand is `occurred_at`, NOT the event id.
+   A UUIDv7 is timestamp-prefixed, so comparing event ids *looks* like comparing times and helps
+   btree locality -- but it makes a correctness-critical comparison depend on the id generator, and
+   the generator is NOT the same in both environments: `20260624000001` branches on
+   `pg_available_extensions`, so PG17/Neon gets `pg_uuidv7` and PG18/local gets an alias for the
+   native `uuidv7()`. Sub-millisecond ordering under one says nothing about the other, and verifying
+   it would have been a standing prod gate on every future change to this predicate.
+   `occurred_at` is the substrate's OWN name for when an event happened -- replay-stable by
+   construction (`replay.rs`: *"projected timestamps come from the event's `occurred_at`, never
+   `now()`"*) and already read this way by `20260626000001_fts_search_index.sql`. The id comparison
+   was reimplementing an ordering that already had a name.
+   It also removes a trap: `max(uuid)` DOES NOT EXIST in PostgreSQL, and a `LANGUAGE sql` body
+   parses at CREATE time, so an earlier draft's `max()` would have failed at `sqlx migrate run`.
+   The workaround was `(array_agg(... ORDER BY ... DESC))[1]` -- because `ORDER BY ... LIMIT 1`
+   becomes a scalar subquery the planner evaluates three times per citation row, the producer
+   multiplication `20260724000130` forbids. On timestamps, plain `max()` just works.
+   Cost of the change: two primary-key joins to `kb_events`. If profiling ever objects, denormalize
+   a `last_event_at` onto `kb_content_blocks` -- do NOT go back to comparing ids.
 
 2. `a.audited_by_profile_id = p_principal` -- the watermark is PER PRINCIPAL.
    A global max picks the COVERAGE grain ("did anyone look?") while staleness protects the QUALITY
@@ -154,10 +169,14 @@ LANGUAGE sql STABLE AS $$
     -- A stale finding is by construction FULLY COVERED, so its `uncovered` is 0 -- the MINIMUM of
     -- `uncovered DESC`. Carried forward unchanged, every stale finding sorts behind every uncovered
     -- one. With `DEFAULT_AUDITOR_DISPATCH_CAP = 50` and k permanently-stuck findings sitting at
-    -- `uncovered >= 1` forever, stale rows get 50 - k slots allocated by `finding_id` ASC -- UUIDv7,
-    -- so oldest-first DETERMINISTICALLY, meaning newer stale findings are structurally excluded
-    -- rather than delayed. At k >= 50 the new disjunct returns nothing, silently, forever: exactly
-    -- the failure this migration exists to fix, reintroduced by its own ordering.
+    -- `uncovered >= 1` forever, stale rows get 50 - k slots allocated by `finding_id` ASC -- and
+    -- since findings are minted minutes or days apart, a UUIDv7 tie-break is oldest-first in
+    -- practice, so newer stale findings are structurally excluded rather than delayed. (Only
+    -- DETERMINISM is load-bearing in this tie-break, and that holds for any uuid comparison
+    -- whatever the generator; the staleness comparand above deliberately does NOT rest on id
+    -- chronology -- see note 1 on `resource_has_stale_citation`.) At k >= 50 the new disjunct
+    -- returns nothing, silently, forever: exactly the failure this migration exists to fix,
+    -- reintroduced by its own ordering.
     --
     -- And k is NOT bounded by scoping `uncovered` to auditable citations, the fix that suggests
     -- itself. `20260724000130`'s own KNOWN-FIRST-CUT-LIMITATION names the dominant stuck population
@@ -213,6 +232,7 @@ NOT FIXED HERE, and each is its own task:
     show-edit-`cat` idiom fires staleness on byte-identical content.
   * The source-side clause fires on ANY block of the cited source, including a telos, which
     `_project_charter_set` folds and reinserts wholesale on every `charter_set`. Unquantified.
-  * Same-millisecond UUIDv7 ordering is verified on PG18 (native `uuidv7()`) but NOT on PG17/Neon,
-    which uses the `pg_uuidv7` extension -- a different generator. If it fills `rand_a` randomly,
-    sub-millisecond comparisons there are arbitrary.$c$;
+  * An edit landing DURING an audit run still under-triggers by one tick -- the verdict is written
+    after the mutation, so it sits above that block's cursor. Bounded to one tick, and it clears on
+    the next material event. Write-action timestamps exist for every agent and document if it ever
+    needs solving.$c$;

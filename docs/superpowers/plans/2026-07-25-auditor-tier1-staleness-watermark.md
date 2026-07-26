@@ -2,7 +2,7 @@
 
 **Spec:** [`docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md`](../specs/2026-07-25-auditor-tier1-staleness-watermark-design.md)
 **Branch:** `jct/auditor-tier1-staleness-watermark` (off `76d0de12`)
-**Rev. 2** — 2026-07-26. Session notes `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6` + this session's.
+**Rev. 3** — 2026-07-26. Session notes `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6` + this session's.
 
 > **Read the spec's revision note first.** Rev. 0 of this plan told the implementer *"body is given
 > in spec §3; do not re-derive it"* — and that body contained `max(uuid)`, which does not exist.
@@ -10,6 +10,10 @@
 > got wrong**: the watermark resolves at `(block, source)` with a guarded arm (spec §3.2(b), with an
 > executed four-scenario probe), and **the ordering key is now specified** rather than delegated
 > (spec §3.4). D7's conjunct is **ratified separable** (spec §3.5) and is not in this PR.
+>
+> **Rev. 3 changes the comparand**: `occurred_at`, not the event id. That deletes F9 outright (no id
+> generator in the correctness path) and removes the `array_agg(…)[1]` workaround with it. See spec
+> §3.1.
 >
 > Everything here is grep- or psql-verified. Steps carry **CONFORM / EXTEND / AMEND** tags per
 > `implementation-grounding.md` GD-3.
@@ -48,9 +52,13 @@ Four constraints, each with the citation to honour:
 - **CONFORM** — `resource_live_citations(p_finding)`
   (`20260724000120_standing_citation_components.sql:103-111`), whose COMMENT calls it *"the one
   definition the three standing axes share."* Any other spelling here is a fourth definition.
-- **CONFORM** — `(array_agg(… ORDER BY … DESC))[1]`, **not** `max()` (does not exist for `uuid`) and
-  **not** `ORDER BY … LIMIT 1` (becomes a scalar subquery the planner evaluates three times per row —
-  the multiplication `20260724000130:23-28` forbids).
+- **CONFORM** — the comparand is **`occurred_at`, not the event id** (spec §3.1). `occurred_at` is
+  the substrate's own name for when an event happened, replay-stable, and already read this way by
+  `20260626000001_fts_search_index.sql:48`. Comparing `last_event_id` against `audited_by_event_id`
+  makes correctness depend on the id generator, which **differs between PG17/Neon (`pg_uuidv7`) and
+  PG18/local (native `uuidv7()`)**. Because the comparand is a timestamp, plain `max()` works —
+  `max(uuid)` does not exist, and the `(array_agg(… ORDER BY … DESC))[1]` workaround it forced is
+  gone with it.
 - **CONFORM** — `a.audited_by_profile_id = p_principal`. Spec §3.2(a): a global max picks the
   *coverage* grain while staleness protects the *quality* grain, and `20260724000210` separated them
   deliberately.
@@ -94,11 +102,16 @@ draft's "exactly four writers" claim — it named a function that does not exist
   **Record in the migration** why a composite `uncovered + stale_count` axis was rejected (spec §3.4:
   stuck findings are older by construction, so they win every tie and `k >= 50` starves it anyway).
 
-### 1d. Amend the KNOWN-FIRST-CUT-LIMITATION comment
+### 1d. Correct the KNOWN-FIRST-CUT-LIMITATION prose — via `COMMENT ON FUNCTION`, NOT by editing `20260724000130`
 
-`20260724000130:70-82`. Spec §5 splits R10: the evidential half is withdrawn (it was always a verdict,
-not a refusal); the structural half — self-authored and unreadable-source citations — is real and is
-D7's conjunct. Update the comment to say that; do not delete it.
+⚠️ **Plan/reality gap, found at implementation.** Earlier revisions of this step said to "amend the
+comment at `20260724000130:70-82`." **That is impossible.** `_sqlx_migrations` carries a `checksum`
+column, so editing an applied migration file breaks it for every environment that already ran it —
+the file is frozen. `audit_drift_sweep` also carries **no** `COMMENT` today (verified via
+`obj_description`), so the correction goes on the function object in the *new* migration.
+
+Spec §5 splits R10: the evidential half is withdrawn (it was always a verdict, not a refusal); the
+structural half — self-authored and unreadable-source citations — is real and is D7's conjunct.
 
 **Do not write that the conjunct fixes the starvation** — rev. 1 implied it and spec §3.5 refutes it.
 This comment's own text already names the dominant stuck population (*"a citation that is readable,
@@ -229,7 +242,7 @@ Pre-commit runs incremental clippy, which has gone green where a clean CI build 
 |---|---|
 | **F7** — `ingest_state` gate on `resource_live_citations` | All three standing axes read that function. Far wider blast radius than this change earns. |
 | **F6** — content-hash dedup before emitting `block_mutated` | Write-path change; `update_resource_in_tx` gates on `p.body.is_some()`, not "changed". |
-| **F9** — verify same-ms UUIDv7 ordering under `pg_uuidv7` on Neon PG17 | Different generator from local PG18. Verify before shipping, but it is an investigation, not a code change. |
+| ~~**F9**~~ — same-ms UUIDv7 ordering under `pg_uuidv7` on Neon | **Dissolved, not deferred.** The predicate no longer compares ids, so there is no generator to verify (spec §3.1, §4). |
 | **F8** — source-side clause fires on any block of the source | Unquantified; needs a measurement of how often findings cite their own telos. |
 | **D7's conjunct** — scope `uncovered` to citations this principal could actually audit (`019f9bfb`) | **Ratified separable** (spec §3.5). It reaches only one of *k*'s three members; the dominant one is deferred to a reaper pass by `20260724000130`'s own comment. So it never was what bounded starvation, and the ordering key had to stand alone regardless. Worth doing on its own merits. |
 | **The residual mid-run race** — an edit landing inside an audit run still under-triggers by one tick | Spec §4. Fixing the grain removes the *permanence*, not the one-tick gap. If it shows up in practice: order write-action timestamps, or define a suspect "within" window that emits a bump-for-re-audit event. Judged not worth solving today (Pete, 2026-07-26). |
