@@ -951,3 +951,443 @@ async fn create_with_remote_source_mints_dedups_and_surfaces_url(pool: sqlx::PgP
         "read fn surfaces the human URL, not the minted uuid"
     );
 }
+
+// ── No-op suppression: a byte-identical revise appends no event ───────────────────────────────────
+//
+// Migration `20260726000030_block_mutate_noop_dedup.sql`. `block_mutate` fired on the PRESENCE of a
+// body, not on a CHANGED one, so a no-op round-trip through the show-edit-`cat` idiom minted a
+// `block_mutated` event and bumped `kb_content_blocks.last_event_id` on byte-identical content —
+// which, with the tier-1 staleness cursor (`20260726000010`) live, re-offers quiet findings for
+// audit. The end-to-end consequence is witnessed in `citation_audits.rs`
+// (`sweep_stays_quiet_after_a_byte_identical_revise`); these two are the mechanism.
+
+/// Fire a revise of `block` with `prose` through the production `SeedAction::BlockMutate` path,
+/// optionally carrying provenance sources. Mirrors `citation_audits.rs`'s `mutate_block`.
+async fn revise_block(
+    pool: &sqlx::PgPool,
+    block: uuid::Uuid,
+    emitter: uuid::Uuid,
+    prose: &str,
+    sources: &[temper_substrate::payloads::Incorporation],
+) {
+    use temper_substrate::content;
+    use temper_substrate::events::{fire, SeedAction};
+    use temper_substrate::ids::{BlockId, EntityId};
+
+    let prepared = content::prepare_block(0, None, prose).unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block: BlockId::from(block),
+            chunks: &prepared.chunks,
+            raw: Some(prose),
+            incorporated: sources,
+            emitter: EntityId::from(emitter),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// (`block_mutated` event count, the block's `last_event_id`, its `kb_block_revisions` row count).
+async fn mutation_state(pool: &sqlx::PgPool, block: uuid::Uuid) -> (i64, uuid::Uuid, i64) {
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id=e.event_type_id \
+         WHERE et.name='block_mutated'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let cursor: uuid::Uuid =
+        sqlx::query_scalar("SELECT last_event_id FROM kb_content_blocks WHERE id=$1")
+            .bind(block)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let revisions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_block_revisions WHERE block_id=$1")
+            .bind(block)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    (events, cursor, revisions)
+}
+
+/// Create `alpha` and return (its live block, an emitter).
+async fn alpha_block(pool: &sqlx::PgPool) -> (uuid::Uuid, uuid::Uuid) {
+    bootseed::seed_system(pool).await.unwrap();
+    runner::run_scenario(pool, &scenario_with_steps(""), std::path::Path::new("."))
+        .await
+        .unwrap();
+    let block: uuid::Uuid = sqlx::query_scalar(
+        "SELECT b.id FROM kb_content_blocks b JOIN kb_resources r ON r.id=b.resource_id \
+         WHERE r.origin_uri='temper://cm/alpha' AND NOT b.is_folded",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let emitter: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_entities ORDER BY id LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    (block, emitter)
+}
+
+/// LOAD-BEARING (the defect itself). Re-submitting a block's current bytes must append NO event, bump
+/// NO cursor, and mint NO revision — while a genuinely different body still does all three. The
+/// control arm is what makes this discriminate: a guard that suppressed everything would pass the
+/// first assertion alone.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn byte_identical_revise_appends_no_event(pool: sqlx::PgPool) {
+    let (block, emitter) = alpha_block(&pool).await;
+    const PROSE: &str = "rollout cadence, staging gates, and the promotion policy";
+
+    // Establish PROSE as the block's current content — a real change, so this one lands.
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let (events, cursor, revisions) = mutation_state(&pool, block).await;
+    assert_eq!(events, 1, "the establishing revise must append an event");
+
+    // The no-op: byte-identical prose, nothing incorporated.
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let after = mutation_state(&pool, block).await;
+    assert_eq!(
+        after,
+        (events, cursor, revisions),
+        "a byte-identical revise must append no event, move no cursor, and mint no revision"
+    );
+
+    // Control: a genuinely changed body still does all three, so the guard is not simply inert.
+    revise_block(
+        &pool,
+        block,
+        emitter,
+        "an entirely different assertion",
+        &[],
+    )
+    .await;
+    let (events2, cursor2, revisions2) = mutation_state(&pool, block).await;
+    assert_eq!(events2, events + 1, "a changed body still appends an event");
+    assert_ne!(cursor2, cursor, "a changed body still moves the cursor");
+    assert_eq!(
+        revisions2,
+        revisions + 1,
+        "a changed body still mints a revision"
+    );
+}
+
+/// The `incorporated` conjunct, and why suppression is not unconditional. `_insert_block_provenance`
+/// is EVENT-ANCHORED (it stamps `contributed_by_event_id`), so suppressing a byte-identical write that
+/// carries sources would silently DROP the provenance accretion — trading a noise bug for a data-loss
+/// bug. A write that incorporates sources is never a no-op, whatever its bytes did.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn byte_identical_revise_carrying_sources_still_appends(pool: sqlx::PgPool) {
+    use temper_substrate::payloads::{Incorporation, ProvenanceSource};
+
+    let (block, emitter) = alpha_block(&pool).await;
+    const PROSE: &str = "the promotion policy and its rollback window";
+
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let (events, _, _) = mutation_state(&pool, block).await;
+
+    // A cited source that the block does not yet carry.
+    let source = uuid::Uuid::now_v7();
+    let sources = [Incorporation {
+        source: ProvenanceSource::Resource(source),
+        seq: 0,
+    }];
+
+    // Byte-identical prose, but carrying provenance — must NOT be suppressed.
+    revise_block(&pool, block, emitter, PROSE, &sources).await;
+
+    let (events_after, _, _) = mutation_state(&pool, block).await;
+    assert_eq!(
+        events_after,
+        events + 1,
+        "a byte-identical revise that incorporates sources must still append an event"
+    );
+
+    let provenance: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_provenance WHERE block_id=$1 AND source_id=$2",
+    )
+    .bind(block)
+    .bind(source)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        provenance, 1,
+        "the provenance accretion must survive — suppressing here would silently drop it"
+    );
+}
+
+/// The current revision's stored verbatim bytes, if any.
+async fn stored_bytes(pool: &sqlx::PgPool, block: uuid::Uuid) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT bc.content FROM kb_content_blocks b \
+         JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
+         WHERE b.id = $1",
+    )
+    .bind(block)
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+}
+
+/// LOAD-BEARING. A chunk's `content_hash` is `sha256(content.trim())`
+/// (`crates/temper-ingest/src/chunk.rs:79,449`), so two bodies differing ONLY in leading/trailing
+/// whitespace share a block merkle — while `kb_block_content` stores the UNTRIMMED bytes
+/// (`payloads.rs:362`) that `readback::body` serves. A merkle-only suppression therefore dropped a
+/// real body edit silently and returned success, breaking the `sha256(PUT) == sha256(GET)` guarantee
+/// `tests/e2e/tests/byte_exact_roundtrip_test.rs` defends on the create leg but never checks on
+/// update.
+///
+/// This bites: drop the `kb_block_content.content_hash` conjunct and the second write vanishes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn whitespace_only_body_edit_is_not_suppressed(pool: sqlx::PgPool) {
+    let (block, emitter) = alpha_block(&pool).await;
+    const TIGHT: &str = "the promotion policy and its rollback window";
+    let padded = format!("{TIGHT}\n\n\n");
+
+    revise_block(&pool, block, emitter, TIGHT, &[]).await;
+    let (events, _, _) = mutation_state(&pool, block).await;
+    assert_eq!(stored_bytes(&pool, block).await.as_deref(), Some(TIGHT));
+
+    // Same trimmed text ⇒ same chunk content_hash ⇒ same merkle. Different bytes.
+    revise_block(&pool, block, emitter, &padded, &[]).await;
+
+    let (events_after, _, _) = mutation_state(&pool, block).await;
+    assert_eq!(
+        events_after,
+        events + 1,
+        "a whitespace-only body edit shares the merkle but changes the stored bytes — \
+         it must NOT be suppressed"
+    );
+    assert_eq!(
+        stored_bytes(&pool, block).await.as_deref(),
+        Some(padded.as_str()),
+        "the new verbatim bytes must be what readback serves"
+    );
+}
+
+/// LOAD-BEARING. Vectors are not in the merkle — `_project_block_mutated` passes
+/// `v_side->'embedding'` / `v_side->>'embedded_with'` straight to `_insert_chunk`. A block the
+/// async-embed drain left with NULL vectors is REPAIRED by re-pushing the same prose from a client
+/// that embeds locally; suppressing that would strand the resource unsearchable by vector, with no
+/// error and no ledger trace.
+///
+/// This bites: drop the `NOT v_unembedded` conjunct and the repair write vanishes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_repush_that_repairs_missing_embeddings_is_not_suppressed(pool: sqlx::PgPool) {
+    let (block, emitter) = alpha_block(&pool).await;
+    const PROSE: &str = "staging gates and the promotion policy";
+
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let (events, _, _) = mutation_state(&pool, block).await;
+
+    // Simulate the drain dying mid-flight: current chunks land with no vectors.
+    // Null ONLY the vector, leaving `embedded_with` intact. That isolates this conjunct: the model
+    // tag still matches what the re-push brings, so `v_new_model` is false and `NOT v_unembedded` is
+    // the only thing standing between the repair and suppression. (An earlier version of this test
+    // nulled both columns and therefore passed with `NOT v_unembedded` removed — it was witnessing
+    // the model-tag conjunct instead.) The state is real, not contrived: `embed.rs:184` stamps
+    // `embedded_with` on blank chunks WITHOUT writing a vector, and `embed.rs:41` writes a vector
+    // WITHOUT the stamp, so the two columns genuinely diverge in production.
+    sqlx::query("UPDATE kb_chunks SET embedding = NULL WHERE block_id = $1 AND is_current")
+        .bind(block)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Re-push byte-identical prose, this time carrying vectors — the repair.
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+
+    let (events_after, _, _) = mutation_state(&pool, block).await;
+    assert_eq!(
+        events_after,
+        events + 1,
+        "a re-push that supplies vectors for an unembedded block must NOT be suppressed"
+    );
+    let unembedded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE block_id = $1 AND is_current AND embedding IS NULL",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unembedded, 0, "the repair must have landed real vectors");
+}
+
+/// The sibling conjunct to the one above, isolated the same way. A block fully embedded by an OLDER
+/// model must not have a re-push under the CURRENT model suppressed — that is a rotation, and the
+/// merkle cannot see it because vectors are not hashed. Here the vectors are all present (so
+/// `v_unembedded` is false) and only the model tag differs, leaving `NOT v_new_model` as the sole
+/// guard.
+///
+/// This bites: drop the `NOT v_new_model` conjunct and the rotation write vanishes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_repush_under_a_new_embedding_model_is_not_suppressed(pool: sqlx::PgPool) {
+    let (block, emitter) = alpha_block(&pool).await;
+    const PROSE: &str = "the rollback window and its promotion policy";
+
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let (events, _, _) = mutation_state(&pool, block).await;
+
+    // Re-stamp the landed chunks as the product of an older model, vectors left intact.
+    sqlx::query(
+        "UPDATE kb_chunks SET embedded_with = 'legacy-model-v0' WHERE block_id = $1 AND is_current",
+    )
+    .bind(block)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Re-push byte-identical prose under the current model — a rotation, not a no-op.
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+
+    let (events_after, _, _) = mutation_state(&pool, block).await;
+    assert_eq!(
+        events_after,
+        events + 1,
+        "a re-push carrying a model tag the block does not already have must NOT be suppressed"
+    );
+    let stale: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks \
+         WHERE block_id = $1 AND is_current AND embedded_with = 'legacy-model-v0'",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stale, 0, "the rotation must have replaced the stale stamps");
+}
+
+/// Fire a revise from an explicitly-ordered chunk manifest, bypassing `prepare_block`'s
+/// always-ascending `chunk_index` emission so the payload ARRAY order can be made to disagree with
+/// `chunk_index` order. Mirrors `fire_with`'s `SeedAction::BlockMutate` arm
+/// (`crates/temper-substrate/src/events.rs:939-976`) using the same typed payload + sidecar.
+async fn fire_manifest(
+    pool: &sqlx::PgPool,
+    block: uuid::Uuid,
+    emitter: uuid::Uuid,
+    array_order: &[temper_substrate::content::PreparedChunk],
+    raw: &str,
+) {
+    use temper_substrate::ids::BlockId;
+    use temper_substrate::payloads::{
+        self, BlockContent, BlockMutated, ChunkManifest, ContentSidecar,
+    };
+
+    let payload = BlockMutated {
+        block_id: BlockId::from(block),
+        chunks: array_order.iter().map(ChunkManifest::from).collect(),
+        incorporated: vec![],
+    };
+    let mut chunk_map = std::collections::HashMap::new();
+    payloads::content_sidecar_chunks(&mut chunk_map, array_order);
+    let sidecar = ContentSidecar {
+        chunks: chunk_map,
+        blocks: Some(std::collections::HashMap::from([(
+            block.to_string(),
+            BlockContent::of(raw),
+        )])),
+    };
+    sqlx::query_scalar::<_, uuid::Uuid>("SELECT block_mutate($1,$2,$3)")
+        .bind(serde_json::to_value(&payload).unwrap())
+        .bind(serde_json::to_value(&sidecar).unwrap())
+        .bind(emitter)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+}
+
+/// Hash two chunk hashes the way the projectors do, using the DATABASE's own primitive rather than a
+/// Rust reimplementation of it.
+async fn merkle_of(pool: &sqlx::PgPool, a: &str, b: &str) -> String {
+    sqlx::query_scalar("SELECT encode(sha256(convert_to($1 || $2, 'UTF8')), 'hex')")
+        .bind(a)
+        .bind(b)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// LOAD-BEARING, and the only test in this suite that can see the rule at all. The guard derives its
+/// merkle in chunk ARRAY order because that is how `_project_blocks` / `_project_block_mutated`
+/// derive the `block_body_hash` it compares against — they accumulate inside
+/// `FOR ... IN SELECT jsonb_array_elements(...)` with no sort. `block_append` and
+/// `_recompute_resource_body_hash` both sort by `chunk_index` instead.
+///
+/// EVERY other chunk payload in the substrate suite is single-chunk, so those rules coincide and
+/// nothing distinguishes them — mutating `ORDER BY c.ord` to `ORDER BY chunk_index` used to fail no
+/// test at all. This one puts the array deliberately out of index order so the two rules disagree,
+/// then asserts both halves: that the projector stored the array-order hash, and that the guard
+/// agrees with it well enough to still suppress a re-submit.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_out_of_order_chunk_array_derives_and_suppresses_in_array_order(pool: sqlx::PgPool) {
+    use temper_substrate::content;
+    use temper_substrate::ids::ChunkId;
+
+    let (block, emitter) = alpha_block(&pool).await;
+    const RAW: &str = "alpha: deployment cadence\n\nbeta: the rollback window\n";
+
+    // Two genuinely embedded chunks. Real vectors matter: with NULL embeddings the embedding
+    // conjuncts — not the merkle — would be what blocks suppression, and this test would pass while
+    // proving nothing about ordering.
+    let mut first = content::prepare_block(0, None, "alpha: deployment cadence and staging gates")
+        .unwrap()
+        .chunks
+        .remove(0);
+    let mut second = content::prepare_block(0, None, "beta: the rollback window and its policy")
+        .unwrap()
+        .chunks
+        .remove(0);
+    first.chunk_index = 0;
+    second.chunk_index = 1;
+    assert!(
+        first.embedding.is_some() && second.embedding.is_some(),
+        "precondition: both chunks must carry real vectors"
+    );
+
+    // Sanity: the two derivation rules must actually disagree on this payload, or the test is inert.
+    let array_order = merkle_of(&pool, &second.content_hash, &first.content_hash).await;
+    let index_order = merkle_of(&pool, &first.content_hash, &second.content_hash).await;
+    assert_ne!(
+        array_order, index_order,
+        "array order and chunk_index order must differ here, else this test discriminates nothing"
+    );
+
+    // Array order is [second(index 1), first(index 0)] — deliberately reversed.
+    fire_manifest(&pool, block, emitter, &[second.clone(), first.clone()], RAW).await;
+
+    let stored: String = sqlx::query_scalar(
+        "SELECT rv.block_body_hash FROM kb_content_blocks b \
+         JOIN kb_block_revisions rv ON rv.id = b.current_revision_id WHERE b.id = $1",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored, array_order,
+        "the projector derives block_body_hash in ARRAY order — that is the rule the guard must mirror"
+    );
+
+    // Re-submit the same content in the same array order, with fresh chunk identities (the projector
+    // supersedes chunks, so reusing ids would collide). Nothing material changed ⇒ suppressed.
+    let (events, cursor, revisions) = mutation_state(&pool, block).await;
+    let mut first_again = first.clone();
+    first_again.chunk_id = ChunkId::from(uuid::Uuid::now_v7());
+    let mut second_again = second.clone();
+    second_again.chunk_id = ChunkId::from(uuid::Uuid::now_v7());
+
+    fire_manifest(&pool, block, emitter, &[second_again, first_again], RAW).await;
+
+    assert_eq!(
+        mutation_state(&pool, block).await,
+        (events, cursor, revisions),
+        "an out-of-order re-submit is still a no-op — a guard that sorted by chunk_index would \
+         compute a different merkle, miss the match, and append an event"
+    );
+}
