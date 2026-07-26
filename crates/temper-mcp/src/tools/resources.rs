@@ -654,6 +654,18 @@ pub async fn create_resource(
 
     let backend = DbBackend::new(pool.clone(), profile_id);
     let out = backend.create_resource(cmd).await.map_err(|e| match e {
+        // F-2: placing a resource into a context requires WRITE on that context, and the backend now
+        // enforces it for both home kinds. A cogmap home is pre-checked above (so it never reaches
+        // here), but a context home has no surface pre-check — without this arm an authorization
+        // refusal would fall through to `other` and render as an internal error, telling an agent its
+        // permission problem was a server fault.
+        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Not authorized to create in this context: placing a resource requires write access, \
+             and read access alone (watcher role, a read-only grant, a shared context, or \
+             membership in an enclosing team) is not enough."
+                .to_string(),
+            None,
+        ),
         TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
             "Context or doc_type not found. Use create_context / list_doc_types to verify."
                 .to_string(),

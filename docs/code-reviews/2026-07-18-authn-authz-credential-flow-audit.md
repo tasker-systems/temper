@@ -170,6 +170,17 @@ Two by-design authority asymmetries surfaced — see F-1, F-2 below.
 F-0 is a live self-escalation on `main`. F-1…F-4 are risk items for an explicit decision.
 Ordered by severity.
 
+> **Resolution tracking.** The finding text below is the 2026-07-18 snapshot and is left as written —
+> it is the record of what was true when the audit ran, including `file:line` citations that have
+> since moved. Where a finding has closed, a **RESOLVED** block is appended to it naming the change
+> and the evidence; the snapshot above each block is not edited to match. A finding with no such
+> block is still open.
+>
+> Status as of 2026-07-26: **every finding is closed.** F-0, F-1, F-2, F-3 and T-1 were fixed; F-4
+> was signed off as intended behavior with its containments verified and pinned. Four of the six
+> closed harder than recommended (F-3's sealed proof type, T-1's compile-error forgery guard, F-1's
+> and F-2's coverage of a second verb the findings did not name).
+
 ### F-0 — capability amplification / self-escalation via the grant path (HIGH — live on `main`, fixed in draft #482)
 `grant_capability` (access_service.rs:189-214) gates on `can_administer_grant` (admin OR
 `can_grant` on the subject), then calls `insert_grant` with the capability bits **taken
@@ -185,6 +196,14 @@ genesis). Fix (shipped in draft PR #482, Task 5b): a SQL-resident chokepoint tha
 plus bounding `grant_reach`'s grantee team. **Recommend: land #482.** Until it merges, this is
 the live form of the exact class that triggered the audit.
 
+> **RESOLVED** — #482 landed (task `019f7673-f784-79d3-843c-cbaeb0ec8e5b`). Attenuation is now a
+> named decision in `access_service`, not a check bolted onto one caller: the authority arm and the
+> attenuation run in **one pass** (`authorize_capability_grant`), and the type keeps the warrant's
+> subject and the attenuated subject the same value by construction, so the two cannot probe
+> different subjects. Delegated administrators may confer only what they hold; system admins stay
+> unrestricted. Two deliberate non-attenuating paths are documented at their call sites — revoke (de-
+> escalation must never be harder than escalation) and the warrant-bearing arm.
+
 ### F-2 — create-into-context is gated on context **READ**, not context **WRITE** (medium)
 `create_resource_inner` re-enforces the container write-gate for **cogmap** homes only
 (db_backend.rs:1211-1212); create-into-context authority rests on the surface's
@@ -197,6 +216,33 @@ re-opens the exact read-wider-than-write axis that migration `20260712000010` cl
 *modify* path. Recommend: gate create-into-context on `context_authorable_by_profile`, matching
 the cogmap path — or explicitly sign off that read-authority-to-place-content is intended.
 
+> **RESOLVED** — gated, not signed off (task `019f7674-1cc2-7373-a4c3-95224fe347eb`). The either/or
+> this finding posed was already decided: the container-write-cascade design's own test matrix
+> requires `reader only (membership read, no write) → create ❌` for **context** homes as much as
+> cogmap ones. Its scope guard deferred the implementation, never the intent.
+>
+> **The finding was one verb short.** Placement has two — create, and **re-home**
+> (`update_resource`'s `move_to.context_to`), whose destination arrives through the same READ-gated
+> `resolve_context_ref` while `check_can_modify_next` authorizes only the resource being *moved*. The
+> re-home is the sharper half: create places new content, re-home drags *existing* content into a
+> container the actor cannot write. Both verbs now gate on `check_context_authorable`.
+>
+> Also worth recording, because it enlarges the finding: the read set has four arms and the write set
+> three, so what this newly denies is not only the `watcher` the finding names — it is also
+> transitive-ancestor team members (read inherits up the enclosure chain; write requires *direct*
+> membership), read-only grant holders, and any team a context was **shared** into (`kb_team_contexts`
+> is read-reach by construction and is not an arm of the write predicate).
+>
+> Measured before shipping: of **2006** existing context placements in production, **0** would be
+> denied by the gate. The hole closes with no regression on live data.
+>
+> Evidence: `crates/temper-api/tests/context_placement_authz_test.rs` — four cases driving `DbBackend`
+> directly, each mutation-proved, each first asserting the actor genuinely *can read* the context so a
+> green means "read allowed, write refused" rather than "context invisible". The mutation run also
+> showed that pre-fix a **non-member outsider's** create succeeded at the backend: placement was not
+> under-gated there, it was ungated, with the surface's read resolve the only thing in the way — the
+> exact "one new caller away from a silent bypass" shape the F1 cogmap gate exists to prevent.
+
 ### F-3 — `promote_admin` authorization lives in the **handler**, not the service (low, latent)
 `access.rs:222` checks `is_system_admin` before calling `access_service::promote_admin`, whose
 own doc-comment says "Auth is enforced by the caller." This is **the exact drift shape this
@@ -205,6 +251,14 @@ reaches `promote_admin`. But any future second caller (an MCP admin tool, an int
 that calls the service directly would grant system-admin with **no** authorization. Recommend:
 move the `is_system_admin` gate inside `promote_admin`, consistent with every other grant op,
 so authority is enforced at the write, not at one call site.
+
+> **RESOLVED** — and closed harder than the recommendation (task
+> `019f7674-7512-7300-be8c-2fc91296f75e`). Rather than moving the `is_system_admin` *check* into the
+> service, `promote_admin` now takes a sealed **`&SystemAdmin`** proof: the authority is a parameter
+> the caller cannot fabricate, so a future second caller cannot reach the write unauthorized — it
+> cannot even construct the argument. A moved check would still have been a check someone could
+> forget to keep; this is the same guarantee made unrepresentable. This is the F-3 rule that
+> principal-admission Phase 1 generalized (authz-in-service).
 
 ### F-1 — edge asserts authorize the **source** only, never the **target** (low, by-design)
 `assert`/`retype`/`reweight`/`fold` gate `check_can_modify_next(source)`; the target endpoint
@@ -215,11 +269,74 @@ contained: the edge is homed on A's home, does not mutate B, and `edges_visible_
 to its creator). Documented as production parity. Recommend an explicit sign-off that
 one-sided edge authorship is intended.
 
+> **RESOLVED** — tightened, not signed off. One-sided edge authorship is **not** intended. The rule
+> decided 2026-07-25: *creating an edge requires write on the source side and read on the target;
+> and since an edge is homed in a context or cogmap — the source side's home — it requires write on
+> that container too.* All three clauses now live in `assert_edge_from_source_home`, the single
+> funnel every creation path goes through.
+>
+> **The finding understated its own reach.** It framed this as edge asserts only. But the create and
+> update **goal-edge projections** also reach that helper, and its contract was "callers hold the
+> source check" — so `--goal`, which takes a bare resource id, had *no* endpoint authorization at
+> all. A caller could link their resource to a goal they cannot see. That path is now gated by the
+> same clause.
+>
+> The target clause calls `endpoint_readable_by_profile` — the predicate `edges_visible_to`, the
+> lineage reader and both admin firewalls already use — so edge *authorship* and edge *visibility*
+> answer to one definition, rather than a restatement that could drift from it.
+>
+> Denials on the target render **NotFound**, not Forbidden: confirming an unreadable resource exists
+> would turn the write into an existence oracle.
+>
+> The mutation verbs (`retype`/`reweight`/`fold`) carry the source and container clauses via
+> `check_edge_mutable`, because otherwise this change would have made *mutating* an edge easier than
+> *creating* it — a delegate holding a direct resource grant but no container authority could not
+> assert an edge, yet could retype an existing one and silently change its meaning in a container
+> they may not author.
+>
+> Measured over every live production edge before shipping: of 2929 created by real (non-`system`)
+> principals, **0** fail container-write and **0** point at a target their creator cannot read. The
+> 14 that trip the target clause do so because the target was deleted *after* the edge was made —
+> nobody exercised this vector. The 382 `system` edges are migration-born (migrations call the
+> `relationship_assert` SQL function directly, never `DbBackend`), so a backend gate cannot reach
+> them.
+>
+> **Left open deliberately:** the gate calls `cogmap_authorable_by_profile`, not
+> `require_cogmap_write_admin`, so the L0 admin gate is not applied on the edge path. Strictly better
+> than the no-container-check status quo, but whether edge authorship into a root-joined map should
+> route through the admin gate is its own decision.
+
 ### F-4 — `change_role`/`remove_member` don't compare caller rank to target rank (low)
 A **maintainer** may demote or remove an **owner** (except the last owner, which is guarded)
 — team_service.rs:387-529. Downward/griefing, not self-elevation (a maintainer still cannot
 make themselves owner). Flagged only because it lets a lower role act on a higher one; if the
 intent is "only owners manage owners," it is under-gated.
+
+> **RESOLVED — signed off as intended, 2026-07-26.** Pete's call: *"I can think of meaningful use
+> cases for a maintainer to be able to demote an owner, and if we have it blocked so that the last
+> owner cannot be removed, then for now I'm going to leave it. It's not a hole so much as annoying
+> if someone did it when they shouldn't."* "Only owners manage owners" is **not** the intent.
+>
+> The sign-off rests on two containments, both verified in code rather than taken from this
+> write-up, and both already pinned by tests — so a future change cannot quietly remove the floor
+> this decision depends on:
+>
+> - **The last owner cannot be removed or demoted.** Both guards are folded into the UPDATE itself
+>   for atomicity, surfacing as `409 Conflict` (*"cannot remove/demote the last owner; transfer
+>   ownership or promote another member first"*). Pinned by `cannot_remove_last_owner` and
+>   `cannot_demote_last_owner` in `team_service`, plus an e2e case for last-owner self-leave.
+> - **No self-elevation.** `change_role` hard-rejects `new_role = owner` outright
+>   (*"cannot grant owner via role change; use ownership transfer"*), so a maintainer cannot promote
+>   themselves or anyone else to owner by this path.
+>
+> Together those make the residual strictly *downward and recoverable*: a demoted owner can be
+> restored by any remaining owner, and a team can never be stranded ownerless. That is what makes
+> this an annoyance rather than a privilege boundary — and it is why the finding closes without a
+> caller-rank comparison.
+>
+> **If this is ever revisited**, the change to make is a caller-rank ≥ target-rank check in
+> `change_role`/`remove_member` — but note it would also block the legitimate cases named above, so
+> it is a product decision, not a hardening.
 
 ### T-1 — forward tripwire: T4 `mint_access_token` caller (not yet built)
 The Slack grant vault's `mint_access_token` enforces **no** authorization itself — it mints an
@@ -230,6 +347,19 @@ principal from the HMAC-verified server-to-server Slack event, never a client-su
 otherwise it is act-as-any-user token theft. Gate the T4 PR review on this invariant. (The
 *store* side is already safe: the callback derives the principal from the consumed, HMAC-gated,
 single-use link intent.)
+
+> **RESOLVED** — the tripwire fired correctly, and the invariant held (task
+> `019f7674-e88b-7a80-ad88-7699ca8e2b23`). The premise has since gone stale in the good direction: a
+> production caller now exists (`slack_mint_service::mint_for_mention` → `mint_access_token`), and it
+> cannot take a client-supplied principal. The mint handler receives an
+> `Extension<VerifiedSlackPrincipal>`, and that type is constructed in exactly one place —
+> `verify_mint_request`, which checks timestamp freshness, then the HMAC over the exact bytes, and
+> only then parses the body. Its field is private, so forging one outside the crate is a compile
+> error pinned by `tests/compile_fail/forge_verified_slack_principal.rs`. Cross-gate containment is
+> structural too: the other two signature gates never call `verify_mint_request`, so a
+> `SLACK_LINK_SECRET` or reconcile-secret holder cannot obtain a proof. The optional hardening this
+> finding suggested (a doc-test / grep that callers sit behind an HMAC-verified handler) is therefore
+> unnecessary — a private-field proof type is the same guarantee that cannot rot.
 
 ## 6. Credential-flow (Phase 3) — verified so far
 - **Slack grant vault crypto:** XChaCha20-Poly1305, fresh nonce per seal, **AAD binds
