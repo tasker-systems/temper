@@ -624,6 +624,40 @@ impl DbBackend {
         }
     }
 
+    /// Auth-before-writes gate for placing a resource INTO a context — the sibling of
+    /// [`Self::check_cogmap_authorable`], and the close of audit finding **F-2**.
+    ///
+    /// Surfaces resolve a context ref through `context_service::resolve_context_ref`, which gates on
+    /// `context_visible_to` → `context_readable_by_profile`. Read is strictly broader than
+    /// `context_authorable_by_profile`: it inherits up the team-enclosure chain and admits `watcher`
+    /// and read-only grants. Relying on the resolve for authority therefore let a **read-only member
+    /// place content in a container they cannot write** — the same read-wider-than-write axis
+    /// migration `20260712000010` closed for the *modify* path, still open on the *placement* path.
+    ///
+    /// Two callers, one per verb, because placement has two: `create_resource_inner` (create INTO a
+    /// context) and `update_resource`'s `move_to.context_to` (re-home an existing resource into one).
+    /// The re-home is the sharper of the pair — create places new content, re-home can drag existing
+    /// content into a container the actor has no authority over — and the update's own
+    /// `check_can_modify_next` authorizes the resource being moved, never the destination.
+    ///
+    /// Deny → `Forbidden` (403), matching the cogmap arm. 403 leaks nothing here: reaching this gate
+    /// means the caller already passed the read gate, so the context's existence is not news to them.
+    async fn check_context_authorable(&self, context_id: uuid::Uuid) -> Result<(), TemperError> {
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT context_authorable_by_profile($1, $2)",
+            *self.profile_id,
+            context_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if can.unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(TemperError::Forbidden)
+        }
+    }
+
     /// The source resource an edge mutation is authorized against. Production gates edge
     /// retype/reweight/fold on "can modify the SOURCE resource" (`handlers::edges` → 403 "Cannot modify
     /// source resource"); the parity-era write path only ever asserts resource→resource edges, so the
@@ -1332,13 +1366,18 @@ impl DbBackend {
         // Correlation-integrity gate for any claimed invocation — additive to the create authz above,
         // before any mutation (auth-before-write). No-op when the act carries no invocation.
         self.check_act_invocation(cmd.act.invocation).await?;
-        // F1 — backend-side create-into-cogmap gate (auth before writes). The surfaces (mcp create
-        // tool, api ingest) pre-check `cogmap_authorable_by_profile` too, but the shared write path
-        // must not trust them: a gate that lives only on the surfaces is one new caller away from a
-        // silent bypass (the SAML `is_active` failure mode `docs/auth` exists to prevent). Cogmap-only
-        // — create-into-context is not gated here (a deliberate scope guard; see the cascade spec).
-        if let HomeAnchor::Cogmap(m) = &cmd.home {
-            self.check_cogmap_authorable(uuid::Uuid::from(*m)).await?;
+        // F1/F-2 — backend-side create-into-container gate (auth before writes), both home kinds. The
+        // surfaces (mcp create tool, api ingest) pre-check `cogmap_authorable_by_profile` too, but the
+        // shared write path must not trust them: a gate that lives only on the surfaces is one new
+        // caller away from a silent bypass (the SAML `is_active` failure mode `docs/auth` exists to
+        // prevent).
+        //
+        // The context arm was previously absent, and that was the F-2 finding: the surfaces' context
+        // resolve is READ-gated (`context_visible_to`), so authority to *see* a context conferred
+        // authority to *place content in* it. See `check_context_authorable` for the full argument.
+        match &cmd.home {
+            HomeAnchor::Cogmap(m) => self.check_cogmap_authorable(uuid::Uuid::from(*m)).await?,
+            HomeAnchor::Context(c) => self.check_context_authorable(uuid::Uuid::from(*c)).await?,
         }
         // Map the command's HomeAnchor to the substrate's AnchorRef so CreateParams.home
         // accepts either a context or a cognitive map without further branching downstream.
@@ -1536,6 +1575,16 @@ impl Backend for DbBackend {
         let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(new_id).await?;
+        // F-2, re-home arm. The gate above authorizes the resource being MOVED; it says nothing about
+        // where it is moved TO. A context-move destination arrives resolved through the surfaces'
+        // READ-gated `resolve_context_ref`, so without this a caller who may modify R and may merely
+        // *read* context C could re-home R into C. Gated here, beside the modify check, so both
+        // authorizations precede every mutation rather than sitting next to the write that consumes
+        // the destination (`rehome_to`, below).
+        if let Some(ctx_to) = cmd.move_to.as_ref().and_then(|m| m.context_to) {
+            self.check_context_authorable(uuid::Uuid::from(ctx_to))
+                .await?;
+        }
         // Correlation-integrity gate for any claimed invocation — additive to the modify authz above,
         // before any mutation. No-op when the act carries no invocation.
         self.check_act_invocation(cmd.act.invocation).await?;
@@ -1635,9 +1684,9 @@ impl Backend for DbBackend {
                 properties.push(("doc_type".to_owned(), serde_json::json!(type_to)));
             }
             if let Some(ctx_to) = mv.context_to {
-                // The ContextId was already resolved and visibility-gated at the
-                // handler boundary (parse_context_ref + resolve_context_ref). Use it
-                // directly; no second DB lookup needed.
+                // The ContextId was resolved and visibility-gated at the handler boundary
+                // (parse_context_ref + resolve_context_ref) and WRITE-gated at the top of this
+                // command (`check_context_authorable`, F-2). Use it directly; no third lookup.
                 rehome_to = Some(ctx_to);
             }
         }

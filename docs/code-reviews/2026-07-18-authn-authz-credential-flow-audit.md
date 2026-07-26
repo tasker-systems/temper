@@ -170,6 +170,16 @@ Two by-design authority asymmetries surfaced — see F-1, F-2 below.
 F-0 is a live self-escalation on `main`. F-1…F-4 are risk items for an explicit decision.
 Ordered by severity.
 
+> **Resolution tracking.** The finding text below is the 2026-07-18 snapshot and is left as written —
+> it is the record of what was true when the audit ran, including `file:line` citations that have
+> since moved. Where a finding has closed, a **RESOLVED** block is appended to it naming the change
+> and the evidence; the snapshot above each block is not edited to match. A finding with no such
+> block is still open.
+>
+> Status as of 2026-07-25: **F-0 resolved**, **F-3 resolved**, **T-1 resolved**. **F-1 and F-4
+> remain open** — both are decisions (sign off or tighten), not fixes, tracked as
+> `019f7674-c8a2-7481-b1c1-18c07788309f`.
+
 ### F-0 — capability amplification / self-escalation via the grant path (HIGH — live on `main`, fixed in draft #482)
 `grant_capability` (access_service.rs:189-214) gates on `can_administer_grant` (admin OR
 `can_grant` on the subject), then calls `insert_grant` with the capability bits **taken
@@ -185,6 +195,14 @@ genesis). Fix (shipped in draft PR #482, Task 5b): a SQL-resident chokepoint tha
 plus bounding `grant_reach`'s grantee team. **Recommend: land #482.** Until it merges, this is
 the live form of the exact class that triggered the audit.
 
+> **RESOLVED** — #482 landed (task `019f7673-f784-79d3-843c-cbaeb0ec8e5b`). Attenuation is now a
+> named decision in `access_service`, not a check bolted onto one caller: the authority arm and the
+> attenuation run in **one pass** (`authorize_capability_grant`), and the type keeps the warrant's
+> subject and the attenuated subject the same value by construction, so the two cannot probe
+> different subjects. Delegated administrators may confer only what they hold; system admins stay
+> unrestricted. Two deliberate non-attenuating paths are documented at their call sites — revoke (de-
+> escalation must never be harder than escalation) and the warrant-bearing arm.
+
 ### F-2 — create-into-context is gated on context **READ**, not context **WRITE** (medium)
 `create_resource_inner` re-enforces the container write-gate for **cogmap** homes only
 (db_backend.rs:1211-1212); create-into-context authority rests on the surface's
@@ -197,6 +215,33 @@ re-opens the exact read-wider-than-write axis that migration `20260712000010` cl
 *modify* path. Recommend: gate create-into-context on `context_authorable_by_profile`, matching
 the cogmap path — or explicitly sign off that read-authority-to-place-content is intended.
 
+> **RESOLVED** — gated, not signed off (task `019f7674-1cc2-7373-a4c3-95224fe347eb`). The either/or
+> this finding posed was already decided: the container-write-cascade design's own test matrix
+> requires `reader only (membership read, no write) → create ❌` for **context** homes as much as
+> cogmap ones. Its scope guard deferred the implementation, never the intent.
+>
+> **The finding was one verb short.** Placement has two — create, and **re-home**
+> (`update_resource`'s `move_to.context_to`), whose destination arrives through the same READ-gated
+> `resolve_context_ref` while `check_can_modify_next` authorizes only the resource being *moved*. The
+> re-home is the sharper half: create places new content, re-home drags *existing* content into a
+> container the actor cannot write. Both verbs now gate on `check_context_authorable`.
+>
+> Also worth recording, because it enlarges the finding: the read set has four arms and the write set
+> three, so what this newly denies is not only the `watcher` the finding names — it is also
+> transitive-ancestor team members (read inherits up the enclosure chain; write requires *direct*
+> membership), read-only grant holders, and any team a context was **shared** into (`kb_team_contexts`
+> is read-reach by construction and is not an arm of the write predicate).
+>
+> Measured before shipping: of **2006** existing context placements in production, **0** would be
+> denied by the gate. The hole closes with no regression on live data.
+>
+> Evidence: `crates/temper-api/tests/context_placement_authz_test.rs` — four cases driving `DbBackend`
+> directly, each mutation-proved, each first asserting the actor genuinely *can read* the context so a
+> green means "read allowed, write refused" rather than "context invisible". The mutation run also
+> showed that pre-fix a **non-member outsider's** create succeeded at the backend: placement was not
+> under-gated there, it was ungated, with the surface's read resolve the only thing in the way — the
+> exact "one new caller away from a silent bypass" shape the F1 cogmap gate exists to prevent.
+
 ### F-3 — `promote_admin` authorization lives in the **handler**, not the service (low, latent)
 `access.rs:222` checks `is_system_admin` before calling `access_service::promote_admin`, whose
 own doc-comment says "Auth is enforced by the caller." This is **the exact drift shape this
@@ -205,6 +250,14 @@ reaches `promote_admin`. But any future second caller (an MCP admin tool, an int
 that calls the service directly would grant system-admin with **no** authorization. Recommend:
 move the `is_system_admin` gate inside `promote_admin`, consistent with every other grant op,
 so authority is enforced at the write, not at one call site.
+
+> **RESOLVED** — and closed harder than the recommendation (task
+> `019f7674-7512-7300-be8c-2fc91296f75e`). Rather than moving the `is_system_admin` *check* into the
+> service, `promote_admin` now takes a sealed **`&SystemAdmin`** proof: the authority is a parameter
+> the caller cannot fabricate, so a future second caller cannot reach the write unauthorized — it
+> cannot even construct the argument. A moved check would still have been a check someone could
+> forget to keep; this is the same guarantee made unrepresentable. This is the F-3 rule that
+> principal-admission Phase 1 generalized (authz-in-service).
 
 ### F-1 — edge asserts authorize the **source** only, never the **target** (low, by-design)
 `assert`/`retype`/`reweight`/`fold` gate `check_can_modify_next(source)`; the target endpoint
@@ -230,6 +283,19 @@ principal from the HMAC-verified server-to-server Slack event, never a client-su
 otherwise it is act-as-any-user token theft. Gate the T4 PR review on this invariant. (The
 *store* side is already safe: the callback derives the principal from the consumed, HMAC-gated,
 single-use link intent.)
+
+> **RESOLVED** — the tripwire fired correctly, and the invariant held (task
+> `019f7674-e88b-7a80-ad88-7699ca8e2b23`). The premise has since gone stale in the good direction: a
+> production caller now exists (`slack_mint_service::mint_for_mention` → `mint_access_token`), and it
+> cannot take a client-supplied principal. The mint handler receives an
+> `Extension<VerifiedSlackPrincipal>`, and that type is constructed in exactly one place —
+> `verify_mint_request`, which checks timestamp freshness, then the HMAC over the exact bytes, and
+> only then parses the body. Its field is private, so forging one outside the crate is a compile
+> error pinned by `tests/compile_fail/forge_verified_slack_principal.rs`. Cross-gate containment is
+> structural too: the other two signature gates never call `verify_mint_request`, so a
+> `SLACK_LINK_SECRET` or reconcile-secret holder cannot obtain a proof. The optional hardening this
+> finding suggested (a doc-test / grep that callers sit behind an HMAC-verified handler) is therefore
+> unnecessary — a private-field proof type is the same guarantee that cannot rot.
 
 ## 6. Credential-flow (Phase 3) — verified so far
 - **Slack grant vault crypto:** XChaCha20-Poly1305, fresh nonce per seal, **AAD binds
