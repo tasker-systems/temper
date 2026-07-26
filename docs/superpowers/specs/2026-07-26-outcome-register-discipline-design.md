@@ -576,6 +576,75 @@ makes witnesses possible, which is incoherent.
 
 ---
 
+## 5.2 The read surface — `temper warmup`, which is the incumbent and is not fit for purpose
+
+§5 specifies two queries and never says what *reads* them. Loop step 1 (§6) says a session opens with
+the criteria-in-force projection and never says how. This section closes that gap.
+
+**The incumbent is `temper warmup`** — self-described as *"Context primer for new sessions."* Do not
+build a second command; the concept already has a name here.
+
+### What it emits today, and why that is the wrong axis
+
+`project` · `recent_sessions` (five titles) · `in_progress_tasks` · **`last_session_content`** — the
+entire previous session note, capped at `MAX_SESSION_LINES = 500`
+(`crates/temper-cli/src/commands/warmup.rs:14`). For a mature context that is ~10 KB of prose.
+
+It carries **no goals, no clauses, no in-force state, no supersessions, no scars, and no project
+fundamentals.**
+
+So it primes on **narrative recency** — what one session chose to write down — rather than on
+**standing state**. That is the archaeology the source research describes, not the fix:
+
+> Sessions open with the projection query: which criteria are in force for this region, which
+> superseded, where the scars are. The 3–4-session reset stops being archaeology.
+
+**Three grounded reasons it is not fit for purpose:**
+
+1. **"The last session" is not *your* last session.** Work here routinely runs several concurrent
+   sessions on different machines. The most recent note is whichever sibling wrote last, from
+   whatever arc it was in. *Demonstrated by this spec's own authoring session*: it opened by reading
+   the most recent session note, which came from another machine and described a branch and a commit
+   that did not exist in the local clone. A primer that leads with that is not merely verbose — it is
+   **actively misleading**, and its confidence scales with how well the sibling writes.
+2. **The constant encodes the wrong goal.** `MAX_SESSION_LINES`'s own comment says *"enough to carry
+   the narrative, short of dominating the primer."* Carrying **a** narrative is the wrong objective
+   when several are in flight.
+3. **It is itself unexercised.** The installed skill references `warmup` exactly once, in
+   `reference.md` — which is *generated from the clap tree*, so it appears because the command exists,
+   not because anything calls it. No session-start routine invokes it. A context primer that the
+   session-start routine does not call is element 7 applied to the read surface, and it explains the
+   drift: nothing exercised the design against real use.
+
+### What it should ground in
+
+**Guidance, goals, and tasks** — standing state, not narrative:
+
+- **Guidance** — the project's ontology (§4): personas, affordances, priors. This is what
+  `guidance/fundamentals.md` has been approximating (§8.1).
+- **Goals** — clauses in force, clauses superseded, and where the scars are.
+- **Tasks** — what is open, and which clause each `witnesses` or `enables`.
+
+**`last_session_content` is dropped.** Not shrunk — dropped. If a *previous-session* signal survives
+at all it should be that session's **open threads**, which are standing state, rather than its prose.
+
+**The payload shape is deliberately not authored here.** A spec-invented field list is stale on
+arrival and wins over the prose beside it (GD-4). What is specified is the *axis*: standing state
+over narrative recency.
+
+### Blast radius: near zero
+
+`WarmupResult` is a CLI-local struct (`crates/temper-cli/src/commands/warmup.rs:37`) with no `ts-rs`
+derives and no OpenAPI presence — `warmup` is a CLI command, not an API route. No consumer of the
+shape was found outside documentation prose and mockups. So this is a change to an output nothing
+depends on, which is a rare and cheap position to be in.
+
+### Reading live is what settles the drift question
+
+If `warmup` reads the ontology live, **there is no projection to drift**. Any on-disk copy becomes an
+offline cache rather than a source — the vault-projection pattern applied one level up, where files
+are derivative and the server is authoritative.
+
 ## 6. The workflow vocabulary and the loop
 
 | Member | Role |
@@ -684,6 +753,47 @@ Changes:
 **This does not become a seventh workflow.** The six `mode × effort` files answer *how much process for
 how big a job*; the register answers *what the outcome is*. They compose — a build/small still has an
 outcome, it just has one clause instead of five.
+
+### 8.1 Three families, and why `guidance/fundamentals.md` keeps getting rewritten
+
+The installed skill mixes three families at one directory level:
+
+| Family | Files today | What it is | Where it should live |
+|---|---|---|---|
+| **The tool** | `reference.md` (generated from the clap tree), `cognitive-maps.md`, `teams.md`, `knowledge-base.md` | How to drive temper | Shipped, generated, universal. Unchanged |
+| **The discipline** | `session-lifecycle.md`, `subagent-guidance.md`, `plan-verification.md`, `implementation-grounding.md`, `workflows/*` | How to work | Shipped, universal, **repo-agnostic**. Where §3 lands |
+| **The project** | `guidance/` — created empty, shape undefined | What *this* project is | See below |
+
+**The observed failure**: across other projects using temper, `guidance/fundamentals.md` has been
+relocated and rewritten by working agents because it was the wrong shape for the repo.
+
+**The mechanism is more specific than "wrong shape."** We name the slot, define no shape, and write
+nothing into it. `install` creates `guidance/` and deliberately never writes there
+(`skill.rs:451`; the comment at `:656`). `SKILL.md` references `guidance/fundamentals.md` three
+times without saying what it contains, and offers `/temper init` — which today initializes a vault
+and ships no template. So the shape is **inferred per project**, from surrounding context that is
+entirely temper-flavoured. In this repository that inference produced a Rust/cargo-make/feature-flags
+document. Elsewhere the same inference is wrong, so the agent rewrites. That is the correct move
+given what it was handed.
+
+**The shape it has been missing is the project ontology** (§4). Personas, affordances, priors — where
+*priors* subsumes what today's fundamentals actually does. A commands table is not wrong; it is **one
+category of prior** (what an actor already knows versus must supply), sitting in a document that
+never named its categories.
+
+**And a durability argument explains the rewriting better than shape does.** A file under
+`~/.claude/skills/temper/guidance/` is per-machine, unversioned, invisible to the team, and shared
+with nobody. Structurally it is a scratch file, so of course it gets rewritten. The same content as
+`domain` resources in a context is versioned, superseded, team-contributable, and promotable into a
+cognitive map. That is the difference between a thing that gets rewritten and a thing that gets
+**amended**.
+
+**Direction**: project guidance lives in temper, and is read live by `warmup` (§5.2). Any on-disk copy
+is an offline cache, not a source — which is what keeps it from drifting.
+
+**Named risk**: a fresh clone with no auth has no project ontology until it pulls. The skill must
+degrade to *"no project ontology yet"* rather than erroring, since §1's standalone property means the
+discipline has to work with none.
 
 ---
 
@@ -795,6 +905,8 @@ remains untaken, and this spec does not supply it.
 | D19 | **Closure gains a fourth cell state — examined-and-inexpressible** | *Excluded-with-reason* is settled; *inexpressible* is a pending fork. Collapsing them makes a waiting cell look decided, which is how the third exit gets taken by default |
 | D20 | **Miscategorisation is checked before either exit is taken** | R10 was not inexpressible — it was a verdict filed in the refusal face, tangled with a real structural refusal. Forking on a miscategorised cell evolves or changes the wrong thing. Three diagnoses, in order: miscategorised (no fork) · missing affordance (evolve) · wrongly reaching (change the goal) |
 | D21 | **The register's cost is NOT claimed as proven** | Of three element-attributions an earlier draft made, one holds (exercise status), one is weakened (closure found a gap in a mechanism PR #550 marks moot), one is withdrawn (the Set 5 Critical predates the register). PR #550's own conclusion is that this arc's findings came from executing SQL, not from the apparatus |
+| D22 | **`temper warmup` is the read surface, and it is redesigned rather than extended** | It already owns "context primer for new sessions", so the concept has a name here. But it primes on narrative recency: with several concurrent sessions, "the last session" is whichever sibling wrote last — demonstrated by this spec's own session, which opened on a note describing a branch that did not exist locally. It grounds in guidance, goals and tasks instead, and `last_session_content` is dropped, not shrunk |
+| D23 | **Project guidance lives in temper; any file is an offline cache** | A file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible to the team, so it is structurally a scratch file and gets rewritten. As `domain` resources it is versioned, superseded and team-contributable — it gets *amended*. Reading live is also what removes the drift a projection would introduce |
 
 ---
 
@@ -864,7 +976,9 @@ Deliberately not specified here:
 1. The discipline as a shipped skill file plus router entry (§3, §8) — self-contained, no dependency
    on anything below.
 2. The recognized `open_meta` conventions (§4.2) — an `open_meta.schema.json` version bump.
-3. The two queries (§5).
+3. The two queries (§5), **and the read surface that consumes them** — `temper warmup` redesigned per
+   §5.2. Named as its own step because the spec previously specified two queries and nothing that
+   read them, which is a declaration with no consumer: the defect this document spends §5.1 on.
 4. Dogfood: hand-author Temper's own ontology (§9), which produces spec 2's requirements.
 5. **Redraft goal `019f9a34-3306-70d1-b07a-f23c99943751` as an outcome register under this
    discipline** — the first register authored against a subject with **no incumbent substrate**, which
