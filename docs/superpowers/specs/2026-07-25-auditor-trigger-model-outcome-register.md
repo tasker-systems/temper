@@ -532,3 +532,71 @@ Every Then-clause either has a witness or is a visible hole. Tasks to file again
 
 **Uncovered by construction** (declared, not hidden): §8.1(b)'s eight unclassified event types have
 no witness until they are classified — that classification is prerequisite work, not a test.
+
+### Filed 2026-07-26 — and two witnesses the register produced under use
+
+**The uncovered-by-construction declaration above is DISCHARGED.** §8.1(b) was classified
+2026-07-25, so the computable absence became computable and its witness now exists as **W8**.
+
+Two witnesses were added that §12 was not authored with. They arrived by **different routes**, and
+the distinction is preserved deliberately — flattening them into "nine witnesses" would destroy the
+part that is actually evidence *about* the convention (C1):
+
+| # | Clause witnessed | Mode | Route | Task |
+|---|---|---|---|---|
+| W8 | §8.1(b): the material/excluded partition is exhaustive over `domain` | executable | **scheduled by the register** — §12 declared the hole *and* the condition under which it becomes witnessable. Causal shape of **C-4**. | `019f9bd0-7dee-7a71-bac8-aabe4befc32f` |
+| W9 | C-7: tier 2 fires when the boundary moves with zero material events | executable | **exceeded the register** — no section anticipated it; it fell out of grounding the §8.1(b) classification. Causal shape of **C-3**, which is why C-3 became schema break B-2. | `019f9bd0-a3f0-7322-b271-582a395e9bc7` |
+
+W1 `019f9bce-9a7f-79b3-8b2b-77e9ee064730` · W2 `019f9bcf-0b1e-7ad1-945e-71fe15afba11` ·
+W3 `019f9bcf-30c0-7772-8833-340b90f22f6b` · W4 `019f9bcf-58a4-77f0-af22-2921ac6eed72` ·
+W5 `019f9bcf-bdba-7c50-a7e7-0ca4fc606ced` · W6 `019f9bcf-e4ba-7c72-83c7-8cc9606cb6cd` ·
+W7 `019f9bd0-0b79-7521-b583-7b1f52a02a1d`
+
+### C1a floor — applying *"demonstrability, not size"* changed the shape
+
+C1a's floor is *"stop when a criterion's witnesses are directly demonstrable, keep going while a
+child still needs children to be checkable."* Applied, the flat seven-row table is **not** flat:
+
+- **Leaves** (writable today, each failing against current state as C2 requires): W1, W4, W9;
+  W6, W7 by inspection. **W7 is upgradeable to executable** — assert no
+  `cogmap_observable_contexts` exists *and* that the delta references `steward_team_contexts`.
+- **W2 and W8 share one child**: the material set exists only as **prose** (spec D3, §8.1(b)'s
+  table), so nothing is enumerable to join against. Filed as
+  `019f9bd0-c9e9-7aa3-95ad-bc8b11325428`. Both unblock together.
+- **W3 and W5 need a *decision*, not code — and §12 as authored does not say so.** This is the
+  finding the filing pass produced, and it is a defect in the table rather than in the work:
+  - **W3** witnesses R10's durable decline trace, but **§9 lists R10's mechanism as stated
+    silence**. §12 files a witness for something §9 declares unspecified.
+  - **W5** witnesses that four endpoints agree, but **EC2 explicitly declines to resolve which
+    disclosure is wrong** (*"one of the two is wrong; the register does not resolve which"*). A
+    witness cannot assert agreement before the correct answer is chosen.
+
+  Neither is illegitimate — a witness may name undesigned work. The defect is that §12 presents all
+  seven as equally fileable, and **quietly filing an unwritable witness is exactly how a coverage
+  question gets a false "yes."** Recorded rather than absorbed.
+
+### The coverage question, asked and answered
+
+C1a's success condition is not that tasks were filed — it is that the coverage question can be
+*asked and answered* against the filed set. Answered:
+
+| Then-clause / claim | Witness | Status |
+|---|---|---|
+| §5 stable state — no re-selection absent a material event | W1 | covered, writable |
+| §8.1(a) — every material member is emittable | W2 | covered, **blocked on child** |
+| §8.1(b) — partition exhaustive over `domain` | W8 | covered, **blocked on same child** |
+| §6 R10 — a decline leaves a durable trace | W3 | covered, **blocked on §9 stated silence** |
+| EC2 — four endpoints agree | W5 | covered, **blocked on an unmade decision** |
+| EC3 / D7 — `uncovered` excludes self-authored | W4 | covered, writable |
+| §7 — exercise status on both axes | W6 | covered, judged |
+| C-1 — `steward_team_contexts` reused, no new function | W7 | covered, judged |
+| C-7 — tier 2 sees its boundary move | W9 | covered, writable |
+| **EC1** — A1/A2 interchangeable for the audit write | **none** | **declared absence**: stated TRUE and *deliberate*, pinned by an existing test (`audit_gate.rs:799-821`). No new witness owed. |
+| **EC4** — a revoked machine is denied everywhere | **none** | **declared absence, and the sharpest one**: FALSE for the audit write, defended only by an upstream authn layer, and the register itself says *"a live dependency between two layers that no test spans."* A witness is **owed** here and none is filed. |
+| §9 stated silences (reaper, aggregation, new authz surface, supersession) | n/a | out of scope by declaration |
+| Cadence / volume / payload-size axes | n/a | **explicitly open** per §8, not closed |
+
+**Two answers worth reading twice.** EC4 is a *witness-shaped hole the register named and §12 did not
+pick up* — the one place where "every Then-clause carries a witness or is a visible hole" currently
+resolves to neither. And the cadence/volume/payload axes are **open, not uncovered**; a reader must
+not count them as gaps.
