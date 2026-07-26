@@ -1,5 +1,52 @@
 # Outcome Register: the auditor's event-driven trigger model
 
+> ## ⟲ DISPOSITION — 2026-07-26. Read this before acting on anything below.
+>
+> **Tier 1 shipped** (`9d316a79`, migration `20260726000010_auditor_tier1_staleness.sql`), and it
+> shipped from a **narrowed** design that supersedes much of this register:
+> `docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md` (rev. 2).
+> Subject task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` is **done**.
+>
+> **This register was specified over a feature that does not exist**, and that is its central
+> lesson, not a footnote. Tier 2, `auditor_watermark_event_id`, and `auditor_context_delta` appear
+> nowhere in `migrations/` or `crates/` — the register says as much about D1 in its own words
+> (*"nothing currently asserts non-reselection, because nothing implements D1"*). So a witness
+> "biting against current state" was mostly biting against the **absence of the feature**, and C2's
+> fail-before/pass-after bar is trivially met by anything when "before" means "unbuilt."
+>
+> ### What is now moot
+>
+> | clause | disposition |
+> |---|---|
+> | **D3** — the material-event allow-list | **Not built, and not needed.** Nothing on the audit path writes `kb_content_blocks`: three writers (`_project_blocks`, `_project_block_mutated`, `_project_charter_set`, from `pg_proc`) and no triggers on `kb_content_blocks` / `kb_citation_audits` / `kb_block_provenance`. The `citation_audited` self-cycle is structurally impossible. Confirmed independently by three reviewers. |
+> | **§8.1(a)** — four of thirteen material events unemittable | Moot with D3. |
+> | **§8.1(b)** — eight `domain` types classified neither material nor excluded | Moot with D3. |
+> | **R10** | **Half withdrawn.** Evidential inability is a *verdict* (`<= 0`), not a refusal — the standing model already separates *evaluated-but-weak* (quality) from *unevaluated* (the band's coverage-ratio gate), so there is no third state. Structural inability is real and became D7's conjunct. See the tier-1 design §5. |
+> | **D7's conjunct** | **Ratified separable** (tier-1 design §3.5), against both prior positions. It reaches only one of three members of the permanently-stuck population; the dominant member — *"a citation that is readable, live, and simply never gets audited"* — is deferred to a reaper pass by `20260724000130`'s own comment. So the conjunct never was what bounded starvation. Carried by `019f9bfb-62e2-7c62-85b2-e309ac1b18c1`. |
+>
+> ### Witness tasks — deleted, and why
+>
+> `W1`, `W3` were cancelled 2026-07-25. **`W2`, `W4`, `W7`, `W8`, `W9` were deleted 2026-07-26**:
+> W2/W8 witness the material set, which no longer exists; W9 claims *"writable today"* but its
+> demonstration asserts against a tier-2 sweep that does not exist, and its finding (C-7) is carried
+> by `019f9bb3-e2cf-7710-9b90-db4ebefb8f64`; W7 judges an unbuilt tier-2 delta, and its content is a
+> *correction to the spec* rather than work; W4 is superseded by `019f9bfb` plus the design's §3.5.
+>
+> **`W5` and `W6` survive** — they are about *shipped* code and are independent of the material set:
+> W5 (`019f9bcf-bdba-7c50-a7e7-0ca4fc606ced`) records four auditor endpoints giving three
+> registration answers, cited to `audit_gate.rs`; W6 (`019f9bcf-e4ba-7c72-83c7-8cc9606cb6cd`) is the
+> two-axis exercise-reporting discipline that caught this register's own false premise.
+>
+> ### The methodological finding, for goal `019f9a34`
+>
+> The register apparatus did not produce this arc's useful findings — **reading and executing SQL
+> did**. Every correction that changed the work came from `psql` or `pg_proc`, and the two most
+> expensive errors (a `grep`-derived enumeration presented as complete; `max(uuid)`, which does not
+> exist, written into a spec with an instruction not to re-derive it) were **assertions from pattern
+> rather than from execution**, in a document whose whole subject was calibrated claims. A later
+> pass then found the *repair* had recreated the same defect one grain over. What caught each round
+> was executing the predicate, not reviewing it.
+
 **Witnesses**: goal `019f9a34-3306-70d1-b07a-f23c99943751` → **C1** (fully), **C1a**/**C1b**, **C3** (partially — this document and its corrections are the evidence C3 judges).
 **Subject**: task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`; spec `docs/superpowers/specs/2026-07-24-auditor-event-driven-trigger-model-design.md` (D1–D8, marked *accepted*).
 **Subject reassigned to C1 by** decision `019f9a64-b738-75d2-8d0a-b832872b6a64`.

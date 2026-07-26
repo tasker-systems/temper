@@ -16,7 +16,8 @@
 
 mod common;
 
-use temper_substrate::events::EventContext;
+use temper_substrate::content;
+use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{
     BlockId, CogmapId, ContextId, EntityId, InvocationId, ProfileId, ResourceId,
 };
@@ -24,7 +25,7 @@ use temper_substrate::payloads::{
     AgentAuthorship, AnchorRef, ConfidenceBand, Incorporation, ProvenanceSource,
 };
 use temper_substrate::scenario::bootseed;
-use temper_substrate::writes::{self, CitationAuditParams, CreateParams};
+use temper_substrate::writes::{self, AppendParams, CitationAuditParams, CreateParams};
 use uuid::Uuid;
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
@@ -1712,5 +1713,481 @@ async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
     assert!(
         high_pos < low_pos,
         "uncovered DESC: the finding with 3 uncovered sources must sort before the one with 1: {rows:?}"
+    );
+}
+
+// ── Tier-1 staleness — `resource_has_stale_citation` + the `stale` disjunct ──────────────────────
+//
+// Migration `20260726000010_auditor_tier1_staleness.sql`, design
+// `docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md` (rev. 2).
+//
+// THE DEFECT THESE WITNESS: `audit_drift_sweep` selected on `coverage < magnitude`, so once a
+// finding was fully covered it never re-entered the queue — a `block_mutated` could change an
+// assertion's text while every verdict about the previous text stood unrevisited forever.
+//
+// WHY THE AUDITING ENTITY MUST BELONG TO THE SWEEPING PRINCIPAL. The watermark is scoped
+// `audited_by_profile_id = p_principal` (spec §3.2(a)), and `audited_by_profile_id` is resolved from
+// the owning event's emitter (`20260724000200_citation_audit_attribution.sql:72-76`). The Task-5
+// fixtures above audit as the `system` actor while sweeping as a separate `principal`, which is fine
+// for coverage — coverage is global — but would make EVERY staleness assertion below vacuously false.
+// So these fixtures audit with the sweeping principal's own entity, via `make_auditor`.
+
+/// The shape every tier-1 staleness witness needs: a cogmap the sweeping principal can reach, that
+/// principal's own entity, one source, and one finding citing it.
+struct StaleFixture {
+    cogmap: Uuid,
+    /// Sweeping principal — also the auditor, for the reason in this section's header.
+    principal: ProfileId,
+    auditor: EntityId,
+    /// The `system` actor, which creates the resources (authorship is not under test here).
+    owner: ProfileId,
+    emitter: EntityId,
+    source: ResourceId,
+    finding: ResourceId,
+}
+
+/// `slug` disambiguates every fixture row this creates; each test passes its own.
+async fn stale_fixture(pool: &sqlx::PgPool, slug: &str) -> StaleFixture {
+    bootseed::seed_system(pool).await.unwrap();
+    let (owner, emitter) = system_actor(pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(pool, slug, &format!("{slug} telos")).await;
+    let (principal, auditor) = make_auditor(pool, &format!("{slug}-principal")).await;
+    join_principal_to_cogmap(pool, principal.uuid(), cogmap, &format!("{slug}-team")).await;
+
+    let src_home = make_home(pool, owner, &format!("{slug}-src-home")).await;
+    let source = make_resource(
+        pool,
+        owner,
+        emitter,
+        src_home,
+        "source",
+        &format!("temper://{slug}/source"),
+    )
+    .await;
+    let finding = make_cogmap_finding(
+        pool,
+        owner,
+        emitter,
+        CogmapId::from(cogmap),
+        "finding",
+        &format!("temper://{slug}/finding"),
+        Some(source),
+    )
+    .await;
+    StaleFixture {
+        cogmap,
+        principal,
+        auditor,
+        owner,
+        emitter,
+        source,
+        finding,
+    }
+}
+
+/// Revise a block's prose through the production write path — the `SeedAction::BlockMutate` shape
+/// verified at `readout_tier.rs:71-90`.
+///
+/// This is what bumps `kb_content_blocks.last_event_id`, and it is why `cite()` above CANNOT stand in
+/// for a material change: `cite()` reuses the block's `genesis_event_id` and moves no cursor.
+/// `incorporated: &[]` is safe — `_project_block_mutated` *accretes* provenance ("empty ⇒ no-op"), so
+/// the finding's existing citation survives the revision rather than being replaced by nothing.
+async fn mutate_block(pool: &sqlx::PgPool, block: Uuid, emitter: EntityId, prose: &str) {
+    let prepared = content::prepare_block(0, None, prose).unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            incorporated: &[],
+            block: BlockId::from(block),
+            chunks: &prepared.chunks,
+            raw: None,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// Append a second block to `finding` that cites `source` — a live citation on a block that has
+/// never been audited.
+async fn append_citing_block(
+    pool: &sqlx::PgPool,
+    finding: ResourceId,
+    source: ResourceId,
+    emitter: EntityId,
+    prose: &str,
+) -> BlockId {
+    let block = content::prepare_block(1, None, prose).unwrap();
+    writes::append_block(
+        pool,
+        AppendParams {
+            resource: finding,
+            block: &block,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(source.uuid()),
+                seq: 0,
+            }],
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// Does the sweep offer this `(cogmap, finding)` pair to this principal?
+async fn sweep_offers(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    cogmap: Uuid,
+    finding: ResourceId,
+) -> bool {
+    sweep(pool, principal.uuid(), 10)
+        .await
+        .iter()
+        .any(|(c, f, _)| *c == cogmap && *f == finding.uuid())
+}
+
+/// LOAD-BEARING (the defect itself). A fully covered finding whose citing block is then MUTATED must
+/// be re-offered. Before `20260726000010` this returned nothing, forever: `coverage == magnitude` was
+/// the only selection predicate, so the verdict about the replaced text stood unrevisited.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_reoffers_a_covered_finding_after_its_block_is_mutated(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-mutate").await;
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    assert!(
+        !sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "precondition: once audited, the finding is fully covered and must be quiet"
+    );
+
+    mutate_block(
+        &pool,
+        block,
+        f.emitter,
+        "the assertion now says something else entirely",
+    )
+    .await;
+
+    assert!(
+        sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "a covered finding whose block was mutated after the audit must be re-offered"
+    );
+}
+
+/// The SOURCE-side arm. Without it this suite would pass with a predicate that only ever looks at the
+/// citing block, and the auditor would never learn that a source it relied on had changed underneath.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_reoffers_a_covered_finding_after_its_cited_source_changes(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-source").await;
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    let source_block = first_block(&pool, f.source).await;
+    mutate_block(
+        &pool,
+        source_block,
+        f.emitter,
+        "the source no longer says that",
+    )
+    .await;
+
+    assert!(
+        sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "a covered finding whose CITED SOURCE changed after the audit must be re-offered"
+    );
+}
+
+/// Witnesses the `block_wm IS NULL` arm (spec §3.2(b)).
+///
+/// `resource_audit_coverage` is `count(DISTINCT source_id)`, so auditing a source on ONE block marks
+/// it covered across ALL blocks of the finding. A new block citing that already-covered source is
+/// therefore selected by NEITHER `coverage < magnitude` nor a watermark comparison that requires an
+/// existing audit on that block — it needs the explicit "this principal never audited this citation"
+/// arm. Tests 1-2 use single-block fixtures and cannot observe this.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_reoffers_a_two_block_finding_when_the_unaudited_pair_s_block_changes(
+    pool: sqlx::PgPool,
+) {
+    let f = stale_fixture(&pool, "ads-stale-append").await;
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    append_citing_block(
+        &pool,
+        f.finding,
+        f.source,
+        f.emitter,
+        "a second assertion drawn from the same source",
+    )
+    .await;
+
+    // The new block cites an ALREADY-COVERED source, so the coverage disjunct stays silent.
+    let coverage: i32 = sqlx::query_scalar("SELECT resource_audit_coverage($1)")
+        .bind(f.finding.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let magnitude: i32 = sqlx::query_scalar("SELECT resource_citation_magnitude($1)")
+        .bind(f.finding.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (magnitude, coverage),
+        (1, 1),
+        "the appended block cites the same source, so coverage must still equal magnitude — \
+         otherwise this test would pass through the `uncovered` disjunct and witness nothing"
+    );
+
+    assert!(
+        sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "a new block citing an already-covered source carries unweighed text and must be re-offered"
+    );
+}
+
+/// Witnesses the per-principal scoping (spec §3.2(a)).
+///
+/// A global watermark picks the COVERAGE grain ("did anyone look?") while staleness protects the
+/// QUALITY grain ("is each principal's vote about the current text?"), and `20260724000210` separated
+/// those deliberately. With a global max, B's fresh verdict would extinguish A's staleness and leave
+/// the finding terminal while A's verdict about deleted text still carried half the aggregate.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_stale_is_scoped_to_the_sweeping_principal(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-principal").await;
+    let (b_principal, b_auditor) = make_auditor(&pool, "ads-stale-principal-b").await;
+    join_principal_to_cogmap(
+        &pool,
+        b_principal.uuid(),
+        f.cogmap,
+        "ads-stale-principal-b-team",
+    )
+    .await;
+
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    mutate_block(
+        &pool,
+        block,
+        f.emitter,
+        "revised after A looked, before B looked",
+    )
+    .await;
+    fire_audit(&pool, b_auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    assert!(
+        sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "A's verdict predates the mutation, so the finding is stale FOR A"
+    );
+    assert!(
+        !sweep_offers(&pool, b_principal, f.cogmap, f.finding).await,
+        "B read the current text, so the finding is NOT stale for B — a global watermark would \
+         have extinguished A's staleness here too"
+    );
+}
+
+/// LOAD-BEARING, and the one that falsifies the FIRST repair of this design.
+///
+/// Rev. 1 keyed the watermark on `(finding, source)` to match `resource_audit_coverage`'s grain. That
+/// takes the LATEST audit across every block of the finding, so an audit of one block sits above
+/// another block's mutation and hides it permanently — the same defect
+/// `sweep_stale_is_scoped_to_the_sweeping_principal` guards, one grain over.
+///
+/// This needs no skipped citation: read the three writes below as ONE audit run, with an edit landing
+/// mid-run. Runs are LLM-paced minutes; ordinary behaviour on both sides.
+///
+/// A witness that only bites against "the feature is absent" discriminates nothing — the bar W1 was
+/// cancelled for missing. This one also bites against a specific WRONG implementation: swap the
+/// `FILTER (WHERE a.block_id = lc.block_id)` watermark for a plain finding-scoped `array_agg` and
+/// this test, alone in the suite, goes red.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_reoffers_when_a_sibling_audit_lands_after_another_blocks_mutation(
+    pool: sqlx::PgPool,
+) {
+    let f = stale_fixture(&pool, "ads-stale-sibling").await;
+    let block0 = first_block(&pool, f.finding).await;
+    let block1 = append_citing_block(
+        &pool,
+        f.finding,
+        f.source,
+        f.emitter,
+        "a second assertion drawn from the same source",
+    )
+    .await;
+
+    fire_audit(&pool, f.auditor, block0, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    mutate_block(
+        &pool,
+        block0,
+        f.emitter,
+        "block 0's assertion now reads differently",
+    )
+    .await;
+    fire_audit(&pool, f.auditor, block1.uuid(), f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    assert!(
+        sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "block 0 was mutated after its own audit; a later audit of its SIBLING must not bury that"
+    );
+}
+
+/// Witnesses the ordering key (spec §3.4).
+///
+/// A stale finding is by construction fully covered, so its `uncovered` is 0 — the MINIMUM of the
+/// `ORDER BY uncovered DESC` this migration inherited. Carried forward unchanged, every stale finding
+/// sorts behind every uncovered one, and with k permanently-stuck findings ahead of it the stale
+/// disjunct silently returns nothing.
+///
+/// Every other fixture in this family is smaller than the cap, so nothing else in the suite can
+/// observe this: the assertion is not "stale findings sort first" but "stale findings get slots AT
+/// ALL when the uncovered class alone would fill the cap."
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_ordering_gives_stale_findings_slots_under_a_stuck_backlog(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-order").await;
+
+    // The stale finding: covered, then mutated.
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    mutate_block(&pool, block, f.emitter, "revised after the audit").await;
+
+    // Four never-audited findings, each `uncovered = 1` — the permanently-stuck class, and more of
+    // them than the cap below.
+    for i in 0..4 {
+        let home = make_home(&pool, f.owner, &format!("ads-stale-order-stuck-home{i}")).await;
+        let src = make_resource(
+            &pool,
+            f.owner,
+            f.emitter,
+            home,
+            &format!("stuck-src{i}"),
+            &format!("temper://ads-stale-order/stuck-src{i}"),
+        )
+        .await;
+        make_cogmap_finding(
+            &pool,
+            f.owner,
+            f.emitter,
+            CogmapId::from(f.cogmap),
+            &format!("stuck{i}"),
+            &format!("temper://ads-stale-order/stuck{i}"),
+            Some(src),
+        )
+        .await;
+    }
+
+    // Cap of 3 against 4 uncovered findings: under `ORDER BY uncovered DESC` the uncovered class
+    // takes every slot and the stale finding is structurally excluded, not merely deprioritized.
+    let rows = sweep(&pool, f.principal.uuid(), 3).await;
+    assert_eq!(
+        rows.len(),
+        3,
+        "the cap must be the binding constraint: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|(_, r, _)| *r == f.finding.uuid()),
+        "the stale finding must get a slot even though four uncovered findings could fill the cap: \
+         {rows:?}"
+    );
+}
+
+/// STAY-GREEN, and the guard on the `block_wm IS NULL` arm.
+///
+/// `finding_wm IS NOT NULL` restricts that arm to a principal already engaged with this
+/// `(finding, source)`. Drop it as a tidy-up and every finding reads stale for every principal who
+/// has not yet audited it — silently converting staleness into per-principal COVERAGE, which is a far
+/// larger behaviour change and one the band's coverage-ratio gate already handles.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_finding_for_a_principal_who_never_audited_it(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-unengaged").await;
+    let (b_principal, _b_auditor) = make_auditor(&pool, "ads-stale-unengaged-b").await;
+    join_principal_to_cogmap(
+        &pool,
+        b_principal.uuid(),
+        f.cogmap,
+        "ads-stale-unengaged-b-team",
+    )
+    .await;
+
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    assert!(
+        !sweep_offers(&pool, b_principal, f.cogmap, f.finding).await,
+        "B has never audited this finding, and it is globally covered — staleness must stay silent \
+         rather than offering every finding to every principal who has not looked yet"
+    );
+}
+
+/// LOAD-BEARING, and the witness for the `gated` CTE itself.
+///
+/// The gate is **redundant for today's only caller** — `audit_drift_sweep` filters `candidates`
+/// through `steward_candidate_cogmaps` and `resources_visible_to` before scoring — so every other
+/// test in this family passes with or without it. That makes it decoration unless something
+/// exercises it directly, which is what this does: it calls `resource_has_stale_citation` itself,
+/// the way a future second caller would.
+///
+/// The bite needs a principal that has a WATERMARK but no VISIBILITY. A principal who simply never
+/// audited returns false through `finding_wm IS NULL` and would pass ungated too — proving nothing.
+/// So A audits while joined to the cogmap, the finding goes stale, and only then is A's team
+/// detached: the audits remain, the visibility does not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn stale_predicate_refuses_a_finding_the_principal_cannot_read(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-gate").await;
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    mutate_block(&pool, block, f.emitter, "revised after the audit").await;
+
+    let stale_while_visible: bool =
+        sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+            .bind(f.finding.uuid())
+            .bind(f.principal.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        stale_while_visible,
+        "precondition: with reach, this principal's watermark predates the mutation, so it IS stale"
+    );
+
+    // Detach the team from the cogmap — `cogmap_readable_by_profile` reads exactly this row, and it
+    // is the principal's ONLY path to a cogmap-homed finding. The audits it already wrote survive.
+    sqlx::query("DELETE FROM kb_team_cogmaps WHERE cogmap_id = $1")
+        .bind(f.cogmap)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stale_without_reach: bool =
+        sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+            .bind(f.finding.uuid())
+            .bind(f.principal.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !stale_without_reach,
+        "the watermark still exists but the finding is no longer readable — the `gated` CTE must \
+         refuse it rather than answer a question about a resource this principal cannot see"
     );
 }
