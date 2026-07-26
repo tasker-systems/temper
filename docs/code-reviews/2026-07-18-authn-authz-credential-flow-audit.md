@@ -176,9 +176,10 @@ Ordered by severity.
 > and the evidence; the snapshot above each block is not edited to match. A finding with no such
 > block is still open.
 >
-> Status as of 2026-07-25: **F-0, F-1, F-2, F-3 and T-1 resolved**. **F-4 alone remains open** — it
-> is a decision (sign off or tighten), not a fix, tracked as
-> `019f7674-c8a2-7481-b1c1-18c07788309f`.
+> Status as of 2026-07-26: **every finding is closed.** F-0, F-1, F-2, F-3 and T-1 were fixed; F-4
+> was signed off as intended behavior with its containments verified and pinned. Four of the six
+> closed harder than recommended (F-3's sealed proof type, T-1's compile-error forgery guard, F-1's
+> and F-2's coverage of a second verb the findings did not name).
 
 ### F-0 — capability amplification / self-escalation via the grant path (HIGH — live on `main`, fixed in draft #482)
 `grant_capability` (access_service.rs:189-214) gates on `can_administer_grant` (admin OR
@@ -310,6 +311,32 @@ A **maintainer** may demote or remove an **owner** (except the last owner, which
 — team_service.rs:387-529. Downward/griefing, not self-elevation (a maintainer still cannot
 make themselves owner). Flagged only because it lets a lower role act on a higher one; if the
 intent is "only owners manage owners," it is under-gated.
+
+> **RESOLVED — signed off as intended, 2026-07-26.** Pete's call: *"I can think of meaningful use
+> cases for a maintainer to be able to demote an owner, and if we have it blocked so that the last
+> owner cannot be removed, then for now I'm going to leave it. It's not a hole so much as annoying
+> if someone did it when they shouldn't."* "Only owners manage owners" is **not** the intent.
+>
+> The sign-off rests on two containments, both verified in code rather than taken from this
+> write-up, and both already pinned by tests — so a future change cannot quietly remove the floor
+> this decision depends on:
+>
+> - **The last owner cannot be removed or demoted.** Both guards are folded into the UPDATE itself
+>   for atomicity, surfacing as `409 Conflict` (*"cannot remove/demote the last owner; transfer
+>   ownership or promote another member first"*). Pinned by `cannot_remove_last_owner` and
+>   `cannot_demote_last_owner` in `team_service`, plus an e2e case for last-owner self-leave.
+> - **No self-elevation.** `change_role` hard-rejects `new_role = owner` outright
+>   (*"cannot grant owner via role change; use ownership transfer"*), so a maintainer cannot promote
+>   themselves or anyone else to owner by this path.
+>
+> Together those make the residual strictly *downward and recoverable*: a demoted owner can be
+> restored by any remaining owner, and a team can never be stranded ownerless. That is what makes
+> this an annoyance rather than a privilege boundary — and it is why the finding closes without a
+> caller-rank comparison.
+>
+> **If this is ever revisited**, the change to make is a caller-rank ≥ target-rank check in
+> `change_role`/`remove_member` — but note it would also block the legitimate cases named above, so
+> it is a product decision, not a hardening.
 
 ### T-1 — forward tripwire: T4 `mint_access_token` caller (not yet built)
 The Slack grant vault's `mint_access_token` enforces **no** authorization itself — it mints an
