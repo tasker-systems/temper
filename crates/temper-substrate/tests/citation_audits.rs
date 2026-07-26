@@ -2136,3 +2136,58 @@ async fn sweep_omits_a_finding_for_a_principal_who_never_audited_it(pool: sqlx::
          rather than offering every finding to every principal who has not looked yet"
     );
 }
+
+/// LOAD-BEARING, and the witness for the `gated` CTE itself.
+///
+/// The gate is **redundant for today's only caller** — `audit_drift_sweep` filters `candidates`
+/// through `steward_candidate_cogmaps` and `resources_visible_to` before scoring — so every other
+/// test in this family passes with or without it. That makes it decoration unless something
+/// exercises it directly, which is what this does: it calls `resource_has_stale_citation` itself,
+/// the way a future second caller would.
+///
+/// The bite needs a principal that has a WATERMARK but no VISIBILITY. A principal who simply never
+/// audited returns false through `finding_wm IS NULL` and would pass ungated too — proving nothing.
+/// So A audits while joined to the cogmap, the finding goes stale, and only then is A's team
+/// detached: the audits remain, the visibility does not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn stale_predicate_refuses_a_finding_the_principal_cannot_read(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-stale-gate").await;
+    let block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    mutate_block(&pool, block, f.emitter, "revised after the audit").await;
+
+    let stale_while_visible: bool =
+        sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+            .bind(f.finding.uuid())
+            .bind(f.principal.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        stale_while_visible,
+        "precondition: with reach, this principal's watermark predates the mutation, so it IS stale"
+    );
+
+    // Detach the team from the cogmap — `cogmap_readable_by_profile` reads exactly this row, and it
+    // is the principal's ONLY path to a cogmap-homed finding. The audits it already wrote survive.
+    sqlx::query("DELETE FROM kb_team_cogmaps WHERE cogmap_id = $1")
+        .bind(f.cogmap)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stale_without_reach: bool =
+        sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+            .bind(f.finding.uuid())
+            .bind(f.principal.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !stale_without_reach,
+        "the watermark still exists but the finding is no longer readable — the `gated` CTE must \
+         refuse it rather than answer a question about a resource this principal cannot see"
+    );
+}

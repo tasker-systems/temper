@@ -2,7 +2,7 @@
 
 **Spec:** [`docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md`](../specs/2026-07-25-auditor-tier1-staleness-watermark-design.md)
 **Branch:** `jct/auditor-tier1-staleness-watermark` (off `76d0de12`)
-**Rev. 3** — 2026-07-26. Session notes `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6` + this session's.
+**Rev. 4** — 2026-07-26. Session notes `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6` + this session's.
 
 > **Read the spec's revision note first.** Rev. 0 of this plan told the implementer *"body is given
 > in spec §3; do not re-derive it"* — and that body contained `max(uuid)`, which does not exist.
@@ -59,6 +59,12 @@ Four constraints, each with the citation to honour:
   PG18/local (native `uuidv7()`)**. Because the comparand is a timestamp, plain `max()` works —
   `max(uuid)` does not exist, and the `(array_agg(… ORDER BY … DESC))[1]` workaround it forced is
   gone with it.
+- **CONFORM** — the **`gated` CTE**, copied from `resource_standing_shape` (`20260724000120`), the
+  one other member of this family that takes a principal. RBAC first, producers computed over the
+  gated set, so an unreadable finding short-circuits instead of costing more. Redundant for the
+  sweep, which already gates `candidates` — present because `p_principal` reads like scoping and is
+  not. **Do not delete it as dead code**: `stale_predicate_refuses_a_finding_the_principal_cannot_read`
+  is the only thing that fails if you do.
 - **CONFORM** — `a.audited_by_profile_id = p_principal`. Spec §3.2(a): a global max picks the
   *coverage* grain while staleness protects the *quality* grain, and `20260724000210` separated them
   deliberately.

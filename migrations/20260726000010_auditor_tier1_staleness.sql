@@ -51,9 +51,26 @@ COMMENT ON INDEX idx_kb_content_blocks_resource_cursor IS
 -- ── 2. The staleness predicate ───────────────────────────────────────────────────────────────────
 CREATE FUNCTION resource_has_stale_citation(p_finding uuid, p_principal uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
+    -- CONFORM: `resource_standing_shape` (`20260724000120`) is the one other member of this family
+    -- that takes a principal, and this is its idiom verbatim -- an RBAC `gated` CTE first, with
+    -- every producer computed OVER the gated set. An unreadable finding leaves `gated` empty, so the
+    -- work below runs zero times: the gate SHORT-CIRCUITS the producers rather than adding to them,
+    -- which is why it does not offend `20260724000130`'s once-per-candidate-row rule.
+    --
+    -- Redundant for today's only caller -- `audit_drift_sweep` already filters `candidates` through
+    -- `steward_candidate_cogmaps` AND `resources_visible_to` before scoring. Present anyway, because
+    -- `p_principal` here selects WHOSE watermark, which reads like scoping and is not; a later
+    -- caller passing an ungated finding would otherwise get an answer about a resource its principal
+    -- cannot see. Defense in depth is the repo rule, and the sweep already applies it to itself
+    -- ("the same predicate Task 6's gate runs, so the queue cannot offer what the gate refuses").
+    WITH gated AS (
+        SELECT p_finding AS fid
+        WHERE p_finding IN (SELECT resource_id FROM resources_visible_to(p_principal))
+    )
     SELECT EXISTS (
         SELECT 1
-        FROM resource_live_citations(p_finding) lc
+        FROM gated g
+        CROSS JOIN LATERAL resource_live_citations(g.fid) lc
         JOIN kb_content_blocks b  ON b.id  = lc.block_id
         JOIN kb_events         be ON be.id = b.last_event_id
         CROSS JOIN LATERAL (
@@ -64,7 +81,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                 max(a.created) FILTER (WHERE a.block_id = lc.block_id) AS block_wm
               FROM kb_citation_audits a
               JOIN kb_content_blocks ab
-                ON ab.id = a.block_id AND ab.resource_id = p_finding
+                ON ab.id = a.block_id AND ab.resource_id = g.fid
              WHERE a.source_kind = 'resource'
                AND a.source_id   = lc.source_id
                AND a.audited_by_profile_id = p_principal
@@ -72,6 +89,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         WHERE w.finding_wm IS NOT NULL
           AND ( w.block_wm IS NULL
              OR be.occurred_at > w.block_wm
+             -- NOT GATED ON SOURCE VISIBILITY, DELIBERATELY AND TEMPORARILY -- see note 5.
              OR EXISTS (SELECT 1 FROM kb_content_blocks sb
                           JOIN kb_events se ON se.id = sb.last_event_id
                          WHERE sb.resource_id = lc.source_id
@@ -130,6 +148,20 @@ FOUR THINGS HERE ARE LOAD-BEARING. Each was arrived at by breaking the alternati
    (finding, source). Without it every finding reads stale for every principal who has not yet
    audited it, silently converting staleness into per-principal COVERAGE -- a far larger behaviour
    change, and one the band's coverage-ratio gate already handles.
+
+5. THE SOURCE SIDE IS NOT VISIBILITY-GATED. Deliberate, temporary, and the largest known gap here.
+   `resource_live_citations` filters `src.is_active` and nothing else, so the source-side arm can
+   re-offer a finding because a source THIS PRINCIPAL CANNOT READ changed. That widens an existing
+   channel rather than opening a new one -- `resource_citation_magnitude` already counts invisible
+   sources and `resource_audit_coverage` already moves when anyone audits one -- but it widens it
+   from "a count, and someone audited" to "one changed, just now", which is far more pollable.
+   The gate is NOT applied yet because it is coupled to reach, not to code: a citation whose source
+   the principal cannot read is one the auditor can never audit (`AuditAuthority` 404s it), so
+   gating the source is correct AND silences this arm entirely unless the auditor is provisioned
+   with read access to cited sources. Applying it before that provisioning ships a predicate that is
+   correct and mute. Sequenced with `019f9bfb-62e2-7c62-85b2-e309ac1b18c1` and the auditor's
+   credential work. Demonstrated, not theorised: applying the gate turns ALL SIX staleness witnesses
+   red, because in every fixture the cited source is invisible to the sweeping principal.
 
 KNOWN AND ACCEPTED: an edit landing DURING an audit run still under-triggers by one tick (the
 verdict is written after the mutation, so it sits above that block's cursor). The block grain makes

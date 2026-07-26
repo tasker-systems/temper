@@ -1,6 +1,6 @@
 # Auditor tier-1 staleness — the watermark the substrate already keeps
 
-**Date:** 2026-07-25 (rev. 2 — 2026-07-26) · **Status:** design, ready to implement
+**Date:** 2026-07-25 (rev. 4 — 2026-07-26) · **Status:** design, ready to implement
 **Supersedes in part:** `2026-07-24-auditor-event-driven-trigger-model-design.md` (D1–D8)
 **Branch:** `jct/auditor-tier1-staleness-watermark`
 
@@ -26,6 +26,8 @@
 > to timestamps removes that dependency (F9 dissolves — §4), and removes the `array_agg(…)[1]`
 > workaround with it, since `max()` exists for `timestamptz` and not for `uuid`. Sections changed in
 > rev. 3 are marked **[rev3]**.
+>
+> **Rev. 4 adds the `gated` CTE** (§3.1) after Pete asked what actually constrains the finding to `p_principal`. Nothing in the function did — only its caller. The source side is still ungated and is now the largest declared gap (§4), because that gate is coupled to the auditor's reach rather than to code. Sections changed in rev. 4 are marked **[rev4]**.
 > Session notes: `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6`, and this session's.
 
 ---
@@ -245,6 +247,21 @@ it is more precise.
 explicitly from `e.occurred_at`, so it is the audit event's own time and is replay-stable for the
 same reason.
 
+**[rev4] The `gated` CTE — CONFORM, not invention.** `resource_standing_shape` is the one other
+member of this family that takes a principal, and it opens with an RBAC `gated` CTE whose result
+every producer is computed *over*. This predicate now does the same. The gate **short-circuits** the
+producers rather than adding to them — an unreadable finding leaves `gated` empty and the work below
+runs zero times — which is why it does not offend `20260724000130`'s once-per-candidate-row rule.
+
+It is redundant for today's only caller: `audit_drift_sweep` gates `candidates` through
+`steward_candidate_cogmaps` **and** `resources_visible_to` before scoring. It is present anyway
+because `p_principal` here selects *whose watermark*, which **reads like scoping and is not** — a
+later caller passing an ungated finding would otherwise receive an answer about a resource its
+principal cannot see. Witnessed by `stale_predicate_refuses_a_finding_the_principal_cannot_read`,
+which calls the predicate directly; every other test in the family passes with or without the gate,
+so without that witness it would be decoration.
+
+
 ### 3.2 Two grain corrections, both load-bearing **[(a) revised · (b) rev2]**
 
 **(a) Scope the watermark to the sweeping principal** — `a.audited_by_profile_id = p_principal`.
@@ -450,6 +467,7 @@ hole requires an honest description of the hole.
 | **F7 — `resource_live_citations` has no `ingest_state` gate** | Its own header quotes the rule it violates. A half-uploaded source confers standing *and* re-queues its citers once per arriving block. **Must NOT ride along** — all three standing axes read this function; far wider blast radius than this change earns. **Own task.** |
 | **F8 — source-side clause fires on ANY block of the source** | Including self-citations and high-churn sources (a telos: `_project_charter_set` folds and reinserts every block per `charter_set`). In a self-cognition KB, findings-citing-findings is the normal case. **Unquantified — nobody has measured how often findings cite their own telos.** |
 | ~~**F9 — same-millisecond ordering unverified on prod**~~ | **DISSOLVED in rev. 3 — not verified, removed.** The predicate no longer compares event ids, so there is no generator to verify: see §3.1. Kept here rather than deleted because the *reasoning* is the reusable part. F9 was framed as "verify `pg_uuidv7` against Neon before shipping", and the framing was the error — it accepted a dependency the design never needed and promoted it to a permanent gate on every future edit to this predicate. Pete, 2026-07-26: *"why are we looking for `max(uuid)` anyway — we should already have record-level timestamps that do not rely on the ids."* The local measurement stands as a fact about PG18 and is now trivia: **49,951 same-millisecond pairs across 49 distinct milliseconds, 0 out of order.** |
+| **The source side is not visibility-gated [rev4] — the largest known gap** | `resource_live_citations` filters `src.is_active` and nothing else, so the source-side arm re-offers a finding because a source **this principal cannot read** changed. It *widens* an existing channel rather than opening one — `resource_citation_magnitude` already counts invisible sources and `resource_audit_coverage` already moves when anyone audits one — but from "a count, and someone audited" to "one changed, just now", which is far more pollable. **Not gated yet because the gate is coupled to reach, not to code**: a citation whose source the principal cannot read is one the auditor can never audit (`AuditAuthority` 404s it), so gating is correct *and* silences this arm entirely unless the auditor is provisioned with read access to cited sources. Applying it first ships a predicate that is correct and mute. **Demonstrated, not theorised: applying the gate turns all six staleness witnesses red**, because in every fixture the cited source is invisible to the sweeping principal. Sequenced with `019f9bfb-62e2-7c62-85b2-e309ac1b18c1` and the auditor credential work. |
 | block mutated mid-session **[rev2]** | **Rev. 1 marked this "benign race; under-triggers by one tick" and then invalidated it in §3.2(b) without revisiting the row.** At the block grain the assessment is correct — a verdict written after the mutation sits above that block's own watermark by one tick and the next material event clears it. At rev. 1's `(finding, source)` grain it was *permanent*, because a later sibling audit put the watermark above the mutation forever. §3.1 restores "one tick." **Still deferred:** the residual one-tick under-trigger is not solved here. If it shows up in practice, write-action timestamps exist for every agent and document, so the options are ordering them outright or defining a suspect "within" window that emits a bump-for-re-audit event to refresh the watermark. Judged not worth solving today (Pete, 2026-07-26). |
 
 ---
@@ -511,6 +529,11 @@ Failing-before / passing-after, extending `citation_audits.rs`'s Task-5 family (
    ones, and assert stale findings appear. Under today's `ORDER BY uncovered DESC` this returns none
    of them — the F4 starvation, which no other witness observes because every other fixture is
    smaller than the cap.
+7. **`stale_predicate_refuses_a_finding_the_principal_cannot_read`** — **new in rev. 4.** Witnesses
+   the `gated` CTE by calling the predicate directly, the way a future second caller would. The bite
+   needs a principal with a **watermark but no visibility**: one who never audited returns false
+   through `finding_wm IS NULL` and would pass ungated too, proving nothing. So the principal audits
+   while joined, the finding goes stale, and only then is its team detached from the cogmap.
 
 Must **stay green**:
 
