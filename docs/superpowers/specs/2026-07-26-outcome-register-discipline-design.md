@@ -182,11 +182,15 @@ For a goal, the space of *situated-actor × act × relevant-state* is a construc
 cell is in one of three states:
 
 - **Examined-and-specified**
-- **Examined-and-deliberately-excluded** — with emitter, timestamp, and stated reason
+- **Examined-and-deliberately-excluded** — with emitter, timestamp, and stated reason. *Settled.*
+- **Examined-and-inexpressible** — the cell is wanted; the system cannot express it. **Carries a
+  pending fork** (§3.4.2): evolve the system, or change the goal. Not a hole — it was examined — and
+  not an exclusion — it was not chosen. *Added by this spec.*
 - **Unexamined** — a *visible* remainder, not a silent one
 
-*A fourth state — **examined-and-inexpressible** — is added in §3.4.2. It is deliberately not folded
-into the second: an exclusion is settled, an inexpressible cell is a pending fork.*
+**Why the third is a peer of the second and not a flag on it**: an exclusion is settled, an
+inexpressible cell is waiting. A reader scanning "excluded, reason given" moves on, which is exactly
+how the fork silently fails to be taken.
 
 The deterministic property is that there is **no ambiguity between the last two**. An unmarked gap is
 the most dangerous kind of undocumented negative decision, because it re-litigates itself as an
@@ -292,25 +296,55 @@ the time:**
 | Exit | Instance |
 |---|---|
 | Evolve the system | The witness citation wants to be a facet on the `advances` edge; edges have never carried properties and no surface can write one. Precondition filed (§5.1.2) |
-| Change the goal | The auditor register's R10 — *"the refusal the system cannot make"* — recorded in its own table as **inexpressible**, *"does not exist"*. Dissolved by argument: an assertion that cannot be concluded is simply unsupported, which is a verdict, not a refusal |
+| Change the goal | The auditor register's R10 — *"the refusal the system cannot make"* — recorded in its own table as **inexpressible**, *"does not exist"*. **But see §3.4.3: R10 is a poor example of this exit, and why is the more useful finding** |
+
+#### 3.4.3 Check for miscategorisation before taking either exit
+
+R10 was used above as the worked instance of *change the goal*. PR #550's disposition shows that is
+not what happened, and the real story names a **third diagnosis that must be ruled out first**.
+
+R10 recorded *"I cannot assess this citation"* as a refusal the system could not express. It splits:
+
+- **Evidential inability** — *"the citations do not warrant this"* — was **never a refusal**. It is a
+  **verdict**, a signed value `<= 0`. The standing model already separates *evaluated-but-weak*
+  (carried by quality) from *unevaluated* (carried by the band's coverage-ratio gate); R10 proposed a
+  third state between them, and the three-axis design says there is none.
+
+  **And it is not a neutral abstention — it is among the most damning verdicts available.** The
+  auditor's whole role is to say whether an assertion holds up under scrutiny of its evidence, and
+  with what confidence. *"I cannot assess this"* is therefore not *"plausible but not fully warranted
+  by the citations and reasoning"*; it is *"this is incommunicable, or I cannot even evaluate where
+  you derived it."* That is worse, and the value should reflect it.
+- **Structural inability** — the gate `NotFound`s a self-authored citation, so the auditor is
+  *forbidden* to verdict — is real, and survived as D7's conjunct.
+
+**So the cell was not inexpressible. It was miscategorised**: a verdict filed in the refusal face, and
+a real structural refusal tangled together with it.
+
+**The diagnosis to run before forking**: *is this element the kind of thing I have claimed it is?*
+Forking on a miscategorised cell evolves or changes the wrong thing — here it would have argued for
+building a refusal the system correctly does not have, when the actual repair was to move the concern
+to the verdict space and let the standing model do what it already does.
+
+Three diagnoses, in order:
+
+1. **Miscategorised** — the element is not the kind of thing the register claimed. Repair: restate it
+   in the right element. *No fork.*
+2. **Missing affordance** — the element is right and the system cannot do it. → **evolve**.
+3. **Wrongly reaching** — the element is right and the system should not do it. → **change the goal**.
 
 **This is not an ontology feature.** An earlier draft framed the detection narrowly, as situated
 actors failing to resolve against a persona list. That is one instance. The general form needs no
 ontology: *any* register element can hit the edge, and R10 hit it in the refusal face.
 
-#### Closure gains a fourth cell state
+#### Where this lands in the closure section
 
-The three states in §3.3 cannot express this. *Examined-and-deliberately-excluded* would swallow it,
-and that is the trap: exclusion-because-out-of-scope is **settled**, whereas
-exclusion-because-the-system-cannot-express-it is a **pending fork**. Collapsing them is how the
-dishonest third exit gets taken by default — the cell looks decided when it is actually waiting.
+The cell state this produces — **examined-and-inexpressible** — is defined once, with the other three,
+in §3.3. It is deliberately not restated here.
 
-- **Examined-and-specified**
-- **Examined-and-deliberately-excluded** — emitter, timestamp, stated reason. *Settled.*
-- **Examined-and-inexpressible** — the cell is wanted; the system cannot express it. **Carries a
-  pending fork: evolve, or change the goal.** Not a hole (it was examined) and not an exclusion (it
-  was not chosen).
-- **Unexamined** — a visible remainder.
+*An earlier draft of this spec restated all four states in both places. Two copies of one enumeration
+is the same drift this document diagnoses, committed inside it; caught by printing the section rather
+than by re-reading it.*
 
 A register with inexpressible cells and no fork recorded against them is incomplete in a way a
 coverage count will not show.
@@ -695,12 +729,34 @@ Against the goal's why-anchor — *"if register-authoring itself becomes ritual 
 it prevents, the goal has failed by its own anchor and should be superseded, not persisted with"* —
 this is the anchor's stated failure condition.
 
-**The verdict is separable, and the separation is the finding.** The register's *elements* earned
-their keep on the record: exercise status found a schedule firing hourly and dying, for a day, while
-the spec asserted nothing was deployed; the closure discipline found eight unclassified event types;
-the Set 5 Critical was a situated-actors omission. Those were attributed to specific elements at the
-time. **It is the decomposition instrument that failed, not the register** — which is why §3.2.1
-changes the instrument rather than abandoning the convention.
+**The verdict is separable, and the separation is the finding** — but the separation is weaker than
+an earlier draft of this section claimed, and the correction is recorded rather than edited away.
+
+That draft asserted the register's *elements* "earned their keep on the record" and cited three
+findings. Re-examined against PR #550's disposition of the auditor register, **one of the three
+survives**:
+
+| Claimed attribution | Verdict |
+|---|---|
+| **Exercise status** found a schedule firing hourly and dying for a day while the spec asserted nothing was deployed | **Holds.** Attributed to element 7 at the time, not retrofitted, and acted on by PR #541 |
+| **The closure discipline** found eight unclassified `domain` event types | **Weakened.** PR #550 marks that section **moot**: the classification existed to serve D3's material-event allow-list, and D3 turned out not to be needed. The discipline correctly found a gap in a mechanism that should not have existed |
+| **Situated actors** — the Set 5 Critical was a situated-actors omission | **Withdrawn.** That was found by a three-lens adversarial review during Set 5 implementation, *before this register existed*. The attribution was retrofitted to strengthen an argument |
+
+**And the arc's own conclusion cuts further** (PR #550, addressed to this goal):
+
+> The register apparatus did not produce this arc's useful findings — **reading and executing SQL
+> did**. Every correction that changed the work came from `psql` or `pg_proc` … What caught each
+> round was executing the predicate, not reviewing it.
+
+**What survives of the separation.** One element — exercise status — has a clean, contemporaneous
+attribution and a production consequence. That is enough to say the decomposition instrument and the
+register are separable failures, which is why §3.2.1 changes the instrument. It is **not** enough to
+say the register has earned its cost. On the current record the strongest honest claim is: *one
+element paid for itself once; the rest is unproven, and one arc's findings came from execution rather
+than from the apparatus.*
+
+That claim is weaker than this spec's existence implies, and it is stated here so nobody has to
+discover the gap by reading PR #550 afterwards.
 
 **Two prior warnings existed and neither became a rule.** The goal's own C3 section recorded the
 termination worry as a counter-observation (*"a convention that generates work under use is not
@@ -737,6 +793,8 @@ remains untaken, and this spec does not supply it.
 | D17 | **A task declares `witnesses` OR `enables`** | Enabling work is not evidence. Without the split, `no-witness-precedes-its-mechanism` would forbid the very work that makes witnesses possible. Evidenced: the deleted "material-event set (**unblocks** W2 and W8)" task declared itself a witness and witnessed nothing |
 | D18 | **The inexpressible intersection is first-class, with exactly two honest exits** — evolve the system (`enables` task) or change the goal (supersession) | The third exit, assuming the affordance, is the deeper account of §9.1: a register met the edge of what the system could express and hallucinated it. Both honest exits already have worked instances (edge facets; R10) and neither was recognised as a fork |
 | D19 | **Closure gains a fourth cell state — examined-and-inexpressible** | *Excluded-with-reason* is settled; *inexpressible* is a pending fork. Collapsing them makes a waiting cell look decided, which is how the third exit gets taken by default |
+| D20 | **Miscategorisation is checked before either exit is taken** | R10 was not inexpressible — it was a verdict filed in the refusal face, tangled with a real structural refusal. Forking on a miscategorised cell evolves or changes the wrong thing. Three diagnoses, in order: miscategorised (no fork) · missing affordance (evolve) · wrongly reaching (change the goal) |
+| D21 | **The register's cost is NOT claimed as proven** | Of three element-attributions an earlier draft made, one holds (exercise status), one is weakened (closure found a gap in a mechanism PR #550 marks moot), one is withdrawn (the Set 5 Critical predates the register). PR #550's own conclusion is that this arc's findings came from executing SQL, not from the apparatus |
 
 ---
 
