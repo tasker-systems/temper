@@ -35,7 +35,7 @@ or to an agent in an explicit meta-goal frame — never to a clause inside the g
 | The expressibility check | **not built** | needs the taxonomy |
 | Project taxonomy (`domain` resources) | **not built** — zero rows in `@me/temper` | needs `open_meta.schema.json` v3 |
 | Edge-owned properties (the precondition) | **built 2026-07-27** — write + read at MCP/API/CLI parity, fold cascades | migration `20260727000030`; task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
-| Citation as a facet on the `advances` edge | **not built** — the path now exists; moving the citation onto it is still to do | spec §5.1.1 |
+| Citation as a facet on a **`witnesses`** edge | **not built** — carrier settled 2026-07-27 (it is *not* the `advances` edge; that one is single-slot and its fold would eat the link). The facet path exists; minting the edges and moving the citations is still to do | §III.2 · decision `019fa589-9083-7030-9a26-545bdcfe54c4` |
 | `temper warmup` as the read surface | **exists, unfit, and untouched** — still emits last session's body; carries no goals or clauses | `crates/temper-cli/src/commands/warmup.rs` |
 | The installable skill | **written, not yet merged** — Part I ships as `outcome-registers.md`; the four always-in-force rules ship in `SKILL.md` itself | `crates/temper-cli/skill-content/outcome-registers.md` |
 | Session-open on standing state | **written, not yet merged** — hand-rolled from `list --type goal --status active`, *not* from `warmup` | `crates/temper-cli/skill-content/session-lifecycle.md` |
@@ -423,10 +423,41 @@ caught it on first run.
 > neither is complete. The divergence is not a rare slip; it is what happens whenever a register is
 > authored after its tasks.
 
-**Resolution: the citation becomes a facet on the `advances` edge** — a `kb_properties` row with
-`owner_table = 'kb_edges'`. The link is the edge; the clause qualifies the link. [decided — Pete,
-2026-07-26] **Scoped by the correction above**: it holds wherever the witnessing task also advances the
-goal, and does not yet cover the case where it does not.
+~~**Resolution: the citation becomes a facet on the `advances` edge**~~ [decided — Pete, 2026-07-26]
+— **superseded on the carrier, 2026-07-27.** The half that survives is the *shape*: the citation
+becomes a **facet on an edge**, a `kb_properties` row with `owner_table = 'kb_edges'`; the link is the
+edge and the clause qualifies the link. The half that is withdrawn is **which edge**.
+
+> **Resolution as of 2026-07-27** [decided — Pete; decision `019fa589-9083-7030-9a26-545bdcfe54c4`]:
+> **the witnessing relation gets its own edge label, `witnesses`.** The clause rides as a facet on
+> *that* edge.
+>
+> **`advances`→goal is a single-slot field, and the slot is defended by a fold that deletes
+> competitors** [observed — production, 2026-07-27]:
+>
+> | Fact | Evidence |
+> |---|---|
+> | One goal per resource, no exceptions | **577** live `advances`→goal edges over **577** distinct sources — max **1** each |
+> | Enforced on the `--goal` path only | `fold_goal_edges` called from exactly two sites, both `GoalPatch` arms — `db_backend.rs:1859,1875` |
+> | It folds **all** matching edges, not just the replaced one | `db_backend.rs:883-900`, whose own doc says *"folds all defensively"* |
+> | `edge assert` bypasses the fold entirely | `assert_edge_from_source_home`, `db_backend.rs:804-874` |
+>
+> **So reuse is not merely blocked — it is unstable storage.** A second `advances`→goal edge *can* be
+> minted via `edge assert`, since that path does not fold. The next `--goal` set or clear on that task
+> then folds **every** `advances`→goal edge on the source, the witness link included, at an
+> unpredictable later time and with no error. That turns the question from *which reading is nicer*
+> into *one option silently loses data* — a stronger argument than the semantic-collision one below,
+> and one that was not available until somebody ran the fold's query.
+>
+> **The label space was enumerated before a new member was proposed** [observed]. No witness-shaped
+> label exists — zero live edges match `witness|evid|attest|demonstrat`. The serious alternative was
+> **`supports`** (227 live `leads_to` edges), rejected on what it connects rather than on the word:
+> concept→concept 21, fact→commitment 21, fact→concept 16, fact→decision 15, memory→principle 3. It
+> operates over distilled knowledge nodes with essentially no task→goal use, so reusing it would merge
+> *"this fact supports that claim"* with *"this task witnesses that clause"* — the same silent merge
+> the enabling-relation decision rejected. `witnesses` is also **invisible to the fold**, which keys on
+> `label = 'advances'`, and needs no new code: `edge assert --label witnesses` plus the edge-facet
+> surface from PR #556.
 
 | Grounding | Evidence |
 |---|---|
@@ -628,7 +659,7 @@ properties**, and belong on edges with their clause qualifiers as edge facets:
 
 | Key | Carrier | Why |
 |---|---|---|
-| `witnesses.goal` | edge — **already exists** | `--goal` mints `leads_to`/`advances`; the `open_meta` copy is a second spelling of a link that is already an edge |
+| `witnesses.goal` | edge — **its own `witnesses` label**, 2026-07-27 | ~~`--goal` mints `leads_to`/`advances`; the `open_meta` copy is a second spelling of a link that is already an edge~~ — true only when the witnessing task also advances that goal. `advances`→goal is single-slot and its fold deletes competitors, so it cannot carry a second link. Decision `019fa589-9083-7030-9a26-545bdcfe54c4`, argued in §III.2 |
 | `witnesses.clauses` · `enables.clauses` | facet on that edge | qualifies the *link*, not the task |
 | `witnesses.child_of` | edge — label already exists | `part_of` (163) and `parent_of` (372) are already in the corpus. **Never written**; delete rather than recognize |
 | `enables.goal` | edge | same shape, distinct relation — see the label collision below |
@@ -647,13 +678,25 @@ production were minted by `relationship_asserted`; none by `resource_created`/`r
 `relates_to: [...]` writes a property and no edge, while `edge assert --label relates_to` writes an
 edge and no property — 372 properties against 940 edges, with nothing tying them.
 
-**Two naming decisions taken with the review** [decided — Pete, 2026-07-27]:
+**Three naming decisions** [decided — Pete, 2026-07-27]:
 
 - **The register's enabling relation gets a new edge label.** An `enables` label already exists in
-  production — 6 `leads_to` edges, newest 2026-07-16, predating this convention — and it means
-  work→work unblocking (*"PR #464 merged"* → *"NEXT blocker: legacy-profile emitter-entities"*). The
-  register's `enables` points a task at a **clause**. Same word, different relation; reusing the label
-  would merge two meanings silently.
+  production — 6 `leads_to` edges, newest 2026-07-16, predating this convention. The register's
+  `enables` points a task at a **clause**. Same word, different relation; reusing the label would
+  merge two meanings silently.
+
+  > **Correction, 2026-07-27 (later)** [observed — production]. This bullet originally said those six
+  > edges *"mean work→work unblocking (`\"PR #464 merged\"` → `\"NEXT blocker: legacy-profile
+  > emitter-entities\"`)."* Of the 6, **one** is task→task; the other five are fact→commitment (3),
+  > fact→fact (1), fact→decision (1). The collision argument survives — six edges do carry a different
+  > meaning — but this description of that meaning does not. Recorded because it is the same shape as
+  > the §III.2 misdiagnosis: **a claim about the corpus that nobody re-ran.**
+
+- **The register's witnessing relation gets a new edge label, `witnesses`.** Not for the reason above
+  — there is no `witnesses` label to collide with — but because `advances`→goal is a **single-slot
+  field** whose fold deletes competitors, so it cannot hold a witness link on a task that advances a
+  different goal. Argued from measurement in §III.2; decision
+  `019fa589-9083-7030-9a26-545bdcfe54c4`.
 - **`witness.clause` is dropped.** It holds prose (*"§6 — the refusal face, rung R10: …"*) while
   `witnesses.clauses` on the same resource holds a readable clause name. Two fields that read as one
   citation. The description belongs in the task body; the citation has one home.
@@ -682,7 +725,7 @@ Everything below this line is **supporting evidence and argument**. It is not a 
 | D13 | Witness decomposition is a separately authorized act | An instruction not to decompose was given and did not hold |
 | D14 | Element 8 — the negative face | Nearly every expensive finding was a standing negative with no slot |
 | D15 | The clause-level floor is a meaning test | Granularity of *how* needs judgment; a rule manufactures false precision |
-| D16 | The clause citation is a facet on the `advances` edge | Makes the divergence unrepresentable rather than detected |
+| D16 | The clause citation is a facet on an edge — on a **`witnesses`** edge, revised 2026-07-27 | Makes the divergence unrepresentable rather than detected. The carrier is not `advances`: that is single-slot per resource and its fold deletes competitors, so it would silently eat the link (§III.2) |
 | D17 | A task declares `witnesses` **or** `enables` | Enabling work is not evidence |
 | D18 | The inexpressible intersection has exactly two honest exits | The third — assuming the affordance — is the deeper account of Appendix B's failure |
 | D19 | Closure gains a fourth cell state | Excluded is settled; inexpressible is a pending fork |
