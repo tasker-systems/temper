@@ -28,24 +28,47 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  * against production is an operator decision, and it was never taken.
  *
  * **This is not a fix for the credential.** Nothing here is broken in a way a token would repair.
- * Three independent gates stand between this file and a single audit row, and the token is only
- * the first:
+ * FOUR independent gates stand between this file and a single audit row, and the token is only
+ * the first. (This list said "three" until 2026-07-27 and omitted gate 3 — which was already
+ * true when the list was written, D11 having landed five days earlier. All four are now CLOSED
+ * on temperkb.io; the list is kept because restoring this file is not the only path back here.)
  *
- *   1. A SECOND machine principal, provisioned per `machine-token-contract.md` §C — its own IdP
+ *   1. ✅ A SECOND machine principal, provisioned per `machine-token-contract.md` §C — its own IdP
  *      application, `--team <ref>:member`, and cogmap reach absent or `:ro`. Never the steward's
  *      client_id: one credential is one `kb_events.emitter_entity_id`, so a shared client makes
  *      every steward-authored citation self-authored to the auditor (`AuditAuthority::Author`)
  *      and 404s every audit. A *writable* `--cogmap` grant does the same thing through
  *      `can_modify_resource`.
- *   2. Registration in `kb_machine_clients` — `resolve_machine_from_claims` is lookup-or-401,
+ *      Done 2026-07-27: `EcbiQJWxSDbhSMfTPMCOEBQboDa5CMua`, profile
+ *      `019fa583-1142-7121-bd67-597945e5f45f`.
+ *   2. ✅ Registration in `kb_machine_clients` — `resolve_machine_from_claims` is lookup-or-401,
  *      with no JIT create branch.
- *   3. The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
+ *   3. ✅ ADMISSION. Since D11 (`20260720000110_repoint_predicates.sql`) `has_system_access`
+ *      reads `kb_principal_standing` alone, and every mint door births the principal `denied`
+ *      — reach does NOT clear it. A registered, correctly-reached machine still 403s
+ *      `SYSTEM_ACCESS_REQUIRED` on every call until `temper admin access approve <profile>`
+ *      runs. This gate has no deploy-time symptom whatsoever: the token mints, the claims are
+ *      perfect, and every request fails. It is the one that actually bit on 2026-07-27.
+ *   4. ✅ The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
  *      ride an auto-deploy of `main`. Until an operator runs it, `/api/auditor/dispatch` 500s.
  *
- * **Do not restore this file by itself.** Its trigger model is being redesigned — task
- * `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`, register
- * `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md` — and that work
- * changes the cadence, the selection predicate, and the dispatch payload this handler sends. The
+ * **Do not restore this file by itself — but the reason has changed, so read this rather than
+ * assuming.** The trigger-model redesign is **DONE**, not in flight: task
+ * `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` closed 2026-07-26 with tier 1 shipped
+ * (`20260726000010_auditor_tier1_staleness.sql`, selection is `uncovered OR stale`), and tier 2 was
+ * deferred onto `019f9bb3-e2cf-7710-9b90-db4ebefb8f64`, which closed 2026-07-27 retargeted onto the
+ * steward (PR #557). F9 — "verify pg_uuidv7 ordering on Neon" — was **dissolved**, not verified:
+ * rev. 3 of the design changed the comparand to a timestamp, so no generator dependency remains.
+ *
+ * What still stands is **D6, and it is a build item, not a design one**: the dispatch payload is
+ * finding-grained (`AuditJobPayload::findings`, `ClaimedAuditJob::findings`) while the unit of work
+ * is citation-grained, and the prompt below *actively forbids* the re-check that would compensate
+ * ("you do not need to re-check whether they need auditing"). Measured on production 2026-07-27:
+ * finding `019f5cdd-ba0b-7fa2-90b1-e78ca7979254` was audited on one of its 8 citations and is STILL
+ * returned by the sweep at `uncovered: 7` — so a restored hourly tick re-dispatches it and the agent
+ * emits verdicts on all 8, re-auditing the one already weighed. Register §3.
+ *
+ * The cadence and the selection predicate below are settled; only the payload grain is not. The
  * register also records that the dispatch prompt below tells the agent not to re-check whether a
  * finding needs auditing (finding grain) while its unit of work is a citation (citation grain),
  * which duplicates verdicts on already-audited citations. Restoring is `git mv` back into
