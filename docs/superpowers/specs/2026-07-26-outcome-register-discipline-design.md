@@ -625,8 +625,26 @@ So it primes on **narrative recency** — what one session chose to write down �
 - **Goals** — clauses in force, clauses superseded, and where the scars are.
 - **Tasks** — what is open, and which clause each `witnesses` or `enables`.
 
-**`last_session_content` is dropped.** Not shrunk — dropped. If a *previous-session* signal survives
-at all it should be that session's **open threads**, which are standing state, rather than its prose.
+**`last_session_content` is dropped.** Not shrunk — dropped. **No previous-session body survives in
+any form** (decided; an earlier draft of this section left it open and floated carrying the previous
+session's open threads instead — that is also rejected).
+
+What survives is **`recent_sessions`: titles and dates only**, which the command already emits, with
+the count **configurable** rather than the fixed `RECENT_SESSION_LIMIT = 5`
+(`crates/temper-cli/src/commands/warmup.rs:18`).
+
+**Why titles are the right resolution, and not a compromise.** A title is a *pointer*; a body is a
+*claim*. Five pointers let a reader recognise which arc is theirs and go read it deliberately —
+which is the correct move when several sessions run concurrently and the most recent one is likely
+someone else's. A body asserts relevance the primer cannot establish, and asserts it first, with the
+authority of being the only prose in the payload. The primer's job is to say what is *in force*; the
+narrative is one `resource show` away for whoever wants it.
+
+This also makes the constant honest. Its sibling `MAX_SESSION_LINES` carries the comment *"enough to
+carry the narrative, short of dominating the primer"* — a budget for a problem that stops existing
+once no narrative is carried. Both constants were flagged by the 2026-06-26 code-quality audit
+(CQ-7) for lacking a stated rationale; one is now deleted rather than documented, and the other
+becomes a user-facing knob, which is its own rationale.
 
 **The payload shape is deliberately not authored here.** A spec-invented field list is stale on
 arrival and wins over the prose beside it (GD-4). What is specified is the *axis*: standing state
@@ -905,7 +923,7 @@ remains untaken, and this spec does not supply it.
 | D19 | **Closure gains a fourth cell state — examined-and-inexpressible** | *Excluded-with-reason* is settled; *inexpressible* is a pending fork. Collapsing them makes a waiting cell look decided, which is how the third exit gets taken by default |
 | D20 | **Miscategorisation is checked before either exit is taken** | R10 was not inexpressible — it was a verdict filed in the refusal face, tangled with a real structural refusal. Forking on a miscategorised cell evolves or changes the wrong thing. Three diagnoses, in order: miscategorised (no fork) · missing affordance (evolve) · wrongly reaching (change the goal) |
 | D21 | **The register's cost is NOT claimed as proven** | Of three element-attributions an earlier draft made, one holds (exercise status), one is weakened (closure found a gap in a mechanism PR #550 marks moot), one is withdrawn (the Set 5 Critical predates the register). PR #550's own conclusion is that this arc's findings came from executing SQL, not from the apparatus |
-| D22 | **`temper warmup` is the read surface, and it is redesigned rather than extended** | It already owns "context primer for new sessions", so the concept has a name here. But it primes on narrative recency: with several concurrent sessions, "the last session" is whichever sibling wrote last — demonstrated by this spec's own session, which opened on a note describing a branch that did not exist locally. It grounds in guidance, goals and tasks instead, and `last_session_content` is dropped, not shrunk |
+| D22 | **`temper warmup` is the read surface, and it is redesigned rather than extended** | It already owns "context primer for new sessions", so the concept has a name here. But it primes on narrative recency: with several concurrent sessions, "the last session" is whichever sibling wrote last — demonstrated by this spec's own session, which opened on a note describing a branch that did not exist locally. It grounds in guidance, goals and tasks instead. **No previous-session body survives in any form** — `last_session_content` is dropped, and `recent_sessions` keeps titles and dates only, with the count made configurable. A title is a pointer; a body is a claim the primer cannot establish the relevance of |
 | D23 | **Project guidance lives in temper; any file is an offline cache** | A file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible to the team, so it is structurally a scratch file and gets rewritten. As `domain` resources it is versioned, superseded and team-contributable — it gets *amended*. Reading live is also what removes the drift a projection would introduce |
 
 ---
