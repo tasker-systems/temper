@@ -401,10 +401,11 @@ async fn the_admin_event_is_invisible_to_cognition(pool: PgPool) {
     .await
     .expect("seed anchored cognition event");
 
-    // NOTE steward_ingest_delta(p_cogmap, p_watermark) takes a COGMAP, not a team
-    // (migrations/20260701000005_steward_ingest_watermark.sql:40).
+    // NOTE steward_ingest_delta(p_cogmap, p_watermark, p_fingerprint) takes a COGMAP, not a team
+    // (migrations/20260727000040_steward_boundary_fingerprint.sql:167). Both cursors are passed NULL:
+    // this asserts the count, and the boundary columns are a separate axis it does not read.
     let new_events: i64 =
-        sqlx::query_scalar("SELECT new_events FROM steward_ingest_delta($1, NULL)")
+        sqlx::query_scalar("SELECT new_events FROM steward_ingest_delta($1, NULL, NULL)")
             .bind(f.cogmap_id)
             .fetch_one(&pool)
             .await

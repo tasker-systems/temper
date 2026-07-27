@@ -36,6 +36,7 @@ use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
 };
+use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
@@ -2752,17 +2753,28 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(()))
     }
 
-    /// Advance a cogmap's steward ingest watermark (T4a). AUTH BEFORE WRITE: one gated lookup does
-    /// existence + read-visibility (absent/unreadable → uniform 404, no existence oracle) and rides
-    /// the cogmap-write capability along; a readable-but-not-writable cogmap → 403. The target event
-    /// must exist (the FK enforces it; a clean 404 beats a raw FK violation). The advance is a direct
+    /// Record a completed steward run's cursors on a cogmap (T4a). AUTH BEFORE WRITE: one gated lookup
+    /// does existence + read-visibility (absent/unreadable → uniform 404, no existence oracle) and
+    /// rides the cogmap-write capability along; a readable-but-not-writable cogmap → 403. The target
+    /// event must exist (the FK enforces it; a clean 404 beats a raw FK violation). This is a direct
     /// UPDATE of operational cursor state — NOT an authored cognitive act — so it fires no event; when
-    /// T5 wires steward-run-completion it will advance the watermark as part of the invocation-close
+    /// T5 wires steward-run-completion it will move these cursors as part of the invocation-close
     /// event instead of calling this bare setter.
+    ///
+    /// It writes TWO cursors in one statement — the event watermark and the boundary fingerprint —
+    /// and **each is independently optional**, with a different rule for absence:
+    ///
+    /// - no `event_id` → the watermark holds. The hygiene check below is skipped because there is
+    ///   nothing to check, not because it was relaxed; a supplied id is validated exactly as before.
+    /// - no `boundary_fingerprint` → the boundary is settled to its **write-time** shape rather than
+    ///   the run's read-time shape. Degraded, and deliberately still a write: see the UPDATE.
+    ///
+    /// Returns the cursors as stored, read back from the UPDATE — both inputs have a server-side rule
+    /// applied, so echoing the request would report state that may not exist.
     async fn advance_steward_watermark(
         &self,
         cmd: AdvanceStewardWatermark,
-    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+    ) -> Result<CommandOutput<AdvanceWatermarkAck>, TemperError> {
         let can_write: bool = sqlx::query_scalar!(
             r#"
             SELECT cogmap_authorable_by_profile($2, $1) AS "can_write!"
@@ -2790,34 +2802,81 @@ impl Backend for DbBackend {
         // advance always passes. A non-scoped (or nonexistent) event collapses to one NotFound — no
         // oracle distinguishing the two. (Cross-team content leak-safety is enforced downstream at the
         // resource grain by the cogmap-principal distillation, not here.)
-        let in_window: bool = sqlx::query_scalar!(
-            r#"SELECT steward_event_in_ingest_window($1, $2) AS "in_window!""#,
+        //
+        // Skipped — never relaxed — when no event id is supplied: a boundary-only advance has no
+        // target, and there is nothing for this gate to be an opinion about. Every id that IS supplied
+        // faces exactly the check it faced before the field became optional.
+        if let Some(event_id) = cmd.event_id {
+            let in_window: bool = sqlx::query_scalar!(
+                r#"SELECT steward_event_in_ingest_window($1, $2) AS "in_window!""#,
+                *cmd.cogmap,
+                event_id,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)?;
+            if !in_window {
+                return Err(TemperError::NotFound(format!(
+                    "event {} is not in cognitive map {}'s ingest window",
+                    event_id,
+                    cmd.cogmap.uuid()
+                )));
+            }
+        }
+
+        // Both cursors move in ONE statement, structurally — how far the run read, and what shape its
+        // scope had while reading. If they could advance independently, a boundary change would either
+        // re-fire forever (fingerprint never stored) or be lost (stored without the events it implied).
+        //
+        // The two COALESCEs are NOT the same idea, and reading them as symmetric is the trap:
+        //
+        //  $2 — no event id ⇒ keep the stored watermark. The run genuinely read no new events (an
+        //       empty window is why it has no id), so leaving the cursor put is exact, not degraded.
+        //
+        //  $3 — no fingerprint ⇒ compute the boundary HERE, at write time. This is the degraded path
+        //       and it should be legible as such: the correct value is the one the run READ, because
+        //       only that value lets a boundary change occurring mid-run survive into the next tick.
+        //       Recomputing here marks such a change as already-seen. It is still far better than
+        //       storing NULL, which is "never snapshotted" and would make this cogmap report
+        //       `boundary_moved` on every tick forever — the same hot loop as the empty-window case,
+        //       entered through a different door. Callers holding the delta's value must pass it.
+        //
+        // `steward_boundary_fingerprint($1)` is the FUNCTION, not the same-named column: it takes the
+        // bind parameter, and a column reference cannot be applied to an argument. No ambiguity, but
+        // it reads like one.
+        //
+        // The fingerprint gets no hygiene check, unlike the event id above, and that asymmetry is
+        // deliberate: an event id can name a row outside this cogmap's window, but any string is a
+        // syntactically valid fingerprint, so there is nothing to validate against. The blast radius is
+        // bounded — a wrong value either mismatches (an extra tick) or matches (one missed boundary
+        // move) — and the caller has already passed the cogmap-write gate.
+        //
+        // RETURNING, not a follow-up SELECT: the ack must report what this statement stored, and both
+        // values are decided inside it.
+        let stored = sqlx::query!(
+            r#"
+            UPDATE kb_cogmaps
+               SET steward_watermark_event_id = COALESCE($2, steward_watermark_event_id),
+                   steward_boundary_fingerprint =
+                       COALESCE($3::text, steward_boundary_fingerprint($1))
+             WHERE id = $1
+            RETURNING steward_watermark_event_id  AS "watermark: uuid::Uuid",
+                      steward_boundary_fingerprint AS "boundary_fingerprint: String"
+            "#,
             *cmd.cogmap,
             cmd.event_id,
+            cmd.boundary_fingerprint.as_deref(),
         )
         .fetch_one(&self.pool)
         .await
         .map_err(api_err)?;
-        if !in_window {
-            return Err(TemperError::NotFound(format!(
-                "event {} is not in cognitive map {}'s ingest window",
-                cmd.event_id,
-                cmd.cogmap.uuid()
-            )));
-        }
 
-        sqlx::query!(
-            "UPDATE kb_cogmaps SET steward_watermark_event_id = $2 WHERE id = $1",
-            *cmd.cogmap,
-            cmd.event_id,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(api_err)?;
-
-        // A clean watermark advance IS steward-run completion — complete the active job atomically so
-        // the concurrency race closes (the watermark only moves on clean completion). A no-op when no
-        // job is active (e.g. a manual advance outside the dispatch loop). ApiError → TemperError via `?`.
+        // A clean advance IS steward-run completion — complete the active job atomically so the
+        // concurrency race closes (the cursors only move on clean completion). This holds for a
+        // boundary-only advance too: a run that distilled a moved boundary and had no event to advance
+        // to is a completed run, and leaving its job open would be the hot loop's second half.
+        // A no-op when no job is active (e.g. a manual advance outside the dispatch loop).
+        // ApiError → TemperError via `?`.
         crate::services::workflow_job_service::complete(
             &self.pool,
             *cmd.cogmap,
@@ -2826,7 +2885,11 @@ impl Backend for DbBackend {
         )
         .await?;
 
-        Ok(CommandOutput::new(cmd.event_id))
+        Ok(CommandOutput::new(AdvanceWatermarkAck {
+            cogmap_id: cmd.cogmap.uuid(),
+            watermark: stored.watermark,
+            boundary_fingerprint: stored.boundary_fingerprint,
+        }))
     }
 
     async fn steward_dispatch_tick(

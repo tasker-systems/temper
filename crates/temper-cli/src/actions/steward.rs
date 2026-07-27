@@ -19,15 +19,17 @@ pub async fn delta_api(
         .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
-/// Advance the cogmap's ingest watermark to a given event id.
+/// Record a completed run's cursors on the cogmap. Both are optional: no `event_id` is a
+/// boundary-only advance, no `boundary_fingerprint` takes the server's write-time fallback.
 pub async fn advance_watermark_api(
     client: &temper_client::TemperClient,
     cogmap: Uuid,
-    event_id: Uuid,
+    event_id: Option<Uuid>,
+    boundary_fingerprint: Option<String>,
 ) -> Result<AdvanceWatermarkAck> {
     client
         .steward()
-        .advance_watermark(cogmap, event_id)
+        .advance_watermark(cogmap, event_id, boundary_fingerprint)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)
 }

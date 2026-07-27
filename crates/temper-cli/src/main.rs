@@ -1251,9 +1251,16 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             StewardCmd::Delta { cogmap, threshold } => {
                 commands::steward::delta(&cogmap, threshold, output_format)
             }
-            StewardCmd::AdvanceWatermark { cogmap, event } => {
-                commands::steward::advance_watermark(&cogmap, &event, output_format)
-            }
+            StewardCmd::AdvanceWatermark {
+                cogmap,
+                event,
+                boundary_fingerprint,
+            } => commands::steward::advance_watermark(
+                &cogmap,
+                event.as_deref(),
+                boundary_fingerprint,
+                output_format,
+            ),
         },
         Commands::Trail { kind, r#ref } => commands::trail::run(kind, &r#ref, output_format),
         Commands::Version { checksum } => {

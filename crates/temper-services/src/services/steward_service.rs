@@ -22,12 +22,14 @@ pub async fn ingest_delta(
     cogmap_id: CogmapId,
     threshold: Option<i64>,
 ) -> ApiResult<IngestDelta> {
-    // One query does the read-gate AND the watermark lookup: an absent row means the cogmap does not
-    // exist OR the caller cannot read it — both surface as NotFound. The column is nullable (NULL =
-    // never run), so the scalar is `Option<Uuid>` inside the fetch_optional `Option`.
-    let watermark: Option<Uuid> = sqlx::query_scalar!(
+    // One query does the read-gate AND both stored cursors: an absent row means the cogmap does not
+    // exist OR the caller cannot read it — both surface as NotFound. Both columns are nullable (NULL
+    // watermark = never run; NULL fingerprint = never snapshotted), and they are read together on
+    // purpose — the delta compares against BOTH, so a second round trip could only serve a torn pair.
+    let cursors = sqlx::query!(
         r#"
-        SELECT steward_watermark_event_id AS "watermark: Uuid"
+        SELECT steward_watermark_event_id  AS "watermark: Uuid",
+               steward_boundary_fingerprint AS "stored_fingerprint: String"
           FROM kb_cogmaps
          WHERE id = $1
            AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
@@ -38,16 +40,20 @@ pub async fn ingest_delta(
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)?;
+    let watermark = cursors.watermark;
 
     let row = sqlx::query!(
         r#"
-        SELECT new_resources AS "new_resources!: i64",
-               new_events    AS "new_events!: i64",
-               max_event_id  AS "max_event_id: Uuid"
-          FROM steward_ingest_delta($1, $2)
+        SELECT new_resources        AS "new_resources!: i64",
+               new_events           AS "new_events!: i64",
+               max_event_id         AS "max_event_id: Uuid",
+               boundary_fingerprint AS "boundary_fingerprint: String",
+               boundary_moved       AS "boundary_moved!: bool"
+          FROM steward_ingest_delta($1, $2, $3)
         "#,
         *cogmap_id,
         watermark,
+        cursors.stored_fingerprint,
     )
     .fetch_one(pool)
     .await?;
@@ -60,13 +66,24 @@ pub async fn ingest_delta(
         new_events: row.new_events,
         max_event_id: row.max_event_id,
         threshold,
-        exceeds_threshold: row.new_resources >= threshold,
+        // Two arms, OR'd: the counted one, and the boundary one. The boundary arm exists because the
+        // counts are taken INSIDE a scope that can itself move silently (a `kb_team_contexts` share
+        // emits no event), so a count-only gate under-triggers precisely when the most material
+        // changed.
+        exceeds_threshold: row.new_resources >= threshold || row.boundary_moved,
+        boundary_fingerprint: row.boundary_fingerprint,
+        boundary_moved: row.boundary_moved,
     })
 }
 
 /// Sweep all team-joined cogmaps the principal can read, returning those whose ingest delta clears
-/// `threshold`, most-drifted-first. The privileged case (the steward app-principal) simply has broad
-/// read; the gate is the same `anchor_readable_by_profile` every read uses — not a bypass.
+/// `threshold` **or whose change-detection boundary moved**, most-drifted-first. The privileged case
+/// (the steward app-principal) simply has broad read; the gate is the same
+/// `anchor_readable_by_profile` every read uses — not a bypass.
+///
+/// The boundary arm is the same OR that `ingest_delta`'s `exceeds_threshold` carries, and it lives in
+/// `steward_drift_sweep`'s own WHERE rather than being re-derived here: the cron path and the
+/// per-cogmap path must not be able to disagree about what "drifted" means.
 pub async fn drift_sweep(
     pool: &PgPool,
     principal: ProfileId,
@@ -75,10 +92,11 @@ pub async fn drift_sweep(
     let threshold = threshold.unwrap_or(DEFAULT_STEWARD_INGEST_THRESHOLD);
     let rows = sqlx::query!(
         r#"
-        SELECT cogmap_id     AS "cogmap_id!: Uuid",
-               watermark     AS "watermark: Uuid",
-               new_resources AS "new_resources!: i64",
-               new_events    AS "new_events!: i64"
+        SELECT cogmap_id      AS "cogmap_id!: Uuid",
+               watermark      AS "watermark: Uuid",
+               new_resources  AS "new_resources!: i64",
+               new_events     AS "new_events!: i64",
+               boundary_moved AS "boundary_moved!: bool"
           FROM steward_drift_sweep($1, $2)
         "#,
         *principal,
@@ -93,6 +111,7 @@ pub async fn drift_sweep(
             watermark: r.watermark,
             new_resources: r.new_resources,
             new_events: r.new_events,
+            boundary_moved: r.boundary_moved,
         })
         .collect())
 }
@@ -122,6 +141,9 @@ mod tests {
     struct Seeded {
         member: Uuid,
         outsider: Uuid,
+        /// The team joined to the cogmap — the thing the change-detection boundary is drawn around.
+        /// Exposed so the boundary tests can move a context INTO it (share or ownership transfer).
+        team: Uuid,
         cogmap: Uuid,
         ctx: Uuid,
         other_ctx: Uuid,
@@ -206,6 +228,7 @@ mod tests {
         Seeded {
             member,
             outsider,
+            team,
             cogmap,
             ctx,
             other_ctx,
@@ -241,9 +264,87 @@ mod tests {
         .unwrap();
     }
 
+    /// Put the cogmap in the state a *completed* run leaves behind: watermark at `watermark_event`,
+    /// boundary fingerprint at the boundary's current shape. Prior state only: the production write of
+    /// these two columns is pinned by the two tests that go through
+    /// `DbBackend::advance_steward_watermark` (the same-act one and the idempotence one), never by
+    /// this fixture.
+    ///
+    /// Settling the fingerprint matters even in tests that ignore the boundary: it is NULL on a fresh
+    /// cogmap, NULL means "never snapshotted" means moved, so an unsettled map reports
+    /// `exceeds_threshold` regardless of its counts.
+    async fn settle_cursors(pool: &PgPool, cogmap: Uuid, watermark_event: Option<Uuid>) {
+        // `steward_boundary_fingerprint($1)` is the FUNCTION applied to the bind parameter, not the
+        // same-named column — a column reference cannot take an argument. Passing $1 rather than the
+        // `id` column removes the question entirely, which is the form the production UPDATE uses too.
+        sqlx::query(
+            "UPDATE kb_cogmaps \
+                SET steward_watermark_event_id = COALESCE($2, steward_watermark_event_id), \
+                    steward_boundary_fingerprint = steward_boundary_fingerprint($1) \
+              WHERE id = $1",
+        )
+        .bind(cogmap)
+        .bind(watermark_event)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Settle **every** cogmap's boundary, not just the seeded one.
+    ///
+    /// Required by any test that asserts on the size of a `drift_sweep` result, and the reason is not
+    /// the seeded map: a fresh migrated database already contains the **L0 kernel** cogmap
+    /// (`system-default`, born by `20260625000001`), it is joined to the root team, and a plain new
+    /// profile reaches it — verified by execution, two candidates come back from
+    /// `steward_candidate_cogmaps` for a profile that owns one map. Its fingerprint is NULL, NULL means
+    /// "never snapshotted" means moved, so it enters every sweep on the boundary arm and
+    /// "exactly one drifted map" is false for a reason that has nothing to do with what the test is
+    /// about.
+    ///
+    /// Settling puts these tests in the **steady state** they are written about. The one-time wave —
+    /// every pre-existing map sweeping once after deploy, then settling — is real, intended, and
+    /// covered by `a_never_snapshotted_boundary_reads_as_moved` rather than papered over here.
+    async fn settle_all_boundaries(pool: &PgPool) {
+        // Here the argument must be the `id` COLUMN, since this settles every row in one statement —
+        // `steward_boundary_fingerprint(id)` is still the function applied to that column's value, as a
+        // column reference cannot take an argument.
+        sqlx::query(
+            "UPDATE kb_cogmaps SET steward_boundary_fingerprint = steward_boundary_fingerprint(id)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The two stored cursors, read raw — `(watermark, boundary_fingerprint)`.
+    async fn stored_cursors(pool: &PgPool, cogmap: Uuid) -> (Option<Uuid>, Option<String>) {
+        sqlx::query_as(
+            "SELECT steward_watermark_event_id, steward_boundary_fingerprint \
+               FROM kb_cogmaps WHERE id = $1",
+        )
+        .bind(cogmap)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Share a context into a team's reach — one `kb_team_contexts` row, and (product decision 5)
+    /// **no event whatsoever**. The write that moves the steward's boundary invisibly.
+    async fn share_context_into_team(pool: &PgPool, context: Uuid, team: Uuid) {
+        sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+            .bind(context)
+            .bind(team)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn delta_counts_resources_and_events_scoped_to_team_contexts(pool: PgPool) {
         let s = seed(&pool).await;
+        // Settle the boundary (watermark untouched): this test is about the counted arm, and an
+        // unsettled boundary would fire `exceeds_threshold` on its own.
+        settle_cursors(&pool, s.cogmap, None).await;
         for _ in 0..3 {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
         }
@@ -269,7 +370,11 @@ mod tests {
             "max_event_id is the newest IN-WINDOW event, not the newer out-of-scope noise event"
         );
         assert_eq!(d.threshold, DEFAULT_STEWARD_INGEST_THRESHOLD);
-        assert!(!d.exceeds_threshold, "3 < default threshold 5");
+        assert!(!d.boundary_moved, "boundary settled and untouched since");
+        assert!(
+            !d.exceeds_threshold,
+            "3 < default threshold 5, and neither arm of the decision fires"
+        );
         assert_eq!(d.watermark, None, "no watermark set yet");
     }
 
@@ -431,9 +536,12 @@ mod tests {
         );
     }
 
+    /// The counted arm, unchanged: with the boundary settled (so only counts can decide),
+    /// `exceeds_threshold` is still exactly `new_resources >= threshold`, `>=` boundary included.
     #[sqlx::test(migrations = "../../migrations")]
     async fn threshold_gates_on_new_resources(pool: PgPool) {
         let s = seed(&pool).await;
+        settle_cursors(&pool, s.cogmap, None).await;
         for _ in 0..3 {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
         }
@@ -441,6 +549,7 @@ mod tests {
         let below = ingest_delta(&pool, s.member.into(), s.cogmap.into(), Some(5))
             .await
             .unwrap();
+        assert!(!below.boundary_moved, "the boundary arm is quiet here");
         assert!(!below.exceeds_threshold, "3 < 5");
 
         let at_boundary = ingest_delta(&pool, s.member.into(), s.cogmap.into(), Some(3))
@@ -448,6 +557,31 @@ mod tests {
             .unwrap();
         assert!(at_boundary.exceeds_threshold, "3 >= 3 (>= boundary)");
         assert_eq!(at_boundary.threshold, 3);
+    }
+
+    /// A settled boundary is what makes an unsettled one legible: on a cogmap that has never been
+    /// snapshotted the fingerprint is NULL, and NULL is "unknown", not "unchanged" — so the steward
+    /// runs once even with nothing counted. Over-trigger, deliberately.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_never_snapshotted_boundary_reads_as_moved(pool: PgPool) {
+        let s = seed(&pool).await;
+
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(d.new_resources, 0, "nothing counted at all");
+        assert!(
+            d.boundary_moved,
+            "NULL stored fingerprint → unknown → moved"
+        );
+        assert!(
+            d.exceeds_threshold,
+            "the boundary arm alone decides the steward should run"
+        );
+        assert!(
+            d.boundary_fingerprint.is_some(),
+            "the live fingerprint is computed regardless, and is what a run stores back"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -464,12 +598,17 @@ mod tests {
         let ack = backend
             .advance_steward_watermark(AdvanceStewardWatermark {
                 cogmap: s.cogmap.into(),
-                event_id: e2,
+                event_id: Some(e2),
+                boundary_fingerprint: None,
                 origin: Surface::ApiHttp,
             })
             .await
             .unwrap();
-        assert_eq!(ack.value, e2);
+        assert_eq!(
+            ack.value.watermark,
+            Some(e2),
+            "the ack reports what was stored"
+        );
 
         let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
             .await
@@ -487,6 +626,9 @@ mod tests {
         );
     }
 
+    /// The window gate is unchanged by `event_id` having become optional: absence skips the check
+    /// (there is no target), but a SUPPLIED id faces exactly the check it always did. This is the test
+    /// that would catch "optional" being mistaken for "unvalidated".
     #[sqlx::test(migrations = "../../migrations")]
     async fn advance_rejects_event_outside_ingest_window(pool: PgPool) {
         let s = seed(&pool).await;
@@ -503,7 +645,8 @@ mod tests {
         let err = backend
             .advance_steward_watermark(AdvanceStewardWatermark {
                 cogmap: s.cogmap.into(),
-                event_id: out_of_window,
+                event_id: Some(out_of_window),
+                boundary_fingerprint: None,
                 origin: Surface::ApiHttp,
             })
             .await
@@ -517,17 +660,21 @@ mod tests {
         let ack = backend
             .advance_steward_watermark(AdvanceStewardWatermark {
                 cogmap: s.cogmap.into(),
-                event_id: in_window,
+                event_id: Some(in_window),
+                boundary_fingerprint: None,
                 origin: Surface::ApiHttp,
             })
             .await
             .unwrap();
-        assert_eq!(ack.value, in_window);
+        assert_eq!(ack.value.watermark, Some(in_window));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn sweep_returns_only_drifted_maps_most_drifted_first(pool: PgPool) {
         let s = seed(&pool).await;
+        // Settle EVERY boundary, not just this map's — the L0 kernel is a candidate too and would
+        // otherwise sweep on the boundary arm. See `settle_all_boundaries`.
+        settle_all_boundaries(&pool).await;
         // 6 resource_created in the team context → above default threshold 5.
         for _ in 0..6 {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
@@ -536,11 +683,15 @@ mod tests {
         assert_eq!(rows.len(), 1, "the one drifted, readable, team-joined map");
         assert_eq!(rows[0].cogmap_id, s.cogmap);
         assert_eq!(rows[0].new_resources, 6);
+        assert!(!rows[0].boundary_moved, "swept on the counted arm");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn sweep_excludes_below_threshold_and_unreadable(pool: PgPool) {
         let s = seed(&pool).await;
+        // Settle EVERY boundary: this test is about the counted arm and the read gate, and any
+        // unsettled map — this one or the L0 kernel — would enter the sweep on the other arm.
+        settle_all_boundaries(&pool).await;
         for _ in 0..2 {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
         }
@@ -584,7 +735,8 @@ mod tests {
         let e = add_event(&pool, s.entity, "resource_created", s.ctx).await;
         let cmd = || AdvanceStewardWatermark {
             cogmap: s.cogmap.into(),
-            event_id: e,
+            event_id: Some(e),
+            boundary_fingerprint: None,
             origin: Surface::ApiHttp,
         };
 
@@ -606,5 +758,350 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err2, TemperError::NotFound(_)), "unreadable → 404");
+    }
+
+    // ── The boundary arm ───────────────────────────────────────────────────────────────────────
+    //
+    // The counts are taken INSIDE `steward_team_contexts` (team-OWNED ∪ SHARED). That set can move
+    // without emitting a countable event, by either of its two halves — a share, or an ownership
+    // transfer — so each half gets its own witness below. Both are built so the counts are pinned at
+    // ZERO across the move: the material that enters scope predates the watermark, which is the case
+    // a count-only gate can never recover from (it is not merely late; it never fires).
+
+    /// SHARED half: a `kb_team_contexts` row brings a whole context into the steward's scope, emits
+    /// no event, and — because that context's material predates the watermark — moves no count.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_shared_context_moves_the_boundary_with_nothing_counted(pool: PgPool) {
+        let s = seed(&pool).await;
+        // Three resources that already exist in a context no joined team can reach.
+        for _ in 0..3 {
+            add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
+        }
+        // One in-scope event, then the state a completed run leaves: watermark here, boundary snapshotted.
+        let wm = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        settle_cursors(&pool, s.cogmap, Some(wm)).await;
+
+        let quiet = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            quiet.new_events, 0,
+            "caught up: nothing after the watermark"
+        );
+        assert!(!quiet.boundary_moved, "boundary just snapshotted");
+        assert!(
+            !quiet.exceeds_threshold,
+            "baseline: the steward should not run"
+        );
+
+        // THE DEFECT THIS CLOSES: one INSERT, zero events, and three resources enter the scope the
+        // steward distills from.
+        share_context_into_team(&pool, s.other_ctx, s.team).await;
+
+        let after = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.new_resources, 0,
+            "the share emits nothing, and the material it admitted predates the watermark — the \
+             counted arm is blind to this forever, not merely late"
+        );
+        assert_eq!(
+            after.new_events, 0,
+            "no event of any type accompanies a share"
+        );
+        assert!(after.boundary_moved, "the scope itself changed shape");
+        assert!(
+            after.exceeds_threshold,
+            "the boundary arm alone must fire — with a count-only gate this map never ticks again"
+        );
+    }
+
+    /// OWNS half: the same invisibility through the other door — transferring a context's ownership
+    /// onto the joined team. `kb_contexts` is not the event spine, so the scope grows uncounted.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reassigning_a_context_onto_the_joined_team_moves_the_boundary(pool: PgPool) {
+        let s = seed(&pool).await;
+        for _ in 0..3 {
+            add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
+        }
+        let wm = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        settle_cursors(&pool, s.cogmap, Some(wm)).await;
+
+        // A `context_reassigned`-style move: owner becomes the joined team, so the context enters the
+        // boundary's OWNED half. (The row move is what the boundary observes; no `resource_created`
+        // accompanies material that already existed.)
+        sqlx::query("UPDATE kb_contexts SET owner_table = 'kb_teams', owner_id = $2 WHERE id = $1")
+            .bind(s.other_ctx)
+            .bind(s.team)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let after = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.new_resources, 0,
+            "the transferred context's resources predate the watermark"
+        );
+        assert!(after.boundary_moved, "the OWNED half of the scope grew");
+        assert!(after.exceeds_threshold, "the boundary arm fires");
+    }
+
+    /// Idempotence: once a run stores the fingerprint it observed, the same boundary reads as
+    /// unchanged. Without this the boundary arm would latch on and the steward would tick forever.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn advancing_with_the_delta_fingerprint_settles_the_boundary(pool: PgPool) {
+        let s = seed(&pool).await;
+        add_event(&pool, s.entity, "resource_created", s.ctx).await;
+
+        let first = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert!(first.boundary_moved, "fresh cogmap: never snapshotted");
+
+        assert!(
+            first.max_event_id.is_some(),
+            "this run has an event to advance to"
+        );
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+        backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: first.max_event_id,
+                boundary_fingerprint: first.boundary_fingerprint.clone(),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap();
+
+        let second = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            second.boundary_fingerprint, first.boundary_fingerprint,
+            "an unchanged boundary computes to the same fingerprint"
+        );
+        assert!(!second.boundary_moved, "stored == live → not moved");
+        assert!(
+            !second.exceeds_threshold,
+            "nothing counted and nothing moved → the steward stays put"
+        );
+    }
+
+    /// One act, both cursors. How far the run read and what shape its scope had are stored together,
+    /// so they cannot diverge — a change that advances only one of them fails right here.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn advance_moves_the_watermark_and_the_boundary_fingerprint_in_one_act(pool: PgPool) {
+        let s = seed(&pool).await;
+        let e = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        let fingerprint = d
+            .boundary_fingerprint
+            .expect("the read computes a live fingerprint");
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+        let ack = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: Some(e),
+                boundary_fingerprint: Some(fingerprint.clone()),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap();
+
+        let (watermark, stored) = stored_cursors(&pool, s.cogmap).await;
+        assert_eq!(watermark, Some(e), "the event watermark moved");
+        assert_eq!(
+            stored,
+            Some(fingerprint.clone()),
+            "and so did the boundary fingerprint, in the same UPDATE"
+        );
+        // The ack is read back from that same UPDATE, so it must agree with the table. Asserting it
+        // against the COLUMNS rather than against the arguments is the point: an ack that echoed the
+        // request would pass this even if the UPDATE wrote nothing.
+        assert_eq!(
+            ack.value.watermark, watermark,
+            "the ack reports stored state"
+        );
+        assert_eq!(ack.value.boundary_fingerprint, stored);
+        assert_eq!(ack.value.cogmap_id, s.cogmap);
+    }
+
+    // ── D5/D6: the cursors are independently optional ──────────────────────────────────────────
+
+    /// D5. A boundary-only advance: no event id, so the watermark must not move — while the boundary
+    /// still gets recorded. Asserting the watermark COLUMN is unchanged (not merely that the call
+    /// returned Ok) is what makes this a test of the COALESCE rather than of the happy path.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_boundary_only_advance_stores_the_fingerprint_and_leaves_the_watermark(pool: PgPool) {
+        let s = seed(&pool).await;
+        let e = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        settle_cursors(&pool, s.cogmap, Some(e)).await;
+        // Move the boundary so there is something new to record, with no event to advance to.
+        share_context_into_team(&pool, s.other_ctx, s.team).await;
+        let (watermark_before, fingerprint_before) = stored_cursors(&pool, s.cogmap).await;
+
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(d.max_event_id, None, "empty window: nothing to advance to");
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+        let ack = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: None,
+                boundary_fingerprint: d.boundary_fingerprint.clone(),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap();
+
+        let (watermark_after, fingerprint_after) = stored_cursors(&pool, s.cogmap).await;
+        assert_eq!(
+            watermark_after, watermark_before,
+            "no event id supplied → the watermark column is untouched, not nulled"
+        );
+        assert_eq!(
+            watermark_after,
+            Some(e),
+            "and it still holds the event it held"
+        );
+        assert_ne!(
+            fingerprint_after, fingerprint_before,
+            "the boundary moved, so its recorded digest must have changed"
+        );
+        assert_eq!(fingerprint_after, d.boundary_fingerprint);
+        assert_eq!(ack.value.watermark, watermark_after);
+        assert_eq!(ack.value.boundary_fingerprint, fingerprint_after);
+    }
+
+    /// **The hot loop, asserted shut.** This is the case the whole boundary mechanism exists for and
+    /// the one it could not previously survive: a context is shared in, so the boundary moves with
+    /// zero countable events, which means the delta has no `max_event_id` — and when an event id was
+    /// mandatory, such a run could record nothing and re-fired on every tick, forever. If this test
+    /// ever fails on the final assertion, the steward is in a distillation loop in production.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_boundary_move_with_no_event_to_advance_to_does_not_re_fire_forever(pool: PgPool) {
+        let s = seed(&pool).await;
+        // Material that predates the watermark, in a context no joined team can reach.
+        for _ in 0..3 {
+            add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
+        }
+        let wm = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        settle_cursors(&pool, s.cogmap, Some(wm)).await;
+
+        share_context_into_team(&pool, s.other_ctx, s.team).await;
+
+        let fired = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert!(fired.exceeds_threshold, "the boundary arm says run");
+        assert_eq!(
+            fired.max_event_id, None,
+            "and there is NO event to advance to — the two facts that used to be irreconcilable"
+        );
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+        backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: fired.max_event_id,
+                boundary_fingerprint: fired.boundary_fingerprint.clone(),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("a run with no event id must still be able to record its boundary");
+
+        let next = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert!(
+            !next.boundary_moved,
+            "the boundary is settled — this assertion IS the loop being shut"
+        );
+        assert!(!next.exceeds_threshold, "and the next tick stands down");
+    }
+
+    /// D6. A caller that supplies no fingerprint still settles the boundary — the server computes one
+    /// at write time. Storing NULL instead would mean "never snapshotted", re-firing this cogmap on
+    /// every tick forever: the same hot loop through a different door. The cost is that a boundary
+    /// change during the run is absorbed unseen, which is why callers holding the delta's value pass it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_advance_without_a_fingerprint_settles_the_boundary_anyway(pool: PgPool) {
+        let s = seed(&pool).await;
+        let e = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+        let ack = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: Some(e),
+                boundary_fingerprint: None,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap();
+
+        let (_, stored) = stored_cursors(&pool, s.cogmap).await;
+        assert!(
+            stored.is_some(),
+            "the fallback computed a digest — NULL here would be the never-snapshotted hot loop"
+        );
+        assert_eq!(
+            ack.value.boundary_fingerprint, stored,
+            "and the ack reports the fallback's value, so the caller can see it was filled in"
+        );
+
+        let next = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert!(
+            !next.boundary_moved,
+            "settled, despite the caller sending nothing"
+        );
+        assert!(!next.exceeds_threshold);
+    }
+
+    /// The cron path carries the boundary arm too. A fix that landed only in `ingest_delta` would
+    /// pass every other test here while `steward_dispatch_tick` — which enqueues from THIS sweep —
+    /// stayed blind to the exact case the fix exists for.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sweep_includes_a_map_whose_boundary_moved_below_threshold(pool: PgPool) {
+        let s = seed(&pool).await;
+        // Every boundary, so the empty baseline below is a real baseline — see `settle_all_boundaries`.
+        settle_all_boundaries(&pool).await;
+        for _ in 0..2 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+        assert!(
+            drift_sweep(&pool, s.member.into(), None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "2 < default threshold 5, boundary settled → neither arm"
+        );
+
+        share_context_into_team(&pool, s.other_ctx, s.team).await;
+
+        let rows = drift_sweep(&pool, s.member.into(), None).await.unwrap();
+        assert_eq!(rows.len(), 1, "the sweep must surface the moved map");
+        assert_eq!(rows[0].cogmap_id, s.cogmap);
+        assert_eq!(
+            rows[0].new_resources, 2,
+            "still below the threshold — this row is in the sweep on the boundary arm, not the count"
+        );
+        assert!(rows[0].boundary_moved, "and it says so");
     }
 }

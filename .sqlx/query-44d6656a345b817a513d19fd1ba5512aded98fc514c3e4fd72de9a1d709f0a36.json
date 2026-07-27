@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT cogmap_id     AS \"cogmap_id!: Uuid\",\n               watermark     AS \"watermark: Uuid\",\n               new_resources AS \"new_resources!: i64\",\n               new_events    AS \"new_events!: i64\"\n          FROM steward_drift_sweep($1, $2)\n        ",
+  "query": "\n        SELECT cogmap_id      AS \"cogmap_id!: Uuid\",\n               watermark      AS \"watermark: Uuid\",\n               new_resources  AS \"new_resources!: i64\",\n               new_events     AS \"new_events!: i64\",\n               boundary_moved AS \"boundary_moved!: bool\"\n          FROM steward_drift_sweep($1, $2)\n        ",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "ordinal": 3,
         "name": "new_events!: i64",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "boundary_moved!: bool",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -34,8 +39,9 @@
       null,
       null,
       null,
+      null,
       null
     ]
   },
-  "hash": "fc1c8ae77fe8e9e85584975f3265e050d96a7470b187bd8245270ed5db7e3a7c"
+  "hash": "44d6656a345b817a513d19fd1ba5512aded98fc514c3e4fd72de9a1d709f0a36"
 }

@@ -32,6 +32,26 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("profile id parse")
 }
 
+/// Snapshot every cogmap's boundary fingerprint — the state a completed run leaves behind.
+///
+/// Load-bearing for every test here that counts claims. A never-snapshotted boundary is NULL, NULL
+/// means "unknown" rather than "unchanged", and the sweep admits it — so on a fresh DB the L0 kernel
+/// map (which the provisioned principal reaches through the root team) is *itself* drifted, and
+/// "nothing claimed" / "exactly one claimed" would both be false for reasons that have nothing to do
+/// with dispatch wiring. Settling puts these tests in the steady state they are about. The one-time
+/// settle wave a deploy triggers is a different, intended behaviour, covered at the service layer.
+async fn settle_all_boundaries(pool: &sqlx::PgPool) {
+    // `steward_boundary_fingerprint(id)` is the FUNCTION applied to the id column, not the same-named
+    // column being read — a column reference cannot take an argument. This is the one place the
+    // argument must be a column rather than a bind parameter, since it settles every row at once.
+    sqlx::query(
+        "UPDATE kb_cogmaps SET steward_boundary_fingerprint = steward_boundary_fingerprint(id)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 /// Seed a single drifted, principal-readable, team-joined cogmap: a team the principal is a member
 /// of (→ cogmap read), a team-owned context, and 6 `resource_created` events (above the default
 /// threshold 5). Returns the cogmap id. Mirrors the service-test seed shape.
@@ -177,6 +197,7 @@ async fn dispatch_route_is_wired_and_returns_empty_when_no_drift(pool: sqlx::PgP
     let app = common::setup(pool.clone()).await;
     let principal = provision_profile(&app, &app.token).await;
     common::enable_invite_only(&pool, principal).await;
+    settle_all_boundaries(&pool).await;
 
     let body = dispatch(&app).await;
     assert!(
@@ -193,6 +214,8 @@ async fn dispatch_claims_a_drifted_map_then_single_flight_blocks_the_next(pool: 
     let principal = provision_profile(&app, &app.token).await;
     common::enable_invite_only(&pool, principal).await;
     let cogmap = seed_drifted_map(&pool, principal).await;
+    // After seeding, so the seeded map drifts on its COUNT (6 >= 5) and nothing drifts on its boundary.
+    settle_all_boundaries(&pool).await;
 
     let first = dispatch(&app).await;
     assert_eq!(first.claimed.len(), 1, "the one drifted map is claimed");
@@ -221,6 +244,7 @@ async fn a_tick_threads_its_correlation_from_the_header_to_the_invocation(pool: 
     common::enable_invite_only(&pool, principal).await;
     let cogmap = seed_drifted_map(&pool, principal).await;
     grant_cogmap_write(&pool, cogmap, principal).await;
+    settle_all_boundaries(&pool).await;
 
     // `crypto.randomUUID()` shape: a v4 UUID, exactly what the cron sends.
     let tick = "6f1e5a2c-9d3b-4c7e-8a10-2b4d6e8f0a12";
@@ -274,6 +298,7 @@ async fn a_dispatch_without_the_header_claims_and_self_roots(pool: sqlx::PgPool)
     common::enable_invite_only(&pool, principal).await;
     let cogmap = seed_drifted_map(&pool, principal).await;
     grant_cogmap_write(&pool, cogmap, principal).await;
+    settle_all_boundaries(&pool).await;
 
     let body = dispatch(&app).await;
     assert_eq!(body.claimed.len(), 1, "claiming is unaffected");
@@ -298,6 +323,7 @@ async fn a_malformed_correlation_header_is_ignored_not_rejected(pool: sqlx::PgPo
     let principal = provision_profile(&app, &app.token).await;
     common::enable_invite_only(&pool, principal).await;
     seed_drifted_map(&pool, principal).await;
+    settle_all_boundaries(&pool).await;
 
     let body = dispatch_with(&app, Some("not-a-uuid")).await;
     assert_eq!(body.claimed.len(), 1, "the tick still does its work");

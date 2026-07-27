@@ -37,15 +37,22 @@ impl<'a> StewardClient<'a> {
             .await
     }
 
-    /// POST /api/steward/{cogmap}/watermark — advance the ingest watermark to `event_id`.
+    /// POST /api/steward/{cogmap}/watermark — record a completed run's cursors. Both are optional:
+    /// no `event_id` is a boundary-only advance (the watermark holds), and no `boundary_fingerprint`
+    /// makes the server settle the boundary to its write-time shape. The ack reports what was
+    /// actually stored, which is not necessarily what was sent.
     pub async fn advance_watermark(
         &self,
         cogmap: Uuid,
-        event_id: Uuid,
+        event_id: Option<Uuid>,
+        boundary_fingerprint: Option<String>,
     ) -> Result<AdvanceWatermarkAck> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/steward/{cogmap}/watermark");
-        let body = AdvanceWatermarkRequest { event_id };
+        let body = AdvanceWatermarkRequest {
+            event_id,
+            boundary_fingerprint,
+        };
         let req = self.http.post(&path).json(&body);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))

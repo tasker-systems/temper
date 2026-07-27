@@ -13,7 +13,7 @@ description: Use when tending the team self-cognition map — choosing a node's 
 > dropped `title`, `source`, `resource`. Keep the names literal when editing this.
 
 ```
-delta = temper__steward_ingest_delta(cogmap=cogmap, threshold=threshold)   # skip if under threshold
+delta = temper__steward_ingest_delta(cogmap=cogmap, threshold=threshold)   # stand down unless delta.exceeds_threshold
 
 # OMIT parent_cogmap. A scheduled tick is not spawned beneath another map, and the only other
 # id in your prompt is the DISPATCH JOB id — not a cogmap. Passing it here trips the delegation
@@ -47,8 +47,10 @@ for src in delta.new_or_changed:
       temper__facet_set(resource=node, values=f, act)
 
 # Before closing, self-check: every act this tick carried invocation_id + confidence.
-# LAST and ONCE — a real kb_events.id (delta.max_event_id), never a resource_id.
-temper__steward_advance_watermark(cogmap=cogmap, event_id=delta.max_event_id)   # see "Advancing the watermark"
+# LAST and ONCE. event_id is a real kb_events.id (delta.max_event_id), never a resource_id —
+# OMIT it when max_event_id is null, but still make this call: the fingerprint must be recorded.
+temper__steward_advance_watermark(cogmap=cogmap, event_id=delta.max_event_id,
+                                  boundary_fingerprint=delta.boundary_fingerprint)   # see "Advancing the watermark"
 temper__invocation_close(invocation=inv.id, disposition="completed", outcome=<outcome>)
 ```
 
@@ -290,9 +292,10 @@ Same envelope on every call — not just `create`:
 them, you broke the accountability chain — the acts exist but nothing ties them to
 this run. Close with an outcome summarizing nodes / edges / facets / folds.
 
-## Advancing the watermark — last, once, to a real event id
+## Advancing the watermark — last, once, and always
 
-`steward_advance_watermark` is the **final** act of a tick, and it fires **exactly once**:
+`steward_advance_watermark` is the **final** act of a tick, and it fires **exactly once** —
+including on a tick that has no event id to pass:
 
 - **Sequence — after everything, never mid-run.** Advance only once *all* authored-4 acts
   are done, immediately before `invocation_close`. The watermark marks the whole delta as
@@ -305,12 +308,25 @@ this run. Close with an outcome summarizing nodes / edges / facets / folds.
   A node or edge id you just created is **not** such an event; passing one 404s as
   "event … is not in cognitive map …'s ingest window". The watermark is an *event* cursor
   scoped to the map's own ingest, not a resource cursor.
-- **Empty window — nothing to advance.** When the delta is empty, `max_event_id` is
-  `null` (absent). There is nothing to mark ingested, so **skip the advance** and just
-  close — do not fabricate an id.
+- **Empty window — still advance, just without an event id.** When the delta is empty,
+  `max_event_id` is `null` (absent). **Omit `event_id` and call the advance anyway** — do not
+  skip it, and do not fabricate an id. The watermark stays where it is (there is nothing to
+  mark ingested), but your `boundary_fingerprint` is recorded, and that is the whole point:
+  the case that produces an empty window *is* the case where your scope moved without emitting
+  events. Skipping here means nothing is recorded, so the very next tick sees the same moved
+  boundary and runs again — every tick, forever.
+- **Carry the boundary fingerprint with it.** Pass `boundary_fingerprint` from *this* tick's
+  delta alongside `max_event_id`. It records the shape your tick's **scope** had, not how far
+  it read: a context shared into the team emits no event, so the counts cannot see it and the
+  fingerprint is the only thing that can. Pass the delta's value verbatim — never a recomputed
+  one, never another read's. If you omit it the server settles the boundary to its shape at
+  write time instead, which is not an error but silently absorbs any scope change that happened
+  *during* your run, marking as seen a context you never looked at.
 
-Concretely: hold `delta.max_event_id` from the top of the tick, do every act, then pass
-that same `max_event_id` to `steward_advance_watermark` right before you close.
+Concretely: hold `delta.max_event_id` and `delta.boundary_fingerprint` from the top of the
+tick, do every act, then pass those same two values to `steward_advance_watermark` right
+before you close. When `max_event_id` is null, pass only the fingerprint — the advance still
+fires.
 
 ## Resume is safe — re-run to fixpoint
 

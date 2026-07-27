@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT new_resources        AS \"new_resources!: i64\",\n               new_events           AS \"new_events!: i64\",\n               max_event_id         AS \"max_event_id: Uuid\",\n               boundary_fingerprint AS \"boundary_fingerprint: String\",\n               boundary_moved       AS \"boundary_moved!: bool\"\n          FROM steward_ingest_delta($1, $2, $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "new_resources!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "new_events!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_event_id: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "boundary_fingerprint: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "boundary_moved!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "55b9e649b989a10e0a6f8a34fc791350fef62e905388cb3d53c76342dfe28511"
+}

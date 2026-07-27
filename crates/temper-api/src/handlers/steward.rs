@@ -86,6 +86,7 @@ pub async fn advance(
     let cmd = AdvanceStewardWatermark {
         cogmap: CogmapId::from(cogmap),
         event_id: req.event_id,
+        boundary_fingerprint: req.boundary_fingerprint,
         origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
@@ -93,10 +94,10 @@ pub async fn advance(
         .advance_steward_watermark(cmd)
         .await
         .map_err(ApiError::from)?;
-    Ok(Json(AdvanceWatermarkAck {
-        cogmap_id: cogmap,
-        watermark: out.value,
-    }))
+    // The ack is built from what the UPDATE stored, not from `req` — the handler must not
+    // re-derive it, or the two server-side rules (watermark holds; fingerprint falls back) become
+    // invisible on the wire.
+    Ok(Json(out.value))
 }
 
 #[utoipa::path(

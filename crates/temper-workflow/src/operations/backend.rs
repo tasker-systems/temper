@@ -174,14 +174,16 @@ pub trait Backend: Send + Sync {
     ) -> Result<CommandOutput<()>, TemperError>;
 
     // ── team-self-cognition steward ingest watermark (T4a) ──
-    // Advance a cogmap's ingest cursor to a given event id. The stub the future steward calls on run
-    // completion so the next `steward_ingest_delta` counts only what landed after this run. Gated on
-    // cogmap-write (auth before write). Returns the watermark now held.
+    // Record a completed run's two cursors on a cogmap — how far it read and what shape its scope had
+    // — so the next `steward_ingest_delta` measures only what changed after it. Both are optional and
+    // both are written in one statement; see [`AdvanceStewardWatermark`]. Gated on cogmap-write (auth
+    // before write). Returns the cursors AS STORED (read back from the UPDATE), not the caller's
+    // arguments — each has a server-side rule that may differ from what was sent.
 
     async fn advance_steward_watermark(
         &self,
         cmd: AdvanceStewardWatermark,
-    ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
+    ) -> Result<CommandOutput<temper_core::types::steward::AdvanceWatermarkAck>, TemperError>;
 
     /// Run one deterministic steward-dispatch pass (reap → sweep → enqueue → claim) and return the
     /// claimed jobs for fan-out. See [`StewardDispatchTick`].

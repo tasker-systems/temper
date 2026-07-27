@@ -9,9 +9,7 @@ use rmcp::model::CallToolResult;
 
 use temper_core::error::TemperError;
 use temper_core::types::ids::{CogmapId, ProfileId};
-use temper_core::types::steward::{
-    AdvanceWatermarkAck, StewardAdvanceWatermarkInput, StewardDeltaInput,
-};
+use temper_core::types::steward::{StewardAdvanceWatermarkInput, StewardDeltaInput};
 use temper_services::backend::DbBackend;
 use temper_services::services::steward_service;
 use temper_workflow::operations::{AdvanceStewardWatermark, Backend, Surface};
@@ -84,6 +82,7 @@ pub async fn steward_advance_watermark(
     let cmd = AdvanceStewardWatermark {
         cogmap,
         event_id: input.event_id,
+        boundary_fingerprint: input.boundary_fingerprint,
         origin: Surface::Mcp,
     };
 
@@ -93,11 +92,9 @@ pub async fn steward_advance_watermark(
         .await
         .map_err(|e| map_err(e, "steward_advance_watermark"))?;
 
-    let ack = AdvanceWatermarkAck {
-        cogmap_id: cogmap.uuid(),
-        watermark: out.value,
-    };
+    // Render the cursors AS STORED. The agent needs to see which of its two optional inputs the
+    // server filled in for it — re-assembling the ack from `input` would hide exactly that.
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
+        to_text(&out.value),
     )]))
 }

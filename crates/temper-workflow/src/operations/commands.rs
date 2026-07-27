@@ -333,13 +333,27 @@ pub struct CloseInvocation {
     pub origin: Surface,
 }
 
-/// Advance a team-self-cognition cogmap's steward ingest watermark to a given event id (T4a). The
-/// stub write the future steward calls on run completion so the next delta counts only what landed
-/// after this run. Gated on cogmap-write (`cogmap_authorable_by_profile`), auth before write.
+/// Record a completed steward run's cursors on a team-self-cognition cogmap (T4a): how far it read
+/// (`event_id` → the watermark) and what shape its scope had while reading (`boundary_fingerprint`).
+/// Gated on cogmap-write (`cogmap_authorable_by_profile`), auth before write.
+///
+/// **Both cursors are optional and both advance in one statement.** Two cursors that could move
+/// independently is exactly how a boundary change re-fires forever or is lost, so there is one
+/// command and no way to write half of it.
+///
+/// - `event_id: None` — a boundary-only advance. A run whose delta fired on the boundary arm alone
+///   has an empty event window and thus no id to advance to; this is the case that made requiring an
+///   id a hot loop, since such a run could record nothing and re-fired every tick. The watermark is
+///   left where it was. A supplied id is still validated against the cogmap's ingest window.
+/// - `boundary_fingerprint: None` — a fallback, and a lossy one. The server stores the boundary as it
+///   stands at write time instead of as the run read it, which settles the boundary (never leaving it
+///   NULL, which would itself re-fire forever) but absorbs any boundary change that happened during
+///   the run. Callers that have the delta's value should always pass it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceStewardWatermark {
     pub cogmap: CogmapId,
-    pub event_id: uuid::Uuid,
+    pub event_id: Option<uuid::Uuid>,
+    pub boundary_fingerprint: Option<String>,
     pub origin: Surface,
 }
 
