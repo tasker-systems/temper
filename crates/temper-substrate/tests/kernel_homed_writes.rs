@@ -6,6 +6,7 @@
 //! resources land, keyed by `origin_uri`. Runs against an isolated `#[sqlx::test]` ephemeral DB
 //! (MIGRATOR-applied canonical schema + seed).
 
+use temper_core::types::property_owner::PropertyOwner;
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::payloads::EdgePolarity;
@@ -78,7 +79,7 @@ async fn create_kernel_resource_homes_to_cogmap_with_facet_and_edge(pool: sqlx::
     .unwrap();
     writes::set_facet(
         &pool,
-        a,
+        PropertyOwner::resource(a),
         &serde_json::json!({ "layer": "concept" }),
         1.0,
         emitter,

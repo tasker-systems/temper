@@ -6,6 +6,7 @@
 
 use serde_json::json;
 use sqlx::PgPool;
+use temper_core::types::property_owner::PropertyOwner;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId, ResourceId};
 use temper_substrate::writes::{self, OpenParams};
@@ -68,7 +69,7 @@ async fn invocation_show_and_list_surface_for_reader_and_gate_outsider(pool: PgP
     fire_with(
         &mut tx,
         SeedAction::FacetSet {
-            resource: ResourceId::from(telos),
+            owner: PropertyOwner::resource(ResourceId::from(telos)),
             values: &values,
             weight: 1.0,
             emitter: entity,
