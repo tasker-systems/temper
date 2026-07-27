@@ -286,6 +286,28 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Set a facet (typed property) on a RELATIONSHIP (edge), addressed by its edge handle — a qualifier on a link rather than on a thing"
+    )]
+    async fn edge_facet_set(
+        &self,
+        Parameters(input): Parameters<tools::facets::EdgeFacetSetInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::edge_facet_set(self, input).await
+    }
+
+    #[tool(description = "Read the live facets of one relationship (edge)")]
+    async fn edge_facets(
+        &self,
+        Parameters(input): Parameters<tools::facets::EdgeFacetsInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::edge_facets(self, input).await
+    }
+
+    #[tool(
         description = "Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
     )]
     async fn steward_ingest_delta(

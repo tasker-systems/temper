@@ -31,6 +31,7 @@ use temper_core::types::ingest::{
 use temper_core::types::materialize::{
     default_lens_for, MaterializeAck, DEFAULT_MATERIALIZE_THRESHOLD,
 };
+use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
@@ -1028,7 +1029,7 @@ impl DbBackend {
                     if facet_is_nonempty(&facets) {
                         writes::set_facet_in_tx(
                             &mut *conn,
-                            rid,
+                            PropertyOwner::resource(rid),
                             &facets,
                             1.0,
                             ctx.emitter,
@@ -2292,9 +2293,21 @@ impl Backend for DbBackend {
     /// resolution, gated on the TARGET resource directly (facets have no source/target split).
     #[act_span]
     async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError> {
-        let resource_next = uuid::Uuid::from(cmd.resource);
-        // Auth before any write (WS2): gate on the resource the facet is being set on.
-        self.check_can_modify_next(resource_next).await?;
+        // Auth before any write (WS2), dispatched on the owner kind — the two are NOT the same
+        // question, and neither gate subsumes the other.
+        //
+        // A resource-owned facet asks "may I modify this resource?". An edge-owned facet asks the
+        // edge's own mutability question, which `check_edge_mutable` already owns for
+        // retype/reweight/fold: the edge's SOURCE resource must be modifiable AND the caller must
+        // have container-write on the edge's home. Calling it here rather than restating those
+        // clauses is what keeps facet-writing an edge and re-typing one answering to one
+        // definition — otherwise a caller could facet an edge they may not otherwise touch.
+        match cmd.owner {
+            PropertyOwner::Resource { id } => {
+                self.check_can_modify_next(uuid::Uuid::from(id)).await?
+            }
+            PropertyOwner::Edge { id } => self.check_edge_mutable(uuid::Uuid::from(id)).await?,
+        }
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
 
@@ -2307,7 +2320,7 @@ impl Backend for DbBackend {
         let act_ctx = act_context(&cmd.act);
         let property_id = writes::set_facet_with(
             &self.pool,
-            cmd.resource,
+            cmd.owner,
             &cmd.values,
             cmd.weight,
             emitter,

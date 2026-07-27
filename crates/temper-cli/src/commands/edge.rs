@@ -7,6 +7,8 @@ use crate::cli::{CliEdgeKind, CliPolarity, EdgeAction};
 use crate::error::Result;
 use crate::format::OutputFormat;
 use crate::output;
+use temper_core::error::TemperError;
+use temper_core::types::facet_requests::EdgeFacetSetRequest;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
@@ -132,6 +134,46 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
                 })
             })
         }
+        EdgeAction::Facet {
+            edge_handle,
+            values,
+            weight,
+            act,
+        } => {
+            // The values payload is caller-supplied JSON; parse it here so a malformed body is a
+            // local error with the offending text, not a 400 from the server.
+            let values: serde_json::Value = serde_json::from_str(&values)
+                .map_err(|e| TemperError::Config(format!("--values must be valid JSON: {e}")))?;
+            let req = EdgeFacetSetRequest {
+                values,
+                weight,
+                act: act.into_act_input()?,
+            };
+            crate::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    let ack = client
+                        .facets()
+                        .set_on_edge(edge_handle, &req)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+                    let rendered = crate::format::render(&ack, fmt)?;
+                    output::plain(rendered);
+                    Ok(())
+                })
+            })
+        }
+        EdgeAction::Facets { edge_handle } => crate::actions::runtime::with_client(|client| {
+            Box::pin(async move {
+                let out = client
+                    .facets()
+                    .list_for_edge(edge_handle)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)?;
+                let rendered = crate::format::render(&out, fmt)?;
+                output::plain(rendered);
+                Ok(())
+            })
+        }),
     }
 }
 

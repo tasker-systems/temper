@@ -34,6 +34,50 @@ pub struct FacetSetRequest {
     pub act: ActInput,
 }
 
+/// Request body for `POST /api/relationships/{edge_handle}/facets` — a facet whose owner is an
+/// **edge**.
+///
+/// A separate type from [`FacetSetRequest`] rather than an optional `edge` field on it, because the
+/// owner is not a payload choice: it is in the path, and it selects a different authorization gate
+/// (the edge's own mutability clauses, not `can_modify_resource`). Two shapes that can each be
+/// parsed into exactly one owner beat one shape carrying two optional ids that must then be
+/// validated into exactly one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EdgeFacetSetRequest {
+    /// The facet's typed value payload.
+    pub values: serde_json::Value,
+    /// Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
+    #[serde(default = "default_facet_weight")]
+    pub weight: f64,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the facet_set act.
+    #[serde(default, flatten)]
+    pub act: ActInput,
+}
+
+/// One property row owned by an edge, as read back by
+/// `GET /api/relationships/{edge_handle}/facets`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EdgeFacetRow {
+    pub property_id: Uuid,
+    /// `kb_properties.property_key`. `"facet"` for a clustering facet written by `facet_set`; an
+    /// arbitrary key for a single-valued property written by `property_set`.
+    pub property_key: String,
+    pub value: serde_json::Value,
+    pub weight: f64,
+}
+
+/// The live facets of one edge. Folded rows are excluded: folding an edge cascades to the
+/// properties it owns, so a folded property here would mean a retracted relationship still
+/// carrying live qualifiers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EdgeFacetsResponse {
+    pub edge_handle: Uuid,
+    pub facets: Vec<EdgeFacetRow>,
+}
+
 /// Acknowledgement returned by the facet write endpoint.
 ///
 /// `id` duplicates `property_id` — see `InvocationAck::id`.

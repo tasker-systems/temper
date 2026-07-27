@@ -19,6 +19,157 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Read the live facets of one edge.
+    # Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay service-direct on both surfaces by design (the trait projections are lossy), so this does not route through the backend.
+    # @param edge_handle [String] Relationship edge handle
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [EdgeFacetsResponse]
+    def list_edge_facets(edge_handle, opts = {})
+      data, _status_code, _headers = list_edge_facets_with_http_info(edge_handle, opts)
+      data
+    end
+
+    # Read the live facets of one edge.
+    # Read-side gate is &#x60;edges_visible_to&#x60; — see &#x60;edge_service::list_edge_facets&#x60;. Reads stay service-direct on both surfaces by design (the trait projections are lossy), so this does not route through the backend.
+    # @param edge_handle [String] Relationship edge handle
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(EdgeFacetsResponse, Integer, Hash)>] EdgeFacetsResponse data, response status code and response headers
+    def list_edge_facets_with_http_info(edge_handle, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: FacetsApi.list_edge_facets ...'
+      end
+      # verify the required parameter 'edge_handle' is set
+      if @api_client.config.client_side_validation && edge_handle.nil?
+        fail ArgumentError, "Missing the required parameter 'edge_handle' when calling FacetsApi.list_edge_facets"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/relationships/{edge_handle}/facets'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'EdgeFacetsResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"FacetsApi.list_edge_facets",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: FacetsApi#list_edge_facets\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Set a facet whose owner is an **edge** rather than a resource.
+    # A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about the owner not being a payload choice: the edge is addressed in the path (matching every other edge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization gate is a different question. `DbBackend::set_facet` dispatches on the typed owner to `check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.  404 rather than 403 for an edge the caller cannot see, matching `check_edge_mutable`'s own NotFound on an absent edge — the endpoint must not become an existence oracle.
+    # @param edge_handle [String] Relationship edge handle
+    # @param edge_facet_set_request [EdgeFacetSetRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [FacetAck]
+    def set_edge_facet(edge_handle, edge_facet_set_request, opts = {})
+      data, _status_code, _headers = set_edge_facet_with_http_info(edge_handle, edge_facet_set_request, opts)
+      data
+    end
+
+    # Set a facet whose owner is an **edge** rather than a resource.
+    # A separate route rather than a mode of &#x60;POST /api/facets&#x60;, for two reasons that are both about the owner not being a payload choice: the edge is addressed in the path (matching every other edge write — &#x60;/api/relationships/{edge_handle}/retype|reweight|fold&#x60;), and the authorization gate is a different question. &#x60;DbBackend::set_facet&#x60; dispatches on the typed owner to &#x60;check_edge_mutable&#x60;, which is the same gate that governs re-typing or folding the same edge.  404 rather than 403 for an edge the caller cannot see, matching &#x60;check_edge_mutable&#x60;&#39;s own NotFound on an absent edge — the endpoint must not become an existence oracle.
+    # @param edge_handle [String] Relationship edge handle
+    # @param edge_facet_set_request [EdgeFacetSetRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(FacetAck, Integer, Hash)>] FacetAck data, response status code and response headers
+    def set_edge_facet_with_http_info(edge_handle, edge_facet_set_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: FacetsApi.set_edge_facet ...'
+      end
+      # verify the required parameter 'edge_handle' is set
+      if @api_client.config.client_side_validation && edge_handle.nil?
+        fail ArgumentError, "Missing the required parameter 'edge_handle' when calling FacetsApi.set_edge_facet"
+      end
+      # verify the required parameter 'edge_facet_set_request' is set
+      if @api_client.config.client_side_validation && edge_facet_set_request.nil?
+        fail ArgumentError, "Missing the required parameter 'edge_facet_set_request' when calling FacetsApi.set_edge_facet"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/relationships/{edge_handle}/facets'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(edge_facet_set_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'FacetAck'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"FacetsApi.set_edge_facet",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: FacetsApi#set_edge_facet\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # @param facet_set_request [FacetSetRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

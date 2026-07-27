@@ -88,6 +88,9 @@ lib/temper/generated/models/dispatch_tick_request.rb
 lib/temper/generated/models/dispatch_tick_response.rb
 lib/temper/generated/models/disposition.rb
 lib/temper/generated/models/drift_sweep_row.rb
+lib/temper/generated/models/edge_facet_row.rb
+lib/temper/generated/models/edge_facet_set_request.rb
+lib/temper/generated/models/edge_facets_response.rb
 lib/temper/generated/models/edge_kind.rb
 lib/temper/generated/models/element_event.rb
 lib/temper/generated/models/element_kind.rb
