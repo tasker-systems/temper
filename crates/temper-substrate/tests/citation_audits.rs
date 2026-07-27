@@ -1608,6 +1608,91 @@ async fn sweep_omits_a_deleted_or_in_progress_finding(pool: sqlx::PgPool) {
     );
 }
 
+/// LOAD-BEARING (`20260727000020`), and the SOURCE-side twin of the test above.
+///
+/// `sweep_omits_a_deleted_or_in_progress_finding` proves the FINDING's `ingest_state` is gated —
+/// that gate lives in `audit_drift_sweep`'s `candidates`. Nothing proved the same about the SOURCE,
+/// and it was not true: `resource_live_citations` gated the source on `is_active` alone, so a
+/// finding whose only citation pointed at a half-uploaded source had `magnitude = 1` and headed the
+/// queue. The auditor would then be handed a passage whose bytes are still arriving.
+///
+/// The two findings are identical in every respect except their source's `ingest_state`, so the
+/// gate is the only thing that can separate them. Bite probe: drop `src.ingest_state = 'complete'`
+/// from `resource_live_citations` and this is the test that fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_omits_a_finding_whose_only_source_is_in_progress(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "ads-src-ip", "ADS Source Ingest").await;
+    let principal = common::create_profile(&pool, "ads-src-ip-principal@example.com").await;
+    join_principal_to_cogmap(&pool, principal, cogmap, "ads-src-ip-team").await;
+    let cogmap_id = CogmapId::from(cogmap);
+
+    let src_home = make_home(&pool, owner, "ads-src-ip-home").await;
+
+    let in_flight_source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "src-in-flight",
+        "temper://ads/src-ip-in-flight",
+    )
+    .await;
+    let finding_on_in_flight = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "finding-on-in-flight-source",
+        "temper://ads/src-ip-finding-in-flight",
+        Some(in_flight_source),
+    )
+    .await;
+    // The SOURCE is half-uploaded — the finding itself is complete and live throughout.
+    sqlx::query("UPDATE kb_resources SET ingest_state = 'in_progress' WHERE id = $1")
+        .bind(in_flight_source.uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let complete_source = make_resource(
+        &pool,
+        owner,
+        emitter,
+        src_home,
+        "src-complete",
+        "temper://ads/src-ip-complete",
+    )
+    .await;
+    let finding_on_complete = make_cogmap_finding(
+        &pool,
+        owner,
+        emitter,
+        cogmap_id,
+        "finding-on-complete-source",
+        "temper://ads/src-ip-finding-complete",
+        Some(complete_source),
+    )
+    .await;
+
+    let rows = sweep(&pool, principal, 10).await;
+    assert!(
+        !rows
+            .iter()
+            .any(|(_, f, _)| *f == finding_on_in_flight.uuid()),
+        "a finding whose only citation is a half-uploaded source has no auditable evidence yet, \
+         so it must not head the queue: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(c, f, u)| *c == cogmap && *f == finding_on_complete.uuid() && *u == 1),
+        "the otherwise-identical finding on a COMPLETE source must still appear at uncovered=1, \
+         which is what proves the exclusion above is the ingest gate and not an empty sweep: \
+         {rows:?}"
+    );
+}
+
 /// LOAD-BEARING (the §6.3 principal gate). A finding homed in a cogmap the principal's team is NOT
 /// joined to must never surface — without this gate the sweep is a cross-tenant enumeration oracle
 /// (spec §6.3: "a sweep with no principal is a cross-tenant enumeration oracle"). The principal IS
