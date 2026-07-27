@@ -31,7 +31,7 @@ or to an agent in an explicit meta-goal frame — never to a clause inside the g
 |---|---|---|
 | The register's 8 elements | **specified, not shipped** | Part I |
 | Witness declarations on tasks | **shipped, in use** — 9 tasks carry both keys | `open_meta.witnesses` · `open_meta.witness` |
-| The coverage query | **runs, not packaged** — first run caught a real dangling citation | ad-hoc script, 2026-07-26 |
+| The coverage query | **packaged 2026-07-27** — reports coverage, dangling citations and citation-vs-edge integrity; agrees with goal `019f9a34`'s hand-maintained table on all 7 rows, and returns a real hole on `019f81e9` | `scripts/register-coverage.py` |
 | The expressibility check | **not built** | needs the taxonomy |
 | Project taxonomy (`domain` resources) | **not built** — zero rows in `@me/temper` | needs `open_meta.schema.json` v3 |
 | Edge-owned properties (the precondition) | **built 2026-07-27** — write + read at MCP/API/CLI parity, fold cascades | migration `20260727000030`; task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
@@ -389,14 +389,44 @@ moment the answer is cheap.
 - the `advances` **edge**, the only thing `resource list --goal` filters on;
 - `open_meta.witnesses.goal`, the **citation** the witness convention uses.
 
-[observed — task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` carries the citation and **no edge**, so it is
-invisible to `list --goal`. A clause migration built from that list missed it and left a dangling
-citation. The migration was hand-built by this spec's author an hour after specifying that the query
-should exist; the query caught it on first run.]
+~~[observed — task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` carries the citation and **no edge**, so it is
+invisible to `list --goal`.]~~ **Wrong, and corrected below.** The rest of the original note stands: a
+clause migration built from that list missed the task and left a dangling citation; the migration was
+hand-built by this spec's author an hour after specifying that the query should exist, and the query
+caught it on first run.
+
+> **Correction, 2026-07-27 — the diagnosis was wrong, not just imprecise** [observed — measured via
+> `scripts/register-coverage.py`, and reproducible; research
+> `019fa572-f2cf-7770-bd8b-a74b5cba729c`].
+>
+> Task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` carries **exactly one** outgoing edge: `advances` →
+> `019f81e9-25f3-7fe1-b563-4acca2e391eb` ("Evidential standing as substrate"), created
+> **2026-07-25T03:42:59Z** — a day *before* the observation above. Zero incoming edges.
+>
+> So it is not citation-without-edge. It is **citation → goal A, edge → goal B**. The task was absent
+> from `list --goal 019f9a34` because its edge legitimately points at a *different* goal, and
+> **absence from a filtered list was read as absence of the thing filtered on**. The `[observed]` mark
+> is the strongest in this document's scheme, and it was carrying an inference.
+>
+> **This changes what the resolution below covers.** For this task there is no `advances` edge to the
+> register goal to hang a clause facet on, and minting one would assert the task *advances* a goal
+> whose clause it merely *evidences*. That is the same collision this document already resolved for
+> the neighbouring relation — *"the register's enabling relation gets a new edge label… same word,
+> different relation; reusing the label would merge two meanings silently"* (Part VI). The identical
+> argument applies to `witnesses`, and is **open**: witnessing a clause and advancing a goal are
+> different relations, and one task now demonstrably does one without the other.
+>
+> **Second instance, larger** [observed]: goal `019f81e9-25f3-7fe1-b563-4acca2e391eb` was redrafted as
+> a register on 2026-07-27 and carries **8 clauses**. It has **13 tasks linked by edge** (9 done) and
+> **0 clause citations** — its 13 tasks predate its clauses. Under the edge spelling it reads
+> well-worked; under the citation spelling its register is entirely uncovered. Both are true and
+> neither is complete. The divergence is not a rare slip; it is what happens whenever a register is
+> authored after its tasks.
 
 **Resolution: the citation becomes a facet on the `advances` edge** — a `kb_properties` row with
 `owner_table = 'kb_edges'`. The link is the edge; the clause qualifies the link. [decided — Pete,
-2026-07-26]
+2026-07-26] **Scoped by the correction above**: it holds wherever the witnessing task also advances the
+goal, and does not yet cover the case where it does not.
 
 | Grounding | Evidence |
 |---|---|
@@ -581,7 +611,7 @@ session actually closes, rather than in the on-demand file. That task stays open
 | 0 | **Precondition** — edge-owned properties get read and write surfaces, MCP + API + CLI | nothing | **done 2026-07-27** |
 | 1 | The discipline as a shipped skill file plus router entry | nothing | **done** (PR #552) |
 | 2 | The recognized `open_meta` conventions — an `open_meta.schema.json` version bump | **step 0** | not started |
-| 3 | The two checks, **and `warmup` redesigned to consume them** | step 2 | not started |
+| 3 | The two checks, **and `warmup` redesigned to consume them** | step 2 | **coverage check packaged** as `scripts/register-coverage.py`, reading `open_meta` per §III.3 — deliberately ahead of step 2, since the citation is still the only spelling that exists. Expressibility check and the `warmup` redesign not started |
 | 4 | **Dogfood** — hand-author temper's own taxonomy | steps 1–3 | not started |
 | 5 | Amend goal `019f9a34-3306-70d1-b07a-f23c99943751`'s executable-spine clause | nothing | landed in the 2026-07-26 redraft |
 
