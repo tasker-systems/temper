@@ -1,439 +1,305 @@
 # The Outcome-Register Discipline — Design
 
-**Status**: proposed
-**Goal**: `019f9a34-3306-70d1-b07a-f23c99943751` — Adopt the Outcome-Register Convention for Temper Development
-**Source research**: `019f9a32-e1b2-7f43-b4cf-ac9b58447cb9` (outcome registers) · `019f9a33-90e5-7882-bf63-61898a33e78d` (the refusal surface)
-**Audit backing this spec**: `019f9ee8-1675-72d0-99bb-3dea38aed84b` — five days read against the convention (2026-07-22 → 07-26)
+**Status:** proposed · **Goal:** `019f9a34-3306-70d1-b07a-f23c99943751` · **Branch:** `jct/outcome-register-discipline-spec`
 
----
+> **How to read this.** Every claim is marked **[decided — who, when]**, **[observed — evidence]**, or
+> **[proposed]**. **Unmarked prose is proposed, not agreed.** Parts I–VI are what we decided and how to
+> build it. The appendices are evidence and argument — you do not need them to act, and nothing in
+> them is a constraint.
+>
+> **A sentence here should stand without its pointer.** Where a section is named, the thing it says is
+> named too. A bare cross-reference doing the work of a referent is a defect.
 
-## 1. Why this exists
+## What this is
 
-Rigor in this repository arrives **grass-roots and late**. It is discovered at a leaf — one adversarial
-pass, one careful reading, one measurement that refutes a confident claim — and then folded back by
-hand into a doc, a guidance file, or a memory. Things still get missed, and the same shapes recur.
+A discipline for stating outcomes so their rigor survives decomposition, shipped as a temper skill.
 
-The audit measured this over five days. Twelve distinct instances of one drift shape — a declaration
-and its consumers with nothing tying them, or a check that could not fail — each written up as *the*
-lesson of its own session note. Separately, eight ambient-documentation artifacts asserted behaviour
-that was not true, every one caught by a human or agent reading carefully and **none by a gate**.
+**Purpose — the four things it exists to give confidence about** [decided — Pete, 2026-07-27]:
 
-The corrective is not more documents. It is a **structural discipline**: a stated convention for what
-an outcome *is*, decomposed so its rigor survives, with the holes computable rather than discovered by
-incident.
-
-The heart of that convention is the **outcome register**. Witnessing, closure, and verification modes
-are the mechanisms that preserve a register's rigor through decomposition — they preserve nothing if
-the criterion is unspecific. The research document already states the negative test:
-
-> a criterion that could be satisfied by a system nobody needed is malformed.
-
-### What this discipline is for — and the boundary of what it may claim
-
-The purpose is **confidence, before and during the work**, that four things hold:
-
-1. We have the **necessary priors**.
-2. We have the **grounding to begin and complete** the goal.
+1. We have the necessary **priors**.
+2. We have the **grounding** to begin and complete.
 3. We have **clarity on what success looks like**.
-4. We have clarity on **what must not be true at the end**, so unintentional regression is avoided.
+4. We have clarity on **what must not be true at the end**, so regression is not accidental.
 
-That is the whole of it. **It is a discipline for working a goal well — not for deciding whether the
-goal is worth working.** Whether cost is too high, whether churn is excessive, whether to abandon: real
-questions, and none of them answerable from inside the goal. See §3.6, which states the constraint and
-records where an earlier draft of this document broke it.
+**It does not decide whether a goal is worth pursuing.** Cost, churn and abandonment belong to people,
+or to an agent in an explicit meta-goal frame — never to a clause inside the goal.
+[decided — Pete, 2026-07-27]
 
-**The discipline is the backbone and stands alone.** It delivers its value with no ontology, no init
-flow, and no substrate change. Everything in §4 onward is an enhancement to it, never a prerequisite.
+## State of play — what exists, what does not
+
+| Thing | State | Where |
+|---|---|---|
+| The register's 8 elements | **specified, not shipped** | Part I |
+| Witness declarations on tasks | **shipped, in use** — 9 tasks carry both keys | `open_meta.witnesses` · `open_meta.witness` |
+| The coverage query | **runs, not packaged** — first run caught a real dangling citation | ad-hoc script, 2026-07-26 |
+| The expressibility check | **not built** | needs the taxonomy |
+| Project taxonomy (`domain` resources) | **not built** — zero rows in `@me/temper` | needs `open_meta.schema.json` v3 |
+| Citation as a facet on the `advances` edge | **not built; substrate never exercised** — zero edge-owned properties in production | task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
+| `temper warmup` as the read surface | **exists, unfit** — emits last session's body; carries no goals or clauses | `crates/temper-cli/src/commands/warmup.rs` |
+| The installable skill | **not written** | — |
+
+## Why we are doing it
+
+Rigor arrives late and by hand. It is found at a leaf — one adversarial pass, one careful reading, one
+measurement that refutes a confident claim — then folded back manually. Things still get missed.
+
+**Measured over five days, 2026-07-22 → 07-26** [observed — audit `019f9ee8-1675-72d0-99bb-3dea38aed84b`]:
+
+- **12** instances of one drift shape: a declaration and its consumers with nothing tying them, or a
+  check that could not fail. Each written up as *the* lesson of its own session.
+- **8** ambient-documentation artifacts asserting behaviour that was not true. Every one caught by a
+  person or agent reading carefully; **none by a gate**.
+
+## What we agreed to build, and what we did not
+
+**In scope** [decided — Pete, 2026-07-26]: the discipline as a skill · the project taxonomy · the
+citation relation and its two checks.
+
+**Out of scope, deliberately**:
+
+- **`temper init`'s research flow.** Building it first would automate a flow nobody has run by hand.
+- **The taxonomy as a cognitive map with a charter-telos.** Deferred, not rejected — edges and tagging
+  carry it for now.
+
+## How much "how" we agreed on
+
+Enough not to wander wide, and no further:
+
+- **Clauses state invariants and name no mechanism.** Mechanism is discovered by building. [decided]
+- **Witnesses are authored during the build**, never in a preamble — a witness naming an unbuilt
+  mechanism cannot bite. [decided — after it cost four sessions]
+- **The taxonomy lives on `domain` resources** via recognized `open_meta` keys, not new doc types.
+  [decided — `resource list` has no `open_meta` filter, so the doc type must carry the kind]
+- **Payload shapes are deliberately unspecified.** A spec-invented field list is stale on arrival and
+  wins over the prose beside it. [decided]
+
+## What we will verify
+
+- The **coverage query returns a hole** on a goal that has one. Empty on day one means it matched
+  nothing, not that there is nothing.
+- The **expressibility check stops an author**, rather than accepting prose.
+- **Temper's own taxonomy is hand-authorable** from what the codebase already states.
+
+**Not verified by any of this**: whether adopting the discipline was worthwhile. That is program-level
+and no criterion here reaches it. Evidence bearing on it is in Appendix B, reported and not adjudicated.
 
 ---
 
-## 2. Scope — the cut, and what is deferred
+# Part I — The discipline
 
-The full picture is five parts:
+The backbone. It stands alone: it delivers its value with **no taxonomy, no init flow, and no
+substrate change**. Parts II and III are enhancements, never prerequisites. [decided]
 
-1. **The discipline**, as an installable skill.
-2. **The project ontology** — personas, affordances, priors as recognized `open_meta` conventions.
-3. **`/temper init`** — the flow that births an ontology at whatever resolution a project offers.
-4. **The citation relation and its two queries** — closure-staleness and expressibility.
-5. **The ontology as a cognitive map with its own charter-telos.**
+## I.1 A goal carries an outcome register — eight elements
 
-**This spec covers 1, 2 and 4. Part 3 is the second spec. Part 5 is deferred.**
+Seven come from research `019f9a32-e1b2-7f43-b4cf-ac9b58447cb9`. The eighth is added here.
 
-2 and 4 are inseparable: a convention whose holes are not queryable is documentation with a schema
-attached. 1 ships without 3 because an ontology can be hand-authored.
+| # | Element | What it states |
+|---|---|---|
+| 1 | **Situated actors** | Entity kind, roles, memberships, grants. Never "a user" unqualified |
+| 2 | **Priors vs. provided** | What the actor already knows (answerable by query) vs. must supply per act (a payload requirement) |
+| 3 | **The act** | Emission topic, on-behalf-of chain, read-vs-mutation character |
+| 4 | **The three-way Then** | Synchronous postconditions · ledger trace · eventual stable-state after run-to-quiescence |
+| 5 | **The refusal face** | What the system *declines*. Distinct from failure: a refusal is itself an auditable act |
+| 6 | **The why-anchor** | Whose attention this saves or protects, and from what. The drift-detector |
+| 7 | **Exercise status** | Has any of this ever *run*? Distinct from "specified" and from "superseded" |
+| 8 | **The negative face** | What must **never** become true. A standing regression boundary [added here] |
 
-**Why init is deliberately second.** Building the research flow first means automating a flow nobody
-has ever run by hand — element 7's failure in its purest form, committed by the work that introduces
-element 7. Hand-authoring Temper's own ontology (§9) *is* the requirements-gathering for what init
-should automate.
+**Element 1 changed**: situated actors may be **enumerated in place** *or* **cited** from the project
+taxonomy. Citation buys computable staleness; in-place enumeration remains a complete, valid register.
+This is what keeps the discipline standing alone. [decided]
 
----
+**Element 7 needs two axes, not one value.** [observed — the citation auditor's schedule fired ~18
+times and died every tick before doing work. *"Has the schedule fired?"* → eighteen → "exercised."
+*"Does any `citation_audited` event exist?"* → zero → "never ran." Both readings alone are wrong.]
 
-## 3. The discipline — complete contents
+**Element 8 is new, and distinct from two things it resembles.** Not the refusal face, which covers
+*acts the system declines*. Not the three-way Then, which is entirely *positive* postconditions. A
+negative-face clause is a state that must not obtain regardless of which act was attempted:
+*"a read-only context member must never create a resource homed in that context"*; *"standing must
+never be recomputed from its own prior value"*; *"a folded source block must never become invisible to
+the staleness check."*
+[observed — across the audited window, nearly every expensive finding was a standing negative that no
+element had a slot for.]
 
-This section is the backbone. It is enumerated exhaustively because a partial restatement of the
-research document would be the serialization loss the document itself diagnoses.
+## I.2 Clauses are invariants; witnesses are statements about mechanism
 
-### 3.1 The register — eight elements
+**The load-bearing distinction, and it was paid for.** [decided — Pete, 2026-07-27]
 
-Seven from the research document, plus a negative face this spec adds (element 8).
+| | States | Authored | Governed by |
+|---|---|---|---|
+| **Clause** | What must be true, or must never be true. **Names no mechanism** | Before the work | The meaning test |
+| **Witness** | How we know. **A claim about mechanism** | During or after the build | The demonstrability floor |
 
-A goal carries an outcome register:
+**Why the timing is forced, not preferred**: a witness must fail against the state its clause claims to
+change. When the mechanism does not exist, "fails against current state" is satisfied by *the absence
+of the feature* — vacuously, by anything. A bite against nothing is not a bite.
 
-1. **Situated actors** — never "a user." A perspective-position: entity kind, roles held, team
-   memberships, grants. The convention forbids the word "user" unqualified.
-   *Changed by this spec*: enumerated **in place**, or **cited** from the ontology (§4). Citation is
-   the enhancement; in-place enumeration remains a complete, valid register.
-2. **Priors vs. provided context** — what the actor already knows (latent, answerable by a projection
-   query) versus what it must supply per action (a payload requirement). Architecturally different
-   things, distinguished up front.
-3. **The act** — emission topic, on-behalf-of chain, read-vs-mutation character.
-4. **The three-way Then**:
-   - *Synchronous postconditions* — what projections now show
-   - *Ledger trace* — what the ledger records, including the on-behalf-of chain
-   - *Eventual stable-state* — what cascades through event-driven consumers and sweeps, asserted
-     after run-to-quiescence
-5. **The refusal face** — refusal as first-class, distinct from success and failure. Failure: the act
-   was attempted and did not complete. Refusal: the system declined, and the declining is itself an
-   auditable act. Grounds, disclosure ladder, recourse, inertness — full treatment in research
-   `019f9a33-90e5-7882-bf63-61898a33e78d`.
-6. **The why-anchor** — one sentence tying the outcome to an attention claim: whose attention does
-   this save or protect, and from what. The drift-detector: when a why-anchor no longer describes
-   anything anyone cares about, the criterion is due for supersession, visibly.
-7. **Exercise status** — has any of this ever *run*? Orthogonal to stated silence ("we did not specify
-   X") and to supersession ("X was decided and is now replaced"). The third state is **unexercised**:
-   specified, merged, present in the corpus, never executed.
-   *Extended by this spec*: exercise status also applies to ontology entries (§4.2).
-8. **The negative face — what must never become true.** *Added by this spec.* A standing regression
-   boundary, not a consequence of any particular act.
+**Consequences** [decided]:
 
-   It is **distinct from the refusal face**, which covers acts the system declines. A negative-face
-   clause is a state that must not obtain regardless of which act was attempted or whether anything
-   was refused: *"a read-only context member must never create a resource homed in that context"*,
-   *"standing must never be recomputed from its own prior value"*, *"a folded source block must never
-   become invisible to the staleness check."*
-
-   It is also distinct from the three-way Then, which is entirely positive postconditions.
-
-   **Why it earns a place**: across the audited window, nearly every expensive finding was the
-   violation of a standing negative that no element of the register had a slot for. The create-into-
-   context gate (`READ` where `WRITE` was required), the auditor dispatch callable by any principal,
-   the proposed `NOT sb.is_folded` filter that would have made content removal invisible — each is a
-   boundary crossed, and none is expressible as a postcondition or a refusal.
-
-> **Element 7 needs two axes, not one value.** Established the hard way: the citation auditor's
-> schedule had fired ~18 times and died every tick before doing any work. *"Has the schedule fired?"*
-> → eighteen → "exercised." *"Does any `citation_audited` event exist?"* → zero → "never ran." Both
-> readings alone are wrong. Trigger-fires and work-executes are independent.
-
-### 3.2 The witnessing invariant
-
-- Every child criterion names which parent clause it **witnesses**. A parent clause is satisfied only
-  when its witnesses jointly cover it.
-- **Coverage gaps are computable absences** — a parent Then-clause with no witnessing child is a
-  visible hole, not a week-three surprise.
-- **Drift is locally scoped.** When implementation reality forces divergence the question is precise:
-  *does this break my witness-duty to clause N, or is clause N itself now wrong?* The first is a
-  task-level fix; the second is a supersession event, visible to sibling tasks.
-
-#### 3.2.1 Clauses are invariants; witnesses are statements about mechanism
-
-**This is the load-bearing correction, and it was paid for.** A register authored over a subject that
-did not exist produced ten witnesses, most of them unwritable, filed against an explicit instruction
-not to file unvetted tasks — and cost four working sessions to recover the intent the decomposition
-had buried. Full accounting in §9.1.
-
-The distinction that prevents it:
-
-- **A clause states what must be true, or what must never be true. It names no mechanism.** It has to
-  survive any implementation, because *the how is the part most likely to mutate*. The clause that
-  survived every revision of the auditor work — *"an unrefreshed verdict is a verdict about something
-  that has not changed"* — names nothing that could be built two ways.
-- **A witness states how we know. It is a claim about mechanism, so it can only be authored once the
-  mechanism is known — which is during or after the doing, never before.**
-
-Every one of the ten hallucinated witnesses was a *how* wearing a clause's clothes: *"every member of
-the material-event set has a production write path"* presumes a material-event set exists as an
-object; *"the partition is exhaustive over `domain`"* presumes a partition. Neither had been built and
-neither could be known yet.
-
-**The bite requirement proves the timing rather than merely suggesting it.** A witness must be shown
-to fail against the state the clause claims to change. When the mechanism does not exist, "fails
-against current state" is satisfied by *the absence of the feature* — vacuously, by anything. A
-witness that fails only because nothing exists discriminates nothing.
-
-**Consequences:**
-
-- **Decomposition into witnesses is not a preamble step.** It happens inside the doing (§6, loop
-  step 5), and it is a **separately authorized act** — the register's shape invites decomposition and
-  an author will decompose, so the constraint has to be structural rather than an instruction.
-- **A clause whose mechanism is unbuilt carries a declared hole, not a filed task.** "One clause with
-  a named remainder" is the honest state; "nine witnesses" was not.
-- **The termination worry dissolves rather than being gated.** Witnesses cannot proliferate up front
+- **Witness decomposition happens inside the build** and is a **separately authorized act**. The
+  register's shape invites decomposition and an author will decompose, so the constraint must be
+  structural rather than an instruction.
+- **A clause whose mechanism is unbuilt carries a declared hole, not a filed task.**
+- **The proliferation worry dissolves** rather than being gated: witnesses cannot multiply up front
   because they are not authored up front.
 
-#### 3.2.2 The decomposition floor — a meaning test, not a demonstrability test
+**Two floors, and they are different questions** [decided]:
 
-The research document's floor — *stop when a criterion's witnesses are directly demonstrable* — cannot
-govern clause decomposition once witnesses come later. The clause-level rule is:
+- **Goal → sub-goal** is clause decomposition, before the work. **The meaning test: split a clause when
+  its halves can be violated independently.** If two sub-clauses can only fail together, they are one
+  clause.
+- **Sub-goal → task** is witness decomposition, inside the work. **The demonstrability floor**, and the
+  only place it can honestly be applied.
 
-> **Split a clause when its halves can be violated independently. If two sub-clauses can only ever
-> fail together, they are one clause.**
+The meaning test is deliberately a judgment question. The granularity of *how* is what most resists a
+hard boundary, and a rule there manufactures false precision.
 
-This is deliberately a **question judgment can answer, not a boundary that pretends to**. The
-granularity of *how* is the thing hardest to communicate up and down a decomposition ladder, and a
-hard rule there produces false precision. The demonstrability floor survives, relocated: it governs
-**witness** decomposition, during the doing, where mechanism is known.
+## I.3 Closure — the four states of a cell
 
-**The boundary this whole section defends**: too much decomposition or verification up front is the
-task performed in preamble. The only way to know what will work, how it will work, and how to prove
-it, is ultimately to do it. The methodology's job is to state what must be true and what must never
-be true — direction, and the means to validate success and failure — and to leave the *how* alone.
+For a goal, *situated-actor × act × relevant-state* is a constructible product. Every cell is in one of
+four states:
 
-### 3.3 The closure discipline
+| State | Meaning |
+|---|---|
+| **Examined-and-specified** | Covered |
+| **Examined-and-deliberately-excluded** | Emitter, timestamp, stated reason. **Settled** |
+| **Examined-and-inexpressible** | Wanted; the system cannot express it. **A pending fork** [added here] |
+| **Unexamined** | A visible remainder, not a silent one |
 
-For a goal, the space of *situated-actor × act × relevant-state* is a constructible product. Every
-cell is in one of three states:
-
-- **Examined-and-specified**
-- **Examined-and-deliberately-excluded** — with emitter, timestamp, and stated reason. *Settled.*
-- **Examined-and-inexpressible** — the cell is wanted; the system cannot express it. **Carries a
-  pending fork** (§3.4.2): evolve the system, or change the goal. Not a hole — it was examined — and
-  not an exclusion — it was not chosen. *Added by this spec.*
-- **Unexamined** — a *visible* remainder, not a silent one
-
-**Why the third is a peer of the second and not a flag on it**: an exclusion is settled, an
-inexpressible cell is waiting. A reader scanning "excluded, reason given" moves on, which is exactly
-how the fork silently fails to be taken.
-
-The deterministic property is that there is **no ambiguity between the last two**. An unmarked gap is
-the most dangerous kind of undocumented negative decision, because it re-litigates itself as an
-incident.
+**The third is a peer of the second, not a flag on it** [decided]: an exclusion is *settled*, an
+inexpressible cell is *waiting*. A reader scanning "excluded, reason given" moves on — which is how the
+fork silently fails to be taken.
 
 **Equivalence claims are first-class and falsifiable.** Nobody examines cells one by one; the matrix
 collapses via claims like *"all actors lacking grant G are interchangeable for this act."* Most holes
 live not in unexamined cells but in **wrong equivalence claims** — cells examined under a class
-abstraction that did not hold. The closure section records: dimensions considered, classes claimed,
-cells examined per class, cells excluded with reasons, and the remainder explicitly marked unexamined.
-A reviewer can attack a stated class; nobody can attack an unuttered assumption.
+abstraction that did not hold. A closure section records: dimensions considered, classes claimed, cells
+examined per class, cells excluded with reasons, remainder marked unexamined.
 
-> **⟲ Scar, carried verbatim in intent from the research document.** The claim that Temper's ontology
-> is "closed-world in the dimensions that matter" is *itself* a wrong equivalence claim, and the type
-> specimen the section describes. Every dimension it enumerated is **authorization-shaped**. The
-> closed-world property genuinely holds there. It does **not** hold for cadence, rate, or volume — and
-> those are not decorative here, since evidential standing is saturated with them.
+> **Scar, carried from the source research.** The claim that temper's categories are "closed-world in
+> the dimensions that matter" is *itself* a wrong equivalence claim. Every dimension it enumerated is
+> **authorization-shaped**. The property holds there; it does **not** hold for cadence, rate or volume,
+> and evidential standing is saturated with those.
 >
 > **Closure declarations must state which axes they close over, and rate-shaped axes must be named as
-> open unless explicitly enumerated.**
->
-> **Consequence for §4**: personas and affordances are authorization-shaped. Hoisting them to project
-> scope buys the closed-world property *on those axes only*. A closure declaration citing the persona
-> list still has to name its rate-shaped axes as open. **The ontology must not be read as closing
-> this scar.**
+> open unless explicitly enumerated.** The project taxonomy does **not** close this — personas and
+> affordances are authorization-shaped, so hoisting them buys the closed-world property on those axes
+> only.
 
-**Bounds.** Closure declarations only at load-bearing intersections. "Unexamined" remains a
-legitimate, sayable state. The goal is a **named** remainder, not a zero remainder — total enclosure
-is fantasy, and exhaustion-driven false claims are worse than honest gaps.
+**Bounds** [decided]: closure declarations only at load-bearing intersections. "Unexamined" stays a
+legitimate, sayable state. The goal is a **named** remainder, not a zero remainder.
 
-### 3.4 Verification modes
+## I.4 The inexpressible intersection — two exits, and a third that is a trap
 
-Each terminal criterion carries a mode marker.
+Sometimes the system **as designed cannot express** an element: the persona does not exist, the act has
+no affordance, the projection a Then-clause asserts over is not built, the refusal named is one the
+system cannot make.
 
-- **Executable.** A witness must be shown to **FAIL against the state the clause claims to change**.
-  A test that passes identically before and after discriminates nothing, however well it is named.
-  Witness-coverage without a bite requirement degenerates into a coverage metric — precisely the
-  instrument this convention exists to escape.
-  **The bite requirement is also what fixes *when* a witness may be authored** (§3.2.1): when the
-  mechanism does not exist, "fails against current state" is satisfied by the absence of the feature,
-  vacuously, by anything. A bite against nothing is not a bite.
-- **Replay-verified.** Eventual stable-state cases: run the cascade to quiescence deterministically
-  against the test ledger, then assert. Event-sourcing makes this deterministic rather than
-  timing-dependent.
-- **Judged.** Subjective criteria are not perspective-free predicates and cannot be made so.
-  The honest form: satisfied *as judged from a named perspective*, exemplified by two or three cited
-  exemplar regions. *"Does this look like `relationships.rs` looks"* is tractable; *"does this align
-  with our patterns"* is a vibes query that fails silently. Reviewed at the consolidated end-of-plan
-  review, which finally gets a rubric instead of a re-derivation. When an exemplar is superseded, the
-  criterion visibly needs revisiting.
+**Two honest exits** [decided]:
 
-**The Gherkin file layer is deliberately skipped.** The value was the decomposition discipline, which
-the register carries at the goal/task level. If stakeholder-legible scenario text is ever wanted,
-generate it *from* the criteria.
+- **Evolve the system** — the affordance is missing and should exist. Produces an **`enables`** task.
+- **Change the goal** — the affordance should not exist, or the clause was reaching wrongly. Produces a
+  **supersession**, via a decision.
 
-#### 3.4.1 The fixture vocabulary — corrected
+**The dishonest third exit is to assume the affordance and write clauses against it.** That is the
+deeper account of the four-session failure in Appendix B: a register met the edge of what the system
+could express and, with no fork available to record, **hallucinated the affordance**.
 
-The research document names the executable mode as *"plain rstest + sqlx::test, with a small fixture
-vocabulary (`given_entity`, `given_grant`, `emit`, `project_as_of`, `run_to_quiescence`)."*
+**Neither exit is taken by the discipline.** Detection is in scope — the register can show that an
+element cannot be expressed, and name the fork. Taking it is a judgment by whoever owns the frame.
 
-**`rstest` is not a dependency of this workspace.** Measured: `rg rstest Cargo.toml crates/*/Cargo.toml
-tests/e2e/Cargo.toml` returns nothing, and the workspace contains **zero** occurrences of `#[rstest]`,
-`#[case]`, `#[fixture]` and `#[values]`. What exists is 1,186 `#[sqlx::test]`, 1,456 `#[test]`, and 50
-`#[tokio::test]` — no parametrized-test framework at all.
+**Check for miscategorisation first** [decided]. Three diagnoses, in order:
 
-The reference entered the goal from an ideation session where `leynos/rstest-bdd` was linked
-explicitly as a **think-with reference, stated as not in the repo**. It came out the other side of a
-goal-authoring pass as a specified affordance.
+1. **Miscategorised** — the element is not the kind of thing the register claimed. Restate it in the
+   right element. *No fork.*
+2. **Missing affordance** — the element is right; the system cannot do it. → **evolve**.
+3. **Wrongly reaching** — the element is right; the system should not do it. → **change the goal**.
 
-**This is a distinct drift species and the discipline should name it.** Element 7 catches
-*shipped-but-never-run*. This is one step earlier: **referenced-to-think-with, mistaken for adopted.**
-Both are "present in the corpus, never chosen," and neither is caught by checking whether the claim is
-*true* — `rstest-bdd` is a real project and the link resolves.
+*Worked instance of miscategorisation*: the auditor register recorded *"I cannot assess this citation"*
+as a refusal the system could not express. It is not a refusal at all — it is a **verdict**, and a
+strongly negative one. The auditor's role is to say whether an assertion holds up under scrutiny of its
+evidence; *"I cannot assess this"* means *"this is incommunicable, or I cannot evaluate where you
+derived it"*, which is worse than *"plausible but underwarranted."* Forking on it would have argued for
+building a refusal the system correctly does not have. [decided — Pete, 2026-07-27]
 
-**Resolution.** The fixture *vocabulary* is right and survives. The framework claim does not. This
-spec makes no framework decision: the vocabulary must be expressed in the idiom the workspace already
-carries, and introducing a parametrized-test framework is a separate, costed decision.
-**Goal `019f9a34-3306-70d1-b07a-f23c99943751` needs its executable-spine clause amended accordingly.**
+## I.5 Verification modes
 
-### 3.4.2 The inexpressible intersection — where a goal exceeds the system's affordances
-
-A goal states an outcome. Sometimes the system **as designed cannot express it** — the persona does
-not exist, the act has no affordance, the projection the Then-clause asserts over is not built, the
-refusal named is one the system cannot make.
-
-**That intersection is a first-class, detectable state, and it has exactly two honest exits:**
-
-- **Evolve the system.** The affordance is missing and should exist. Produces an **`enables`** task
-  (§5.1.3) — a precondition, legitimately filed before any witness.
-- **Change the goal.** The affordance should not exist, or the clause was reaching wrongly. Produces
-  a **supersession**, via a decision.
-
-**Neither exit is taken by the discipline** (§3.6). Detection is in scope: the register can show that
-an element cannot be expressed, and name the fork. Taking it is a judgment by whoever owns the frame.
-A mechanism that both detected the intersection *and* resolved it would be reaching up out of its
-enclosure — which is the error this document committed once already.
-
-**The dishonest third exit is to assume the affordance and write clauses against it.** That is what
-produces mechanism-shaped clauses and premature witnesses, and it is the deeper account of §9.1 than
-"witnesses were authored too early": a register met the edge of what the system could express and,
-instead of forking, **hallucinated the affordance**. Ten witnesses were written against a
-material-event set, a partition, and a tier 2 — none of which existed. Neither honest exit was taken
-because neither was named.
-
-**Both exits already have worked instances in this corpus, and neither was recognised as a fork at
-the time:**
-
-| Exit | Instance |
+| Mode | What it requires |
 |---|---|
-| Evolve the system | The witness citation wants to be a facet on the `advances` edge; edges have never carried properties and no surface can write one. Precondition filed (§5.1.2) |
-| Change the goal | The auditor register's R10 — *"the refusal the system cannot make"* — recorded in its own table as **inexpressible**, *"does not exist"*. **But see §3.4.3: R10 is a poor example of this exit, and why is the more useful finding** |
+| **Executable** | A witness **shown to fail** against the state its clause claims to change |
+| **Replay-verified** | Run the cascade to quiescence against the test ledger, then assert |
+| **Judged** | Satisfied *as judged from a named perspective*, exemplified by two or three cited regions |
 
-#### 3.4.3 Check for miscategorisation before taking either exit
+**A judged criterion needs its perspective and its exemplars named.** *"Does this look like
+`relationships.rs` looks"* is tractable; *"does this align with our patterns"* fails silently.
 
-R10 was used above as the worked instance of *change the goal*. PR #550's disposition shows that is
-not what happened, and the real story names a **third diagnosis that must be ruled out first**.
+**The Gherkin file layer is deliberately skipped** [decided]. The value was the decomposition
+discipline, which the register carries at goal and task level.
 
-R10 recorded *"I cannot assess this citation"* as a refusal the system could not express. It splits:
+**The fixture vocabulary is corrected.** The source research names the executable mode as "rstest +
+sqlx::test". [observed — `rstest` is not a dependency of this workspace: zero `#[rstest]`, `#[case]`,
+`#[fixture]`, `#[values]`, against 1,186 `#[sqlx::test]`, 1,456 `#[test]`, 50 `#[tokio::test]`.] The
+reference entered from an ideation link explicitly stated as not-in-the-repo. **The vocabulary
+survives — `given_entity`, `given_grant`, `emit`, `project_as_of`, `run_to_quiescence` — the framework
+claim does not, and this spec makes no framework decision.** [decided]
 
-- **Evidential inability** — *"the citations do not warrant this"* — was **never a refusal**. It is a
-  **verdict**, a signed value `<= 0`. The standing model already separates *evaluated-but-weak*
-  (carried by quality) from *unevaluated* (carried by the band's coverage-ratio gate); R10 proposed a
-  third state between them, and the three-axis design says there is none.
+## I.6 Enclosure of responsibility — what a clause may not reach
 
-  **And it is not a neutral abstention — it is among the most damning verdicts available.** The
-  auditor's whole role is to say whether an assertion holds up under scrutiny of its evidence, and
-  with what confidence. *"I cannot assess this"* is therefore not *"plausible but not fully warranted
-  by the citations and reasoning"*; it is *"this is incommunicable, or I cannot even evaluate where
-  you derived it."* That is worse, and the value should reflect it.
-- **Structural inability** — the gate `NotFound`s a self-authored citation, so the auditor is
-  *forbidden* to verdict — is real, and survived as D7's conjunct.
+> Criteria that describe the interiority of a thing are framed within the priors that situate them, but
+> they cannot reach beyond or up into the frame of their priors to mutate them. That is an **enclosure
+> of responsibility error**. [decided — Pete, 2026-07-27]
 
-**So the cell was not inexpressible. It was miscategorised**: a verdict filed in the refusal face, and
-a real structural refusal tangled together with it.
+A goal's clauses may say what must be true and what must never become true **for this goal to have been
+achieved well**. They may not say whether pursuing it was right, whether its cost is justified, or
+whether it should be abandoned. That judgment belongs to the engineer, the product manager, the business
+partner weighing cost against churn, or an agent in an explicit meta-goal frame.
 
-**The diagnosis to run before forking**: *is this element the kind of thing I have claimed it is?*
-Forking on a miscategorised cell evolves or changes the wrong thing — here it would have argued for
-building a refusal the system correctly does not have, when the actual repair was to move the concern
-to the verdict space and let the standing model do what it already does.
+**The discipline detects; it does not decide.**
 
-Three diagnoses, in order:
+| Mechanism | May | May not |
+|---|---|---|
+| Closure | Mark a cell unexamined or inexpressible | Decide the goal is not worth closing |
+| The inexpressible intersection | **Surface** the evolve-or-change fork | **Take** it |
+| Witnessing | Show a clause uncovered | Conclude the clause should be dropped |
+| Exercise status | Report that something never ran | Conclude it should not exist |
+| A verification mode | Say a criterion failed | Say the goal was misconceived |
 
-1. **Miscategorised** — the element is not the kind of thing the register claimed. Repair: restate it
-   in the right element. *No fork.*
-2. **Missing affordance** — the element is right and the system cannot do it. → **evolve**.
-3. **Wrongly reaching** — the element is right and the system should not do it. → **change the goal**.
+**Cost, churn and worth stay worth measuring — they are simply not clauses.**
 
-**This is not an ontology feature.** An earlier draft framed the detection narrowly, as situated
-actors failing to resolve against a persona list. That is one instance. The general form needs no
-ontology: *any* register element can hit the edge, and R10 hit it in the refusal face.
-
-#### Where this lands in the closure section
-
-The cell state this produces — **examined-and-inexpressible** — is defined once, with the other three,
-in §3.3. It is deliberately not restated here.
-
-*An earlier draft of this spec restated all four states in both places. Two copies of one enumeration
-is the same drift this document diagnoses, committed inside it; caught by printing the section rather
-than by re-reading it.*
-
-A register with inexpressible cells and no fork recorded against them is incomplete in a way a
-coverage count will not show.
-
-### 3.5 Two disciplines throughout, and they cut against the rest
+## I.7 Two guardrails that cut against everything above
 
 - **Load-bearing intersections only.** Clauses concentrated where drift is catastrophic. *"Forty
   scenarios is spec-fall in a new costume."*
-- **Stated silence as first-class.** *"We are intentionally not specifying X"* is itself a clause of
-  the shared-incompleteness record — the difference between an agent exercising delegated judgment and
-  an agent guessing whether it has any.
+- **Stated silence is first-class.** *"We are intentionally not specifying X"* is itself a clause of the
+  shared-incompleteness record.
 
-**The skill must teach these with equal weight to everything above.** A skill that only teaches how to
-write a register produces exactly the spec-fall it exists to escape. Where **not** to put clauses, why
-"unexamined" is a legitimate answer, and why a named remainder beats a false zero are load-bearing
-content, not caveats.
-
-### 3.6 Enclosure of responsibility — what a clause may not reach
-
-**The outermost constraint on this discipline, and the one an earlier draft of this spec broke.**
-
-> Criteria that describe the interiority of a thing are framed within the priors that situate them,
-> but they cannot reach beyond or up into the frame of their priors to mutate them. That is an
-> **enclosure of responsibility error**.
-
-A goal's clauses live inside a frame its priors establish. They may say what must be true and what
-must never become true **for this goal to have been achieved well**. They may not say whether
-pursuing the goal was the right idea, whether its cost is justified, or whether it should be
-abandoned.
-
-**That judgment is real, necessary, and belongs elsewhere** — to the engineer, the product manager,
-the business partner weighing cost against churn, or an agent reasoning in an explicit *meta-goal*
-frame. Nothing in the disciplined workflow **of a goal** can make it, however well-argued the clause
-is. A clause that invalidates its own container has reached up out of its enclosure.
-
-**The discipline detects; it does not decide.** This distinction runs through the whole document and
-should be read into every mechanism in it:
-
-| Mechanism | What it may do | What it may not do |
-|---|---|---|
-| Closure (§3.3) | Mark a cell unexamined or inexpressible | Decide the goal is not worth closing |
-| The inexpressible intersection (§3.4.2) | **Detect** that the system cannot express an element, and surface the fork | **Take** the fork. Evolve-or-change is decided by whoever owns the frame |
-| Witnessing (§3.2) | Show a clause uncovered | Conclude the clause should be dropped |
-| Exercise status (element 7) | Report that something never ran | Conclude it should not exist |
-| A verification mode (§3.4) | Say a criterion failed | Say the goal was misconceived |
-
-**The error this spec committed.** An earlier draft carried a clause whose stated job was to retire
-the goal if the convention proved too expensive to correct — and built an extended argument around
-it (§9.1). That framing came from the pre-redraft goal body, authored by an earlier working session
-and never ratified; this spec then treated it as a given constraint and amplified it into a named
-clause and a section. Two failures at once: an unratified agent invention read as a decision, and a
-clause reaching up to invalidate the goal that contained it.
-
-**Cost, churn, and worth are still worth measuring** — they are simply not clauses. Where this
-document has such evidence it is now reported as **program-level material the discipline surfaces**
-(§9.1), explicitly not as a criterion, and explicitly not adjudicated here.
+**The skill must teach these with equal weight to everything else.** A skill that only teaches how to
+write a register produces exactly the spec-fall it exists to escape.
 
 ---
 
-## 4. The project ontology
+# Part II — The project taxonomy
 
-### 4.1 What it is, and why it is not configuration
+## II.1 What it is, and why the word matters
 
-The closure discipline is only *computable* where the dimensions it quantifies over are enumerable.
-Temper's own entity model makes them enumerable for Temper. Another project has no such model inside
-temper, so its closure sections are prose and its "unexamined remainder" is unaskable.
+**Taxonomy, not ontology** [decided — Pete, 2026-07-27]. Ontology addresses being and is-ness; taxonomy
+addresses categorisation, labelling, speciation. An information domain is accurately operationalised as
+a taxonomy. Calling it an ontology would imply the categories describe reality rather than our
+labelling of it.
 
-The ontology gives a project that enumeration. It is not configuration: three of its four categories
-are **the register's own elements hoisted from goal scope to project scope**, and the fourth is the
-matrix they generate.
+**And the word is already taken.** [observed — temper publishes a public theory page titled *"Ontology:
+data, intention, information, knowledge"*, four ontological layers each derivable from those below
+(`packages/temper-ui/src/routes/(public)/theory/ontology/+page.svelte`).] Same de-collision problem the
+corpus solved once before, when evidential standing was renamed `evidence` to avoid colliding with
+principal access-standing.
+
+**Why it exists**: closure is only computable where the dimensions it quantifies over are enumerable. A
+project that has not told temper its personas has nothing to enumerate over, so its closure sections are
+prose and its remainder is unaskable.
+
+**Three of its four categories are register elements hoisted from goal scope to project scope**, and the
+fourth is the matrix they generate:
 
 | Category | Register element | Scope |
 |---|---|---|
@@ -442,30 +308,22 @@ matrix they generate.
 | priors and fundamentals | 2 — priors vs. provided, plus constraints | project |
 | scenarios | the closure product — actor × act × state | derived |
 
-### 4.2 Carrier and shape
+## II.2 Carrier and shape
 
-**Doc type `domain` carries every ontology entry. A recognized `open_meta` key names its kind.**
+**Doc type `domain` carries every taxonomy entry. A recognized `open_meta` key names its kind.** [decided]
 
-*Why the doc type carries the kind*: `temper resource list` has no `open_meta` filter — its filters are
-`--type`, `--context`, `--cogmap`, `--title-contains`, `--stage`, `--goal`, `--status`. The closure
-query needs a **complete** enumeration of the domain; filtering client-side over a paged list is the
-truncation trap the skill already warns about. `list --type domain --all` is a complete server-side
-enumeration.
+*Why the doc type carries the kind*: [observed — `resource list` filters on `--type`, `--context`,
+`--cogmap`, `--title-contains`, `--stage`, `--goal`, `--status`, and has **no `open_meta` filter**.] The
+closure query needs a complete enumeration; filtering client-side over a paged list is the truncation
+trap. `list --type domain --all` is complete and server-side.
 
-*Why `domain`*: semantically exact — the closure section quantifies over a domain — and effectively
-free. **Zero rows in `@me/temper`**, eight repo-wide. No collision with the 66 existing `concept` rows.
+*Why `domain`*: semantically exact, and effectively free. [observed — zero rows in `@me/temper`, eight
+repo-wide. No collision with the 66 existing `concept` rows.]
 
-*Why a recognized `open_meta` key rather than a new doc type*: `open_meta.schema.json` already exists
-for exactly this purpose, and states it:
-
-> *"The open tier is generally free-form… This schema documents the keys temper **recognizes** and
-> constrains their shape. A recognized key with a wrong shape is a bug."*
-
-It is already versioned by migration (v1: `keywords` + `descriptor`; v2: `tags`). A new doc type would
-mean an enum change in `base.schema.json`, a per-type schema, a seed, and full MCP + API + CLI parity —
-for browsing affordances an ordinary resource already has.
-
-Three recognized keys:
+*Why a recognized `open_meta` key rather than a new doc type*: `open_meta.schema.json` exists for exactly
+this and says so — *"documents the keys temper recognizes and constrains their shape. A recognized key
+with a wrong shape is a bug."* It is already versioned by migration. A new doc type would mean an enum
+change, a per-type schema, a seed, and full MCP + API + CLI parity.
 
 | Key | Carries |
 |---|---|
@@ -473,614 +331,355 @@ Three recognized keys:
 | `affordance` | the act's topic, on-behalf-of shape, read-vs-mutation character |
 | `prior` | what an actor already knows vs. must supply; project constraints |
 
-**Exactly one of the three keys per entry.** An entry carrying two is a modelling error, not a
-multi-kind entry: a persona that is also an affordance means the act and the actor have been conflated,
-which is precisely the distinction elements 1 and 3 exist to hold apart. The schema should make this
-unrepresentable rather than merely discouraged.
+**Exactly one key per entry** [decided]. Two is a modelling error, not a multi-kind entry: a persona
+that is also an affordance means actor and act have been conflated, which is the distinction elements 1
+and 3 exist to hold apart. The schema should make it unrepresentable.
 
-Exact field lists are an implementation concern for the plan, grounded against
-`crates/temper-workflow/schemas/open_meta.schema.json` at implementation time. Deliberately not
-authored here: a spec-invented field list is stale on arrival and, worse, wins over the prose beside it.
+**Field lists are deliberately not authored here**, and are grounded against
+`crates/temper-workflow/schemas/open_meta.schema.json` at implementation time.
 
-**Ontology entries are ordinary resources**, so edges, supersession, team authorship, and promotion
-into a shared cognitive map are all inherited. Nothing new is built for any of them.
+## II.3 Two axes, both already available
 
-### 4.3 Two orthogonal axes
-
-- **Provenance** — the existing managed enum `temper-provenance` (`user-created` | `llm-discovered`,
-  `base.schema.json`). *"Here are our personas, take our word"* → `user-created`. *"Go research it"* →
-  `llm-discovered`. Import-and-map is `user-created` for the entry and `llm-discovered` for the mapping
-  edges.
-  **Grounded caveat**: sampled across `@me/temper`, `temper-provenance` is absent on roughly 30% of
-  rows (58 `llm-discovered`, 87 `user-created`, 61 absent). It must be **required** for ontology
-  entries, not conventional.
-- **Exercised** — whether a real goal has cited it. No new field; it is the citation relation read
-  backwards.
-  **"Cited" means named by a register** — as a situated actor, an act, or a prior — **not merely
-  referenced.** An ontology entry linked from a session note, a research doc, or another ontology
-  entry is *mentioned*, not exercised. The distinction is the whole point of the axis: exercise
-  status asks whether this entry has done work in an outcome, and a mention is not work.
+- **Provenance** — the existing managed enum `temper-provenance` (`user-created` | `llm-discovered`).
+  *"Here are our personas, take our word"* → `user-created`. *"Go research it"* → `llm-discovered`.
+  **Required on taxonomy entries, not conventional** [decided] — [observed: absent on ~30% of sampled
+  rows today: 58 `llm-discovered`, 87 `user-created`, 61 absent].
+- **Exercised** — whether a real goal has **cited** it. No new field. **"Cited" means named by a
+  register**, not merely referenced: an entry linked from a session note is *mentioned*, not exercised.
 
 An entry that is `llm-discovered` and unexercised is a **proposal**. `user-created` and unexercised is
-**a claim, not yet load-bearing**. Exercised is **doing work**. All three are legitimate.
+**a claim, not yet load-bearing**. Exercised is **doing work**. All three are legitimate, and the pair is
+what lets a research pass be generous without inflating the domain closure computes against.
 
-This pair is what lets a research pass be generous: over-proposing costs nothing when every proposal
-is visibly unexercised until cited.
-
-### 4.4 The discipline must be useful at low resolution
+## II.4 The discipline must be useful at low resolution
 
 A project that can say only *"we have customers and internal admins"* has a legitimate two-entry
-ontology. Coarse domain; the discipline still runs; expressibility pressure sharpens it. This is a
-**design constraint, not a tolerance**: if adoption requires a rich ontology first, the ontology
-becomes a large upfront cost and the convention fails its own why-anchor.
+taxonomy. Coarse domain; the discipline still runs; expressibility pressure sharpens it. **This is a
+design constraint, not a tolerance** [decided] — if adoption requires a rich taxonomy first, it becomes a
+large upfront cost and fails its own why-anchor.
 
 ---
 
-## 5. The citation relation and its two queries
+# Part III — The citation relation
 
-Both directions are set differences over two lists. Nothing is built in substrate.
+## III.1 Two checks, both set differences
 
 **Closure staleness.** A goal's closure declaration records the persona refs it closed over. A persona
 exists whose ref is not in that list ⇒ the declaration is visibly incomplete. Set difference against
-`list --type domain --all`. No timestamps, no watermark.
+`list --type domain --all`.
 
 **Expressibility.** At **authoring** time, not in a sweep: **where a register elects to cite the
-ontology**, its situated actors must resolve to persona refs. One that does not resolve is the signal
-— either the clause is vague, or the project's self-model has a gap and the persona is born
-(`user-created`, unexercised until cited).
+taxonomy**, its situated actors must resolve to persona refs. One that does not resolve is the signal —
+either the clause is vague, or the project's self-model has a gap and the persona is born.
 
-Synchronous-at-authoring is the better property: it puts the discovery at the moment someone is
-already thinking about the outcome, which is the only moment the answer is cheap.
+> **Both checks are conditional, and that is load-bearing.** A register that enumerates its actors **in
+> place** is complete and must not be blocked. An implementation making persona resolution unconditional
+> breaks the standalone property and is wrong. A closure declaration over an in-place enumeration is
+> **outside the query's domain** — reported as such, never silently counted clean.
 
-> **This check is conditional, and that is load-bearing (D1/D3).** A register that enumerates its
-> situated actors **in place** is complete and must not be blocked — a project with no ontology, or a
-> goal whose actors genuinely have no project-scope counterpart, is authoring correctly. Expressibility
-> fires only on the citing form. An implementation that makes persona resolution unconditional breaks
-> the discipline's standalone property and is wrong, however well-intentioned.
->
-> The same conditionality governs closure staleness: a declaration that closed over an in-place
-> enumeration has no persona refs to diff, and is neither stale nor fresh — it is **outside the query's
-> domain**, and must be reported as such rather than silently counted as clean.
+Synchronous-at-authoring is the better property for expressibility: it puts the discovery at the only
+moment the answer is cheap.
 
-> **This closes an open question.** The research document lists *"closure-declaration staleness
-> projection — the ontology-drift falsification is described as computable; the actual projection query
-> shape is unspecified and depends on how closure declarations are encoded (structured section?
-> open_meta? eventually facets?)."* Answered: recognized `open_meta` conventions on `domain`-typed
-> resources, and the query is a set difference.
+## III.2 A defect the first run of this query found
 
-### 5.1 A defect the first run of this query found, in the convention's own plumbing
+**Two spellings of "this task belongs to that goal" exist, and nothing ties them** [observed]:
 
-**Two spellings of "this task belongs to that goal" exist, and nothing ties them.**
-
-- the `advances` **edge**, asserted by `resource create/update --goal`, and the only thing
-  `resource list --goal <ref>` filters on;
+- the `advances` **edge**, the only thing `resource list --goal` filters on;
 - `open_meta.witnesses.goal`, the **citation** the witness convention uses.
 
-They can disagree, silently. Found empirically on 2026-07-26, on the first run of the uncovered-clause
-query: task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` cites goal
-`019f9a34-3306-70d1-b07a-f23c99943751` through `open_meta` and carries **no** `advances` edge. It
-therefore does not appear in `list --goal`, and a clause migration built from that list missed it and
-left a dangling citation.
+[observed — task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` carries the citation and **no edge**, so it is
+invisible to `list --goal`. A clause migration built from that list missed it and left a dangling
+citation. The migration was hand-built by this spec's author an hour after specifying that the query
+should exist; the query caught it on first run.]
 
-**The migration was hand-built by the author of this spec, an hour after specifying that the query
-should exist. The query caught it.** That is the non-vacuity evidence §9 asks for, taken earlier and
-more cheaply than expected, and it is worth more than a green run would have been.
+**Resolution: the citation becomes a facet on the `advances` edge** — a `kb_properties` row with
+`owner_table = 'kb_edges'`. The link is the edge; the clause qualifies the link. [decided — Pete,
+2026-07-26]
 
-This is the audit's own type specimen — same shape, two spellings, nothing linking them — sitting
-inside the mechanism meant to catch it.
-
-#### 5.1.1 Resolution: the citation becomes a facet on the `advances` edge
-
-**Decided 2026-07-26 (Pete).** The clause citation is a `kb_properties` row owned by the `advances`
-edge (`owner_table = 'kb_edges'`). The link is the edge; the clause **qualifies the link**.
-
-Grounding for the decision:
-
-| Fact | Evidence |
+| Grounding | Evidence |
 |---|---|
-| `advances` is a **label** on a `leads_to` edge, not an `edge_kind` | `db_backend.rs:94`; `substrate_read.rs:201` |
-| The goal *link* being an edge and **not** a property is already settled | `keys.rs:20` — `KeyFate::Edge`, for `temper-goal` |
-| `kb_properties` admits `owner_table='kb_edges'`, by design | `canonical_schema.sql:656` — *"§4a edges carry facets"* |
-| The event and payload schema admit `kb_edges` as owner | `property_asserted` · `AnchorTable` enum |
-| Uniqueness is `(owner, key, value) WHERE NOT is_folded` | so N clauses = N rows, no encoding needed |
+| `advances` is a **label** on a `leads_to` edge, not an `edge_kind` | `db_backend.rs:94` · `substrate_read.rs:201` |
+| The goal *link* being an edge and not a property is already settled | `keys.rs:20` — `KeyFate::Edge`, for `temper-goal` |
+| `kb_properties` admits `owner_table='kb_edges'` by design | `canonical_schema.sql:656` — *"§4a edges carry facets"* |
+| Uniqueness is `(owner, key, value)` | N clauses = N rows, no encoding needed |
 
-**Why this over the alternatives.** It makes the divergence **unrepresentable** rather than detected:
-a citation's owner *must* be an edge id, so a citation without an edge cannot exist. That is rung 4
-against a checked-pair's rung 2. Putting the clause in the edge `label` would also work — `label` is
-part of `uq_kb_edges_assertion` — but it puts structure in a string, against this repo's own rule, and
-`list --goal` binds `label = 'advances'` exactly. Making the edge a projection of the `open_meta`
-citation was rejected outright: it reverses `KeyFate::Edge` with no evidence against that decision.
+**Why this over the alternatives**: it makes the divergence **unrepresentable** rather than detected — a
+citation's owner must be an edge id. Putting the clause in the edge `label` would also work but puts
+structure in a string. Making the edge a projection of the citation was rejected: it reverses a decided
+thing with no evidence against it.
 
-#### 5.1.2 The precondition, and why "never run" is not "wrong"
+## III.3 The precondition — never run is not wrong
 
-**Production has zero edge-owned properties.** `kb_resources` 10,590 · `kb_content_blocks` 37 ·
-`kb_edges` **0** · `kb_cogmaps` **0**. No surface can write one: `FacetSetInput` takes a `resource`.
+[observed — production has **zero** edge-owned properties: `kb_resources` 10,590 · `kb_content_blocks`
+37 · `kb_edges` **0** · `kb_cogmaps` **0**. No surface can write one: `FacetSetInput` takes a `resource`.]
 
-**That is a second instance of a confident DDL comment describing something nobody has executed** —
-after `init.rs`'s *"No export layer, deliberately."* One instance was an anecdote; two is the species
-the discipline names, and it is worth recording that the pattern reaches production DDL and not only
-Rust doc comments.
+That is a second instance of a confident DDL comment describing something nobody executed. **But
+unexercised is not wrong** — element 7 exists precisely to convert a never-run artifact from an apparent
+constraint into **open design space**. Edges were always intended to carry facets; the write path was
+never built.
 
-**But unexercised is not wrong.** Element 7 exists precisely to convert a never-run artifact from an
-apparent constraint into **open design space**. Edges were always intended to carry facets; the write
-path simply never got built. So this goal takes on a **precondition**: expand the read and write
-surfaces so an edge can own a property — across MCP, API and CLI, per the standing parity intention.
+**So this goal takes on a precondition**: expand the read and write surfaces for edge-owned properties,
+across MCP, API and CLI. [decided — Pete, 2026-07-26] Task `019fa03a-913b-7141-a173-1c804d9b7ccd`.
 
-The citation moves onto that path once it exists. Until then `open_meta` holds, and the standing rule
-is unchanged: **any query over goal membership must read the citation, not the edge**, because a query
-built on `--goal` silently under-reports.
+Until it lands, `open_meta` holds, and **any query over goal membership must read the citation, not the
+edge** — a query built on `--goal` silently under-reports.
 
-#### 5.1.3 A task either *witnesses* a clause or *enables* one
+## III.4 A task either *witnesses* a clause or *enables* one
 
-Surfaced by 5.1.2's precondition, which is neither evidence nor a clause: it is build work that makes
-a clause witnessable.
+[decided — Pete, 2026-07-26]
 
-The model as inherited says tasks carry witness declarations, full stop. That forces enabling work to
-**pretend to be evidence**, and there is evidence it already did: the deleted child task *"Make the
-material-event set a first-class enumerable object (**unblocks** W2 and W8)"* declared itself a
-witness while its own title says it *unblocks* two others. It witnessed nothing. It was enabling work
-miscast as evidence, and that miscasting is part of how a decomposition pass produced ten unbuildable
-witnesses.
+- **`witnesses`** — this task is the evidence. Subject to the bite requirement and to the rule that no
+  witness precedes its mechanism.
+- **`enables`** — this task builds the mechanism that makes a clause witnessable. Not evidence, not
+  subject to bite, and legitimately filed before the witness exists.
 
-So a task declares one of two relations to a clause:
+Without the split, the rule forbidding premature witnesses would also forbid the work that makes
+witnesses possible.
 
-- **`witnesses`** — this task is the evidence. Subject to the bite requirement and to
-  `no-witness-precedes-its-mechanism`.
-- **`enables`** — this task builds the mechanism that makes a clause witnessable. **Not** evidence,
-  **not** subject to the bite requirement, and legitimately filed before the witness exists — indeed
-  it is what `no-witness-precedes-its-mechanism` implies must exist first.
-
-Without the distinction, the clause forbidding premature witnesses would also forbid the work that
-makes witnesses possible, which is incoherent.
+[observed — the deleted task *"Make the material-event set a first-class enumerable object (**unblocks**
+W2 and W8)"* declared itself a witness while its own title says it unblocks two others. It witnessed
+nothing. Enabling work miscast as evidence.]
 
 ---
 
-## 5.2 The read surface — `temper warmup`, which is the incumbent and is not fit for purpose
-
-§5 specifies two queries and never says what *reads* them. Loop step 1 (§6) says a session opens with
-the criteria-in-force projection and never says how. This section closes that gap.
-
-**The incumbent is `temper warmup`** — self-described as *"Context primer for new sessions."* Do not
-build a second command; the concept already has a name here.
-
-### What it emits today, and why that is the wrong axis
-
-`project` · `recent_sessions` (five titles) · `in_progress_tasks` · **`last_session_content`** — the
-entire previous session note, capped at `MAX_SESSION_LINES = 500`
-(`crates/temper-cli/src/commands/warmup.rs:14`). For a mature context that is ~10 KB of prose.
-
-It carries **no goals, no clauses, no in-force state, no supersessions, no scars, and no project
-fundamentals.**
-
-So it primes on **narrative recency** — what one session chose to write down — rather than on
-**standing state**. That is the archaeology the source research describes, not the fix:
-
-> Sessions open with the projection query: which criteria are in force for this region, which
-> superseded, where the scars are. The 3–4-session reset stops being archaeology.
-
-**Three grounded reasons it is not fit for purpose:**
-
-1. **"The last session" is not *your* last session.** Work here routinely runs several concurrent
-   sessions on different machines. The most recent note is whichever sibling wrote last, from
-   whatever arc it was in. *Demonstrated by this spec's own authoring session*: it opened by reading
-   the most recent session note, which came from another machine and described a branch and a commit
-   that did not exist in the local clone. A primer that leads with that is not merely verbose — it is
-   **actively misleading**, and its confidence scales with how well the sibling writes.
-2. **The constant encodes the wrong goal.** `MAX_SESSION_LINES`'s own comment says *"enough to carry
-   the narrative, short of dominating the primer."* Carrying **a** narrative is the wrong objective
-   when several are in flight.
-3. **It is itself unexercised.** The installed skill references `warmup` exactly once, in
-   `reference.md` — which is *generated from the clap tree*, so it appears because the command exists,
-   not because anything calls it. No session-start routine invokes it. A context primer that the
-   session-start routine does not call is element 7 applied to the read surface, and it explains the
-   drift: nothing exercised the design against real use.
-
-### What it should ground in
-
-**Guidance, goals, and tasks** — standing state, not narrative:
-
-- **Guidance** — the project's ontology (§4): personas, affordances, priors. This is what
-  `guidance/fundamentals.md` has been approximating (§8.1).
-- **Goals** — clauses in force, clauses superseded, and where the scars are.
-- **Tasks** — what is open, and which clause each `witnesses` or `enables`.
-
-**`last_session_content` is dropped.** Not shrunk — dropped. **No previous-session body survives in
-any form** (decided; an earlier draft of this section left it open and floated carrying the previous
-session's open threads instead — that is also rejected).
-
-What survives is **`recent_sessions`: titles and dates only**, which the command already emits, with
-the count **configurable** rather than the fixed `RECENT_SESSION_LIMIT = 5`
-(`crates/temper-cli/src/commands/warmup.rs:18`).
-
-**Why titles are the right resolution, and not a compromise.** A title is a *pointer*; a body is a
-*claim*. Five pointers let a reader recognise which arc is theirs and go read it deliberately —
-which is the correct move when several sessions run concurrently and the most recent one is likely
-someone else's. A body asserts relevance the primer cannot establish, and asserts it first, with the
-authority of being the only prose in the payload. The primer's job is to say what is *in force*; the
-narrative is one `resource show` away for whoever wants it.
-
-This also makes the constant honest. Its sibling `MAX_SESSION_LINES` carries the comment *"enough to
-carry the narrative, short of dominating the primer"* — a budget for a problem that stops existing
-once no narrative is carried. Both constants were flagged by the 2026-06-26 code-quality audit
-(CQ-7) for lacking a stated rationale; one is now deleted rather than documented, and the other
-becomes a user-facing knob, which is its own rationale.
-
-**The payload shape is deliberately not authored here.** A spec-invented field list is stale on
-arrival and wins over the prose beside it (GD-4). What is specified is the *axis*: standing state
-over narrative recency.
-
-### Blast radius: near zero
-
-`WarmupResult` is a CLI-local struct (`crates/temper-cli/src/commands/warmup.rs:37`) with no `ts-rs`
-derives and no OpenAPI presence — `warmup` is a CLI command, not an API route. No consumer of the
-shape was found outside documentation prose and mockups. So this is a change to an output nothing
-depends on, which is a rare and cheap position to be in.
-
-### Reading live is what settles the drift question
-
-If `warmup` reads the ontology live, **there is no projection to drift**. Any on-disk copy becomes an
-offline cache rather than a source — the vault-projection pattern applied one level up, where files
-are derivative and the server is authoritative.
-
-## 6. The workflow vocabulary and the loop
+# Part IV — The workflow vocabulary and the loop
 
 | Member | Role |
 |---|---|
 | **Goal** | Carries the register |
-| **Sub-goal** | A **non-leaf witness** — witnesses named parent clauses; its own witnesses are clauses, not tests. Cites the parent's dimensions and narrows them; never restates |
-| **Task** | A **leaf witness** — carries `witnesses` (goal ref → clauses) and `witness` (id, mode, floor, bites-against) |
+| **Sub-goal** | A non-leaf node — decomposes **clauses** by the meaning test. Names no mechanism |
+| **Task** | A leaf — carries `witnesses` or `enables`, and a witness descriptor |
 | **Research** | Where a grounding pass lands |
 | **Decision** | The supersession vehicle |
-| **Session** | Opens with the criteria-in-force projection; closes by updating exercise status and carrying a status on every closing note |
+| **Session** | Opens with the criteria-in-force projection; closes by updating exercise status |
 
-**Goal, sub-goal and task are one kind of node at three heights, but two different floors govern the
-descent** (§3.2.1, §3.2.2):
+**Research is placed by evidence**: across the audited sessions the expensive findings all came from
+grounding passes, and they had nowhere to live but a session note that then had to be re-read.
 
-- **Goal → sub-goal** is clause decomposition, before the doing. Governed by the **meaning test**:
-  split while the halves can be violated independently. A sub-goal names no mechanism.
-- **Sub-goal → task** is witness decomposition, inside the doing, once mechanism is known. Governed by
-  the **demonstrability floor**, which is where that floor belongs and the only place it can be
-  honestly applied.
+**The two `open_meta` keys already in use stay as they are** [observed — across the 50 most recent tasks
+in `@me/temper`: 9 carry both, 4 carry only the pointer]: `witnesses` = `{goal, clauses, child_of}` is
+the pointer up; `witness` = `{id, mode, clause, floor, bites_against, route}` is the witness describing
+itself. Two concepts, not a drifted spelling.
 
-So *"which am I writing?"* has an answer at both heights, and neither answer is "how big is this."
-A task filed before its mechanism exists is the failure §9.1 records.
+## The loop
 
-**Research is placed by evidence.** The research document leaves it unplaced. Across the audited
-sessions the expensive findings all came from grounding passes, and they had nowhere to live but a
-session note that then had to be re-read to recover them.
-
-**The two `open_meta` keys already in production use** — measured across the 50 most recent tasks in
-`@me/temper`: 9 carry both, 4 carry only the pointer, 0 carry only the descriptor — are kept as-is:
-`witnesses` = `{goal, clauses, child_of}` (the pointer up) and `witness` =
-`{id, mode, clause, floor, bites_against, route}` (the witness describing itself). They are two
-concepts, not a drifted spelling.
-
-### The loop
-
-1. **Open** — the criteria-in-force projection: which clauses hold for this region, which are
-   superseded, where the scars are.
-2. **Author or resume** — write or reload the register: the invariants (what must be true) and the
-   negative face (what must never become true). No mechanism named. The expressibility check fires
-   here.
-3. **Decompose the clauses** — by the meaning test (§3.2.2), not to a demonstrability floor. Stop
-   when halves can no longer be violated independently. A clause whose mechanism is unbuilt carries a
+1. **Open** — the criteria-in-force projection: what holds, what is superseded, where the scars are.
+2. **Author or resume** — the invariants and the negative face. **No mechanism named.** Expressibility
+   fires here.
+3. **Decompose the clauses** — by the meaning test. A clause whose mechanism is unbuilt carries a
    **declared hole**, not a filed task.
 4. **Ground** — a grounding pass lands as research.
-5. **Build — and author the witnesses here.** Mechanism becomes known by building, so this is the
-   first point at which a witness can be written honestly, and it is a **separately authorized act**.
-   Witnesses must bite against a state that exists.
-6. **Contradict** — measurement refutes a clause ⇒ decision, supersession, visible scar. Never a
-   silent edit.
-7. **Close** — exercise status updates to what actually ran; every closing note carries
-   **hard follow** / **accepted** / **for the record** / **nothing**.
+5. **Build — and author the witnesses here.** First honest point; a separately authorized act.
+6. **Contradict** — measurement refutes a clause ⇒ decision, supersession, visible scar. Never a silent
+   edit.
+7. **Close** — exercise status updates; every closing note carries **hard follow** / **accepted** / **for
+   the record** / **nothing**.
 
-> **Steps 3 and 5 were one step in the draft of this spec, and that was the defect.** Collapsing them
-> is what lets a preamble pass emit mechanism-shaped tasks for a mechanism nobody has built.
-
----
-
-## 7. The reach bound — reach by relocation
-
-The research document states the choice as: either the convention's reach extends to the ambient
-corpus, or it *"should say plainly that it does not, so nobody reads a clean register as evidence that
-the environment is clean."*
-
-**Resolution: reach extends by relocation, not by governance.**
-
-The ambient corpus stays explicitly ungoverned, and the skill says so plainly. But the **load-bearing
-content** — who acts, what the system affords, what has run, what the project's priors are — relocates
-into ontology entries that version, supersede, carry provenance, and carry exercise status.
-
-The audit's evidence supports this over gating. Of eight ambient-documentation drift instances, the
-expensive ones were all **ontological claims wearing prose**:
-
-- `temper-telemetry`'s `init.rs` asserted *"No export layer, deliberately … not an omission to tidy
-  up"* — a decision nobody made (repaired, `#540`).
-- `TeamInvitation`'s doc comment asserted a link-based invitation flow that was never built — and that
-  false premise is what made a routing decision look hard (repaired, `#543`).
-- A spec marked *"accepted; all eight decisions settled"* took six corrections on first grounding.
-
-The genuinely-ambient remainder — a stale line in a setup guide — is cheap and stays cheap.
-
-**Why not gate the prose.** Prose has no compiler. A gate could check a marker's *presence*, never its
-*truth* — a rung-1 check by the discipline's own standard, and one that would read as coverage.
-
----
-
-## 8. Where this lands in the shipped skill
-
-`temper skill install` renders the skill from askama templates, parameterized per install
-(`crates/temper-cli/src/commands/skill.rs`). Two existing properties matter:
-
-- The installed `SKILL.md` embeds a **config hash**, and `check_config_hash_staleness` detects when it
-  no longer matches the config it was generated from.
-- `guidance/` is deliberately **the project's namespace**: install creates it and writes nothing
-  there — *"shipping into it would clobber user files on every regen."*
-
-Changes:
-
-- **A new supporting file** carrying the discipline (§3), shipped at the skill root beside
-  `subagent-guidance.md`, `plan-verification.md` and `implementation-grounding.md`. **Not** into
-  `guidance/`.
-- **A router entry** in `SKILL.md`.
-- **`session-lifecycle.md`** gains the criteria-in-force projection at session open (loop step 1).
-- **The summary-statement discipline folds in** at loop step 7 rather than shipping separately —
-  already filed as task `019f9aa5-ec66-7230-812d-4c14b5d7ed58` (backlog, build/small).
+> **Steps 3 and 5 were one step in an earlier draft, and that was the defect.** Collapsing them is what
+> lets a preamble pass emit mechanism-shaped tasks for a mechanism nobody has built.
 
 **This does not become a seventh workflow.** The six `mode × effort` files answer *how much process for
-how big a job*; the register answers *what the outcome is*. They compose — a build/small still has an
-outcome, it just has one clause instead of five.
-
-### 8.1 Three families, and why `guidance/fundamentals.md` keeps getting rewritten
-
-The installed skill mixes three families at one directory level:
-
-| Family | Files today | What it is | Where it should live |
-|---|---|---|---|
-| **The tool** | `reference.md` (generated from the clap tree), `cognitive-maps.md`, `teams.md`, `knowledge-base.md` | How to drive temper | Shipped, generated, universal. Unchanged |
-| **The discipline** | `session-lifecycle.md`, `subagent-guidance.md`, `plan-verification.md`, `implementation-grounding.md`, `workflows/*` | How to work | Shipped, universal, **repo-agnostic**. Where §3 lands |
-| **The project** | `guidance/` — created empty, shape undefined | What *this* project is | See below |
-
-**The observed failure**: across other projects using temper, `guidance/fundamentals.md` has been
-relocated and rewritten by working agents because it was the wrong shape for the repo.
-
-**The mechanism is more specific than "wrong shape."** We name the slot, define no shape, and write
-nothing into it. `install` creates `guidance/` and deliberately never writes there
-(`skill.rs:451`; the comment at `:656`). `SKILL.md` references `guidance/fundamentals.md` three
-times without saying what it contains, and offers `/temper init` — which today initializes a vault
-and ships no template. So the shape is **inferred per project**, from surrounding context that is
-entirely temper-flavoured. In this repository that inference produced a Rust/cargo-make/feature-flags
-document. Elsewhere the same inference is wrong, so the agent rewrites. That is the correct move
-given what it was handed.
-
-**The shape it has been missing is the project ontology** (§4). Personas, affordances, priors — where
-*priors* subsumes what today's fundamentals actually does. A commands table is not wrong; it is **one
-category of prior** (what an actor already knows versus must supply), sitting in a document that
-never named its categories.
-
-**And a durability argument explains the rewriting better than shape does.** A file under
-`~/.claude/skills/temper/guidance/` is per-machine, unversioned, invisible to the team, and shared
-with nobody. Structurally it is a scratch file, so of course it gets rewritten. The same content as
-`domain` resources in a context is versioned, superseded, team-contributable, and promotable into a
-cognitive map. That is the difference between a thing that gets rewritten and a thing that gets
-**amended**.
-
-**Direction**: project guidance lives in temper, and is read live by `warmup` (§5.2). Any on-disk copy
-is an offline cache, not a source — which is what keeps it from drifting.
-
-**Named risk**: a fresh clone with no auth has no project ontology until it pulls. The skill must
-degrade to *"no project ontology yet"* rather than erroring, since §1's standalone property means the
-discipline has to work with none.
+how big a job*; the register answers *what the outcome is*. They compose.
 
 ---
 
-## 9. Verification — how we would know
+# Part V — Where this lands
 
-The discipline demands non-vacuity and bite of everything else, so it owes both of itself.
+## V.1 Three families in the installed skill
 
-- **Non-vacuity.** The closure-staleness query must be shown to return a hole on a goal that genuinely
-  has one. If it returns empty on day one that is not coverage — it is a selector that matched nothing.
-- **Bite.** The expressibility check must be shown to *stop* an author: a register whose actor cannot
-  resolve must refuse to resolve, not quietly accept prose.
-- **Dogfood as the acceptance path.** Temper's own ontology is hand-authored from what the codebase
-  already states — the machine principals, the steward and auditor personas, the human profile, the
-  admin emitter, and the affordances the `Backend` trait already enumerates. Doing that by hand *is*
-  the requirements-gathering for `/temper init` (spec 2).
-- **The honest bound.** These verify that the mechanism works — that the queries bite, that the
-  ontology is authorable. They do **not** verify that adopting the discipline was worthwhile. That is
-  a program-level judgment (§3.6) and no criterion here reaches it. Evidence bearing on it is
-  reported in §9.1 as material for whoever holds that frame, not as a test this goal passes or
-  fails.
+| Family | Files today | Where it should live |
+|---|---|---|
+| **The tool** | `reference.md` (generated from the clap tree), `cognitive-maps.md`, `teams.md`, `knowledge-base.md` | Shipped, generated, universal. Unchanged |
+| **The discipline** | `session-lifecycle.md`, `subagent-guidance.md`, the grounding pair, `workflows/*` | Shipped, universal, **repo-agnostic**. Where Part I lands |
+| **The project** | `guidance/` — created empty, shape undefined | Lives in temper; see below |
 
-### 9.1 Program-level evidence this work surfaced — reported, not adjudicated
+**Why `guidance/fundamentals.md` keeps getting relocated and rewritten in other projects**: we name the
+slot, define no shape, and write nothing into it. [observed — `install` creates `guidance/` and
+deliberately never writes there (`skill.rs:451`); `SKILL.md` references the file three times without
+saying what it contains; `/temper init` ships no template.] The shape is inferred per project from
+surrounding context that is entirely temper-flavoured, so elsewhere the inference is wrong and the agent
+rewrites. That is the correct move given what it was handed.
 
-**Scope note, and it is the point of §3.6.** An earlier draft framed this section as a reading on a
-"kill-switch clause" whose job was to retire the goal if correction proved expensive. That clause has
-been withdrawn: it reached up out of its enclosure, and the framing came from an unratified
-agent-authored line in the pre-redraft goal body rather than from anyone entitled to set it.
+**The shape it has been missing is the project taxonomy.** A commands table is not wrong — it is **one
+category of prior**, in a document that never named its categories.
 
-What remains here is **evidence**, and it is genuinely useful to whoever holds the program frame —
-cost, churn, and what the apparatus did or did not catch. It is recorded because it was paid for.
-**Nothing in this section decides anything**, and no criterion in this spec or in the goal consumes
-it.
+**And a durability argument explains the rewriting better than shape does** [decided — Pete,
+2026-07-27]: a file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible
+to the team — structurally a scratch file. As `domain` resources it is versioned, superseded and
+team-contributable. That is the difference between a thing that gets **rewritten** and a thing that gets
+**amended**.
 
-**One event, and it is the reason §3.2.1 exists.**
+**Named risk**: a fresh clone with no auth has no taxonomy until it pulls. The skill must degrade to
+*"no project taxonomy yet"* rather than erroring.
 
-What happened: a decomposition pass over a register authored against an unbuilt subject produced ten
-witnesses, filed against an explicit instruction not to create unvetted tasks. Grounding showed most
-were **not expressible and not implementable** — they did not fall out of any design, because there
-was no design to fall out of. Six were subsequently deleted; two had already been cancelled with
-reasons; the remainder stand.
+## V.2 The read surface — `temper warmup`, redesigned
+
+**`warmup` is the incumbent** — *"Context primer for new sessions"* — so no second command is built. **It
+is not fit for purpose as designed** [decided — Pete, 2026-07-27]. Three reasons:
+
+1. **It primes on narrative recency.** [observed — it emits `last_session_content`, the whole previous
+   note capped at 500 lines, and carries no goals, no clauses, no in-force state, no scars, no
+   fundamentals.]
+2. **"The last session" is not *your* last session.** Several sessions run concurrently on different
+   machines. [observed — this spec's own authoring session opened on a note from another machine
+   describing a branch and commit that did not exist locally.] A primer leading with that is **actively
+   misleading**, and its confidence scales with how well the sibling writes.
+3. **It is itself unexercised.** [observed — the installed skill references `warmup` exactly once, in
+   `reference.md`, which is *generated from the clap tree*. No session-start routine calls it.]
+
+**What it grounds in instead**: **guidance, goals, and tasks** — standing state.
+
+**`last_session_content` is dropped, not shrunk.** What survives is `recent_sessions` — **titles and
+dates only**, with the count **configurable**. [decided — Pete, 2026-07-27]
+
+**Why titles rather than bodies, and it is not a compromise**: a title is a **pointer**; a body is a
+**claim**. Pointers let a reader recognise which arc is theirs and go read it deliberately. A body
+asserts a relevance the primer cannot establish, first, with the authority of being the only prose in
+the payload.
+
+[observed — blast radius is near zero: `WarmupResult` is a CLI-local struct with no `ts-rs` and no
+OpenAPI presence, and no consumer of the shape was found.]
+
+**Reading live is what settles drift**: any on-disk copy becomes an offline cache, not a source.
+
+## V.3 Changes to the shipped skill
+
+- **A new supporting file** carrying Part I, at the skill root beside `subagent-guidance.md` — **not**
+  into `guidance/`, which is the project's namespace.
+- **A router entry** in `SKILL.md`.
+- **`session-lifecycle.md`** gains the criteria-in-force projection at session open.
+- **The summary-statement discipline folds in** at loop step 7 rather than shipping separately — already
+  filed as task `019f9aa5-ec66-7230-812d-4c14b5d7ed58`.
+
+---
+
+# Part VI — Sequencing
+
+| # | Step | Depends on |
+|---|---|---|
+| 0 | **Precondition** — edge-owned properties get read and write surfaces, MCP + API + CLI | nothing |
+| 1 | The discipline as a shipped skill file plus router entry | nothing |
+| 2 | The recognized `open_meta` conventions — an `open_meta.schema.json` version bump | nothing |
+| 3 | The two checks, **and `warmup` redesigned to consume them** | step 2 |
+| 4 | **Dogfood** — hand-author temper's own taxonomy | steps 1–3 |
+| 5 | Amend goal `019f9a34-3306-70d1-b07a-f23c99943751`'s executable-spine clause | nothing |
+
+Steps 1 and 2 are independent. **Step 0 is not on the critical path for guidance-in-temper** — it serves
+the citation-as-edge-facet work only. Step 4 is where the coverage and bite checks are actually taken.
+
+---
+---
+
+# Appendix A — Decisions
+
+Everything below this line is **supporting evidence and argument**. It is not a constraint.
+
+| # | Decision | Why |
+|---|---|---|
+| D1 | The discipline is the backbone and stands alone | Delivers value with no taxonomy, no init, no substrate change |
+| D2 | Spec covers the discipline, the taxonomy, and the citation relation; init is spec 2 | Building init first automates a flow nobody has run by hand |
+| D3 | Situated actors may be enumerated in place **or** cited | Preserves the standalone property |
+| D4 | Taxonomy entries are `domain`-typed resources with recognized `open_meta` keys | `list` has no `open_meta` filter, so the doc type must carry the kind |
+| D5 | `temper-provenance` is **required** on taxonomy entries | Absent on ~30% of sampled rows; the trust axis cannot ride on a convention |
+| D6 | Exercise status extends to taxonomy entries | Lets a research pass be generous without inflating the domain |
+| D7 | Expressibility fires at authoring time, not in a sweep | Puts discovery at the only moment the answer is cheap |
+| D8 | Reach extends by **relocation**, not governance | Prose has no compiler; a marker-presence gate reads as coverage |
+| D9 | A sub-goal is a non-leaf node decomposing **clauses** | Only the sub-goal→task descent uses the demonstrability floor |
+| D10 | The register is not a seventh mode×effort workflow | Orthogonal axes |
+| D11 | No framework decision on the fixture vocabulary | `rstest` was a think-with reference mistaken for an affordance |
+| D12 | Clauses name no mechanism; witnesses are authored during the build | The *how* is what mutates; bite is vacuous against an absent mechanism |
+| D13 | Witness decomposition is a separately authorized act | An instruction not to decompose was given and did not hold |
+| D14 | Element 8 — the negative face | Nearly every expensive finding was a standing negative with no slot |
+| D15 | The clause-level floor is a meaning test | Granularity of *how* needs judgment; a rule manufactures false precision |
+| D16 | The clause citation is a facet on the `advances` edge | Makes the divergence unrepresentable rather than detected |
+| D17 | A task declares `witnesses` **or** `enables` | Enabling work is not evidence |
+| D18 | The inexpressible intersection has exactly two honest exits | The third — assuming the affordance — is the deeper account of Appendix B's failure |
+| D19 | Closure gains a fourth cell state | Excluded is settled; inexpressible is a pending fork |
+| D20 | Miscategorisation is checked **before** either exit | Forking on a miscategorised cell changes the wrong thing |
+| D21 | Cost and worth are reported, never claimed or adjudicated | Enclosure of responsibility |
+| D22 | `warmup` is the read surface, redesigned rather than extended | It primes on narrative recency; "the last session" is a sibling's |
+| D23 | Project guidance lives in temper; any file is an offline cache | A per-machine unversioned file is structurally a scratch file |
+| D24 | **Enclosure of responsibility** — a clause may not reach up into its frame | The discipline detects; it does not decide |
+| D25 | **Taxonomy, not ontology** | Ontology is being; taxonomy is categorisation. Also collides with temper's published theory page |
+
+# Appendix B — Program-level record
+
+**Reported, not adjudicated.** Cost and churn evidence, kept because it was paid for. Nothing here is a
+criterion and nothing here decides anything.
+
+## B.1 The expensive event, and why the clause-versus-witness rule exists
+
+A decomposition pass over a register authored against an **unbuilt** subject produced ten witnesses,
+filed against an explicit instruction not to create unvetted tasks. Most were **not expressible and not
+implementable** — they did not fall out of any design, because there was no design to fall out of. Six
+were later deleted; two had already been cancelled with reasons.
 
 **Cost: four working sessions on a sibling machine, recovering the original intent.**
 
-Why it does not qualify, stated honestly: no code was written against the clauses, and nothing built
-was discarded. Why it is nevertheless the more serious reading: **the cost was not correcting a
-clause. It was recovering the intent the decomposition had buried** — which is precisely the drift
-this convention exists to prevent, produced by the convention's own instrument.
+The cost was not correcting a clause. It was **recovering the intent the decomposition had buried** —
+the drift this convention exists to prevent, produced by the convention's own instrument.
 
-Against the goal's why-anchor — *"if register-authoring itself becomes ritual costlier than the drift
-it prevents, the goal has failed by its own anchor and should be superseded, not persisted with"* —
-this is the anchor's stated failure condition.
+**The verdict is separable, and weaker than an earlier draft claimed.** That draft asserted the
+register's elements "earned their keep" and cited three findings. Re-examined, **one of three survives**:
 
-**The verdict is separable, and the separation is the finding** — but the separation is weaker than
-an earlier draft of this section claimed, and the correction is recorded rather than edited away.
-
-That draft asserted the register's *elements* "earned their keep on the record" and cited three
-findings. Re-examined against PR #550's disposition of the auditor register, **one of the three
-survives**:
-
-| Claimed attribution | Verdict |
+| Claimed | Verdict |
 |---|---|
-| **Exercise status** found a schedule firing hourly and dying for a day while the spec asserted nothing was deployed | **Holds.** Attributed to element 7 at the time, not retrofitted, and acted on by PR #541 |
-| **The closure discipline** found eight unclassified `domain` event types | **Weakened.** PR #550 marks that section **moot**: the classification existed to serve D3's material-event allow-list, and D3 turned out not to be needed. The discipline correctly found a gap in a mechanism that should not have existed |
-| **Situated actors** — the Set 5 Critical was a situated-actors omission | **Withdrawn.** That was found by a three-lens adversarial review during Set 5 implementation, *before this register existed*. The attribution was retrofitted to strengthen an argument |
+| **Exercise status** found a schedule firing hourly and dying while a spec asserted nothing was deployed | **Holds.** Attributed contemporaneously; acted on by PR #541 |
+| **Closure** found eight unclassified `domain` event types | **Weakened.** PR #550 marks that section moot — the classification served a mechanism that turned out not to be needed |
+| **Situated actors** — the Set 5 authorization critical | **Withdrawn.** Found by adversarial review *before this register existed*. Retrofitted to strengthen an argument |
 
 **And the arc's own conclusion cuts further** (PR #550, addressed to this goal):
 
-> The register apparatus did not produce this arc's useful findings — **reading and executing SQL
-> did**. Every correction that changed the work came from `psql` or `pg_proc` … What caught each
-> round was executing the predicate, not reviewing it.
+> The register apparatus did not produce this arc's useful findings — **reading and executing SQL did**.
+> What caught each round was executing the predicate, not reviewing it.
 
-**What survives of the separation.** One element — exercise status — has a clean, contemporaneous
-attribution and a production consequence. That is enough to say the decomposition instrument and the
-register are separable failures, which is why §3.2.1 changes the instrument. It is **not** enough to
-say the register has earned its cost. On the current record the strongest honest claim is: *one
-element paid for itself once; the rest is unproven, and one arc's findings came from execution rather
-than from the apparatus.*
+**Strongest honest claim**: one element paid for itself once; the rest is unproven; one arc's findings
+came from execution rather than from the apparatus.
 
-That claim is weaker than this spec's existence implies, and it is stated here so nobody has to
-discover the gap by reading PR #550 afterwards.
+## B.2 Two prior warnings that never became rules
 
-**Two prior warnings existed and neither became a rule.** The goal's own C3 section recorded the
-termination worry as a counter-observation (*"a convention that generates work under use is not
-obviously cheap… no stated termination proof"*). Arc 3 concluded *"the ambitious route has no ground
-to build on so the shape evolves too much in unbuilt futures"* and *"the fail-before/pass-after bar is
-trivially met by anything when 'before' means 'unbuilt.'"* Both were written down as observations.
-Neither was written down as a constraint. **§3.2.1 is that constraint.**
+The goal recorded the proliferation worry as a *counter-observation*. A session concluded that *"the
+fail-before/pass-after bar is trivially met by anything when 'before' means unbuilt."* **Both were
+written down as observations. Neither was written down as a constraint.** The negative face and the
+clause-versus-witness rule are that constraint.
 
-**What is still unmet.** The reading the clause actually specified — a supersession *after code* —
-remains untaken, and this spec does not supply it.
+## B.3 Corrections this document made to itself
 
----
+- An earlier draft wrote *"nothing shows it expanding faster than it closes."* **That was false when
+  written.** Left as a visible scar rather than edited away.
+- An earlier draft restated the closure cell states in **two places**. Two copies of one enumeration is
+  the drift this document diagnoses, committed inside it.
+- An earlier draft carried a clause whose job was to **retire the goal** if correction proved
+  expensive — carried forward unratified from the pre-redraft goal body, then amplified into a named
+  clause and a section. Withdrawn as an enclosure error; decision
+  `019fa343-d423-72e2-96a2-2cd122410ba3`.
+- This document was **1,087 lines, 67% prose**, before this rewrite. Verbosity is not only a reading
+  cost: exposition is where unratified assertions hide, because prose reads as uniformly agreed.
 
-## 10. Decisions taken
+# Appendix C — Open questions and stated silence
 
-| # | Decision | Rationale |
-|---|---|---|
-| D1 | The discipline is the backbone and stands alone | It delivers value with no ontology, no init flow, no substrate change. The ontology is an enhancement, never a prerequisite |
-| D2 | Spec covers parts 1, 2, 4; init is spec 2; cogmap deferred | Building init first automates a flow nobody has run by hand |
-| D3 | Situated actors may be enumerated in place **or** cited | Preserves D1. Citation buys computable staleness; in-place remains a complete register |
-| D4 | Ontology entries are `domain`-typed resources with recognized `open_meta` keys | `list` has no `open_meta` filter, so the doc type must carry the kind for the enumeration to be complete. `open_meta.schema.json` already exists to constrain recognized keys |
-| D5 | `temper-provenance` is **required** on ontology entries | It is absent on ~30% of sampled rows today; the trust axis cannot ride on a conventional field |
-| D6 | Exercise status extends to ontology entries | Lets a research pass be generous without inflating the domain closure is computed against |
-| D7 | Expressibility fires at authoring time, not in a sweep | Puts discovery at the only moment the answer is cheap |
-| D8 | Reach extends by relocation, not governance | Prose has no compiler; a marker-presence gate would read as coverage. The load-bearing content moves instead |
-| D9 | Sub-goals need no new mechanism — a sub-goal is a non-leaf node in the same tree | Amended by D12/D15: a sub-goal decomposes **clauses** by the meaning test, before the doing. Only the sub-goal→task descent is witness decomposition, and only that descent uses the demonstrability floor |
-| D10 | The register does not become a seventh mode×effort workflow | Orthogonal axes: how much process vs. what the outcome is |
-| D11 | No framework decision on the fixture vocabulary | The `rstest` claim was a think-with reference mistaken for an affordance. The vocabulary survives; the framework claim does not |
-| D12 | **Clauses are invariants and name no mechanism; witnesses name mechanism and are authored during or after the doing** | The *how* is what mutates. Ten mechanism-shaped witnesses over an unbuilt subject cost four sessions (§9.1). The bite requirement proves the timing: "fails against current state" is vacuous when the mechanism does not exist |
-| D13 | **Witness decomposition is a separately authorized act, inside the build** | The register's shape invites decomposition and an author will decompose. An explicit instruction not to was given and not held, so the constraint must be structural, not instructional |
-| D14 | **Element 8 — the negative face:** what must never become true | Distinct from the refusal face (acts declined) and from the three-way Then (positive postconditions). Nearly every expensive finding in the audited window was a standing negative that no element had a slot for |
-| D15 | **The clause-level floor is a meaning test — split when halves can be violated independently** | The demonstrability floor cannot govern clause splitting once witnesses come later. Granularity of *how* needs judgment; a hard rule there manufactures false precision. The demonstrability floor survives, relocated to witness decomposition |
-| D16 | **The clause citation is a facet on the `advances` edge** (`kb_properties`, `owner_table='kb_edges'`) | Makes the two-spellings divergence *unrepresentable* rather than detected — rung 4, not rung 2. The link is the edge (settled by `KeyFate::Edge`); the clause qualifies the link. Alternatives put structure in a string or reverse a decided thing |
-| D17 | **A task declares `witnesses` OR `enables`** | Enabling work is not evidence. Without the split, `no-witness-precedes-its-mechanism` would forbid the very work that makes witnesses possible. Evidenced: the deleted "material-event set (**unblocks** W2 and W8)" task declared itself a witness and witnessed nothing |
-| D18 | **The inexpressible intersection is first-class, with exactly two honest exits** — evolve the system (`enables` task) or change the goal (supersession) | The third exit, assuming the affordance, is the deeper account of §9.1: a register met the edge of what the system could express and hallucinated it. Both honest exits already have worked instances (edge facets; R10) and neither was recognised as a fork |
-| D19 | **Closure gains a fourth cell state — examined-and-inexpressible** | *Excluded-with-reason* is settled; *inexpressible* is a pending fork. Collapsing them makes a waiting cell look decided, which is how the third exit gets taken by default |
-| D20 | **Miscategorisation is checked before either exit is taken** | R10 was not inexpressible — it was a verdict filed in the refusal face, tangled with a real structural refusal. Forking on a miscategorised cell evolves or changes the wrong thing. Three diagnoses, in order: miscategorised (no fork) · missing affordance (evolve) · wrongly reaching (change the goal) |
-| D21 | **Cost and worth are reported, never claimed or adjudicated** (§3.6) | Of three element-attributions an earlier draft made, one holds (exercise status), one is weakened (closure found a gap in a mechanism PR #550 marks moot), one is withdrawn (the Set 5 Critical predates the register). PR #550's own conclusion is that this arc's findings came from executing SQL, not from the apparatus |
-| D22 | **`temper warmup` is the read surface, and it is redesigned rather than extended** | It already owns "context primer for new sessions", so the concept has a name here. But it primes on narrative recency: with several concurrent sessions, "the last session" is whichever sibling wrote last — demonstrated by this spec's own session, which opened on a note describing a branch that did not exist locally. It grounds in guidance, goals and tasks instead. **No previous-session body survives in any form** — `last_session_content` is dropped, and `recent_sessions` keeps titles and dates only, with the count made configurable. A title is a pointer; a body is a claim the primer cannot establish the relevance of |
-| D23 | **Project guidance lives in temper; any file is an offline cache** | A file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible to the team, so it is structurally a scratch file and gets rewritten. As `domain` resources it is versioned, superseded and team-contributable — it gets *amended*. Reading live is also what removes the drift a projection would introduce |
-| D24 | **Enclosure of responsibility: a clause may not reach up into the frame its priors set** | A goal's criteria say whether it was achieved well, never whether pursuing it was right. Abandonment, cost and churn belong to the engineer, the product or business partner, or an agent in an explicit meta-goal frame. An earlier draft carried a clause whose job was to retire the goal — carried forward unratified from the pre-redraft goal body, then amplified into a named clause and a section. The discipline **detects**; it does not **decide** |
+## C.1 Still open
 
----
-
-## 11. Open questions
-
-**Closed by this spec:**
-
-- *Closure-declaration staleness projection* — the query shape is specified (§5).
-- *Reach bound* — resolved as relocation (§7).
-
-**Still open, carried forward unchanged:**
-
-- **Witnessing economics, measured as revision cost.** Still unmeasured. **Re-scoped by §3.6**: this is program-level material, not a criterion — it informs whoever decides whether to keep investing, and no clause here adjudicates it.
-- **Clause-count discipline** — what "load-bearing intersections only" means operationally at
-  authoring time. Heuristic ceiling, or judgment?
+- **Witnessing economics, measured as revision cost.** Unmeasured. Program-level material, not a
+  criterion.
+- **Clause-count discipline** — what "load-bearing intersections only" means operationally.
 - **Evidential refusal ground** — whether refusal on evidential state is a third ground alongside
-  standing and commitment, or a commitment sub-flavor.
-- **M2M recourse** — what rung-3 recourse means for a machine actor.
-- **The register's authoring cost** — the convention must be cheaper than the drift it prevents.
-- **Generated scenario prose** — deferred; only worth building if a stakeholder audience materializes.
+  standing and commitment.
+- **M2M recourse** — what recourse means for a machine actor.
+- **Where the granularity of *how* is communicated** up and down a decomposition ladder. Named as open
+  because the meaning test deliberately leaves it to judgment.
+- **Whether the negative face is one element or an arm of the three-way Then.**
+- **Goal membership has two spellings** and nothing ties them until the edge-facet work lands.
 
-**Closed by evidence during this spec's own authoring:**
+## C.2 Stated silence — deliberately not specified
 
-- **Termination of witness generation.** An earlier draft of this section read: *"Nothing shows it
-  expanding faster than it closes; named so a later reader checks rather than assumes."* **That is
-  false, and it was false when written.** The check came back positive — see §9.1. The resolution is
-  §3.2.1: witnesses are not authored up front, so they cannot proliferate up front.
-  Left as a visible scar rather than an edit, because a spec about drift that silently corrected its
-  own would be the specimen.
+`temper init`'s research flow · the taxonomy as a cognitive map with a charter-telos · promotion of
+criteria to substrate mechanics · a parametrized-test framework · governing the ambient corpus · any
+application outside temper development until this is dogfooded here.
 
-**Still open, and newly opened:**
+## C.3 Named remainders — examined and deferred
 
-- **Where the granularity of *how* is communicated.** §3.2.2 makes clause splitting a judgment
-  question on purpose. That leaves genuinely unresolved how the right granularity of mechanism is
-  conveyed up and down a decomposition ladder — the thing that most needs subjective judgement and
-  most resists a hard boundary. No mechanism is proposed here; naming it as open is the honest state.
-- **Goal membership has two spellings** (§5.1) — the `advances` edge and `open_meta.witnesses.goal` —
-  and nothing ties them. Found by the first run of the uncovered-clause query, on a migration the
-  author of this spec had just built by hand. Three resolutions are named in §5.1; none is costed.
-- **Whether the negative face is one element or an arm of the three-way Then.** Element 8 is
-  introduced as standing rather than act-scoped (§3.1). A standing negative outlives any act, which is
-  what regressions are — but it has not been exercised in a real register yet, and the first one may
-  argue for folding it into element 4.
-
----
-
-## 12. Non-goals — stated silence
-
-Deliberately not specified here:
-
-- **`/temper init`'s research flow** — spec 2, and named as such.
-- **The ontology as a cognitive map with a charter-telos** — examined and deferred. Edges and tagging
-  carry it for now.
-- **Promotion of criteria to substrate mechanics** (criteria as first-class resources with an
-  in-force/superseded lifecycle). Unchanged from the research document: deliberately deferred.
-- **A parametrized-test framework** — see D11.
-- **Governing the ambient corpus** — see D8; declared out of scope rather than silently omitted.
-- **Any application outside Temper development** until the discipline has been dogfooded here.
-
----
-
-## 13. Sequencing
-
-0. **Precondition — edge-owned properties get a read and write surface** (§5.1.2). Nothing has ever
-   written one; `FacetSetInput` takes a `resource`. MCP + API + CLI, per the standing parity
-   intention. Everything in §5.1.1 waits on this, and nothing else here does.
-1. The discipline as a shipped skill file plus router entry (§3, §8) — self-contained, no dependency
-   on anything below.
-2. The recognized `open_meta` conventions (§4.2) — an `open_meta.schema.json` version bump.
-3. The two queries (§5), **and the read surface that consumes them** — `temper warmup` redesigned per
-   §5.2. Named as its own step because the spec previously specified two queries and nothing that
-   read them, which is a declaration with no consumer: the defect this document spends §5.1 on.
-4. Dogfood: hand-author Temper's own ontology (§9), which produces spec 2's requirements.
-5. **Redraft goal `019f9a34-3306-70d1-b07a-f23c99943751` as an outcome register under this
-   discipline** — the first register authored against a subject with **no incumbent substrate**, which
-   is the test that goal's own overfit clause asks for. It must:
-   - preserve the accumulated discovery — the three revision-cost data points, the superseded pilot
-     subject, and the named remainders (the greenfield instance, the third refusal ground);
-   - amend the executable-spine clause per §3.4.1;
-   - record §9.1's verdict as a clause, not a footnote;
-   - carry an element-8 negative face, which the current goal has nowhere to put;
-   - migrate the four live clause citations (`019f9bcf-bdba-…`, `019f9bcf-e4ba-…`, `019f9a34-c8ca-…`,
-     `019f9a34-8098-…`) and give clauses **readable names rather than letter-number indices**, since an
-     index carries no information to a reader who does not have the document open.
-
-   Landed through a **decision** resource — the discipline's own supersession vehicle — not as an
-   in-place edit.
-
-Steps 1 and 2 are independent and can land in either order. Step 3 depends on 2. Step 4 depends on all
-three and is where the non-vacuity and bite checks in §9 are actually taken. Step 5 depends on nothing
-technical and can run at any point; it is sequenced last because a register written before §3.2.1 was
-understood is what §9.1 records.
+- **The greenfield instance.** The steward promotion-to-action gate remains the designated subject for a
+  register written with no incumbent, and the only one that can settle whether evidential refusal is a
+  genuine third ground.
+- **The two-versus-three-ground refusal taxonomy** therefore stays open.
