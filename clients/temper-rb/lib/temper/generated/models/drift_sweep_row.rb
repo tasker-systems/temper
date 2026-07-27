@@ -16,13 +16,16 @@ require 'time'
 module Temper::Generated
   # One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark. Ordered most-drifted-first by the sweep (`steward_drift_sweep`).
   class DriftSweepRow < ApiModelBase
+    # Whether this map is in the sweep on the *boundary* arm rather than the counted one — its change-detection scope moved without emitting countable events. Explains a row whose `new_resources` is below the sweep's threshold (including zero).  The fingerprint *value* deliberately does not ride this row. The only consumer of a fingerprint is `steward_advance_watermark`, and the value it must store is the one from the delta the run actually processed ([`IngestDelta::boundary_fingerprint`]) — a sweep-time value is older, and storing it would mark a boundary state no run ever saw, swallowing any move between sweep and run.
+    attr_accessor :boundary_moved
+
     # The team-joined cogmap that drifted.
     attr_accessor :cogmap_id
 
     # All events anchored to the team's contexts since the watermark (total activity).
     attr_accessor :new_events
 
-    # Newly-created resources in the team's contexts since the watermark (the gated ingest signal).
+    # Newly-created resources in the team's contexts since the watermark (the counted ingest signal).
     attr_accessor :new_resources
 
     # The watermark the delta was computed against; `None` when the steward has never run for it.
@@ -31,6 +34,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'boundary_moved' => :'boundary_moved',
         :'cogmap_id' => :'cogmap_id',
         :'new_events' => :'new_events',
         :'new_resources' => :'new_resources',
@@ -51,6 +55,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'boundary_moved' => :'Boolean',
         :'cogmap_id' => :'String',
         :'new_events' => :'Integer',
         :'new_resources' => :'Integer',
@@ -81,6 +86,12 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'boundary_moved')
+        self.boundary_moved = attributes[:'boundary_moved']
+      else
+        self.boundary_moved = nil
+      end
+
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
       else
@@ -109,6 +120,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if @boundary_moved.nil?
+        invalid_properties.push('invalid value for "boundary_moved", boundary_moved cannot be nil.')
+      end
+
       if @cogmap_id.nil?
         invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
       end
@@ -128,10 +143,21 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if @boundary_moved.nil?
       return false if @cogmap_id.nil?
       return false if @new_events.nil?
       return false if @new_resources.nil?
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] boundary_moved Value to be assigned
+    def boundary_moved=(boundary_moved)
+      if boundary_moved.nil?
+        fail ArgumentError, 'boundary_moved cannot be nil'
+      end
+
+      @boundary_moved = boundary_moved
     end
 
     # Custom attribute writer method with validation
@@ -169,6 +195,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          boundary_moved == o.boundary_moved &&
           cogmap_id == o.cogmap_id &&
           new_events == o.new_events &&
           new_resources == o.new_resources &&
@@ -184,7 +211,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, new_events, new_resources, watermark].hash
+      [boundary_moved, cogmap_id, new_events, new_resources, watermark].hash
     end
 
     # Builds the object from hash

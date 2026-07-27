@@ -1682,12 +1682,22 @@ pub enum StewardCmd {
         #[arg(long)]
         threshold: Option<i64>,
     },
-    /// Advance the ingest watermark to a given event id — the cursor a completed run records.
+    /// Record a completed run's cursors: how far it read, and what shape its scope had.
+    ///
+    /// Both are optional. Omitting the event leaves the watermark where it is — the correct
+    /// invocation for a run that fired on a moved boundary with an empty event window, which has no
+    /// event id to advance to and must still be able to record its boundary.
     AdvanceWatermark {
         /// The team-self-cognition cogmap, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
-        /// The `kb_events.id` (UUID) to advance the watermark to.
-        event: String,
+        /// The `kb_events.id` (UUID) to advance the watermark to — the delta's `max_event_id`.
+        /// Omit for a boundary-only advance (the delta's `max_event_id` was null).
+        event: Option<String>,
+        /// The `boundary_fingerprint` from the delta this run processed. Omit only if you have
+        /// none: the server then settles the boundary to its shape at write time, which is still a
+        /// settle but silently absorbs any boundary change during the run.
+        #[arg(long)]
+        boundary_fingerprint: Option<String>,
     },
 }
 

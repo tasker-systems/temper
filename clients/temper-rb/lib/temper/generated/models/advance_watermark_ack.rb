@@ -14,17 +14,21 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Acknowledgement for a watermark advance.
+  # Acknowledgement for a watermark advance — **the cursors as stored**, read back from the UPDATE itself (`RETURNING`), never an echo of the request.  The difference is load-bearing. Both fields are optional on the way in and both have a server-side rule applied to them (an absent `event_id` leaves the watermark put; an absent `boundary_fingerprint` falls back to the write-time boundary), so echoing the input would report a state that may not exist. A caller — and a test — can compare these against what it sent and see exactly which rule fired.
   class AdvanceWatermarkAck < ApiModelBase
-    # The cogmap whose watermark advanced.
+    # The boundary fingerprint now stored. Never `None` after a successful advance: the fallback computes one when the caller supplies none, precisely so the boundary cannot stay unsnapshotted.
+    attr_accessor :boundary_fingerprint
+
+    # The cogmap whose cursors were written.
     attr_accessor :cogmap_id
 
-    # The watermark it now holds.
+    # The watermark now stored. `None` when the cogmap has never had one — which a boundary-only advance (no `event_id`) does not change.
     attr_accessor :watermark
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'boundary_fingerprint' => :'boundary_fingerprint',
         :'cogmap_id' => :'cogmap_id',
         :'watermark' => :'watermark'
       }
@@ -43,6 +47,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'boundary_fingerprint' => :'String',
         :'cogmap_id' => :'String',
         :'watermark' => :'String'
       }
@@ -51,6 +56,8 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'boundary_fingerprint',
+        :'watermark'
       ])
     end
 
@@ -70,6 +77,10 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'boundary_fingerprint')
+        self.boundary_fingerprint = attributes[:'boundary_fingerprint']
+      end
+
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
       else
@@ -78,8 +89,6 @@ module Temper::Generated
 
       if attributes.key?(:'watermark')
         self.watermark = attributes[:'watermark']
-      else
-        self.watermark = nil
       end
     end
 
@@ -92,10 +101,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
       end
 
-      if @watermark.nil?
-        invalid_properties.push('invalid value for "watermark", watermark cannot be nil.')
-      end
-
       invalid_properties
     end
 
@@ -104,7 +109,6 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @cogmap_id.nil?
-      return false if @watermark.nil?
       true
     end
 
@@ -118,21 +122,12 @@ module Temper::Generated
       @cogmap_id = cogmap_id
     end
 
-    # Custom attribute writer method with validation
-    # @param [Object] watermark Value to be assigned
-    def watermark=(watermark)
-      if watermark.nil?
-        fail ArgumentError, 'watermark cannot be nil'
-      end
-
-      @watermark = watermark
-    end
-
     # Checks equality by comparing each attribute.
     # @param [Object] Object to be compared
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          boundary_fingerprint == o.boundary_fingerprint &&
           cogmap_id == o.cogmap_id &&
           watermark == o.watermark
     end
@@ -146,7 +141,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, watermark].hash
+      [boundary_fingerprint, cogmap_id, watermark].hash
     end
 
     # Builds the object from hash

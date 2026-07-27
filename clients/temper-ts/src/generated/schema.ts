@@ -1578,26 +1578,49 @@ export interface components {
             profile_id: string;
             role: components["schemas"]["TeamRole"];
         };
-        /** @description Acknowledgement for a watermark advance. */
+        /**
+         * @description Acknowledgement for a watermark advance — **the cursors as stored**, read back from the UPDATE
+         *     itself (`RETURNING`), never an echo of the request.
+         *
+         *     The difference is load-bearing. Both fields are optional on the way in and both have a server-side
+         *     rule applied to them (an absent `event_id` leaves the watermark put; an absent
+         *     `boundary_fingerprint` falls back to the write-time boundary), so echoing the input would report a
+         *     state that may not exist. A caller — and a test — can compare these against what it sent and see
+         *     exactly which rule fired.
+         */
         AdvanceWatermarkAck: {
             /**
+             * @description The boundary fingerprint now stored. Never `None` after a successful advance: the fallback
+             *     computes one when the caller supplies none, precisely so the boundary cannot stay unsnapshotted.
+             */
+            boundary_fingerprint?: string | null;
+            /**
              * Format: uuid
-             * @description The cogmap whose watermark advanced.
+             * @description The cogmap whose cursors were written.
              */
             cogmap_id: string;
             /**
              * Format: uuid
-             * @description The watermark it now holds.
+             * @description The watermark now stored. `None` when the cogmap has never had one — which a boundary-only
+             *     advance (no `event_id`) does not change.
              */
-            watermark: string;
+            watermark?: string | null;
         };
         /** @description Request body for `POST /api/steward/{cogmap}/watermark`. */
         AdvanceWatermarkRequest: {
             /**
-             * Format: uuid
-             * @description The `kb_events.id` to advance the watermark to.
+             * @description The boundary fingerprint the run observed ([`IngestDelta::boundary_fingerprint`]). Optional,
+             *     but supplying it is the correct path — see
+             *     [`StewardAdvanceWatermarkInput::boundary_fingerprint`] for what the fallback gives up.
              */
-            event_id: string;
+            boundary_fingerprint?: string | null;
+            /**
+             * Format: uuid
+             * @description The `kb_events.id` to advance the watermark to. Optional: a boundary-only advance (an empty
+             *     event window) supplies none and the watermark stays put. See
+             *     [`StewardAdvanceWatermarkInput::event_id`].
+             */
+            event_id?: string | null;
         };
         /**
          * @description Per-act agent-authorship metadata — rides in `kb_events.metadata`, NOT the payload, so it is
@@ -2494,6 +2517,18 @@ export interface components {
          */
         DriftSweepRow: {
             /**
+             * @description Whether this map is in the sweep on the *boundary* arm rather than the counted one — its
+             *     change-detection scope moved without emitting countable events. Explains a row whose
+             *     `new_resources` is below the sweep's threshold (including zero).
+             *
+             *     The fingerprint *value* deliberately does not ride this row. The only consumer of a
+             *     fingerprint is `steward_advance_watermark`, and the value it must store is the one from the
+             *     delta the run actually processed ([`IngestDelta::boundary_fingerprint`]) — a sweep-time value
+             *     is older, and storing it would mark a boundary state no run ever saw, swallowing any move
+             *     between sweep and run.
+             */
+            boundary_moved: boolean;
+            /**
              * Format: uuid
              * @description The team-joined cogmap that drifted.
              */
@@ -2505,7 +2540,7 @@ export interface components {
             new_events: number;
             /**
              * Format: int64
-             * @description Newly-created resources in the team's contexts since the watermark (the gated ingest signal).
+             * @description Newly-created resources in the team's contexts since the watermark (the counted ingest signal).
              */
             new_resources: number;
             /**
@@ -2809,16 +2844,44 @@ export interface components {
         IngestCreateResponse: components["schemas"]["ResourceRow"] | components["schemas"]["SegmentedBeginResponse"];
         /**
          * @description The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the
-         *     steward's cron pulls. `new_resources` is the gated metric (an *ingest* threshold); `new_events`
-         *     is the broader activity count for context.
+         *     steward's cron pulls. `new_resources` is the counted ingest metric; `new_events` is the broader
+         *     activity count for context; `boundary_moved` is the *uncounted* signal — the steward's scope
+         *     itself changed shape.
+         *
+         *     The two signals are independent by construction. The counts measure events **inside**
+         *     `steward_team_contexts` (team-OWNED ∪ SHARED contexts); the boundary is that set itself. Sharing a
+         *     context into a joined team writes a `kb_team_contexts` row and emits **no event**
+         *     (`context_service`: "Context creation is a plain INSERT (no event emission — product decision 5:
+         *     contexts are infrastructure)"), so a whole context of material can enter scope with every count
+         *     still zero. That is what [`Self::boundary_fingerprint`] and [`Self::boundary_moved`] observe.
          */
         IngestDelta: {
+            /**
+             * @description The fingerprint of the cogmap's change-detection boundary **as computed for this read** — the
+             *     value a completed run passes back to `steward_advance_watermark` (alongside `max_event_id`) to
+             *     record the boundary it actually processed. Carry this one; do not recompute or substitute
+             *     another read's, or a boundary move that happened in between is silently swallowed.
+             */
+            boundary_fingerprint?: string | null;
+            /**
+             * @description Whether the boundary changed since the fingerprint the cogmap has stored — i.e. contexts
+             *     entered or left the steward's scope without emitting a countable event. `true` when nothing
+             *     was ever snapshotted (a NULL stored fingerprint is "unknown", and unknown means run).
+             */
+            boundary_moved: boolean;
             /**
              * Format: uuid
              * @description The cogmap whose team-context ingest this measures.
              */
             cogmap_id: string;
-            /** @description Whether `new_resources >= threshold` — i.e. the steward should run. */
+            /**
+             * @description **The decision: should the steward run?** `new_resources >= threshold || boundary_moved`.
+             *
+             *     It is deliberately NOT a restatement of the count comparison, so a `true` sitting next to
+             *     `new_resources: 0` is not a bug — it is the boundary arm firing. Read the two inputs
+             *     separately when you want the reason: `new_resources`/`threshold` for the counted arm,
+             *     [`Self::boundary_moved`] for the uncounted one.
+             */
             exceeds_threshold: boolean;
             /**
              * Format: uuid

@@ -18,16 +18,34 @@ pub fn delta(cogmap_ref: &str, threshold: Option<i64>, fmt: OutputFormat) -> Res
     Ok(())
 }
 
-/// `temper steward advance-watermark <cogmap> <event>`.
-pub fn advance_watermark(cogmap_ref: &str, event_ref: &str, fmt: OutputFormat) -> Result<()> {
+/// `temper steward advance-watermark <cogmap> [event] [--boundary-fingerprint FP]`.
+///
+/// An omitted event is a boundary-only advance, not a mistake — see the `AdvanceWatermark` clap doc.
+/// A *supplied* event that does not parse is still an error; "optional" applies to absence only.
+pub fn advance_watermark(
+    cogmap_ref: &str,
+    event_ref: Option<&str>,
+    boundary_fingerprint: Option<String>,
+    fmt: OutputFormat,
+) -> Result<()> {
     let cogmap = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
-    let event_id = temper_workflow::operations::parse_ref(event_ref)
-        .map_err(|e| TemperError::Config(format!("invalid event id: {e}")))?
-        .0;
+    let event_id = event_ref
+        .map(|r| {
+            temper_workflow::operations::parse_ref(r)
+                .map(|parsed| parsed.0)
+                .map_err(|e| TemperError::Config(format!("invalid event id: {e}")))
+        })
+        .transpose()?;
 
     let ack = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            crate::actions::steward::advance_watermark_api(client, cogmap, event_id).await
+            crate::actions::steward::advance_watermark_api(
+                client,
+                cogmap,
+                event_id,
+                boundary_fingerprint,
+            )
+            .await
         })
     })?;
 

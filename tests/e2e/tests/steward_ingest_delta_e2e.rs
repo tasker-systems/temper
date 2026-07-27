@@ -60,7 +60,17 @@ async fn delta_read_surface_round_trips_through_real_server(pool: sqlx::PgPool) 
     assert_eq!(delta.new_resources, 0, "no team-context ingest yet");
     assert_eq!(delta.new_events, 0);
     assert_eq!(delta.threshold, DEFAULT_STEWARD_INGEST_THRESHOLD);
-    assert!(!delta.exceeds_threshold, "0 < default threshold");
+    // The boundary half of the trigger round-trips too. L0 has never been snapshotted, and NULL is
+    // "unknown", not "unchanged" — so the decision fires on the boundary arm with nothing counted.
+    assert!(
+        delta.boundary_fingerprint.is_some(),
+        "the live fingerprint rides the wire — it is what a completed run stores back"
+    );
+    assert!(delta.boundary_moved, "never snapshotted → moved");
+    assert!(
+        delta.exceeds_threshold,
+        "0 < default threshold, but exceeds_threshold is the DECISION: the boundary arm carries it"
+    );
 
     // The explicit threshold query param round-trips.
     let with_threshold = app
@@ -70,7 +80,11 @@ async fn delta_read_surface_round_trips_through_real_server(pool: sqlx::PgPool) 
         .await
         .expect("delta with explicit threshold should succeed");
     assert_eq!(with_threshold.threshold, 1);
-    assert!(!with_threshold.exceeds_threshold, "0 < 1");
+    assert!(
+        with_threshold.exceeds_threshold,
+        "0 < 1 on the counted arm, but L0's boundary is still unsnapshotted — the threshold param \
+         moves the count comparison, never the boundary one"
+    );
 
     // A cogmap the principal cannot read → deny → 404 (no existence oracle) → client error.
     let unreadable = Uuid::from_u128(0xdead_beef);
@@ -92,7 +106,7 @@ async fn advance_watermark_route_is_wired(pool: sqlx::PgPool) {
     let err = app
         .client
         .steward()
-        .advance_watermark(Uuid::from_u128(0xdead_beef), Uuid::from_u128(1))
+        .advance_watermark(Uuid::from_u128(0xdead_beef), Some(Uuid::from_u128(1)), None)
         .await;
     assert!(err.is_err(), "advancing an unauthorable cogmap is rejected");
 }

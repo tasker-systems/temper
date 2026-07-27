@@ -16,12 +16,16 @@ require 'time'
 module Temper::Generated
   # Request body for `POST /api/steward/{cogmap}/watermark`.
   class AdvanceWatermarkRequest < ApiModelBase
-    # The `kb_events.id` to advance the watermark to.
+    # The boundary fingerprint the run observed ([`IngestDelta::boundary_fingerprint`]). Optional, but supplying it is the correct path — see [`StewardAdvanceWatermarkInput::boundary_fingerprint`] for what the fallback gives up.
+    attr_accessor :boundary_fingerprint
+
+    # The `kb_events.id` to advance the watermark to. Optional: a boundary-only advance (an empty event window) supplies none and the watermark stays put. See [`StewardAdvanceWatermarkInput::event_id`].
     attr_accessor :event_id
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'boundary_fingerprint' => :'boundary_fingerprint',
         :'event_id' => :'event_id'
       }
     end
@@ -39,6 +43,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'boundary_fingerprint' => :'String',
         :'event_id' => :'String'
       }
     end
@@ -46,6 +51,8 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'boundary_fingerprint',
+        :'event_id'
       ])
     end
 
@@ -65,10 +72,12 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'boundary_fingerprint')
+        self.boundary_fingerprint = attributes[:'boundary_fingerprint']
+      end
+
       if attributes.key?(:'event_id')
         self.event_id = attributes[:'event_id']
-      else
-        self.event_id = nil
       end
     end
 
@@ -77,10 +86,6 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @event_id.nil?
-        invalid_properties.push('invalid value for "event_id", event_id cannot be nil.')
-      end
-
       invalid_properties
     end
 
@@ -88,18 +93,7 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @event_id.nil?
       true
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] event_id Value to be assigned
-    def event_id=(event_id)
-      if event_id.nil?
-        fail ArgumentError, 'event_id cannot be nil'
-      end
-
-      @event_id = event_id
     end
 
     # Checks equality by comparing each attribute.
@@ -107,6 +101,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          boundary_fingerprint == o.boundary_fingerprint &&
           event_id == o.event_id
     end
 
@@ -119,7 +114,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [event_id].hash
+      [boundary_fingerprint, event_id].hash
     end
 
     # Builds the object from hash

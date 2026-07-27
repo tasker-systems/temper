@@ -14,12 +14,18 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the steward's cron pulls. `new_resources` is the gated metric (an *ingest* threshold); `new_events` is the broader activity count for context.
+  # The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the steward's cron pulls. `new_resources` is the counted ingest metric; `new_events` is the broader activity count for context; `boundary_moved` is the *uncounted* signal — the steward's scope itself changed shape.  The two signals are independent by construction. The counts measure events **inside** `steward_team_contexts` (team-OWNED ∪ SHARED contexts); the boundary is that set itself. Sharing a context into a joined team writes a `kb_team_contexts` row and emits **no event** (`context_service`: \"Context creation is a plain INSERT (no event emission — product decision 5: contexts are infrastructure)\"), so a whole context of material can enter scope with every count still zero. That is what [`Self::boundary_fingerprint`] and [`Self::boundary_moved`] observe.
   class IngestDelta < ApiModelBase
+    # The fingerprint of the cogmap's change-detection boundary **as computed for this read** — the value a completed run passes back to `steward_advance_watermark` (alongside `max_event_id`) to record the boundary it actually processed. Carry this one; do not recompute or substitute another read's, or a boundary move that happened in between is silently swallowed.
+    attr_accessor :boundary_fingerprint
+
+    # Whether the boundary changed since the fingerprint the cogmap has stored — i.e. contexts entered or left the steward's scope without emitting a countable event. `true` when nothing was ever snapshotted (a NULL stored fingerprint is \"unknown\", and unknown means run).
+    attr_accessor :boundary_moved
+
     # The cogmap whose team-context ingest this measures.
     attr_accessor :cogmap_id
 
-    # Whether `new_resources >= threshold` — i.e. the steward should run.
+    # **The decision: should the steward run?** `new_resources >= threshold || boundary_moved`.  It is deliberately NOT a restatement of the count comparison, so a `true` sitting next to `new_resources: 0` is not a bug — it is the boundary arm firing. Read the two inputs separately when you want the reason: `new_resources`/`threshold` for the counted arm, [`Self::boundary_moved`] for the uncounted one.
     attr_accessor :exceeds_threshold
 
     # The latest `kb_events.id` in the delta window — the value a completed tick passes straight to `steward_advance_watermark` to mark this delta ingested. `None` when the delta is empty (no events since the watermark), in which case there is nothing to advance to and the tick skips the advance. Because `kb_events.id` is uuidv7 (its byte order is time order), the greatest id in the window is the newest event.
@@ -40,6 +46,8 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'boundary_fingerprint' => :'boundary_fingerprint',
+        :'boundary_moved' => :'boundary_moved',
         :'cogmap_id' => :'cogmap_id',
         :'exceeds_threshold' => :'exceeds_threshold',
         :'max_event_id' => :'max_event_id',
@@ -63,6 +71,8 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'boundary_fingerprint' => :'String',
+        :'boundary_moved' => :'Boolean',
         :'cogmap_id' => :'String',
         :'exceeds_threshold' => :'Boolean',
         :'max_event_id' => :'String',
@@ -76,6 +86,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'boundary_fingerprint',
         :'max_event_id',
         :'watermark'
       ])
@@ -96,6 +107,16 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'boundary_fingerprint')
+        self.boundary_fingerprint = attributes[:'boundary_fingerprint']
+      end
+
+      if attributes.key?(:'boundary_moved')
+        self.boundary_moved = attributes[:'boundary_moved']
+      else
+        self.boundary_moved = nil
+      end
 
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
@@ -141,6 +162,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if @boundary_moved.nil?
+        invalid_properties.push('invalid value for "boundary_moved", boundary_moved cannot be nil.')
+      end
+
       if @cogmap_id.nil?
         invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
       end
@@ -168,12 +193,23 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if @boundary_moved.nil?
       return false if @cogmap_id.nil?
       return false if @exceeds_threshold.nil?
       return false if @new_events.nil?
       return false if @new_resources.nil?
       return false if @threshold.nil?
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] boundary_moved Value to be assigned
+    def boundary_moved=(boundary_moved)
+      if boundary_moved.nil?
+        fail ArgumentError, 'boundary_moved cannot be nil'
+      end
+
+      @boundary_moved = boundary_moved
     end
 
     # Custom attribute writer method with validation
@@ -231,6 +267,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          boundary_fingerprint == o.boundary_fingerprint &&
+          boundary_moved == o.boundary_moved &&
           cogmap_id == o.cogmap_id &&
           exceeds_threshold == o.exceeds_threshold &&
           max_event_id == o.max_event_id &&
@@ -249,7 +287,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, exceeds_threshold, max_event_id, new_events, new_resources, threshold, watermark].hash
+      [boundary_fingerprint, boundary_moved, cogmap_id, exceeds_threshold, max_event_id, new_events, new_resources, threshold, watermark].hash
     end
 
     # Builds the object from hash

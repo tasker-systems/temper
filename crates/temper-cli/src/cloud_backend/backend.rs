@@ -306,7 +306,8 @@ mod embed_impl {
         async fn advance_steward_watermark(
             &self,
             _cmd: AdvanceStewardWatermark,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::steward::AdvanceWatermarkAck>, TemperError>
+        {
             Err(TemperError::Project(
                 "CloudBackend::advance_steward_watermark not wired until cutover".to_string(),
             ))
@@ -706,7 +707,8 @@ mod non_embed_impl {
         async fn advance_steward_watermark(
             &self,
             _cmd: AdvanceStewardWatermark,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::steward::AdvanceWatermarkAck>, TemperError>
+        {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

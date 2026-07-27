@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT steward_watermark_event_id  AS \"watermark: Uuid\",\n               steward_boundary_fingerprint AS \"stored_fingerprint: String\"\n          FROM kb_cogmaps\n         WHERE id = $1\n           AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "watermark: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "stored_fingerprint: String",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "9d5df906df90c348425034430f6fa4c197c11264b838bac0fcba61cd3ecd0c62"
+}
