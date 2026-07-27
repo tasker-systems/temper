@@ -66,8 +66,10 @@ criteria are still uncovered and why. Coverage is never inferred from absence, s
 not been closed must still be **stated**. The register is the goal's body, so this is a body rewrite:
 
 ```bash
-# `show` emits JSON — the body is the `content` field. Redirecting `show` straight to a file and
-# piping it back would set the body to a JSON blob.
+# `show` prints a serialized record, not the markdown body — json or toon depending on the format
+# in force (`--format` → TEMPER_FORMAT → `[cli]` config → toon on a TTY, json otherwise). NEITHER
+# is the body, so pin the format and extract `content`; a bare `show > file` piped back would
+# write the serialized record as the body.
 temper resource show <goal-ref> --format json | jq -r .content > register.md
 # edit register.md, then:
 cat register.md | temper resource update <goal-ref>

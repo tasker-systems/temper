@@ -250,7 +250,9 @@ temper resource list --type goal --context @me/<ctx> --status active --all
 temper resource show <goal-ref>            # the register; --meta-only to skip the body
 
 # 2. Author or amend. The register is the body, so a body rewrite is the edit.
-#    `show` emits JSON — the body is the `content` field, so extract it rather than redirecting.
+#    `show` prints a serialized RECORD, not the markdown body — json or toon depending on the
+#    format in force. Neither is the body, so extract `content` explicitly; a bare redirect of
+#    `show` into a file and back would write the serialized record as the body.
 temper resource show <goal-ref> --format json | jq -r .content > register.md
 cat register.md | temper resource update <goal-ref>
 
