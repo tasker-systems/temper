@@ -551,6 +551,67 @@ async fn readback_resource_standing_is_gated_and_carries_band(pool: sqlx::PgPool
     );
 }
 
+/// LOAD-BEARING (`20260727000020`). An in-flight SOURCE is not a citable source.
+///
+/// `resource_live_citations` gated the source on `is_active` alone, so a segmented upload still
+/// arriving counted toward `citation_magnitude` — against CLAUDE.md's rule that
+/// "`ingest_state = 'complete'` goes exactly where `r.is_active` already goes".
+///
+/// `r_parent` IS THE CONTROL, and it is what makes this test discriminating rather than merely
+/// green. `resource_r_parent` reads `kb_block_provenance` directly and never calls the shared
+/// producer, so it must stay at 2 while `citation_magnitude` falls to 1. A change that suppressed
+/// the provenance row itself — or that gated too widely — would move both, and this asserts it does
+/// not. Bite probe: drop `src.ingest_state = 'complete'` from `resource_live_citations` and this is
+/// the test that fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_in_progress_source_leaves_provenance_but_not_magnitude(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-ingest-gate").await;
+
+    let (finding, bases) = seed_finding_with_n_provenance(&pool, owner, emitter, home, 2).await;
+
+    let before = shape(&pool, owner, finding).await.expect("readable");
+    assert_eq!(
+        before.citation_magnitude, 2,
+        "both seeded sources are complete, so magnitude counts both"
+    );
+    assert_eq!(before.r_parent, 2.0, "two uncorrected provenance rows");
+
+    // Exactly the state a segmented `begin_segmented_ingest` leaves a source in before
+    // `resource_finalize` flips it.
+    sqlx::query("UPDATE kb_resources SET ingest_state = 'in_progress' WHERE id = $1")
+        .bind(bases[1].uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let after = shape(&pool, owner, finding).await.expect("still readable");
+    assert_eq!(
+        after.citation_magnitude, 1,
+        "an in-flight source must not count toward findability: {after:?}"
+    );
+    assert_eq!(
+        after.r_parent, 2.0,
+        "r_parent counts provenance rows and does NOT route through resource_live_citations, so \
+         the gate must not have moved it: {after:?}"
+    );
+
+    // Exclusion is not deletion: `ingest_state` only moves in_progress -> complete, so finalizing
+    // returns the source to the axis. This is why gating a monotone axis is safe.
+    sqlx::query("UPDATE kb_resources SET ingest_state = 'complete' WHERE id = $1")
+        .bind(bases[1].uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let refinalized = shape(&pool, owner, finding).await.expect("readable");
+    assert_eq!(
+        refinalized.citation_magnitude, 2,
+        "a finalized source re-enters the axis it was withheld from: {refinalized:?}"
+    );
+}
+
 // ── Task 4 — readback::is_resource_visible (the extracted, shared predicate) ───────────────────
 //
 // `is_resource_visible` is the one Rust-callable spelling of `resources_visible_to`, extracted out
