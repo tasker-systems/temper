@@ -1878,6 +1878,43 @@ async fn sweep_reoffers_a_covered_finding_after_its_block_is_mutated(pool: sqlx:
     );
 }
 
+/// THE NOISE FLOOR (migration `20260726000030`). The mirror of the witness above: staleness must fire
+/// on a CHANGED assertion and stay silent on an unchanged one. Before that migration `block_mutate`
+/// fired on the PRESENCE of a body rather than a changed one, so a no-op round-trip through
+/// CLAUDE.md's own documented show-edit-`cat` idiom bumped `last_event_id` on byte-identical content
+/// and re-offered a quiet finding — the exact failure tier 1's design §6 calls "worse than the defect
+/// it replaces".
+///
+/// This bites: with the suppression removed, the second `mutate_block` moves the cursor and the
+/// finding is offered again. It is the pair to
+/// `sweep_reoffers_a_covered_finding_after_its_block_is_mutated`, which holds the other direction —
+/// neither alone discriminates a predicate that is merely always-on or always-off.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn sweep_stays_quiet_after_a_byte_identical_revise(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-noop-revise").await;
+    let block = first_block(&pool, f.finding).await;
+    const PROSE: &str = "the assertion exactly as it currently stands";
+
+    // Establish PROSE as the block's current text, then audit it — covered, and quiet.
+    mutate_block(&pool, block, f.emitter, PROSE).await;
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    assert!(
+        !sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "precondition: audited at its current text, the finding must be quiet"
+    );
+
+    // The no-op round-trip: re-submit byte-identical prose.
+    mutate_block(&pool, block, f.emitter, PROSE).await;
+
+    assert!(
+        !sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "a byte-identical revise changed nothing, so the finding must stay quiet — \
+         re-offering here is the noise floor tier 1 must not have"
+    );
+}
+
 /// The SOURCE-side arm. Without it this suite would pass with a predicate that only ever looks at the
 /// citing block, and the auditor would never learn that a source it relied on had changed underneath.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
