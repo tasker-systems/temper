@@ -284,10 +284,14 @@ downstream reader is that reader.
 
 - **Goal membership has two spellings and nothing ties them.** `--goal <ref>` projects an `advances`
   **edge**, which is the only thing `resource list --type task --goal <ref>` filters on.
-  `open_meta.witnesses.goal` is a **citation**, and no query reads it. A task can carry one without
-  the other — one did, and a clause migration built from `list --goal` silently missed it. **Pass
-  `--goal` *and* write the citation**, and when you enumerate a goal's tasks, do not trust either
-  spelling alone.
+  `open_meta.witnesses.goal` is a **citation**. A task can carry one without the other — one does, and
+  a clause migration built from `list --goal` silently missed it. **Pass `--goal` *and* write the
+  citation**, and when you enumerate a goal's tasks, do not trust either spelling alone.
+
+  `scripts/register-coverage.py <goal-ref>` reads the citation and compares the two, so you no longer
+  have to eyeball it. Note what the divergence usually *is*: not a missing edge, but an edge pointing
+  at a **different** goal, because a task may advance one goal while evidencing a clause of another —
+  and a resource gets only one `advances`→goal edge.
 - **`--open-meta` on `update` is a per-key PATCH, and the key is the unit.** Keys you do not supply
   are untouched, but a key you do supply is **replaced whole** — sending `{"witness":{"mode":"judged"}}`
   drops every other field of `witness`. Send the complete key value.
