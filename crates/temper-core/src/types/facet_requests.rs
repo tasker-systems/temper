@@ -57,6 +57,20 @@ pub struct EdgeFacetSetRequest {
 
 /// One property row owned by an edge, as read back by
 /// `GET /api/relationships/{edge_handle}/facets`.
+///
+/// **Carries its author, because an edge facet is an evidential claim.** The use case this exists
+/// for is *"this task witnesses clause X of goal G"* on an `advances` edge — a statement a later
+/// reader weighs. Anyone with source-write and container-write on the edge may write one, which is
+/// not the same set as the edge's asserter, so an unattributed row would let a planted claim read
+/// identically to a steward's.
+///
+/// Attribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set:
+/// identity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`),
+/// and the row carries the profile **plus** its two human-readable `kb_profiles` columns so a
+/// caller never needs a second round trip to name an author.
+///
+/// **`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is
+/// a masked surrogate whose id a replay re-mints, exactly as an audit's is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct EdgeFacetRow {
@@ -66,6 +80,14 @@ pub struct EdgeFacetRow {
     pub property_key: String,
     pub value: serde_json::Value,
     pub weight: f64,
+    /// `kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's
+    /// replay-stable identity.
+    pub authored_by_event_id: Uuid,
+    /// The profile behind that act's emitter entity. `None` only if the emitter has no profile,
+    /// which no live write path produces — carried as an `Option` rather than fabricating an id.
+    pub authored_by_profile_id: Option<Uuid>,
+    pub authored_by_handle: Option<String>,
+    pub authored_by_display_name: Option<String>,
 }
 
 /// The live facets of one edge. Folded rows are excluded: folding an edge cascades to the

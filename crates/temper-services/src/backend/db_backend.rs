@@ -677,13 +677,41 @@ impl DbBackend {
     /// stored anchor is where the edge actually lives, and the two can differ if the source was
     /// re-homed after the edge was asserted.
     ///
-    /// No target-read clause: these verbs do not change endpoints, so the target was already
-    /// authorized at assert time. Retracting or reweighting an edge you can see, in a container you
-    /// author, discloses nothing new about the target.
+    /// **Four clauses, mirroring `assert` in the same order** (source-modify → container-write →
+    /// target-read), plus the tombstone floor the row lookup carries.
+    ///
+    /// This gate previously had **no target-read clause**, justified in its own words as: *"these
+    /// verbs do not change endpoints, so the target was already authorized at assert time.
+    /// Retracting or reweighting an edge you can see, in a container you author, discloses nothing
+    /// new about the target."*
+    ///
+    /// **That rationale was verb-specific, and it stopped holding when a fourth verb arrived.**
+    /// Retype, reweight and fold carry no caller-authored content, so "discloses nothing new" was
+    /// true of them. Setting a **facet** on an edge writes caller-authored JSON that other
+    /// principals then read as authoritative — so without this clause, a caller with source-write
+    /// and container-write but *no read on the target* could author a qualifier on a link into a
+    /// resource they have no standing to see, and the target's owner would read it back as fact.
+    /// Measured on a live database, 2026-07-27: the same principal got `GET` → 404 and `POST` → 200
+    /// on one edge. It is an integrity hole, not a disclosure one — the gate never told the caller
+    /// anything about the target — which is why it survived a read-shaped audit.
+    ///
+    /// A second, independent hole the same probe found: there was **no `is_folded` floor**, so a
+    /// facet could be written to an already-retracted edge, landing live where no read surface can
+    /// ever see it. `NOT is_folded` in the lookup is the edge's tombstone floor, and it is the same
+    /// rule `can_modify_resource` states for resources: *"a tombstone is unmodifiable on every
+    /// axis."* Folding an already-folded edge is now `NotFound` rather than a silent second fold.
+    ///
+    /// **Clause ORDER is load-bearing, not cosmetic.** Target-read runs last, exactly as it does in
+    /// [`Self::assert_edge_from_source_home`], because it is the only clause that renders
+    /// `NotFound` instead of `Forbidden` (see [`Self::check_endpoint_readable`] — a caller who
+    /// cannot read an endpoint must not learn it exists). Running it first would convert every
+    /// container-write refusal into a 404 and destroy the distinction `Forbidden` carries for a
+    /// caller who legitimately sees the edge but may not author into its home.
     async fn check_edge_mutable(&self, edge_id: uuid::Uuid) -> Result<(), TemperError> {
         let home = sqlx::query!(
-            "SELECT source_id, home_anchor_table, home_anchor_id FROM kb_edges \
-             WHERE id = $1 AND source_table = 'kb_resources'",
+            "SELECT source_id, target_table, target_id, home_anchor_table, home_anchor_id \
+             FROM kb_edges \
+             WHERE id = $1 AND source_table = 'kb_resources' AND NOT is_folded",
             edge_id,
         )
         .fetch_optional(&self.pool)
@@ -692,6 +720,8 @@ impl DbBackend {
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
         self.check_can_modify_next(home.source_id).await?;
         self.check_container_authorable(&home.home_anchor_table, home.home_anchor_id)
+            .await?;
+        self.check_endpoint_readable(&home.target_table, home.target_id)
             .await
     }
 

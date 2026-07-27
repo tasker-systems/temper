@@ -975,8 +975,16 @@ export interface paths {
          *     gate is a different question. `DbBackend::set_facet` dispatches on the typed owner to
          *     `check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.
          *
-         *     404 rather than 403 for an edge the caller cannot see, matching `check_edge_mutable`'s own
-         *     NotFound on an absent edge — the endpoint must not become an existence oracle.
+         *     **Both statuses are reachable, and they mean different things.** `404` for an edge that does not
+         *     exist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather
+         *     than `Forbidden` on purpose, so the write never confirms the existence of a resource the caller
+         *     has no standing to see. `403` for an edge the caller can legitimately see but may not author
+         *     into: it fails source-write or container-write on the edge's home.
+         *
+         *     An earlier version of this comment claimed the endpoint returns "404 rather than 403" outright,
+         *     twelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was
+         *     wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row
+         *     lookup and clause 3.
          */
         post: operations["set_edge_facet"];
         delete?: never;
@@ -2553,8 +2561,36 @@ export interface components {
         /**
          * @description One property row owned by an edge, as read back by
          *     `GET /api/relationships/{edge_handle}/facets`.
+         *
+         *     **Carries its author, because an edge facet is an evidential claim.** The use case this exists
+         *     for is *"this task witnesses clause X of goal G"* on an `advances` edge — a statement a later
+         *     reader weighs. Anyone with source-write and container-write on the edge may write one, which is
+         *     not the same set as the edge's asserter, so an unattributed row would let a planted claim read
+         *     identically to a steward's.
+         *
+         *     Attribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set:
+         *     identity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`),
+         *     and the row carries the profile **plus** its two human-readable `kb_profiles` columns so a
+         *     caller never needs a second round trip to name an author.
+         *
+         *     **`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is
+         *     a masked surrogate whose id a replay re-mints, exactly as an audit's is.
          */
         EdgeFacetRow: {
+            authored_by_display_name?: string | null;
+            /**
+             * Format: uuid
+             * @description `kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's
+             *     replay-stable identity.
+             */
+            authored_by_event_id: string;
+            authored_by_handle?: string | null;
+            /**
+             * Format: uuid
+             * @description The profile behind that act's emitter entity. `None` only if the emitter has no profile,
+             *     which no live write path produces — carried as an `Option` rather than fabricating an id.
+             */
+            authored_by_profile_id?: string | null;
             /** Format: uuid */
             property_id: string;
             /**

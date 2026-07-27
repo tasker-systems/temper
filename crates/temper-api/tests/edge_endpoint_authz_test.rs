@@ -21,6 +21,19 @@
 //!
 //! The mutation verbs (retype/reweight/fold) carry clauses 1 and 2 via `check_edge_mutable`, so that
 //! changing an edge is never easier than creating it.
+//!
+//! **Amended 2026-07-27 — `check_edge_mutable` now carries clause 3 and a tombstone floor too.**
+//! It omitted the target clause by design, on the reasoning that retract/reweight "discloses nothing
+//! new about the target". That was true of those verbs and stopped being true when `set_facet`
+//! joined them: a facet is caller-authored content that other principals read as authoritative, so
+//! a caller with source-write and container-write but no read on the target could author a
+//! qualifier on a link into a resource they cannot see. An adversarial pass measured it on a live
+//! database — one principal, one edge, `GET` 404 and `POST` 200. The same pass found no `is_folded`
+//! floor, so a facet could be written to an already-retracted edge and land where no read surface
+//! could see it.
+//!
+//! Both are fixed in `check_edge_mutable` rather than in the facet verb alone, so all four verbs
+//! answer to one definition — the gate's own reason for existing.
 
 mod common;
 
@@ -31,9 +44,11 @@ use temper_core::error::TemperError;
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EdgeId, ProfileId, ResourceId};
+use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CreateResource, RetypeRelationship, Surface,
+    AssertRelationship, Backend, CreateResource, FoldRelationship, RetypeRelationship, SetFacet,
+    Surface,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;
 
@@ -95,6 +110,23 @@ async fn grant_resource_write(pool: &PgPool, resource: Uuid, profile: Uuid) {
     .execute(pool)
     .await
     .expect("seed a direct resource write grant");
+}
+
+/// A direct profile-anchored WRITE grant on a CONTEXT — satisfies `context_authorable_by_profile`
+/// via its `profile_explicit_grant` arm, without making the grantee owner or team member. The
+/// container-side twin of [`grant_resource_write`].
+async fn grant_context_write(pool: &PgPool, context: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, \
+            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, true, false, false, $2)",
+    )
+    .bind(context)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("seed a direct context write grant");
 }
 
 // ─── clause 3: the target must be readable ───────────────────────────────────
@@ -297,4 +329,265 @@ async fn retype_requires_container_write_like_assert(pool: PgPool) {
         })
         .await
         .expect("the home's author may retype");
+}
+
+// ─── clause 3 on the MUTATION verbs, and the tombstone floor ─────────────────
+
+/// **The vector an adversarial pass measured on a live database, 2026-07-27.**
+///
+/// A delegate holds write on the edge's source *and* on its home container — clauses 1 and 2, which
+/// is everything `check_edge_mutable` used to ask. The edge's TARGET sits in the owner's private
+/// context, which the delegate cannot read. Before clause 3 reached the mutation gate, that
+/// delegate could write a facet onto the link: caller-authored JSON, on an edge pointing at a
+/// resource they have no standing to see, which the target's owner then reads back as authoritative.
+///
+/// The positive control matters as much as the refusal. The same delegate, same source, same home,
+/// with a target it *can* read, must succeed — otherwise this test would pass just as well if
+/// clauses 1 or 2 were what refused, and it would be pinning the wrong thing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn faceting_an_edge_requires_reading_its_target(pool: PgPool) {
+    let (owner, owner_context, source) = profile_with_resource(&pool, "facet-tgt-owner").await;
+
+    // A second, PRIVATE context of the owner's, holding the unreadable target.
+    let private_email = format!("f1-facet-priv-{}@example.com", Uuid::new_v4());
+    let (_p2, private_context) =
+        common::fixtures::create_test_profile_with_context(&pool, &private_email).await;
+    let hidden_target = DbBackend::new(pool.clone(), ProfileId::from(_p2))
+        .create_resource(create_cmd(private_context, "facet-hidden-target"))
+        .await
+        .expect("create the hidden target")
+        .value
+        .id;
+    let hidden_target = Uuid::from(hidden_target);
+
+    // A readable target, for the positive control.
+    let open_target = DbBackend::new(pool.clone(), ProfileId::from(owner))
+        .create_resource(create_cmd(owner_context, "facet-open-target"))
+        .await
+        .expect("create the readable target")
+        .value
+        .id;
+    let open_target = Uuid::from(open_target);
+
+    // The edges are asserted by principals who legitimately see both endpoints, so the state under
+    // test is reachable rather than manufactured: the hidden edge is asserted by the target's own
+    // owner after being granted write on the source and its home.
+    let delegate_email = format!("f1-facet-delegate-{}@example.com", Uuid::new_v4());
+    let delegate = common::fixtures::create_test_profile(&pool, &delegate_email).await;
+    grant_resource_write(&pool, source, delegate).await;
+    grant_context_write(&pool, owner_context, delegate).await;
+
+    grant_resource_write(&pool, source, _p2).await;
+    grant_context_write(&pool, owner_context, _p2).await;
+    let hidden_edge: EdgeId = DbBackend::new(pool.clone(), ProfileId::from(_p2))
+        .assert_relationship(assert_cmd(source, hidden_target))
+        .await
+        .expect("the target's owner may assert the edge — it reads both endpoints")
+        .value;
+
+    let open_edge: EdgeId = DbBackend::new(pool.clone(), ProfileId::from(owner))
+        .assert_relationship(assert_cmd(source, open_target))
+        .await
+        .expect("owner asserts the readable edge")
+        .value;
+
+    // Precondition: the delegate genuinely passes clauses 1 and 2 — otherwise the refusal below
+    // would prove nothing about clause 3.
+    let source_writable: Option<bool> = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
+        .bind(delegate)
+        .bind(source)
+        .fetch_one(&pool)
+        .await
+        .expect("source clause");
+    let home_authorable: Option<bool> =
+        sqlx::query_scalar("SELECT context_authorable_by_profile($1, $2)")
+            .bind(delegate)
+            .bind(owner_context)
+            .fetch_one(&pool)
+            .await
+            .expect("container clause");
+    let target_readable: Option<bool> =
+        sqlx::query_scalar("SELECT endpoint_readable_by_profile($1, 'kb_resources', $2)")
+            .bind(delegate)
+            .bind(hidden_target)
+            .fetch_one(&pool)
+            .await
+            .expect("target clause");
+    assert_eq!(
+        (
+            source_writable.unwrap_or(false),
+            home_authorable.unwrap_or(false),
+            target_readable.unwrap_or(false)
+        ),
+        (true, true, false),
+        "the fixture must isolate clause 3: clauses 1 and 2 hold, the target is unreadable"
+    );
+
+    // The refusal. NotFound, never Forbidden — confirming the edge exists would tell the delegate
+    // about a resource they cannot read.
+    let denied = DbBackend::new(pool.clone(), ProfileId::from(delegate))
+        .set_facet(SetFacet {
+            owner: PropertyOwner::edge(hidden_edge),
+            values: serde_json::json!({"clause": "planted"}),
+            weight: 1.0,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(denied, Err(TemperError::NotFound(_))),
+        "faceting an edge whose target is unreadable must be NotFound (never an existence oracle), \
+         got {denied:?}"
+    );
+    let planted: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_properties WHERE owner_table = 'kb_edges'")
+            .fetch_one(&pool)
+            .await
+            .expect("count edge properties");
+    assert_eq!(planted, 0, "auth-before-writes: the refusal wrote nothing");
+
+    // Positive control: same delegate, same source, same home — a readable target succeeds.
+    DbBackend::new(pool.clone(), ProfileId::from(delegate))
+        .set_facet(SetFacet {
+            owner: PropertyOwner::edge(open_edge),
+            values: serde_json::json!({"clause": "legitimate"}),
+            weight: 1.0,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("a readable target is faceted by the same delegate — clause 3 is what refused");
+}
+
+/// The mutation verbs share the gate, so retype inherits clause 3 with no separate wiring.
+///
+/// Without this, clause 3 could be quietly re-scoped to the facet verb alone and the suite would
+/// stay green while `retype` regained the hole.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn retype_inherits_the_target_clause(pool: PgPool) {
+    let (_owner, owner_context, source) = profile_with_resource(&pool, "retype-tgt-owner").await;
+
+    let stranger_email = format!("f1-retype-tgt-{}@example.com", Uuid::new_v4());
+    let (stranger, stranger_context) =
+        common::fixtures::create_test_profile_with_context(&pool, &stranger_email).await;
+    let hidden = DbBackend::new(pool.clone(), ProfileId::from(stranger))
+        .create_resource(create_cmd(stranger_context, "retype-hidden"))
+        .await
+        .expect("create the hidden target")
+        .value
+        .id;
+
+    grant_resource_write(&pool, source, stranger).await;
+    grant_context_write(&pool, owner_context, stranger).await;
+    let edge: EdgeId = DbBackend::new(pool.clone(), ProfileId::from(stranger))
+        .assert_relationship(assert_cmd(source, Uuid::from(hidden)))
+        .await
+        .expect("the target's owner asserts it")
+        .value;
+
+    let delegate_email = format!("f1-retype-del-{}@example.com", Uuid::new_v4());
+    let delegate = common::fixtures::create_test_profile(&pool, &delegate_email).await;
+    grant_resource_write(&pool, source, delegate).await;
+    grant_context_write(&pool, owner_context, delegate).await;
+
+    let denied = DbBackend::new(pool.clone(), ProfileId::from(delegate))
+        .retype_relationship(RetypeRelationship {
+            edge_handle: edge,
+            edge_kind: graph::EdgeKind::Near,
+            polarity: graph::Polarity::Forward,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(denied, Err(TemperError::NotFound(_))),
+        "retype must carry the same target clause as assert, got {denied:?}"
+    );
+}
+
+/// A folded edge is unmutable on every axis — the edge's tombstone floor.
+///
+/// Mirrors the rule `can_modify_resource` already states for resources: *"a tombstone is
+/// unmodifiable on every axis."* Without it, a facet lands live on a retracted link where no read
+/// surface can ever see it, which falsifies the read service's own stated invariant that a live row
+/// always belongs to a live edge.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_folded_edge_is_unmutable(pool: PgPool) {
+    let (owner, owner_context, source) = profile_with_resource(&pool, "fold-floor-owner").await;
+    let target = DbBackend::new(pool.clone(), ProfileId::from(owner))
+        .create_resource(create_cmd(owner_context, "fold-floor-target"))
+        .await
+        .expect("create target")
+        .value
+        .id;
+
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let edge: EdgeId = backend
+        .assert_relationship(assert_cmd(source, Uuid::from(target)))
+        .await
+        .expect("assert")
+        .value;
+
+    // Faceting works while the edge is live — the precondition that makes the refusal meaningful.
+    backend
+        .set_facet(SetFacet {
+            owner: PropertyOwner::edge(edge),
+            values: serde_json::json!({"clause": "while-live"}),
+            weight: 1.0,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("a live edge is faceted by its owner");
+
+    backend
+        .fold_relationship(FoldRelationship {
+            edge_handle: edge,
+            reason: Some("retracted".to_string()),
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("owner folds the edge");
+
+    // Post-fold: the same owner, with every clause satisfied, is refused on the tombstone floor.
+    let denied = backend
+        .set_facet(SetFacet {
+            owner: PropertyOwner::edge(edge),
+            values: serde_json::json!({"clause": "after-the-fold"}),
+            weight: 1.0,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(denied, Err(TemperError::NotFound(_))),
+        "a folded edge must be unmutable, got {denied:?}"
+    );
+
+    // No orphan: the only property is the pre-fold one, and the cascade folded it.
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties WHERE owner_table = 'kb_edges' AND NOT is_folded",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count live edge properties");
+    assert_eq!(
+        live, 0,
+        "no live property may survive on a folded edge — neither the cascaded one nor a new one"
+    );
+
+    // And folding twice is now NotFound rather than a silent second fold.
+    let refolded = backend
+        .fold_relationship(FoldRelationship {
+            edge_handle: edge,
+            reason: None,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(refolded, Err(TemperError::NotFound(_))),
+        "re-folding a folded edge must be NotFound, got {refolded:?}"
+    );
 }

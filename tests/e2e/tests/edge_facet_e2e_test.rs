@@ -126,6 +126,27 @@ async fn a_clause_citation_rides_the_advances_edge_and_dies_with_it(pool: sqlx::
     assert_eq!(read.facets[0].value, clause);
     assert_eq!(read.facets[0].weight, 1.0);
 
+    // Attribution — an edge facet is an evidential claim, and anyone with source-write plus
+    // container-write may author one, which is not the same set as the edge's asserter. Without a
+    // named author, a planted citation reads identically to a steward's. The edge's own trail
+    // cannot recover it (`element_trail_edge` joins on `payload->>'edge_id'`, which a
+    // `property_asserted` payload does not carry), so this read is the only surface that can.
+    let me = app.client.profile().get().await.expect("whoami");
+    assert_eq!(
+        read.facets[0].authored_by_profile_id,
+        Some(me.id),
+        "the facet must name the profile that wrote it"
+    );
+    assert!(
+        read.facets[0].authored_by_handle.is_some(),
+        "the author's handle rides along, so a reader needs no second round trip"
+    );
+    assert_ne!(
+        read.facets[0].authored_by_event_id,
+        Uuid::nil(),
+        "the authoring act is the row's replay-stable identity"
+    );
+
     // ── the cascade: retracting the goal takes the citation with it ────────────────────────────
     // `clear_goal` folds the `advances` edge. If the cascade were missing, the clause would still
     // be readable here — a live citation of a link that no longer exists.

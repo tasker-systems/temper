@@ -3613,7 +3613,7 @@
           "Facets"
         ],
         "summary": "Set a facet whose owner is an **edge** rather than a resource.",
-        "description": "A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about\nthe owner not being a payload choice: the edge is addressed in the path (matching every other\nedge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization\ngate is a different question. `DbBackend::set_facet` dispatches on the typed owner to\n`check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.\n\n404 rather than 403 for an edge the caller cannot see, matching `check_edge_mutable`'s own\nNotFound on an absent edge — the endpoint must not become an existence oracle.",
+        "description": "A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about\nthe owner not being a payload choice: the edge is addressed in the path (matching every other\nedge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization\ngate is a different question. `DbBackend::set_facet` dispatches on the typed owner to\n`check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.\n\n**Both statuses are reachable, and they mean different things.** `404` for an edge that does not\nexist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather\nthan `Forbidden` on purpose, so the write never confirms the existence of a resource the caller\nhas no standing to see. `403` for an edge the caller can legitimately see but may not author\ninto: it fails source-write or container-write on the edge's home.\n\nAn earlier version of this comment claimed the endpoint returns \"404 rather than 403\" outright,\ntwelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was\nwrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row\nlookup and clause 3.",
         "operationId": "set_edge_facet",
         "parameters": [
           {
@@ -8436,14 +8436,40 @@
       },
       "EdgeFacetRow": {
         "type": "object",
-        "description": "One property row owned by an edge, as read back by\n`GET /api/relationships/{edge_handle}/facets`.",
+        "description": "One property row owned by an edge, as read back by\n`GET /api/relationships/{edge_handle}/facets`.\n\n**Carries its author, because an edge facet is an evidential claim.** The use case this exists\nfor is *\"this task witnesses clause X of goal G\"* on an `advances` edge — a statement a later\nreader weighs. Anyone with source-write and container-write on the edge may write one, which is\nnot the same set as the edge's asserter, so an unattributed row would let a planted claim read\nidentically to a steward's.\n\nAttribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set:\nidentity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`),\nand the row carries the profile **plus** its two human-readable `kb_profiles` columns so a\ncaller never needs a second round trip to name an author.\n\n**`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is\na masked surrogate whose id a replay re-mints, exactly as an audit's is.",
         "required": [
           "property_id",
           "property_key",
           "value",
-          "weight"
+          "weight",
+          "authored_by_event_id"
         ],
         "properties": {
+          "authored_by_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authored_by_event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "`kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's\nreplay-stable identity."
+          },
+          "authored_by_handle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authored_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The profile behind that act's emitter entity. `None` only if the emitter has no profile,\nwhich no live write path produces — carried as an `Option` rather than fabricating an id."
+          },
           "property_id": {
             "type": "string",
             "format": "uuid"

@@ -14,8 +14,18 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # One property row owned by an edge, as read back by `GET /api/relationships/{edge_handle}/facets`.
+  # One property row owned by an edge, as read back by `GET /api/relationships/{edge_handle}/facets`.  **Carries its author, because an edge facet is an evidential claim.** The use case this exists for is *\"this task witnesses clause X of goal G\"* on an `advances` edge — a statement a later reader weighs. Anyone with source-write and container-write on the edge may write one, which is not the same set as the edge's asserter, so an unattributed row would let a planted claim read identically to a steward's.  Attribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set: identity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`), and the row carries the profile **plus** its two human-readable `kb_profiles` columns so a caller never needs a second round trip to name an author.  **`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is a masked surrogate whose id a replay re-mints, exactly as an audit's is.
   class EdgeFacetRow < ApiModelBase
+    attr_accessor :authored_by_display_name
+
+    # `kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's replay-stable identity.
+    attr_accessor :authored_by_event_id
+
+    attr_accessor :authored_by_handle
+
+    # The profile behind that act's emitter entity. `None` only if the emitter has no profile, which no live write path produces — carried as an `Option` rather than fabricating an id.
+    attr_accessor :authored_by_profile_id
+
     attr_accessor :property_id
 
     # `kb_properties.property_key`. `\"facet\"` for a clustering facet written by `facet_set`; an arbitrary key for a single-valued property written by `property_set`.
@@ -28,6 +38,10 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'authored_by_display_name' => :'authored_by_display_name',
+        :'authored_by_event_id' => :'authored_by_event_id',
+        :'authored_by_handle' => :'authored_by_handle',
+        :'authored_by_profile_id' => :'authored_by_profile_id',
         :'property_id' => :'property_id',
         :'property_key' => :'property_key',
         :'value' => :'value',
@@ -48,6 +62,10 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'authored_by_display_name' => :'String',
+        :'authored_by_event_id' => :'String',
+        :'authored_by_handle' => :'String',
+        :'authored_by_profile_id' => :'String',
         :'property_id' => :'String',
         :'property_key' => :'String',
         :'value' => :'Object',
@@ -58,6 +76,9 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'authored_by_display_name',
+        :'authored_by_handle',
+        :'authored_by_profile_id',
         :'value',
       ])
     end
@@ -77,6 +98,24 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'authored_by_display_name')
+        self.authored_by_display_name = attributes[:'authored_by_display_name']
+      end
+
+      if attributes.key?(:'authored_by_event_id')
+        self.authored_by_event_id = attributes[:'authored_by_event_id']
+      else
+        self.authored_by_event_id = nil
+      end
+
+      if attributes.key?(:'authored_by_handle')
+        self.authored_by_handle = attributes[:'authored_by_handle']
+      end
+
+      if attributes.key?(:'authored_by_profile_id')
+        self.authored_by_profile_id = attributes[:'authored_by_profile_id']
+      end
 
       if attributes.key?(:'property_id')
         self.property_id = attributes[:'property_id']
@@ -108,6 +147,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if @authored_by_event_id.nil?
+        invalid_properties.push('invalid value for "authored_by_event_id", authored_by_event_id cannot be nil.')
+      end
+
       if @property_id.nil?
         invalid_properties.push('invalid value for "property_id", property_id cannot be nil.')
       end
@@ -127,10 +170,21 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if @authored_by_event_id.nil?
       return false if @property_id.nil?
       return false if @property_key.nil?
       return false if @weight.nil?
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] authored_by_event_id Value to be assigned
+    def authored_by_event_id=(authored_by_event_id)
+      if authored_by_event_id.nil?
+        fail ArgumentError, 'authored_by_event_id cannot be nil'
+      end
+
+      @authored_by_event_id = authored_by_event_id
     end
 
     # Custom attribute writer method with validation
@@ -168,6 +222,10 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          authored_by_display_name == o.authored_by_display_name &&
+          authored_by_event_id == o.authored_by_event_id &&
+          authored_by_handle == o.authored_by_handle &&
+          authored_by_profile_id == o.authored_by_profile_id &&
           property_id == o.property_id &&
           property_key == o.property_key &&
           value == o.value &&
@@ -183,7 +241,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [property_id, property_key, value, weight].hash
+      [authored_by_display_name, authored_by_event_id, authored_by_handle, authored_by_profile_id, property_id, property_key, value, weight].hash
     end
 
     # Builds the object from hash
