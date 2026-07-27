@@ -21,6 +21,7 @@ use crate::ids::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::slack::IdpRevocation;
 use uuid::Uuid;
 
@@ -177,6 +178,30 @@ impl AnchorRef {
         AnchorRef {
             table: AnchorTable::Contexts,
             id: id.uuid(),
+        }
+    }
+    /// An **edge** as a property owner — the `owner` of a `property_asserted` / `property_set`
+    /// payload whose facet hangs off a relationship rather than a resource
+    /// (`kb_properties.owner_table = 'kb_edges'`, which the canonical DDL has always admitted).
+    /// The event still anchors on a context or cogmap: `_property_owner_anchor` resolves it from
+    /// the edge's own `home_anchor_*` columns.
+    pub fn edge(id: EdgeId) -> Self {
+        AnchorRef {
+            table: AnchorTable::Edges,
+            id: id.uuid(),
+        }
+    }
+}
+
+/// The one place a [`PropertyOwner`] becomes a payload `owner`. `PropertyOwner` is the *typed* owner
+/// (exactly the two kinds the write path serves); `AnchorRef` is the *wire* owner (all nine anchor
+/// tables). Mapping in one impl keeps the narrowing honest — a new `PropertyOwner` arm cannot reach
+/// the wire without a match arm here.
+impl From<PropertyOwner> for AnchorRef {
+    fn from(owner: PropertyOwner) -> Self {
+        match owner {
+            PropertyOwner::Resource { id } => AnchorRef::resource(id),
+            PropertyOwner::Edge { id } => AnchorRef::edge(id),
         }
     }
 }

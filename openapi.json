@@ -3535,6 +3535,167 @@
         ]
       }
     },
+    "/api/relationships/{edge_handle}/facets": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Facets"
+        ],
+        "summary": "Read the live facets of one edge.",
+        "description": "Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay\nservice-direct on both surfaces by design (the trait projections are lossy), so this does not\nroute through the backend.",
+        "operationId": "list_edge_facets",
+        "parameters": [
+          {
+            "name": "edge_handle",
+            "in": "path",
+            "description": "Relationship edge handle",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The edge's live facets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeFacetsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Relationship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Facets"
+        ],
+        "summary": "Set a facet whose owner is an **edge** rather than a resource.",
+        "description": "A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about\nthe owner not being a payload choice: the edge is addressed in the path (matching every other\nedge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization\ngate is a different question. `DbBackend::set_facet` dispatches on the typed owner to\n`check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.\n\n**Both statuses are reachable, and they mean different things.** `404` for an edge that does not\nexist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather\nthan `Forbidden` on purpose, so the write never confirms the existence of a resource the caller\nhas no standing to see. `403` for an edge the caller can legitimately see but may not author\ninto: it fails source-write or container-write on the edge's home.\n\nAn earlier version of this comment claimed the endpoint returns \"404 rather than 403\" outright,\ntwelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was\nwrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row\nlookup and clause 3.",
+        "operationId": "set_edge_facet",
+        "parameters": [
+          {
+            "name": "edge_handle",
+            "in": "path",
+            "description": "Relationship edge handle",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgeFacetSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Facet set on the edge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cannot modify this relationship",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Relationship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/relationships/{edge_handle}/fold": {
       "parameters": [
         {
@@ -8270,6 +8431,102 @@
             ],
             "format": "uuid",
             "description": "The watermark the delta was computed against; `None` when the steward has never run for it."
+          }
+        }
+      },
+      "EdgeFacetRow": {
+        "type": "object",
+        "description": "One property row owned by an edge, as read back by\n`GET /api/relationships/{edge_handle}/facets`.\n\n**Carries its author, because an edge facet is an evidential claim.** The use case this exists\nfor is *\"this task witnesses clause X of goal G\"* on an `advances` edge — a statement a later\nreader weighs. Anyone with source-write and container-write on the edge may write one, which is\nnot the same set as the edge's asserter, so an unattributed row would let a planted claim read\nidentically to a steward's.\n\nAttribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set:\nidentity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`),\nand the row carries the profile **plus** its two human-readable `kb_profiles` columns so a\ncaller never needs a second round trip to name an author.\n\n**`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is\na masked surrogate whose id a replay re-mints, exactly as an audit's is.",
+        "required": [
+          "property_id",
+          "property_key",
+          "value",
+          "weight",
+          "authored_by_event_id"
+        ],
+        "properties": {
+          "authored_by_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authored_by_event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "`kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's\nreplay-stable identity."
+          },
+          "authored_by_handle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authored_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The profile behind that act's emitter entity. `None` only if the emitter has no profile,\nwhich no live write path produces — carried as an `Option` rather than fabricating an id."
+          },
+          "property_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "property_key": {
+            "type": "string",
+            "description": "`kb_properties.property_key`. `\"facet\"` for a clustering facet written by `facet_set`; an\narbitrary key for a single-valued property written by `property_set`."
+          },
+          "value": {},
+          "weight": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "EdgeFacetSetRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActInput",
+            "description": "Per-act correlation (`invocation_id`) + discrete agent authorship for the facet_set act."
+          },
+          {
+            "type": "object",
+            "required": [
+              "values"
+            ],
+            "properties": {
+              "values": {
+                "description": "The facet's typed value payload."
+              },
+              "weight": {
+                "type": "number",
+                "format": "double",
+                "description": "Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`]."
+              }
+            }
+          }
+        ],
+        "description": "Request body for `POST /api/relationships/{edge_handle}/facets` — a facet whose owner is an\n**edge**.\n\nA separate type from [`FacetSetRequest`] rather than an optional `edge` field on it, because the\nowner is not a payload choice: it is in the path, and it selects a different authorization gate\n(the edge's own mutability clauses, not `can_modify_resource`). Two shapes that can each be\nparsed into exactly one owner beat one shape carrying two optional ids that must then be\nvalidated into exactly one."
+      },
+      "EdgeFacetsResponse": {
+        "type": "object",
+        "description": "The live facets of one edge. Folded rows are excluded: folding an edge cascades to the\nproperties it owns, so a folded property here would mean a retracted relationship still\ncarrying live qualifiers.",
+        "required": [
+          "edge_handle",
+          "facets"
+        ],
+        "properties": {
+          "edge_handle": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeFacetRow"
+            }
           }
         }
       },

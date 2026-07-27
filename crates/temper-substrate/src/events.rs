@@ -28,6 +28,7 @@ use crate::payloads;
 use crate::scenario::model::LensDef;
 use anyhow::{Context, Result};
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::property_owner::PropertyOwner;
 use uuid::Uuid;
 
 /// The seeding event taxonomy (mirrors the `kb_event_types` seeding names registered in
@@ -256,8 +257,12 @@ pub enum SeedAction<'a> {
         home: EdgeHome,
         emitter: EntityId,
     },
+    /// Append a multi-valued facet (`property_key = "facet"`) to an owner. The owner is a
+    /// [`PropertyOwner`], not a `ResourceId`: a facet may qualify a **relationship** as well as a
+    /// thing, and the anchor the event lands on is resolved per owner kind by
+    /// `_property_owner_anchor` (a resource's home; an edge's own `home_anchor_*`).
     FacetSet {
-        resource: ResourceId,
+        owner: PropertyOwner,
         values: &'a serde_json::Value,
         weight: f64,
         emitter: EntityId,
@@ -734,14 +739,14 @@ pub async fn fire_with(
         }
 
         SeedAction::FacetSet {
-            resource,
+            owner,
             values,
             weight,
             emitter,
         } => {
             let payload = payloads::PropertyAsserted {
                 property_id: PropertyId::from(Uuid::now_v7()),
-                owner: payloads::AnchorRef::resource(resource),
+                owner: payloads::AnchorRef::from(owner),
                 property_key: "facet".into(),
                 value: values.clone(),
                 weight,

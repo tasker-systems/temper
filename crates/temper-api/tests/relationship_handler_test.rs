@@ -255,28 +255,35 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
         .await
         .expect("fold request failed");
 
-    assert_eq!(
-        fold_resp.status().as_u16(),
-        200,
-        "fold should return 200; body: {}",
-        fold_resp.text().await.unwrap_or_default()
-    );
-
-    let fold_ack: Value = app
-        .client
-        .post(app.url(&format!("/api/relationships/{edge_handle}/fold")))
-        .header("Authorization", format!("Bearer {token}"))
-        .json(&json!({ "reason": "test fold via HTTP second pass" }))
-        .send()
-        .await
-        .expect("second fold request failed")
-        .json()
-        .await
-        .expect("fold ack JSON");
-
+    let fold_status = fold_resp.status().as_u16();
+    // Read the body ONCE. This previously fired a *second* fold request purely to obtain a JSON
+    // ack, because `.text()` in the assert message had consumed the first response — scaffolding,
+    // not an idempotency assertion. It became load-bearing by accident when the edge tombstone
+    // floor landed, so the second call is removed rather than accommodated.
+    let fold_ack: Value = fold_resp.json().await.expect("fold ack JSON");
+    assert_eq!(fold_status, 200, "fold should return 200; body: {fold_ack}");
     assert!(
         fold_ack["edge_handle"].is_string(),
         "fold ack must contain edge_handle; got {fold_ack}"
+    );
+
+    // Re-folding is refused, and that is now ratified rather than incidental: `check_edge_mutable`
+    // carries the edge's tombstone floor (`NOT is_folded`), mirroring the rule
+    // `can_modify_resource` states for resources — *"a tombstone is unmodifiable on every axis"* —
+    // under which `delete_resource` likewise refuses a second delete. Retraction is not idempotent
+    // in this codebase, for edges or for resources.
+    let refold = app
+        .client
+        .post(app.url(&format!("/api/relationships/{edge_handle}/fold")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "reason": "second fold must be refused" }))
+        .send()
+        .await
+        .expect("second fold request failed");
+    assert_eq!(
+        refold.status().as_u16(),
+        404,
+        "re-folding a folded edge must be refused on the tombstone floor"
     );
 
     // Verify edge is marked folded in the DB. The ack's edge_handle IS the
