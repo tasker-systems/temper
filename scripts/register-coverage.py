@@ -75,12 +75,32 @@ CLAUSE_SECTION_RE = re.compile(
 )
 
 
+# A cancelled witness is a **named remainder**, not coverage. Retiring a witness is legitimate and
+# often correct; what must never happen is the clause it pointed at silently reading as covered
+# afterwards. So retired witnesses stay *listed* (the remainder must remain visible) and are excluded
+# from the covered/uncovered verdict. Every other stage — backlog, in-progress, done — counts: a filed
+# witness is a live claim of coverage even before it runs.
+RETIRED_STAGES = frozenset({"cancelled"})
+
+
 @dataclass
 class Clause:
     name: str
     withdrawn: bool = False
     witnesses: list = field(default_factory=list)
     enables: list = field(default_factory=list)
+
+    @property
+    def live_witnesses(self) -> list:
+        return [w for w in self.witnesses if w.stage not in RETIRED_STAGES]
+
+    @property
+    def retired_witnesses(self) -> list:
+        return [w for w in self.witnesses if w.stage in RETIRED_STAGES]
+
+    @property
+    def covered(self) -> bool:
+        return bool(self.live_witnesses)
 
 
 @dataclass
@@ -244,16 +264,21 @@ def print_report(report: dict) -> None:
     print("  `no-clause-is-uncovered-silently` forbids.")
     print()
     for clause in clauses.values():
-        mark = "WITHDRAWN" if clause.withdrawn else ("covered" if clause.witnesses else "UNCOVERED")
-        print(f"  {clause.name}  [{mark}]")
-        for citation in clause.witnesses:
+        mark = "WITHDRAWN" if clause.withdrawn else ("covered" if clause.covered else "UNCOVERED")
+        suffix = ""
+        if not clause.withdrawn and clause.retired_witnesses:
+            suffix = f"  ({len(clause.retired_witnesses)} retired — remainder, not coverage)"
+        print(f"  {clause.name}  [{mark}]{suffix}")
+        for citation in clause.live_witnesses:
             print(f"      witness  {citation.task_id}  ({citation.stage})  {citation.title[:60]}")
+        for citation in clause.retired_witnesses:
+            print(f"      RETIRED  {citation.task_id}  ({citation.stage})  {citation.title[:60]}")
         for citation in clause.enables:
             print(f"      enables  {citation.task_id}  ({citation.stage})  {citation.title[:60]}")
         if not clause.witnesses and not clause.enables:
             print("      (no citations)")
     print()
-    uncovered = [c for c in clauses.values() if not c.witnesses and not c.withdrawn]
+    uncovered = [c for c in clauses.values() if not c.covered and not c.withdrawn]
     print(f"  {len(clauses)} clauses · {len(uncovered)} uncovered")
     if uncovered:
         print("  An uncovered clause is not a defect. Check the register declares each one,")
@@ -318,9 +343,10 @@ def main() -> int:
                         {
                             "name": c.name,
                             "withdrawn": c.withdrawn,
-                            "witnesses": [w.task_id for w in c.witnesses],
+                            "witnesses": [w.task_id for w in c.live_witnesses],
+                            "retired_witnesses": [w.task_id for w in c.retired_witnesses],
                             "enables": [e.task_id for e in c.enables],
-                            "covered": bool(c.witnesses),
+                            "covered": c.covered,
                         }
                         for c in report["clauses"].values()
                     ],
