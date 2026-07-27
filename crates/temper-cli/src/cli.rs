@@ -1790,6 +1790,32 @@ pub enum EdgeAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Set a facet (typed property) on a relationship.
+    ///
+    /// Sends `POST /api/relationships/{edge_handle}/facets`. A facet here qualifies the *link* —
+    /// e.g. which clause of a goal a task's `advances` edge is evidence for — rather than either
+    /// endpoint. Authorizes through the same clauses as retype/reweight/fold.
+    Facet {
+        /// Correlation ID of the relationship to set the facet on
+        edge_handle: uuid::Uuid,
+        /// The facet's typed value payload, as a JSON string
+        #[arg(long)]
+        values: String,
+        /// Facet weight (default: 1.0)
+        #[arg(long, default_value = "1.0")]
+        weight: f64,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
+    /// List the live facets of a relationship.
+    ///
+    /// Sends `GET /api/relationships/{edge_handle}/facets`. Folding the edge folds its facets, so
+    /// every row returned belongs to a live relationship.
+    Facets {
+        /// Correlation ID of the relationship to read
+        edge_handle: uuid::Uuid,
+    },
 }
 
 #[cfg(test)]

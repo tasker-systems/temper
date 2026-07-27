@@ -17,6 +17,7 @@ use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::property_owner::PropertyOwner;
 use uuid::Uuid;
 
 /// Which materialize path the runner drives at each `materialize` step. `Full` recomputes every
@@ -190,7 +191,7 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                 fire(
                     &mut tx,
                     SeedAction::FacetSet {
-                        resource: rid,
+                        owner: PropertyOwner::resource(rid),
                         values: &values,
                         weight: f.weight(),
                         emitter: EntityId::from(loaded.emitter),
@@ -212,7 +213,7 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
             fire(
                 &mut tx,
                 SeedAction::FacetSet {
-                    resource: rid,
+                    owner: PropertyOwner::resource(rid),
                     values: &v,
                     weight: *weight,
                     emitter: EntityId::from(loaded.emitter),

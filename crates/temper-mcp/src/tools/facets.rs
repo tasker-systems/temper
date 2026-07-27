@@ -11,8 +11,9 @@ use serde::Deserialize;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
-use temper_core::types::facet_requests::FacetAck;
-use temper_core::types::ids::ProfileId;
+use temper_core::types::facet_requests::{EdgeFacetsResponse, FacetAck};
+use temper_core::types::ids::{EdgeId, ProfileId};
+use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, SetFacet, Surface};
 use uuid::Uuid;
@@ -79,7 +80,7 @@ pub async fn facet_set(
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
     let cmd = SetFacet {
-        resource,
+        owner: PropertyOwner::resource(resource),
         values: input.values,
         weight: input.weight.unwrap_or(1.0),
         act,
@@ -98,6 +99,94 @@ pub async fn facet_set(
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
+    )]))
+}
+
+/// MCP input for `edge_facet_set`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EdgeFacetSetInput {
+    /// The relationship's edge handle (the UUID `edge_assert` returned).
+    pub edge_handle: Uuid,
+    /// The facet's typed value payload.
+    pub values: serde_json::Value,
+    /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
+    pub weight: Option<f64>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
+}
+
+/// MCP input for `edge_facets` (read).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EdgeFacetsInput {
+    /// The relationship's edge handle.
+    pub edge_handle: Uuid,
+}
+
+/// Set a facet whose owner is an **edge** — a qualifier on a relationship rather than on a thing.
+///
+/// Mirrors `POST /api/relationships/{edge_handle}/facets`. The edge is addressed by its handle, not
+/// a resource ref, and the write authorizes through the edge's own mutability clauses (its source
+/// resource plus container-write on its home) rather than through `can_modify_resource`.
+///
+/// CLI equivalent: `temper edge facet <edge-handle> --values '<json>'`.
+pub async fn edge_facet_set(
+    svc: &TemperMcpService,
+    input: EdgeFacetSetInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+    let profile_id = ProfileId::from(profile.id);
+
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
+    let cmd = SetFacet {
+        owner: PropertyOwner::edge(EdgeId::from(input.edge_handle)),
+        values: input.values,
+        weight: input.weight.unwrap_or(1.0),
+        act,
+        origin: Surface::Mcp,
+    };
+
+    let backend = DbBackend::new(pool.clone(), profile_id);
+    let out = backend
+        .set_facet(cmd)
+        .await
+        .map_err(|e| map_err(e, "edge_facet_set"))?;
+
+    let ack = FacetAck {
+        id: Uuid::from(out.value),
+        property_id: Uuid::from(out.value),
+    };
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&ack),
+    )]))
+}
+
+/// Read the live facets of one edge. Service-direct, like every other read.
+pub async fn edge_facets(
+    svc: &TemperMcpService,
+    input: EdgeFacetsInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let facets = temper_services::services::edge_service::list_edge_facets(
+        &svc.api_state.pool,
+        profile.id,
+        input.edge_handle,
+    )
+    .await
+    .map_err(|e| map_err(TemperError::from(e), "edge_facets"))?;
+
+    let out = EdgeFacetsResponse {
+        edge_handle: input.edge_handle,
+        facets,
+    };
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&out),
     )]))
 }
 

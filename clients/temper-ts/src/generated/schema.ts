@@ -949,6 +949,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/relationships/{edge_handle}/facets": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the live facets of one edge.
+         * @description Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay
+         *     service-direct on both surfaces by design (the trait projections are lossy), so this does not
+         *     route through the backend.
+         */
+        get: operations["list_edge_facets"];
+        put?: never;
+        /**
+         * Set a facet whose owner is an **edge** rather than a resource.
+         * @description A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about
+         *     the owner not being a payload choice: the edge is addressed in the path (matching every other
+         *     edge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization
+         *     gate is a different question. `DbBackend::set_facet` dispatches on the typed owner to
+         *     `check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.
+         *
+         *     **Both statuses are reachable, and they mean different things.** `404` for an edge that does not
+         *     exist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather
+         *     than `Forbidden` on purpose, so the write never confirms the existence of a resource the caller
+         *     has no standing to see. `403` for an edge the caller can legitimately see but may not author
+         *     into: it fails source-write or container-write on the edge's home.
+         *
+         *     An earlier version of this comment claimed the endpoint returns "404 rather than 403" outright,
+         *     twelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was
+         *     wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row
+         *     lookup and clause 3.
+         */
+        post: operations["set_edge_facet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/relationships/{edge_handle}/fold": {
         parameters: {
             query?: never;
@@ -2548,6 +2592,79 @@ export interface components {
              * @description The watermark the delta was computed against; `None` when the steward has never run for it.
              */
             watermark?: string | null;
+        };
+        /**
+         * @description One property row owned by an edge, as read back by
+         *     `GET /api/relationships/{edge_handle}/facets`.
+         *
+         *     **Carries its author, because an edge facet is an evidential claim.** The use case this exists
+         *     for is *"this task witnesses clause X of goal G"* on an `advances` edge — a statement a later
+         *     reader weighs. Anyone with source-write and container-write on the edge may write one, which is
+         *     not the same set as the edge's asserter, so an unattributed row would let a planted claim read
+         *     identically to a steward's.
+         *
+         *     Attribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set:
+         *     identity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`),
+         *     and the row carries the profile **plus** its two human-readable `kb_profiles` columns so a
+         *     caller never needs a second round trip to name an author.
+         *
+         *     **`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is
+         *     a masked surrogate whose id a replay re-mints, exactly as an audit's is.
+         */
+        EdgeFacetRow: {
+            authored_by_display_name?: string | null;
+            /**
+             * Format: uuid
+             * @description `kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's
+             *     replay-stable identity.
+             */
+            authored_by_event_id: string;
+            authored_by_handle?: string | null;
+            /**
+             * Format: uuid
+             * @description The profile behind that act's emitter entity. `None` only if the emitter has no profile,
+             *     which no live write path produces — carried as an `Option` rather than fabricating an id.
+             */
+            authored_by_profile_id?: string | null;
+            /** Format: uuid */
+            property_id: string;
+            /**
+             * @description `kb_properties.property_key`. `"facet"` for a clustering facet written by `facet_set`; an
+             *     arbitrary key for a single-valued property written by `property_set`.
+             */
+            property_key: string;
+            value: unknown;
+            /** Format: double */
+            weight: number;
+        };
+        /**
+         * @description Request body for `POST /api/relationships/{edge_handle}/facets` — a facet whose owner is an
+         *     **edge**.
+         *
+         *     A separate type from [`FacetSetRequest`] rather than an optional `edge` field on it, because the
+         *     owner is not a payload choice: it is in the path, and it selects a different authorization gate
+         *     (the edge's own mutability clauses, not `can_modify_resource`). Two shapes that can each be
+         *     parsed into exactly one owner beat one shape carrying two optional ids that must then be
+         *     validated into exactly one.
+         */
+        EdgeFacetSetRequest: components["schemas"]["ActInput"] & {
+            /** @description The facet's typed value payload. */
+            values: unknown;
+            /**
+             * Format: double
+             * @description Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
+             */
+            weight?: number;
+        };
+        /**
+         * @description The live facets of one edge. Folded rows are excluded: folding an edge cascades to the
+         *     properties it owns, so a folded property here would mean a retracted relationship still
+         *     carrying live qualifiers.
+         */
+        EdgeFacetsResponse: {
+            /** Format: uuid */
+            edge_handle: string;
+            facets: components["schemas"]["EdgeFacetRow"][];
         };
         /**
          * Format: uuid
@@ -6934,6 +7051,116 @@ export interface operations {
                 };
             };
             /** @description Source resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_edge_facets: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Relationship edge handle */
+                edge_handle: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The edge's live facets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeFacetsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Relationship not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    set_edge_facet: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Relationship edge handle */
+                edge_handle: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EdgeFacetSetRequest"];
+            };
+        };
+        responses: {
+            /** @description Facet set on the edge */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetAck"];
+                };
+            };
+            /** @description Invalid payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Cannot modify this relationship */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Relationship not found */
             404: {
                 headers: {
                     [name: string]: unknown;

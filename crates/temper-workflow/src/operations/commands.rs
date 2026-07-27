@@ -15,6 +15,7 @@ use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{BlockId, CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
+use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::provenance::ProvenanceSource;
 
 use super::{
@@ -298,7 +299,11 @@ pub struct FoldRelationship {
 /// salience/confidence weight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetFacet {
-    pub resource: ResourceId,
+    /// What the facet hangs off — a resource, or an **edge** (a facet qualifying a relationship
+    /// rather than a thing). Typed rather than a bare id because the two authorize differently:
+    /// a resource-owned facet gates on `can_modify_resource`, an edge-owned one on the edge's own
+    /// mutability clauses. Keeping the owner typed is what makes that dispatch exhaustive.
+    pub owner: PropertyOwner,
     pub values: serde_json::Value,
     pub weight: f64,
     /// Per-act correlation + authorship — stamps the authored `facet_set` act. Empty by

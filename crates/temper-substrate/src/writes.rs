@@ -22,6 +22,7 @@ use crate::ids::{
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
+use temper_core::types::property_owner::PropertyOwner;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
 
@@ -776,20 +777,24 @@ pub async fn set_charter_in_tx(
     .charter()
 }
 
-/// Set the **clustering** facet on a resource — one `kb_properties` row with `property_key='facet'`
+/// Set the **clustering** facet on an owner — one `kb_properties` row with `property_key='facet'`
 /// holding the whole `values` object (e.g. `{layer: concept}`). This is what materialization/affinity
 /// read. NOT interchangeable with [`set_property`] (Decision #6): `provenance` is per-key, not a
 /// clustering facet.
+///
+/// The owner is a [`PropertyOwner`], so a facet may hang off an **edge** as well as a resource. The
+/// event still anchors on a context or cogmap either way — `_property_owner_anchor` resolves it from
+/// the resource's home, or from the edge's own `home_anchor_*` columns.
 pub async fn set_facet(
     pool: &PgPool,
-    resource: ResourceId,
+    owner: PropertyOwner,
     values: &serde_json::Value,
     weight: f64,
     emitter: EntityId,
 ) -> Result<PropertyId> {
     set_facet_with(
         pool,
-        resource,
+        owner,
         values,
         weight,
         emitter,
@@ -803,14 +808,14 @@ pub async fn set_facet(
 /// `kb_properties.id` the fire produced (surfaced from `Fired::Facet`).
 pub async fn set_facet_with(
     pool: &PgPool,
-    resource: ResourceId,
+    owner: PropertyOwner,
     values: &serde_json::Value,
     weight: f64,
     emitter: EntityId,
     ctx: EventContext,
 ) -> Result<PropertyId> {
     let mut tx = begin_scoped(pool).await?;
-    let property_id = set_facet_in_tx(&mut tx, resource, values, weight, emitter, ctx).await?;
+    let property_id = set_facet_in_tx(&mut tx, owner, values, weight, emitter, ctx).await?;
     tx.commit().await?;
     Ok(property_id)
 }
@@ -820,7 +825,7 @@ pub async fn set_facet_with(
 /// the `kb_properties.id` the fire produced.
 pub async fn set_facet_in_tx(
     conn: &mut sqlx::PgConnection,
-    resource: ResourceId,
+    owner: PropertyOwner,
     values: &serde_json::Value,
     weight: f64,
     emitter: EntityId,
@@ -829,7 +834,7 @@ pub async fn set_facet_in_tx(
     fire_with(
         conn,
         SeedAction::FacetSet {
-            resource,
+            owner,
             values,
             weight,
             emitter,

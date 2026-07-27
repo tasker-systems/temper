@@ -14,6 +14,7 @@ use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, PropertyId};
+use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, CommandOutput, CreateResource, SetFacet, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
@@ -61,7 +62,7 @@ async fn set_facet_returns_property_id_and_gates_auth(pool: PgPool) {
         backend_with_context(&pool, "facet-other@example.com").await;
     let denied = other_backend
         .set_facet(SetFacet {
-            resource,
+            owner: PropertyOwner::resource(resource),
             values: serde_json::json!({"k": "v"}),
             weight: 1.0,
             act: ActContext::default(),
@@ -87,7 +88,7 @@ async fn set_facet_returns_property_id_and_gates_auth(pool: PgPool) {
         value: property_id, ..
     } = owner_backend
         .set_facet(SetFacet {
-            resource,
+            owner: PropertyOwner::resource(resource),
             values: serde_json::json!({"k": "v"}),
             weight: 1.0,
             act: ActContext::default(),

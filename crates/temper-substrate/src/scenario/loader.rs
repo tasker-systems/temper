@@ -15,6 +15,7 @@ use crate::scenario::model::*;
 use anyhow::{Context, Result};
 use sqlx::{PgConnection, PgPool};
 use std::collections::HashMap;
+use temper_core::types::property_owner::PropertyOwner;
 use uuid::Uuid;
 
 pub struct Loaded {
@@ -199,7 +200,7 @@ async fn load_resources(
             fire(
                 &mut *tx,
                 SeedAction::FacetSet {
-                    resource: rid,
+                    owner: PropertyOwner::resource(rid),
                     values: &values,
                     weight: f.weight(),
                     emitter,
