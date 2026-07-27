@@ -52,10 +52,23 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  *   4. ✅ The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
  *      ride an auto-deploy of `main`. Until an operator runs it, `/api/auditor/dispatch` 500s.
  *
- * **Do not restore this file by itself.** Its trigger model is being redesigned — task
- * `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`, register
- * `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md` — and that work
- * changes the cadence, the selection predicate, and the dispatch payload this handler sends. The
+ * **Do not restore this file by itself — but the reason has changed, so read this rather than
+ * assuming.** The trigger-model redesign is **DONE**, not in flight: task
+ * `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` closed 2026-07-26 with tier 1 shipped
+ * (`20260726000010_auditor_tier1_staleness.sql`, selection is `uncovered OR stale`), and tier 2 was
+ * deferred onto `019f9bb3-e2cf-7710-9b90-db4ebefb8f64`, which closed 2026-07-27 retargeted onto the
+ * steward (PR #557). F9 — "verify pg_uuidv7 ordering on Neon" — was **dissolved**, not verified:
+ * rev. 3 of the design changed the comparand to a timestamp, so no generator dependency remains.
+ *
+ * What still stands is **D6, and it is a build item, not a design one**: the dispatch payload is
+ * finding-grained (`AuditJobPayload::findings`, `ClaimedAuditJob::findings`) while the unit of work
+ * is citation-grained, and the prompt below *actively forbids* the re-check that would compensate
+ * ("you do not need to re-check whether they need auditing"). Measured on production 2026-07-27:
+ * finding `019f5cdd-ba0b-7fa2-90b1-e78ca7979254` was audited on one of its 8 citations and is STILL
+ * returned by the sweep at `uncovered: 7` — so a restored hourly tick re-dispatches it and the agent
+ * emits verdicts on all 8, re-auditing the one already weighed. Register §3.
+ *
+ * The cadence and the selection predicate below are settled; only the payload grain is not. The
  * register also records that the dispatch prompt below tells the agent not to re-check whether a
  * finding needs auditing (finding grain) while its unit of work is a citation (citation grain),
  * which duplicates verdicts on already-audited citations. Restoring is `git mv` back into
