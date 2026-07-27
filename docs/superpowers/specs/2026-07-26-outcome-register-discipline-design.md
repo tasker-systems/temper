@@ -34,7 +34,8 @@ or to an agent in an explicit meta-goal frame — never to a clause inside the g
 | The coverage query | **runs, not packaged** — first run caught a real dangling citation | ad-hoc script, 2026-07-26 |
 | The expressibility check | **not built** | needs the taxonomy |
 | Project taxonomy (`domain` resources) | **not built** — zero rows in `@me/temper` | needs `open_meta.schema.json` v3 |
-| Citation as a facet on the `advances` edge | **not built; substrate never exercised** — zero edge-owned properties in production | task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
+| Edge-owned properties (the precondition) | **built 2026-07-27** — write + read at MCP/API/CLI parity, fold cascades | migration `20260727000020`; task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
+| Citation as a facet on the `advances` edge | **not built** — the path now exists; moving the citation onto it is still to do | spec §5.1.1 |
 | `temper warmup` as the read surface | **exists, unfit, and untouched** — still emits last session's body; carries no goals or clauses | `crates/temper-cli/src/commands/warmup.rs` |
 | The installable skill | **written, not yet merged** — Part I ships as `outcome-registers.md`; the four always-in-force rules ship in `SKILL.md` itself | `crates/temper-cli/skill-content/outcome-registers.md` |
 | Session-open on standing state | **written, not yet merged** — hand-rolled from `list --type goal --status active`, *not* from `warmup` | `crates/temper-cli/skill-content/session-lifecycle.md` |
@@ -575,17 +576,57 @@ session actually closes, rather than in the on-demand file. That task stays open
 
 # Part VI — Sequencing
 
-| # | Step | Depends on |
-|---|---|---|
-| 0 | **Precondition** — edge-owned properties get read and write surfaces, MCP + API + CLI | nothing |
-| 1 | The discipline as a shipped skill file plus router entry | nothing |
-| 2 | The recognized `open_meta` conventions — an `open_meta.schema.json` version bump | nothing |
-| 3 | The two checks, **and `warmup` redesigned to consume them** | step 2 |
-| 4 | **Dogfood** — hand-author temper's own taxonomy | steps 1–3 |
-| 5 | Amend goal `019f9a34-3306-70d1-b07a-f23c99943751`'s executable-spine clause | nothing |
+| # | Step | Depends on | State |
+|---|---|---|---|
+| 0 | **Precondition** — edge-owned properties get read and write surfaces, MCP + API + CLI | nothing | **done 2026-07-27** |
+| 1 | The discipline as a shipped skill file plus router entry | nothing | **done** (PR #552) |
+| 2 | The recognized `open_meta` conventions — an `open_meta.schema.json` version bump | **step 0** | not started |
+| 3 | The two checks, **and `warmup` redesigned to consume them** | step 2 | not started |
+| 4 | **Dogfood** — hand-author temper's own taxonomy | steps 1–3 | not started |
+| 5 | Amend goal `019f9a34-3306-70d1-b07a-f23c99943751`'s executable-spine clause | nothing | landed in the 2026-07-26 redraft |
 
-Steps 1 and 2 are independent. **Step 0 is not on the critical path for guidance-in-temper** — it serves
-the citation-as-edge-facet work only. Step 4 is where the coverage and bite checks are actually taken.
+Step 4 is where the coverage and bite checks are actually taken.
+
+**Correction, 2026-07-27: step 2 now depends on step 0, and the earlier claim that it did not was
+wrong** [decided — Pete, 2026-07-27]. This document previously said *"Steps 1 and 2 are independent.
+Step 0 is not on the critical path for guidance-in-temper — it serves the citation-as-edge-facet work
+only."*
+
+A carrier review of every key the convention proposes or writes
+(research `019fa43c-b4c7-7521-94ef-c394f95e616c`) found that three of them are **relations, not
+properties**, and belong on edges with their clause qualifiers as edge facets:
+
+| Key | Carrier | Why |
+|---|---|---|
+| `witnesses.goal` | edge — **already exists** | `--goal` mints `leads_to`/`advances`; the `open_meta` copy is a second spelling of a link that is already an edge |
+| `witnesses.clauses` · `enables.clauses` | facet on that edge | qualifies the *link*, not the task |
+| `witnesses.child_of` | edge — label already exists | `part_of` (163) and `parent_of` (372) are already in the corpus. **Never written**; delete rather than recognize |
+| `enables.goal` | edge | same shape, distinct relation — see the label collision below |
+| `register` | edge | a bare UUID pointing at the governing resource is a link |
+| `witness.{id,mode,floor,bites_against}` | property — genuinely | describes the task, points at nothing |
+| `witness.route` | **drop** | never written, and no one can say what it would carry |
+
+So a v3 bump that recognizes `witnesses`/`enables`/`register` would be recognizing keys we intend to
+retire. Only `witness` and the taxonomy keys are unambiguously `open_meta`.
+
+**The general finding underneath it** [observed — production, 2026-07-27]: `open_meta` relationship
+keys mint no edges and never have. `FieldCategory::Relationship`
+(`crates/temper-workflow/src/frontmatter/registry.rs:22-27`) is documented as recording *"whether they
+contribute edges"*, and its only reference outside the registry is a unit test. All **3,733** edges in
+production were minted by `relationship_asserted`; none by `resource_created`/`resource_updated`. So
+`relates_to: [...]` writes a property and no edge, while `edge assert --label relates_to` writes an
+edge and no property — 372 properties against 940 edges, with nothing tying them.
+
+**Two naming decisions taken with the review** [decided — Pete, 2026-07-27]:
+
+- **The register's enabling relation gets a new edge label.** An `enables` label already exists in
+  production — 6 `leads_to` edges, newest 2026-07-16, predating this convention — and it means
+  work→work unblocking (*"PR #464 merged"* → *"NEXT blocker: legacy-profile emitter-entities"*). The
+  register's `enables` points a task at a **clause**. Same word, different relation; reusing the label
+  would merge two meanings silently.
+- **`witness.clause` is dropped.** It holds prose (*"§6 — the refusal face, rung R10: …"*) while
+  `witnesses.clauses` on the same resource holds a readable clause name. Two fields that read as one
+  citation. The description belongs in the task body; the citation has one home.
 
 ---
 ---
