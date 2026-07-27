@@ -25,10 +25,10 @@ Temper supports two kinds of machine credential. Pick by **who owns the secret**
 | **`issuer` recorded** | `auth0-m2m` | `temper` |
 | **Use when** | you already run an IdP and want it to keep minting M2M tokens | you want Temper to be the whole loop — no external IdP |
 
-Both create the same thing on Temper's side: an agent profile, its emitter entities, its
-gating-team enrollment, and a `kb_machine_clients` registration row. The difference is only where
-the secret and token-minting live. A token from either kind is verified the same way and rides the
-same authorization rails.
+Both create the same thing on Temper's side: an agent profile, its emitter entities, the reach you
+name, and a `kb_machine_clients` registration row. The difference is only where the secret and
+token-minting live. A token from either kind is verified the same way and rides the same
+authorization rails.
 
 ```bash
 # External IdP: register an Auth0 M2M app you already created
@@ -36,7 +36,17 @@ temper admin machine provision --client-id <auth0-client-id> --label "acme ci"
 
 # Temper-issued: Temper mints the id and secret; the secret prints once
 temper admin machine issue --label "acme steward"
+
+# EITHER WAY, then admit it — both commands create the principal DENIED.
+temper admin access approve <profile_id>
 ```
+
+> **Registering a machine does not admit it.** Every mint door births the principal `denied`, so a
+> correctly registered machine with correct reach still gets `403 SYSTEM_ACCESS_REQUIRED` on every
+> single call until `temper admin access approve <profile_id>` runs. Nothing fails earlier — the
+> secret works, the token mints, the claims are valid — so this is the step that gets skipped and
+> then looks like a broken credential. Use the `profile_id` from the `provision`/`issue` output;
+> `temper admin access revoke` reverses it.
 
 > The `issue` command prints the plaintext secret **exactly once**. Temper stores only its hash and
 > cannot recover it — capture it at mint time or rotate to get a new one.

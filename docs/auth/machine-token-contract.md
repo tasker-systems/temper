@@ -212,21 +212,38 @@ sum removed the routing drift (#384) and the shared ladder removed the construct
       by `temper admin machine provision` / `issue`, ahead of this call.
       Never reconcile_by_email. Then the `is_active` gate.
 
-5. require_system_access gates the agent on the ordinary rails: open mode admits;
-      a gated instance (temperkb.io) denies until the agent profile holds gating-team
-      membership. Registration enrolls it (as `watcher`) when the minter is themselves a
-      gating-team member; authoring into a cogmap still needs an explicit write grant.
+5. require_system_access gates the agent on the ordinary rails — and since D11
+      (`20260720000110_repoint_predicates.sql`) those rails are ONE authoritative state in
+      one table: `has_system_access` reads `kb_principal_standing`. No access_mode, no
+      gating-team membership. Every mint door BIRTHS THE PRINCIPAL `denied`
+      (`machine_registration_service.rs:270-280`) — including a machine minted by an admin —
+      so registration alone never clears this gate. Admission is a separate operator act:
+      `temper admin access approve <profile-id>`. Authoring into a cogmap still needs an
+      explicit write grant.
 ```
+
+> **Registration is not admission, and the difference has no deploy-time symptom.** A
+> provisioned-but-unadmitted machine mints a perfectly valid token and gets `403
+> SYSTEM_ACCESS_REQUIRED` on every call. This bit the citation auditor's first live run
+> (2026-07-27): app, client grant, registration and reach were all correct, and every request
+> still 403'd until `temper admin access approve` ran. The design is deliberate —
+> *"a minter who cannot confer access is moot when minting never confers any"* — but the
+> **step is easy to omit precisely because nothing before it fails.**
 
 ## Operator runbook: standing up an M2M agent
 
-Two shapes, one Temper-side step. The operator-facing guide is
+Two shapes, **two** Temper-side steps — register, then admit. The operator-facing guide is
 [../guides/machine-credentials.md](../guides/machine-credentials.md); this is the
 contributor's view of what each command makes true.
 
 **Either way, `temper admin machine …` is not optional.** Since G3 Phase A there is **no
 auto-provisioning**: the agent profile is created by the *registration*, and an
 unregistered `client_id` is a 401 no matter how valid its token is.
+
+**And registration is not admission.** Since D11 every mint door births the principal
+`denied`, so a correctly registered machine still gets `403 SYSTEM_ACCESS_REQUIRED` on
+every call until `temper admin access approve <profile-id>` runs. Both steps appear in
+each shape below; omitting the second fails at *runtime*, never at provision time.
 
 ### A. Temper is the issuer (no external IdP)
 
@@ -235,6 +252,9 @@ unregistered `client_id` is a 401 no matter how valid its token is.
 temper admin machine issue --label "Temper Steward" \
   --team <team-ref>:member \
   --cogmap <cogmap-ref>
+
+# Then ADMIT it — `issue` births it `denied` exactly as `provision` does.
+temper admin access approve <profile-id-from-the-issue-output>
 ```
 
 ### B. Auth0 holds the secret
@@ -251,13 +271,17 @@ auth0 apps create --name "Temper Steward M2M" --type m2m --reveal-secrets --no-i
 auth0 api post client-grants \
   --data '{"client_id":"<CLIENT_ID>","audience":"https://temperkb.io/api","scope":[]}'
 
-# 3. Register it with Temper — this creates the agent profile, its emitters, its gating-team
-#    enrollment, and the reach you name. NOTHING is auto-provisioned by the token.
+# 3. Register it with Temper — this creates the agent profile, its emitters, and the reach
+#    you name. NOTHING is auto-provisioned by the token. Note the `profile_id` it returns.
 temper admin machine provision --client-id <CLIENT_ID> --label "Temper Steward" \
   --team <team-ref>:member \
   --cogmap <cogmap-ref>
 
-# 4. (Verify) mint a token and confirm the claim shape. FORM-ENCODED — Auth0 tolerates JSON,
+# 4. ADMIT it. Registration births it `denied` (D11), so without this every authenticated
+#    call returns 403 SYSTEM_ACCESS_REQUIRED. Reversible with `temper admin access revoke`.
+temper admin access approve <profile_id-from-step-3>
+
+# 5. (Verify) mint a token and confirm the claim shape. FORM-ENCODED — Auth0 tolerates JSON,
 #    Temper's own AS does not, so form-encode everywhere and the same client works on both.
 curl -s --request POST --url https://temperkb.us.auth0.com/oauth/token \
   --header 'content-type: application/x-www-form-urlencoded' \
@@ -274,10 +298,15 @@ IdP *application* — a new `client_id` — needs `temper admin machine rebind`,
 new id to the existing agent profile. A temper-issued secret rotates with
 `temper admin machine rotate-secret`.
 
-Reach (`--team`, `--cogmap`) is **plural and explicit**, and is what clears the
-`system_access` gate and the cogmap write gate on a gated instance (temperkb.io). It is never
-inferred from `--owner-team`, which records the machine's *owner* and is never consulted for
+Reach (`--team`, `--cogmap`) is **plural and explicit**, and is what clears the *resource*
+gates — visibility and cogmap write — on a gated instance (temperkb.io). It is never inferred
+from `--owner-team`, which records the machine's *owner* and is never consulted for
 authorization.
+
+**Reach does not clear `system_access`.** Post-D11 that gate reads `kb_principal_standing`
+alone, so no amount of team or cogmap reach substitutes for `temper admin access approve`.
+The two are orthogonal: reach decides *what* the principal may touch, admission decides
+*whether it may act at all*.
 
 ### C. The citation auditor — a SECOND principal, and read-only reach
 
@@ -288,7 +317,21 @@ are both load-bearing. Register it the same way (Auth0 app → client-grant → 
 temper admin machine provision --client-id <AUDITOR_CLIENT_ID> --label "citation auditor" \
   --team <team-ref>:member
 # NOTE: no bare `--cogmap <ref>`. If you grant cogmap reach at all, it MUST be `:ro`.
+
+temper admin access approve <profile_id>   # D11: born `denied`; without this every call 403s
 ```
+
+> **Done on temperkb.io, 2026-07-27, and exercised end to end.** Auth0 app
+> `Temper Citation Auditor M2M` (`EcbiQJWxSDbhSMfTPMCOEBQboDa5CMua`), client grant
+> `cgr_O6NxtahD6T1Hbijs` for `https://temperkb.io/api`, machine row
+> `019fa583-1173-7d3c-952d-183ed838a3da`, agent profile
+> `019fa583-1142-7121-bd67-597945e5f45f`, reach `+personal-j-cole-taylor:member` and **zero**
+> rows in `kb_access_grants`. First audit `019fa592-c374-76f1-824a-0976253fd9e8` recorded the
+> same day — the corpus's first, attributed to the auditor and not to its operator.
+>
+> The read the auditor needs came from **team membership alone**, exactly as the paragraph
+> below predicts: the two grants on that cogmap are profile-anchored (to the human owner and
+> to the steward), so there was no team-anchored write for the auditor to inherit.
 
 **1. It must not share the steward's `client_id`.** One credential is one
 `emitter_entity_id`, so a shared client would leave the ledger unable to tell an audit from

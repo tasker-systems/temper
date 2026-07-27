@@ -28,18 +28,28 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  * against production is an operator decision, and it was never taken.
  *
  * **This is not a fix for the credential.** Nothing here is broken in a way a token would repair.
- * Three independent gates stand between this file and a single audit row, and the token is only
- * the first:
+ * FOUR independent gates stand between this file and a single audit row, and the token is only
+ * the first. (This list said "three" until 2026-07-27 and omitted gate 3 — which was already
+ * true when the list was written, D11 having landed five days earlier. All four are now CLOSED
+ * on temperkb.io; the list is kept because restoring this file is not the only path back here.)
  *
- *   1. A SECOND machine principal, provisioned per `machine-token-contract.md` §C — its own IdP
+ *   1. ✅ A SECOND machine principal, provisioned per `machine-token-contract.md` §C — its own IdP
  *      application, `--team <ref>:member`, and cogmap reach absent or `:ro`. Never the steward's
  *      client_id: one credential is one `kb_events.emitter_entity_id`, so a shared client makes
  *      every steward-authored citation self-authored to the auditor (`AuditAuthority::Author`)
  *      and 404s every audit. A *writable* `--cogmap` grant does the same thing through
  *      `can_modify_resource`.
- *   2. Registration in `kb_machine_clients` — `resolve_machine_from_claims` is lookup-or-401,
+ *      Done 2026-07-27: `EcbiQJWxSDbhSMfTPMCOEBQboDa5CMua`, profile
+ *      `019fa583-1142-7121-bd67-597945e5f45f`.
+ *   2. ✅ Registration in `kb_machine_clients` — `resolve_machine_from_claims` is lookup-or-401,
  *      with no JIT create branch.
- *   3. The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
+ *   3. ✅ ADMISSION. Since D11 (`20260720000110_repoint_predicates.sql`) `has_system_access`
+ *      reads `kb_principal_standing` alone, and every mint door births the principal `denied`
+ *      — reach does NOT clear it. A registered, correctly-reached machine still 403s
+ *      `SYSTEM_ACCESS_REQUIRED` on every call until `temper admin access approve <profile>`
+ *      runs. This gate has no deploy-time symptom whatsoever: the token mints, the claims are
+ *      perfect, and every request fails. It is the one that actually bit on 2026-07-27.
+ *   4. ✅ The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
  *      ride an auto-deploy of `main`. Until an operator runs it, `/api/auditor/dispatch` 500s.
  *
  * **Do not restore this file by itself.** Its trigger model is being redesigned — task

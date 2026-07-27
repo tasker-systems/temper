@@ -21,10 +21,15 @@ project ships the **citation auditor** (Set 5) as a declared subagent at `agent/
 > cron for it — eve creates one Vercel Cron Job per file in `agent/schedules/`. It shipped enabled in
 > PR #531, fired hourly from 2026-07-24T23:16Z, and failed every tick on an unprovisioned
 > `TEMPER_AUDITOR_TOKEN` until it was withdrawn on 2026-07-25. Read that file's header before
-> restoring it: three gates stand between it and a working audit, and its trigger model is being
-> redesigned (register:
-> `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md`). The subagent, its
-> channel, tools and instructions are all live and unchanged — only the trigger is gone.
+> restoring it: it enumerates **four** gates between this file and a working audit (its own list
+> said "three" until 2026-07-27 — it omitted the post-D11 system-access admission, which is the
+> one that actually bit). **All four are now closed** as of 2026-07-27: the auditor principal is
+> provisioned, registered, admitted, and has recorded a real audit against production. What
+> remains is deliberate — the trigger model is still being redesigned (register:
+> `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md`), and turning a
+> production cron back on is an operator decision, not a consequence of the gates clearing. The
+> subagent, its channel, tools and instructions are all live and unchanged — only the trigger is
+> gone.
 
 Code
 colocation does not create epistemic dependence — the two have separate instructions, separate
