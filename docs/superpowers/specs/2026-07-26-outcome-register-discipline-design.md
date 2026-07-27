@@ -34,7 +34,7 @@ or to an agent in an explicit meta-goal frame — never to a clause inside the g
 | The coverage query | **runs, not packaged** — first run caught a real dangling citation | ad-hoc script, 2026-07-26 |
 | The expressibility check | **not built** | needs the taxonomy |
 | Project taxonomy (`domain` resources) | **not built** — zero rows in `@me/temper` | needs `open_meta.schema.json` v3 |
-| Edge-owned properties (the precondition) | **built 2026-07-27** — write + read at MCP/API/CLI parity, fold cascades | migration `20260727000020`; task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
+| Edge-owned properties (the precondition) | **built 2026-07-27** — write + read at MCP/API/CLI parity, fold cascades | migration `20260727000030`; task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
 | Citation as a facet on the `advances` edge | **not built** — the path now exists; moving the citation onto it is still to do | spec §5.1.1 |
 | `temper warmup` as the read surface | **exists, unfit, and untouched** — still emits last session's body; carries no goals or clauses | `crates/temper-cli/src/commands/warmup.rs` |
 | The installable skill | **written, not yet merged** — Part I ships as `outcome-registers.md`; the four always-in-force rules ship in `SKILL.md` itself | `crates/temper-cli/skill-content/outcome-registers.md` |

@@ -4,7 +4,7 @@
 //! `migrations/20260624000001_canonical_schema.sql:656` has admitted an edge owner since the
 //! canonical schema ("§4a edges carry facets"), and nothing ever wrote one: production on
 //! 2026-07-27 held 10,692 resource-owned properties, 37 block-owned, and **zero** edge-owned.
-//! Migration `20260727000020` builds the path.
+//! Migration `20260727000030` builds the path.
 //!
 //! These tests pin the three things that were genuinely unknown because the path had never run,
 //! rather than the things that merely looked risky:
