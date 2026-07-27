@@ -35,8 +35,9 @@ or to an agent in an explicit meta-goal frame — never to a clause inside the g
 | The expressibility check | **not built** | needs the taxonomy |
 | Project taxonomy (`domain` resources) | **not built** — zero rows in `@me/temper` | needs `open_meta.schema.json` v3 |
 | Citation as a facet on the `advances` edge | **not built; substrate never exercised** — zero edge-owned properties in production | task `019fa03a-913b-7141-a173-1c804d9b7ccd` |
-| `temper warmup` as the read surface | **exists, unfit** — emits last session's body; carries no goals or clauses | `crates/temper-cli/src/commands/warmup.rs` |
-| The installable skill | **not written** | — |
+| `temper warmup` as the read surface | **exists, unfit, and untouched** — still emits last session's body; carries no goals or clauses | `crates/temper-cli/src/commands/warmup.rs` |
+| The installable skill | **written, not yet merged** — Part I ships as `outcome-registers.md`; the four always-in-force rules ship in `SKILL.md` itself | `crates/temper-cli/skill-content/outcome-registers.md` |
+| Session-open on standing state | **written, not yet merged** — hand-rolled from `list --type goal --status active`, *not* from `warmup` | `crates/temper-cli/skill-content/session-lifecycle.md` |
 
 ## Why we are doing it
 
@@ -550,6 +551,25 @@ OpenAPI presence, and no consumer of the shape was found.]
 - **`session-lifecycle.md`** gains the criteria-in-force projection at session open.
 - **The summary-statement discipline folds in** at loop step 7 rather than shipping separately — already
   filed as task `019f9aa5-ec66-7230-812d-4c14b5d7ed58`.
+
+**Built 2026-07-27. The routing split is decided here rather than above** [decided — Pete,
+2026-07-27]. `outcome-registers.md` is ~230 lines that only a goal-authoring session needs, so loading
+it on every task start would be a standing tax on work that authors no goal. It is reached **on
+demand** from the routing table, while the four rules always in force — clauses name no mechanism ·
+witnesses are authored during the build · coverage is never inferred from absence · the discipline
+detects and does not decide — ship **inside `SKILL.md`**, which is loaded whole.
+
+The failure this split has to survive already happened once: `implementation-grounding.md` shipped
+correct and unread for weeks because `SKILL.md`'s numbered steps named only `guidance/fundamentals.md`.
+Being shipped is not being reachable, and `skill check` reports the file present either way. So the
+stanza is pinned by its **content**, not its heading, in
+`skill_md_carries_the_outcome_discipline_stanza_not_just_the_pointer`.
+
+**The fold got wider than "loop step 7."** Task `019f9aa5-ec66-7230-812d-4c14b5d7ed58` specifies four
+rules and only the first is a status vocabulary. The other three — say so explicitly when there are
+no hard follows · the *caused-by-material vs. filling-a-slot* self-check · the restraint applies to
+summary-time criticism only, never to in-flight rigor — landed in `session-lifecycle.md`, where a
+session actually closes, rather than in the on-demand file. That task stays open until this merges.
 
 ---
 

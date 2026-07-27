@@ -299,6 +299,50 @@ fn test_skill_md_routes_to_block_grain_and_guards_stdin() {
     });
 }
 
+/// **The discipline ships in SKILL.md; the reasoning ships on demand.**
+///
+/// `outcome-registers.md` is ~200 lines that only a goal-authoring session needs, so the router
+/// reaches it from the routing table rather than the numbered steps. That split only works if the
+/// always-loaded half — the four rules in SKILL.md — is actually there. Drop the stanza and every
+/// session silently loses the discipline while `skill check` still reports all files present,
+/// because the file is shipped and named; it is just never reached by a session that isn't
+/// authoring a goal.
+///
+/// So this pins the stanza's load-bearing rules by their content, not the heading. The clause/
+/// witness rule and the enclosure rule are the two that cost sessions when they go missing.
+#[test]
+fn skill_md_carries_the_outcome_discipline_stanza_not_just_the_pointer() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        let skill_dir = dir.path().join("skill-output");
+        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+
+        assert!(
+            skill_md.contains("names no mechanism"),
+            "SKILL.md lost the clause rule — a clause states what must be true and names no \
+             mechanism. Without it in the always-loaded file, only goal-authoring sessions ever \
+             see it, and implementing agents build the mechanism a clause named"
+        );
+        assert!(
+            skill_md.contains("never in a preamble"),
+            "SKILL.md lost the witness-timing rule — a witness authored before its mechanism \
+             exists cannot bite, and that cost four working sessions once"
+        );
+        assert!(
+            skill_md.contains("detects; it does not decide"),
+            "SKILL.md lost the enclosure rule — reporting that a criterion is uncovered must \
+             never conclude the work should be dropped"
+        );
+        assert!(
+            skill_md.contains("outcome-registers.md"),
+            "SKILL.md must still route to the full discipline for goal authoring"
+        );
+    });
+}
+
 #[test]
 fn test_skill_generate_includes_skill_only_commands() {
     let dir = TempDir::new().unwrap();
