@@ -17,6 +17,7 @@ static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-g
 static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
 static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
+static OUTCOME_REGISTERS_MD: &str = include_str!("../../skill-content/outcome-registers.md");
 static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
@@ -535,6 +536,7 @@ fn check_expected_files(skill_dir: &Path) {
         "subagent-guidance.md",
         "plan-verification.md",
         "implementation-grounding.md",
+        "outcome-registers.md",
         "session-lifecycle.md",
         "cognitive-maps.md",
         "teams.md",
@@ -664,6 +666,12 @@ pub fn generate_skill_files_with_hash(
         "implementation-grounding.md".to_string(),
         IMPLEMENTATION_GROUNDING_MD.to_string(),
     );
+    // The outcome-register discipline. Root, not `guidance/`, for the same reason as the grounding
+    // pair: `guidance/` is the project's namespace and this is universal, repo-agnostic discipline.
+    files.insert(
+        "outcome-registers.md".to_string(),
+        OUTCOME_REGISTERS_MD.to_string(),
+    );
     files.insert(
         "session-lifecycle.md".to_string(),
         SESSION_LIFECYCLE_MD.to_string(),
@@ -775,10 +783,15 @@ mod tests {
         let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
         let skill_md = files.get("SKILL.md").expect("SKILL.md");
 
+        // Being named is the bar, not being named in a *numbered step*: `outcome-registers.md` is
+        // reached on demand from the routing table (plus a one-line stanza in the always-read
+        // steps), which is deliberate — it is ~200 lines that only a goal-authoring session needs.
+        // Unreachable is the failure this pins; expensive-on-every-task is a separate judgment.
         for guidance in [
             "subagent-guidance.md",
             "plan-verification.md",
             "implementation-grounding.md",
+            "outcome-registers.md",
         ] {
             assert!(
                 skill_md.contains(guidance),
@@ -798,6 +811,7 @@ mod tests {
         assert!(files.contains_key("subagent-guidance.md"));
         assert!(files.contains_key("plan-verification.md"));
         assert!(files.contains_key("implementation-grounding.md"));
+        assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("session-lifecycle.md"));
         assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("teams.md"));

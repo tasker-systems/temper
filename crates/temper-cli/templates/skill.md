@@ -25,6 +25,8 @@ upfront; read only what the current task requires.
 - `plan-verification.md` — Verify a plan's claims against the code **before** dispatching from it
 - `implementation-grounding.md` — For anyone **writing a plan, or writing code from one** —
   including you, in the main loop. Inject verbatim into plan-writing/implementing subagents.
+- `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. Read when
+  **authoring or amending a goal or sub-goal**, not to start a task
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
@@ -45,6 +47,26 @@ exists.
 > I'll add ritual C"* is that failure mode mid-sentence, growing an unbounded catalogue of edge
 > cases instead of reasoning from the theme. When you get there, stop and ask what the principle is
 > **for**. It almost always already covers you; what it will not do is match your case by shape.
+
+## Outcome Discipline — applies to every task, whether or not you author a goal
+
+Four rules. They are short because they are always in force; the reasoning, the eight register
+elements, and the worked failures are in `outcome-registers.md`, which you read **only** when
+authoring or amending a goal or sub-goal.
+
+- **A clause states what must be true, or must never be true, and names no mechanism.** The *how* is
+  the part that mutates, and a clause naming one propagates that commitment to every reader — most
+  damagingly to an implementing agent, which builds the mechanism the clause named rather than the
+  outcome it meant.
+- **A witness is authored during the build, never in a preamble.** A witness must fail against the
+  state its clause claims to change. When the mechanism does not exist yet, "fails against current
+  state" is satisfied by the *absence of the feature* — vacuously, by anything. A clause whose
+  mechanism is unbuilt carries a **declared hole, not a filed task**.
+- **Coverage is never inferred from absence.** A criterion with no evidence says so explicitly. A
+  retired check leaves a named remainder, not a gap that reads as clean.
+- **The discipline detects; it does not decide.** Reporting that something never ran, or that a
+  criterion is uncovered, never concludes that the work should be dropped. Cost, churn and whether a
+  goal is worth pursuing belong to the user, not to a criterion inside it.
 
 ## On Task Start
 
@@ -67,7 +89,9 @@ exists.
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
 4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
 5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
-   as principles, not checklists (see *Extension Files*). Then check `guidance/fundamentals.md`:
+   as principles, not checklists (see *Extension Files*). Apply *Outcome Discipline* above: clauses
+   name no mechanism, witnesses are authored during the build. If this task authors or amends a
+   goal, read `outcome-registers.md` first. Then check `guidance/fundamentals.md`:
    - If it exists, read it and apply its principles
    - If it doesn't, offer: "This context has no project fundamentals. Want to set them up? (`/temper init`)"
 6. Check auto-memory for user plugin preferences (skills they've said they rely on)
@@ -89,7 +113,8 @@ exists.
    - Match the session by its `slug`/`title` column in the `resource list` output (a unique substring is enough), then copy that row's `ref`
 4. If the task is not already in-progress, move it: `temper resource update <ref> --stage in-progress`
 5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/`
-   — as principles, not checklists (see *Extension Files*)
+   — as principles, not checklists (see *Extension Files*). Apply *Outcome Discipline* above; if
+   this task authors or amends a goal, read `outcome-registers.md` first
 6. Check auto-memory for user plugin preferences
 7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 8. Ask: "Resuming from last session. Found these skills: [list]. Want subagents to use any? Any other quality gates?"
@@ -106,7 +131,8 @@ exists.
    - If existing task: pivot to **On Task Resume** with that slug
    - If new: continue as open session
 4. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/`
-   — as principles, not checklists (see *Extension Files*)
+   — as principles, not checklists (see *Extension Files*). Apply *Outcome Discipline* above; if
+   this session authors or amends a goal, read `outcome-registers.md` first
 5. Check auto-memory for user plugin preferences
 6. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 7. Proceed with the user's request. At session end, save via:
@@ -156,6 +182,7 @@ exists.
 | `task resume <slug>` | On Task Resume |
 | `task create [--context @me/<ctx>]` | On Task Create |
 | `session start [--context @me/<ctx>]` | On Session Start |
+| Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, wayfind) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
