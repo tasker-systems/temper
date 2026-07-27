@@ -28,6 +28,20 @@ the criterion is unspecific. The research document already states the negative t
 
 > a criterion that could be satisfied by a system nobody needed is malformed.
 
+### What this discipline is for — and the boundary of what it may claim
+
+The purpose is **confidence, before and during the work**, that four things hold:
+
+1. We have the **necessary priors**.
+2. We have the **grounding to begin and complete** the goal.
+3. We have **clarity on what success looks like**.
+4. We have clarity on **what must not be true at the end**, so unintentional regression is avoided.
+
+That is the whole of it. **It is a discipline for working a goal well — not for deciding whether the
+goal is worth working.** Whether cost is too high, whether churn is excessive, whether to abandon: real
+questions, and none of them answerable from inside the goal. See §3.6, which states the constraint and
+records where an earlier draft of this document broke it.
+
 **The discipline is the backbone and stands alone.** It delivers its value with no ontology, no init
 flow, and no substrate change. Everything in §4 onward is an enhancement to it, never a prerequisite.
 
@@ -283,6 +297,11 @@ refusal named is one the system cannot make.
 - **Change the goal.** The affordance should not exist, or the clause was reaching wrongly. Produces
   a **supersession**, via a decision.
 
+**Neither exit is taken by the discipline** (§3.6). Detection is in scope: the register can show that
+an element cannot be expressed, and name the fork. Taking it is a judgment by whoever owns the frame.
+A mechanism that both detected the intersection *and* resolved it would be reaching up out of its
+enclosure — which is the error this document committed once already.
+
 **The dishonest third exit is to assume the affordance and write clauses against it.** That is what
 produces mechanism-shaped clauses and premature witnesses, and it is the deeper account of §9.1 than
 "witnesses were authored too early": a register met the edge of what the system could express and,
@@ -361,6 +380,46 @@ coverage count will not show.
 write a register produces exactly the spec-fall it exists to escape. Where **not** to put clauses, why
 "unexamined" is a legitimate answer, and why a named remainder beats a false zero are load-bearing
 content, not caveats.
+
+### 3.6 Enclosure of responsibility — what a clause may not reach
+
+**The outermost constraint on this discipline, and the one an earlier draft of this spec broke.**
+
+> Criteria that describe the interiority of a thing are framed within the priors that situate them,
+> but they cannot reach beyond or up into the frame of their priors to mutate them. That is an
+> **enclosure of responsibility error**.
+
+A goal's clauses live inside a frame its priors establish. They may say what must be true and what
+must never become true **for this goal to have been achieved well**. They may not say whether
+pursuing the goal was the right idea, whether its cost is justified, or whether it should be
+abandoned.
+
+**That judgment is real, necessary, and belongs elsewhere** — to the engineer, the product manager,
+the business partner weighing cost against churn, or an agent reasoning in an explicit *meta-goal*
+frame. Nothing in the disciplined workflow **of a goal** can make it, however well-argued the clause
+is. A clause that invalidates its own container has reached up out of its enclosure.
+
+**The discipline detects; it does not decide.** This distinction runs through the whole document and
+should be read into every mechanism in it:
+
+| Mechanism | What it may do | What it may not do |
+|---|---|---|
+| Closure (§3.3) | Mark a cell unexamined or inexpressible | Decide the goal is not worth closing |
+| The inexpressible intersection (§3.4.2) | **Detect** that the system cannot express an element, and surface the fork | **Take** the fork. Evolve-or-change is decided by whoever owns the frame |
+| Witnessing (§3.2) | Show a clause uncovered | Conclude the clause should be dropped |
+| Exercise status (element 7) | Report that something never ran | Conclude it should not exist |
+| A verification mode (§3.4) | Say a criterion failed | Say the goal was misconceived |
+
+**The error this spec committed.** An earlier draft carried a clause whose stated job was to retire
+the goal if the convention proved too expensive to correct — and built an extended argument around
+it (§9.1). That framing came from the pre-redraft goal body, authored by an earlier working session
+and never ratified; this spec then treated it as a given constraint and amplified it into a named
+clause and a section. Two failures at once: an unratified agent invention read as a decision, and a
+clause reaching up to invalidate the goal that contained it.
+
+**Cost, churn, and worth are still worth measuring** — they are simply not clauses. Where this
+document has such evidence it is now reported as **program-level material the discipline surfaces**
+(§9.1), explicitly not as a criterion, and explicitly not adjudicated here.
 
 ---
 
@@ -827,18 +886,25 @@ The discipline demands non-vacuity and bite of everything else, so it owes both 
   already states — the machine principals, the steward and auditor personas, the human profile, the
   admin emitter, and the affordances the `Backend` trait already enumerates. Doing that by hand *is*
   the requirements-gathering for `/temper init` (spec 2).
-- **The honest bound.** Whether drift actually drops is a **judged** criterion — perspective: Pete, as
-  maintainer, across several sessions. It cannot be made executable, and claiming otherwise would be
-  the flattening the discipline forbids elsewhere.
+- **The honest bound.** These verify that the mechanism works — that the queries bite, that the
+  ontology is authorable. They do **not** verify that adopting the discipline was worthwhile. That is
+  a program-level judgment (§3.6) and no criterion here reaches it. Evidence bearing on it is
+  reported in §9.1 as material for whoever holds that frame, not as a test this goal passes or
+  fails.
 
-### 9.1 A reading on the kill-switch — negative, and it is why §3.2.1 exists
+### 9.1 Program-level evidence this work surfaced — reported, not adjudicated
 
-Goal `019f9a34-3306-70d1-b07a-f23c99943751`'s revision-economics clause is the kill-switch: *when
-measurement contradicted a clause, what did the supersession cost?* It specifies the reading it needs
-as one taken from a clause superseded **after witnesses are filed and code written against it**.
+**Scope note, and it is the point of §3.6.** An earlier draft framed this section as a reading on a
+"kill-switch clause" whose job was to retire the goal if correction proved expensive. That clause has
+been withdrawn: it reached up out of its enclosure, and the framing came from an unratified
+agent-authored line in the pre-redraft goal body rather than from anyone entitled to set it.
 
-**A reading now exists, and by the goal's own criteria it does not qualify — yet it is worse in the
-dimension that matters.**
+What remains here is **evidence**, and it is genuinely useful to whoever holds the program frame —
+cost, churn, and what the apparatus did or did not catch. It is recorded because it was paid for.
+**Nothing in this section decides anything**, and no criterion in this spec or in the goal consumes
+it.
+
+**One event, and it is the reason §3.2.1 exists.**
 
 What happened: a decomposition pass over a register authored against an unbuilt subject produced ten
 witnesses, filed against an explicit instruction not to create unvetted tasks. Grounding showed most
@@ -922,9 +988,10 @@ remains untaken, and this spec does not supply it.
 | D18 | **The inexpressible intersection is first-class, with exactly two honest exits** — evolve the system (`enables` task) or change the goal (supersession) | The third exit, assuming the affordance, is the deeper account of §9.1: a register met the edge of what the system could express and hallucinated it. Both honest exits already have worked instances (edge facets; R10) and neither was recognised as a fork |
 | D19 | **Closure gains a fourth cell state — examined-and-inexpressible** | *Excluded-with-reason* is settled; *inexpressible* is a pending fork. Collapsing them makes a waiting cell look decided, which is how the third exit gets taken by default |
 | D20 | **Miscategorisation is checked before either exit is taken** | R10 was not inexpressible — it was a verdict filed in the refusal face, tangled with a real structural refusal. Forking on a miscategorised cell evolves or changes the wrong thing. Three diagnoses, in order: miscategorised (no fork) · missing affordance (evolve) · wrongly reaching (change the goal) |
-| D21 | **The register's cost is NOT claimed as proven** | Of three element-attributions an earlier draft made, one holds (exercise status), one is weakened (closure found a gap in a mechanism PR #550 marks moot), one is withdrawn (the Set 5 Critical predates the register). PR #550's own conclusion is that this arc's findings came from executing SQL, not from the apparatus |
+| D21 | **Cost and worth are reported, never claimed or adjudicated** (§3.6) | Of three element-attributions an earlier draft made, one holds (exercise status), one is weakened (closure found a gap in a mechanism PR #550 marks moot), one is withdrawn (the Set 5 Critical predates the register). PR #550's own conclusion is that this arc's findings came from executing SQL, not from the apparatus |
 | D22 | **`temper warmup` is the read surface, and it is redesigned rather than extended** | It already owns "context primer for new sessions", so the concept has a name here. But it primes on narrative recency: with several concurrent sessions, "the last session" is whichever sibling wrote last — demonstrated by this spec's own session, which opened on a note describing a branch that did not exist locally. It grounds in guidance, goals and tasks instead. **No previous-session body survives in any form** — `last_session_content` is dropped, and `recent_sessions` keeps titles and dates only, with the count made configurable. A title is a pointer; a body is a claim the primer cannot establish the relevance of |
 | D23 | **Project guidance lives in temper; any file is an offline cache** | A file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible to the team, so it is structurally a scratch file and gets rewritten. As `domain` resources it is versioned, superseded and team-contributable — it gets *amended*. Reading live is also what removes the drift a projection would introduce |
+| D24 | **Enclosure of responsibility: a clause may not reach up into the frame its priors set** | A goal's criteria say whether it was achieved well, never whether pursuing it was right. Abandonment, cost and churn belong to the engineer, the product or business partner, or an agent in an explicit meta-goal frame. An earlier draft carried a clause whose job was to retire the goal — carried forward unratified from the pre-redraft goal body, then amplified into a named clause and a section. The discipline **detects**; it does not **decide** |
 
 ---
 
@@ -937,7 +1004,7 @@ remains untaken, and this spec does not supply it.
 
 **Still open, carried forward unchanged:**
 
-- **Witnessing economics, measured as revision cost.** The kill-switch. Still unmet (§9).
+- **Witnessing economics, measured as revision cost.** Still unmeasured. **Re-scoped by §3.6**: this is program-level material, not a criterion — it informs whoever decides whether to keep investing, and no clause here adjudicates it.
 - **Clause-count discipline** — what "load-bearing intersections only" means operationally at
   authoring time. Heuristic ceiling, or judgment?
 - **Evidential refusal ground** — whether refusal on evidential state is a third ground alongside
