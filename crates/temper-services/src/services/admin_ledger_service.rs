@@ -30,6 +30,7 @@ use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{EventRef, RefTarget};
 use uuid::Uuid;
 
+use crate::authz::ACTOR_HISTORY_REFUSAL;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 
@@ -177,9 +178,7 @@ pub async fn list_by_actor(
     // `readable_event_types`; both hold regardless of how the instance is configured. That is
     // intended: reading your own authorship is not an admin act.
     if !access_service::has_system_access(pool, caller).await? {
-        return Err(ApiError::NotFound(
-            "actor history not found or not readable".to_string(),
-        ));
+        return Err(ApiError::NotFound(ACTOR_HISTORY_REFUSAL.to_string()));
     }
 
     // Reading someone else's history is an audit, and audits are admin-only. The `has_system_access`

@@ -90,6 +90,23 @@ pub async fn get_visible(
     .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
 }
 
+/// **The one refusal every third-party context lookup renders.**
+///
+/// A caller resolving `@handle/slug` has three ways to fail — no such handle, no such context
+/// under it, or one that exists but is not theirs to see — and telling them apart answers
+/// questions the caller has no standing to ask: whether a handle names a real profile, and, one
+/// guess per request, what another user's private contexts are called. At base all three rendered
+/// the bare `Not found` and were indistinguishable for free; carrying a message is what makes the
+/// property something to hold deliberately.
+///
+/// A constant rather than a literal per site, for the reason `FINDING_REFUSAL` gives: four copies
+/// of one defence is four defences that drift. `the_three_handle_slug_refusals_are_indistinguishable`
+/// asserts the byte-identity directly.
+///
+/// The `@me` arm is deliberately **not** bound by this and still names the slug — that slug is the
+/// caller's own, so echoing it discloses nothing they did not supply.
+const CONTEXT_REFUSAL: &str = "context not found or not readable";
+
 /// Resolve a context ref to a `ContextId`, gated to what `principal` may see.
 ///
 /// The single source of truth for context resolution. `@me` uses the caller's
@@ -120,20 +137,32 @@ pub async fn resolve_context_ref(
             .await?;
             found
                 .map(ContextId::from)
-                .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
+                .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
         }
         ContextRef::OwnerSlug { owner, slug } => match owner {
             ContextOwnerRef::Me => lookup_profile_context(pool, *principal, slug).await,
             ContextOwnerRef::Handle(handle) => {
+                // All three exits below render `CONTEXT_REFUSAL` and nothing else. An unresolvable
+                // handle must not be distinguishable from a resolvable one, or the arm becomes a
+                // membership oracle over every handle on the instance.
                 let owner_id =
                     sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE handle = $1", handle)
                         .fetch_optional(pool)
                         .await?
-                        .ok_or_else(|| {
-                            ApiError::NotFound(format!("no profile with handle {handle}"))
+                        .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+                // Resolve the context, then gate visibility to the principal. The inner lookup
+                // names the slug — right for `@me`, wrong here, where "no such slug" and "exists
+                // but not yours" must read alike — so its refusal is rewritten. Only `NotFound` is
+                // rewritten; a genuine fault still propagates as itself.
+                let cid =
+                    lookup_profile_context(pool, owner_id, slug)
+                        .await
+                        .map_err(|e| match e {
+                            ApiError::NotFound(_) => {
+                                ApiError::NotFound(CONTEXT_REFUSAL.to_string())
+                            }
+                            other => other,
                         })?;
-                // Resolve the context, then gate visibility to the principal.
-                let cid = lookup_profile_context(pool, owner_id, slug).await?;
                 ensure_context_visible(pool, *principal, *cid).await?;
                 Ok(cid)
             }
@@ -211,9 +240,7 @@ async fn ensure_context_visible(
     if visible {
         Ok(())
     } else {
-        Err(ApiError::NotFound(
-            "context not found or not readable".to_string(),
-        ))
+        Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
     }
 }
 

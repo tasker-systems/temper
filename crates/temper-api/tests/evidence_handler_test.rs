@@ -121,6 +121,10 @@ async fn unreadable_finding_is_not_found(pool: PgPool) {
     // An existing but unreadable finding: the in-SQL gate yields zero rows → None → NotFound.
     let existing = resource_evidence(&pool, stranger, goal).await;
     assert!(
+        // Variant-only on purpose: the byte-identity of this refusal and its three siblings is
+        // asserted in `citation_audit_trail_test`'s
+        // `unreadable_finding_is_not_found_exactly_as_evidence_is`, which owns that property.
+        // A second copy here would be one more thing to keep in step.
         matches!(existing, Err(ApiError::NotFound(_))),
         "the in-SQL gate hides an unreadable finding as NotFound: {existing:?}"
     );

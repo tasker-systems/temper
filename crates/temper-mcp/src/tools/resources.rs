@@ -684,11 +684,11 @@ pub async fn create_resource(
                 .to_string(),
             None,
         ),
-        TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
-            "Context or doc_type not found. Use create_context / list_doc_types to verify."
-                .to_string(),
-            None,
-        ),
+        // Carry the service's message. The constant this replaced named the context and the
+        // doc_type — but a create also fails when `goal` resolves to nothing, and that refusal
+        // then arrived as "verify your context and doc_type", sending the caller to check two
+        // things that were never wrong. Naming one cause is worse than naming none.
+        TemperError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)

@@ -292,3 +292,66 @@ async fn handle_slug_not_found_when_not_shared(pool: PgPool) {
         "expected NotFound for unshared @handle/slug, got {err:?}"
     );
 }
+
+// ─── Test 5c: the three @handle/slug refusals are one refusal ────────────────
+
+/// A caller probing `@handle/slug` must not be able to tell **which** of three things went wrong.
+///
+/// The arm has three failure exits, and at base every one of them rendered the bare string
+/// `Not found`, so they were indistinguishable for free. Once `ApiError::NotFound` carries a
+/// message that is no longer free, and each exit will happily describe itself:
+///
+/// * the handle does not resolve to a profile,
+/// * it does, but that profile owns no context by this slug,
+/// * it does own one, and the caller may not see it.
+///
+/// Told apart, those three answer questions the caller has no standing to ask. The first is a
+/// membership oracle over every handle on the instance. The second and third are worse together:
+/// one guess per request, and a caller enumerates the **private context slugs of another user**,
+/// learning for each guess whether it named a real context — which is exactly what "not found or
+/// not readable" exists to withhold.
+///
+/// So this asserts byte-identity, not a shared variant. Status is no longer the whole signal, and
+/// the two sibling tests above (`bare_uuid_not_found_when_not_visible`,
+/// `handle_slug_not_found_when_not_shared`) check only `matches!(err, ApiError::NotFound(_))` —
+/// which a tuple variant satisfies no matter what string it carries. They were written when the
+/// variant *was* the whole signal and cannot catch this.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_three_handle_slug_refusals_are_indistinguishable(pool: PgPool) {
+    let email_a = format!("oracle-a-{}@example.com", Uuid::new_v4());
+    let (profile_a_id, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_a).await;
+
+    let email_b = format!("oracle-b-{}@example.com", Uuid::new_v4());
+    let (profile_b_id, _context_b_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_b).await;
+
+    let b_local = email_b.split('@').next().unwrap_or("test");
+    let b_handle = format!("{b_local}-{}", &profile_b_id.simple().to_string()[..8]);
+    let principal = ProfileId::from(profile_a_id);
+
+    /// Resolve a ref expected to fail, and return the rendered refusal.
+    async fn refusal(pool: &PgPool, principal: ProfileId, ref_str: &str) -> String {
+        let r = parse_context_ref(ref_str).expect("valid ref");
+        match context_service::resolve_context_ref(pool, principal, &r).await {
+            Err(ApiError::NotFound(msg)) => msg,
+            other => panic!("{ref_str} must refuse with NotFound; got {other:?}"),
+        }
+    }
+
+    // The fixture gives B a context named `temper`, and nothing shares it with A.
+    let absent_handle = refusal(&pool, principal, "@no-such-handle-at-all/temper").await;
+    let absent_slug = refusal(&pool, principal, &format!("@{b_handle}/no-such-context")).await;
+    let unreadable = refusal(&pool, principal, &format!("@{b_handle}/temper")).await;
+
+    assert_eq!(
+        [&absent_handle, &absent_slug, &unreadable]
+            .map(String::as_str)
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        1,
+        "all three @handle/slug refusals must be byte-identical: \
+         absent-handle {absent_handle:?}, absent-slug {absent_slug:?}, unreadable {unreadable:?}"
+    );
+}

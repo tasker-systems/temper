@@ -36,8 +36,8 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 
 fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
     match e {
-        TemperError::NotFound(_) => {
-            rmcp::ErrorData::invalid_params(format!("{action}: resource not found"), None)
+        TemperError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
         }
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::Forbidden => rmcp::ErrorData::new(

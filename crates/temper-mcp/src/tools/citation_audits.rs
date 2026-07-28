@@ -59,6 +59,13 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 
 fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
     match e {
+        // **Deliberately does NOT carry the service message, unlike its siblings.** Every
+        // finding-shaped refusal is one string by construction (`authz::audit_gate`'s
+        // `FINDING_REFUSAL`) precisely so a prober cannot tell "no such finding" from "exists but
+        // not yours" from "yours, so you may not grade it". This arm enumerates all three without
+        // electing between them, which is the same guarantee stated locally. Making it
+        // message-transparent is safe only for as long as everything upstream is that constant —
+        // a coupling nothing here can enforce, so it stays independent.
         TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
             format!("{action}: finding not found, unreadable, or self-authored"),
             None,

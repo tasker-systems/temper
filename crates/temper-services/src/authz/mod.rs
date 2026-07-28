@@ -52,7 +52,7 @@ pub(crate) use audit_gate::{
 };
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
-pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority};
+pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority, ACTOR_HISTORY_REFUSAL};
 pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};
 
 use async_trait::async_trait;

@@ -365,10 +365,9 @@ pub async fn cogmap_materialize(
                 "cogmap_materialize: cannot author this cognitive map".to_string(),
                 None,
             ),
-            TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
-                "cogmap_materialize: cognitive map not found".to_string(),
-                None,
-            ),
+            TemperError::NotFound(msg) => {
+                rmcp::ErrorData::invalid_params(format!("cogmap_materialize: {msg}"), None)
+            }
             other => rmcp::ErrorData::internal_error(format!("cogmap_materialize: {other}"), None),
         })?;
 
