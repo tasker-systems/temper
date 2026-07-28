@@ -252,6 +252,15 @@ pub struct UpdateResourceInput {
     #[serde(default)]
     #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: Option<serde_json::Value>,
+    /// Additive open_meta patch: a JSON object whose values are **arrays**, each unioned
+    /// with the list already stored rather than replacing it. Repeating an add is a no-op,
+    /// so this expresses "make sure these are present".
+    ///
+    /// Use this to add a tag; use `open_meta` to replace or clear a list (`{"tags":[]}`).
+    /// Sending `{"tags":["x"]}` in `open_meta` replaces every existing tag — correct when
+    /// you mean to state the list in full, silent data loss when you meant to add one.
+    #[serde(default)]
+    pub open_meta_add: Option<serde_json::Value>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
     #[serde(flatten)]
@@ -973,6 +982,7 @@ pub async fn update_resource(
         body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
+        open_meta_add: input.open_meta_add,
         goal,
         move_to: None,
         context_ref: None,
@@ -1096,6 +1106,9 @@ pub async fn update_resource_meta(
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
+        // Meta-only path states both tiers in full — that is what separates it from
+        // update_resource, which is where the additive channel belongs.
+        open_meta_add: None,
         // Meta-only path is Property-only (Fork 2); goal links travel via update_resource.
         goal: None,
         move_to: None,

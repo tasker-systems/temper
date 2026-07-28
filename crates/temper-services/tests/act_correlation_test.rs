@@ -96,6 +96,7 @@ fn create_cmd(slug: &str, context: uuid::Uuid, act: ActContext) -> CreateResourc
 
 fn update_cmd(resource: ResourceId, title: &str, act: ActContext) -> UpdateResource {
     UpdateResource {
+        open_meta_add: None,
         resource,
         title: Some(title.to_string()),
         slug: None,

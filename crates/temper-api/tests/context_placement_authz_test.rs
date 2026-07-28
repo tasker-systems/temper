@@ -131,6 +131,7 @@ fn create_cmd(context: Uuid, slug: &str) -> CreateResource {
 
 fn rehome_cmd(resource: Uuid, dest: Uuid) -> UpdateResource {
     UpdateResource {
+        open_meta_add: None,
         resource: ResourceId::from(resource),
         title: None,
         slug: None,

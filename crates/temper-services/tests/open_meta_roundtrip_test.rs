@@ -104,6 +104,7 @@ async fn open_meta_round_trips_on_create_and_update(pool: PgPool) {
     // --- update: a meta-only PATCH (body None, managed None) sets a new open key ---
     backend
         .update_resource(UpdateResource {
+            open_meta_add: None,
             resource: created.id,
             title: None,
             slug: None,
@@ -127,5 +128,118 @@ async fn open_meta_round_trips_on_create_and_update(pool: PgPool) {
         open2.get("reviewed_by"),
         Some(&serde_json::json!("qa")),
         "open_meta key set on update must round-trip"
+    );
+}
+
+/// The additive open-tier channel must ADD to a list, not replace it.
+///
+/// This is the regression guard for the `--tags` data-loss bug: `--tags docs` on a
+/// resource holding six tags wrote a one-element list and destroyed the other five,
+/// silently, with a success response, under a flag whose help read *"Add tag"*.
+///
+/// **The starting state is the whole test.** The original probe ran against a resource with
+/// NO tags and returned a clean-looking single-element list — which proves nothing about
+/// merge behavior, because replace and union are indistinguishable from empty. Every
+/// assertion below therefore begins from a populated list. A version of this test that
+/// seeds nothing would pass against the broken build.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_meta_add_unions_instead_of_replacing(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "open-meta-add@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let created = backend
+        .create_resource(CreateResource {
+            slug: "zz-open-meta-add-probe".to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ open_meta_add probe".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            // Seed a POPULATED list — the state the defect needs to be visible.
+            open_meta: Some(serde_json::json!({"tags": ["alpha", "beta", "gamma"]})),
+            goal: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("create")
+        .value;
+
+    let tags_now = |pool: PgPool, id| async move {
+        substrate_read::get_meta_select(&pool, ProfileId::from(profile), id)
+            .await
+            .expect("get_meta")
+            .open_meta
+            .expect("open_meta")
+            .get("tags")
+            .cloned()
+            .expect("tags key")
+    };
+
+    let add = |patch: serde_json::Value| UpdateResource {
+        resource: created.id,
+        title: None,
+        slug: None,
+        body: None,
+        managed_meta: None,
+        open_meta: None,
+        open_meta_add: Some(patch),
+        goal: None,
+        move_to: None,
+        context_ref: None,
+        act: ActContext::default(),
+        origin: Surface::Mcp,
+    };
+
+    // Adding one tag keeps the three that were already there.
+    backend
+        .update_resource(add(serde_json::json!({"tags": ["delta"]})))
+        .await
+        .expect("add delta");
+    assert_eq!(
+        tags_now(pool.clone(), created.id).await,
+        serde_json::json!(["alpha", "beta", "gamma", "delta"]),
+        "open_meta_add must APPEND to the stored list, preserving existing order. \
+         A result of [\"delta\"] alone is the original data-loss bug."
+    );
+
+    // Re-adding an existing member is a no-op, not a duplicate: the flag means
+    // \"make sure this is present\".
+    backend
+        .update_resource(add(serde_json::json!({"tags": ["beta"]})))
+        .await
+        .expect("re-add beta");
+    assert_eq!(
+        tags_now(pool.clone(), created.id).await,
+        serde_json::json!(["alpha", "beta", "gamma", "delta"]),
+        "re-adding an existing member must not duplicate it"
+    );
+
+    // The replace channel still replaces — that is what makes clearing possible, and
+    // losing it is the cost the separate-channel design exists to avoid.
+    backend
+        .update_resource(UpdateResource {
+            resource: created.id,
+            title: None,
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({"tags": []})),
+            open_meta_add: None,
+            goal: None,
+            move_to: None,
+            context_ref: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("clear via replace channel");
+    assert_eq!(
+        tags_now(pool.clone(), created.id).await,
+        serde_json::json!([]),
+        "open_meta must still REPLACE, so an empty array still clears the list"
     );
 }

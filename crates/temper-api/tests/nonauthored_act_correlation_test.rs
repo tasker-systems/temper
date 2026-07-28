@@ -128,6 +128,7 @@ async fn update_under_invocation_stamps_the_property_act(pool: PgPool) {
     // An open_meta-only update fires a `property_set` sub-event of the update fan-out.
     backend
         .update_resource(UpdateResource {
+            open_meta_add: None,
             resource,
             title: None,
             slug: None,
@@ -255,6 +256,7 @@ async fn nonauthored_act_claiming_unknown_invocation_is_not_found(pool: PgPool) 
     };
     let result = backend
         .update_resource(UpdateResource {
+            open_meta_add: None,
             resource,
             title: None,
             slug: None,
@@ -314,6 +316,7 @@ async fn update_without_act_leaves_invocation_null(pool: PgPool) {
 
     backend
         .update_resource(UpdateResource {
+            open_meta_add: None,
             resource,
             title: None,
             slug: None,

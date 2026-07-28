@@ -609,35 +609,37 @@ pub enum ResourceAction {
         /// Update title
         #[arg(long)]
         title: Option<String>,
-        /// Add tag (repeatable)
+        /// Add tag, keeping existing ones (repeatable). To replace or clear the
+        /// list instead, use --open-meta '{"tags":[...]}' (or [] to clear).
         #[arg(long)]
         tags: Vec<String>,
-        /// Add alias (repeatable)
+        /// Add alias, keeping existing ones (repeatable)
         #[arg(long)]
         aliases: Vec<String>,
-        /// Add relates-to reference (repeatable)
+        /// Add relates-to reference, keeping existing ones (repeatable)
         #[arg(long)]
         relates_to: Vec<String>,
-        /// Add reference (repeatable)
+        /// Add reference, keeping existing ones (repeatable)
         #[arg(long)]
         references: Vec<String>,
-        /// Add depends-on reference (repeatable)
+        /// Add depends-on reference, keeping existing ones (repeatable)
         #[arg(long)]
         depends_on: Vec<String>,
-        /// Set extends reference (repeatable)
+        /// Add extends reference, keeping existing ones (repeatable)
         #[arg(long)]
         extends: Vec<String>,
-        /// Set preceded-by reference (repeatable)
+        /// Add preceded-by reference, keeping existing ones (repeatable)
         #[arg(long)]
         preceded_by: Vec<String>,
-        /// Set derived-from reference (repeatable)
+        /// Add derived-from reference, keeping existing ones (repeatable)
         #[arg(long)]
         derived_from: Vec<String>,
         /// Open (caller-defined) frontmatter as a JSON object string, e.g.
-        /// --open-meta '{"marker":"x","reviewed":true}'. Merged over the
-        /// repeatable open-tier flags above (explicit keys win). Free-form
-        /// "bring-your-own" fields; temper-* keys use the typed flags. Must be
-        /// a JSON object.
+        /// --open-meta '{"marker":"x","reviewed":true}'. REPLACES each key it
+        /// names — including lists, so '{"tags":[]}' clears tags. The repeatable
+        /// flags above ADD instead; when both name a key, this replace lands
+        /// first and the additions union on top. Free-form "bring-your-own"
+        /// fields; temper-* keys use the typed flags. Must be a JSON object.
         #[arg(long)]
         open_meta: Option<String>,
         // --- Managed (temper-*) fields: a closed vocabulary; caller-defined

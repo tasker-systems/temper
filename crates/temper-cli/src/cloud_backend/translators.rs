@@ -247,6 +247,15 @@ pub(crate) fn cmd_to_resource_update_request(
         .transpose()
         .map_err(|e| TemperError::Project(format!("serialize open_meta: {e}")))?;
 
+    // The additive channel travels as its own wire field. Folding it into `open_meta` here
+    // would restore the replace semantics the split exists to remove.
+    let open_meta_add = cmd
+        .open_meta_add
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| TemperError::Project(format!("serialize open_meta_add: {e}")))?;
+
     let type_to = cmd.move_to.as_ref().and_then(|m| m.type_to.clone());
 
     // Goal patch → wire tri-state: `Set` carries the resolved id in `goal`; `Clear` sets
@@ -263,6 +272,7 @@ pub(crate) fn cmd_to_resource_update_request(
         title: cmd.title.clone(),
         managed_meta: managed_meta_opt,
         open_meta,
+        open_meta_add,
         content,
         content_hash,
         chunks_packed,
@@ -520,6 +530,7 @@ mod tests {
             body: None,
             managed_meta: None,
             open_meta: None,
+            open_meta_add: None,
             move_to: None,
             context_ref: None,
             goal: None,

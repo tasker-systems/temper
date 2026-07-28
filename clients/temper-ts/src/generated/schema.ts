@@ -4242,6 +4242,21 @@ export interface components {
             /** @description Partial open_meta — incoming keys win; absent keys preserved. */
             open_meta?: unknown;
             /**
+             * @description Additive open_meta patch: each key's list is UNIONED with the value already
+             *     stored, preserving existing order and appending only what is new.
+             *
+             *     Exists because `open_meta` merges at the KEY level, so sending `{"tags":["x"]}`
+             *     replaces the whole list — which made `--tags`, a flag whose help said *"Add tag"*,
+             *     silently destroy every tag it did not name. Both semantics are legitimate, so they
+             *     get separate channels rather than one channel with a mode: `open_meta` still
+             *     replaces (and `{"tags":[]}` still clears), `open_meta_add` accumulates.
+             *
+             *     Values must be arrays — a scalar here is a 400, not a silent overwrite. When a key
+             *     appears in BOTH, the replace lands first and the union applies on top of it, so
+             *     `open_meta {"tags":[]}` + `open_meta_add {"tags":["x"]}` reads as "clear, then add".
+             */
+            open_meta_add?: unknown;
+            /**
              * @description Block-provenance sources this body was distilled from — recorded against the
              *     resource's body block, position → accretion `seq`. Resource refs only in T7b;
              *     URL/`remote` sources are T7c.

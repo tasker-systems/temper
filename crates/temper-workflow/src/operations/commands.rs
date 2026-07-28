@@ -123,6 +123,10 @@ pub struct UpdateResource {
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
+    /// Additive open_meta patch — each key's list is unioned with the stored value rather
+    /// than replacing it. See `ResourceUpdateRequest::open_meta_add` for why the two
+    /// semantics are separate channels instead of one channel with a mode flag.
+    pub open_meta_add: Option<Value>,
     /// Goal-edge patch (`Edge`-fated, not a property). `None` leaves the goal edge
     /// untouched; `Some(Set)` folds any existing `advances`→goal edge and asserts a new
     /// one; `Some(Clear)` folds the existing edge. Surfaces resolve `--goal <ref>` to a
@@ -481,6 +485,7 @@ mod tests {
     #[test]
     fn update_resource_all_optional_fields_default_none() {
         let cmd = UpdateResource {
+            open_meta_add: None,
             resource: ResourceId(uuid::Uuid::now_v7()),
             title: None,
             slug: None,

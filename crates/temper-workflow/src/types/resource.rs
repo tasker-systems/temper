@@ -368,6 +368,20 @@ pub struct ResourceUpdateRequest {
     /// Partial open_meta — incoming keys win; absent keys preserved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<serde_json::Value>,
+    /// Additive open_meta patch: each key's list is UNIONED with the value already
+    /// stored, preserving existing order and appending only what is new.
+    ///
+    /// Exists because `open_meta` merges at the KEY level, so sending `{"tags":["x"]}`
+    /// replaces the whole list — which made `--tags`, a flag whose help said *"Add tag"*,
+    /// silently destroy every tag it did not name. Both semantics are legitimate, so they
+    /// get separate channels rather than one channel with a mode: `open_meta` still
+    /// replaces (and `{"tags":[]}` still clears), `open_meta_add` accumulates.
+    ///
+    /// Values must be arrays — a scalar here is a 400, not a silent overwrite. When a key
+    /// appears in BOTH, the replace lands first and the union applies on top of it, so
+    /// `open_meta {"tags":[]}` + `open_meta_add {"tags":["x"]}` reads as "clear, then add".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meta_add: Option<serde_json::Value>,
     /// New body markdown. Required iff `content_hash` and `chunks_packed`
     /// are also `Some` (all-or-nothing trio).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,6 +636,7 @@ mod tests {
     fn resource_update_request_serde_round_trips_with_all_fields() {
         use serde_json::json;
         let req = ResourceUpdateRequest {
+            open_meta_add: None,
             title: Some("New Title".to_string()),
             managed_meta: Some(ManagedMeta {
                 stage: Some("done".to_string()),
@@ -661,6 +676,7 @@ mod tests {
     #[test]
     fn resource_update_request_omits_none_fields_on_serialize() {
         let req = ResourceUpdateRequest {
+            open_meta_add: None,
             title: None,
             managed_meta: Some(ManagedMeta {
                 stage: Some("done".to_string()),
