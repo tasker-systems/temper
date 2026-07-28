@@ -11,8 +11,14 @@
 //! one job per swept row would therefore create the first job and have
 //! `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` (`:59-62`) **silently discard the other N−1** —
 //! no error, no log, N findings collapsed into 1. So the tick groups the sweep by cogmap and
-//! enqueues ONE job whose payload carries the finding list ([`AuditJobPayload`]), and the claimed
-//! job hands that list back ([`ClaimedAuditJob::findings`]) for the session to iterate.
+//! enqueues ONE job whose payload carries the work list ([`AuditJobPayload`]), and the claimed job
+//! hands that list back ([`ClaimedAuditJob::citations`]) for the session to iterate.
+//!
+//! **The queue's grain is the cogmap; the auditor's grain is the CITATION** — not the finding, as
+//! this module assumed until `20260727000050`. `audit_drift_sweep` still selects findings and its
+//! ordering is still the only prioritization the auditor has, but each swept finding is expanded
+//! through `resource_auditable_citations` before it reaches the payload, so the session receives
+//! only citations this principal has not already weighed.
 //!
 //! No `ts-rs` derives here, deliberately, unlike `ClaimedJob`. The only TypeScript consumer is the
 //! auditor schedule in `packages/agent-workflows/steward/`, which is **workspace-isolated** and has
@@ -27,8 +33,10 @@ use uuid::Uuid;
 /// One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.
 ///
 /// `uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has
-/// not yet weighed; the sweep orders by it descending, so the most-cited/least-audited findings head
-/// the queue (spec §6.3).
+/// not yet weighed. It ranks the uncovered findings — most-cited/least-audited first — but it is no
+/// longer the whole ordering: since `20260726000010` the sweep interleaves the uncovered and stale
+/// classes by rank, because a stale finding is fully covered by construction and a plain
+/// `uncovered DESC` would park it behind every stuck finding forever (spec §6.3).
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditSweepRow {
@@ -40,24 +48,53 @@ pub struct AuditSweepRow {
     pub uncovered: i32,
 }
 
+/// One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.
+///
+/// The finding rides along because it is not derivable from the pair at the point of use — the
+/// session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the
+/// authorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which
+/// then refuses if the two disagree. Carrying it is what lets the session address the finding it
+/// was actually given rather than one it inferred.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditCitation {
+    /// The finding the citing block belongs to — the path segment of the audit write.
+    pub finding_id: Uuid,
+    /// The citing block.
+    pub block_id: Uuid,
+    /// The cited source. Always resource-kind; only resource citations are auditable.
+    pub source_id: Uuid,
+}
+
 /// The payload written into `kb_workflow_jobs.payload` for a citation-audit job.
 ///
 /// A typed struct, not an inline `serde_json::json!()` — the repo rule, and the reason it matters
 /// here is that this shape crosses the DB and comes back out at claim time, so a silent key rename
-/// would produce an empty finding list rather than a compile error.
+/// would produce an empty list rather than a compile error.
+///
+/// **Citation-grained since `20260727000050`.** It carried `findings: Vec<Uuid>` until then, which
+/// left the session unable to tell which citations it had already weighed — so it re-weighed all of
+/// them, every tick. See that migration and task
+/// `019fa5eb-2819-7e71-bd27-0d2875f60960`.
+///
+/// `#[serde(default)]` is deliberate and is the ONLY concession to the shape change: a job enqueued
+/// before this deploy deserializes to an empty citation list rather than failing the claim. That
+/// session then audits nothing and completes, and the sweep re-offers its findings on the next tick
+/// — self-healing, and strictly better than a claim that errors on a payload nobody can re-write.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditJobPayload {
-    /// Every finding in this cogmap the sweep found with uncovered citations, most-uncovered-first.
-    /// The session iterates this list; it is never a single id.
-    pub findings: Vec<Uuid>,
+    /// Every citation in this cogmap that this principal should weigh, in the sweep's own finding
+    /// order, with one finding's citations contiguous. The session iterates this list.
+    #[serde(default)]
+    pub citations: Vec<AuditCitation>,
 }
 
 /// A citation-audit job claimed for fan-out — the auditor twin of
-/// [`crate::types::workflow_job::ClaimedJob`], carrying the finding list the job was enqueued with.
+/// [`crate::types::workflow_job::ClaimedJob`], carrying the citation list the job was enqueued with.
 ///
 /// One isolated session per entry, exactly as the steward's fan-out works; the difference is that
-/// each session iterates `findings` rather than tending one target.
+/// each session iterates `citations` rather than tending one target.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimedAuditJob {
@@ -67,8 +104,13 @@ pub struct ClaimedAuditJob {
     pub cogmap_id: Uuid,
     /// How many times this job has now been claimed (1 on first dispatch).
     pub attempts: i32,
-    /// The findings this run must audit — the payload the enqueue carried, read back verbatim.
-    pub findings: Vec<Uuid>,
+    /// The citations this run must weigh — the payload the enqueue carried, read back verbatim.
+    ///
+    /// Every entry is work this principal has NOT already done: the enqueue resolved them through
+    /// `resource_auditable_citations`, so the session needs no skip logic and is given no
+    /// opportunity to exercise any. That is the whole point of the grain change — the invariant is
+    /// held by what the session receives, not by an instruction it is asked to follow.
+    pub citations: Vec<AuditCitation>,
 }
 
 /// Request body for `POST /api/auditor/dispatch`. Optional — the server default applies

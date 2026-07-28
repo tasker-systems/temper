@@ -14,23 +14,23 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.  `uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has not yet weighed. It ranks the uncovered findings — most-cited/least-audited first — but it is no longer the whole ordering: since `20260726000010` the sweep interleaves the uncovered and stale classes by rank, because a stale finding is fully covered by construction and a plain `uncovered DESC` would park it behind every stuck finding forever (spec §6.3).
-  class AuditSweepRow < ApiModelBase
-    # The cogmap the finding is homed in — the queue's grain (spec §6.2).
-    attr_accessor :cogmap_id
+  # One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.  The finding rides along because it is not derivable from the pair at the point of use — the session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the authorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which then refuses if the two disagree. Carrying it is what lets the session address the finding it was actually given rather than one it inferred.
+  class AuditCitation < ApiModelBase
+    # The citing block.
+    attr_accessor :block_id
 
-    # The finding with uncovered citations — the auditor's grain.
+    # The finding the citing block belongs to — the path segment of the audit write.
     attr_accessor :finding_id
 
-    # Distinct live cited sources this finding carries that no audit has yet weighed.
-    attr_accessor :uncovered
+    # The cited source. Always resource-kind; only resource citations are auditable.
+    attr_accessor :source_id
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'cogmap_id' => :'cogmap_id',
+        :'block_id' => :'block_id',
         :'finding_id' => :'finding_id',
-        :'uncovered' => :'uncovered'
+        :'source_id' => :'source_id'
       }
     end
 
@@ -47,9 +47,9 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'cogmap_id' => :'String',
+        :'block_id' => :'String',
         :'finding_id' => :'String',
-        :'uncovered' => :'Integer'
+        :'source_id' => :'String'
       }
     end
 
@@ -63,22 +63,22 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::AuditSweepRow` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::AuditCitation` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::AuditSweepRow`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::AuditCitation`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'cogmap_id')
-        self.cogmap_id = attributes[:'cogmap_id']
+      if attributes.key?(:'block_id')
+        self.block_id = attributes[:'block_id']
       else
-        self.cogmap_id = nil
+        self.block_id = nil
       end
 
       if attributes.key?(:'finding_id')
@@ -87,10 +87,10 @@ module Temper::Generated
         self.finding_id = nil
       end
 
-      if attributes.key?(:'uncovered')
-        self.uncovered = attributes[:'uncovered']
+      if attributes.key?(:'source_id')
+        self.source_id = attributes[:'source_id']
       else
-        self.uncovered = nil
+        self.source_id = nil
       end
     end
 
@@ -99,16 +99,16 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @cogmap_id.nil?
-        invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
+      if @block_id.nil?
+        invalid_properties.push('invalid value for "block_id", block_id cannot be nil.')
       end
 
       if @finding_id.nil?
         invalid_properties.push('invalid value for "finding_id", finding_id cannot be nil.')
       end
 
-      if @uncovered.nil?
-        invalid_properties.push('invalid value for "uncovered", uncovered cannot be nil.')
+      if @source_id.nil?
+        invalid_properties.push('invalid value for "source_id", source_id cannot be nil.')
       end
 
       invalid_properties
@@ -118,20 +118,20 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @cogmap_id.nil?
+      return false if @block_id.nil?
       return false if @finding_id.nil?
-      return false if @uncovered.nil?
+      return false if @source_id.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] cogmap_id Value to be assigned
-    def cogmap_id=(cogmap_id)
-      if cogmap_id.nil?
-        fail ArgumentError, 'cogmap_id cannot be nil'
+    # @param [Object] block_id Value to be assigned
+    def block_id=(block_id)
+      if block_id.nil?
+        fail ArgumentError, 'block_id cannot be nil'
       end
 
-      @cogmap_id = cogmap_id
+      @block_id = block_id
     end
 
     # Custom attribute writer method with validation
@@ -145,13 +145,13 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] uncovered Value to be assigned
-    def uncovered=(uncovered)
-      if uncovered.nil?
-        fail ArgumentError, 'uncovered cannot be nil'
+    # @param [Object] source_id Value to be assigned
+    def source_id=(source_id)
+      if source_id.nil?
+        fail ArgumentError, 'source_id cannot be nil'
       end
 
-      @uncovered = uncovered
+      @source_id = source_id
     end
 
     # Checks equality by comparing each attribute.
@@ -159,9 +159,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          cogmap_id == o.cogmap_id &&
+          block_id == o.block_id &&
           finding_id == o.finding_id &&
-          uncovered == o.uncovered
+          source_id == o.source_id
     end
 
     # @see the `==` method
@@ -173,7 +173,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, finding_id, uncovered].hash
+      [block_id, finding_id, source_id].hash
     end
 
     # Builds the object from hash

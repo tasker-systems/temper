@@ -2980,12 +2980,18 @@ impl Backend for DbBackend {
         workflow_job_service::reap(&self.pool, "lease expired").await?;
 
         // 2. Deterministic, principal-scoped sweep over cogmap-homed findings with incomplete
-        //    audit coverage, most-uncovered-first.
+        //    audit coverage or stale citations, in the sweep's own rank-interleaved order.
         let drifted = auditor_service::drift_sweep(&self.pool, self.profile_id, cmd.cap).await?;
 
-        // 3. Collapse finding grain → queue grain, then enqueue ONE job per cogmap carrying its
-        //    finding list. Already-active maps skip via the in-flight index.
-        for work in auditor_service::group_by_cogmap(&drifted) {
+        // 3. Expand each swept finding into the citations THIS principal has not already weighed.
+        //    Without this the session was handed findings and told not to re-check, so it re-weighed
+        //    every citation of a partially-audited finding on every tick (20260727000050).
+        let auditable =
+            auditor_service::expand_to_citations(&self.pool, self.profile_id, &drifted).await?;
+
+        // 4. Collapse citation grain → queue grain, then enqueue ONE job per cogmap carrying its
+        //    citation list. Already-active maps skip via the in-flight index.
+        for work in auditor_service::group_by_cogmap(&auditable) {
             let payload = serde_json::to_value(&work.payload).map_err(|e| {
                 crate::error::ApiError::Internal(format!(
                     "citation-audit job payload for cogmap {} is not serializable: {e}",
@@ -3002,7 +3008,7 @@ impl Backend for DbBackend {
             .await?;
         }
 
-        // 4. Claim for fan-out, stamping this tick's correlation onto each claimed row exactly as
+        // 5. Claim for fan-out, stamping this tick's correlation onto each claimed row exactly as
         //    the steward tick does — `invocation_open` inherits it, so an auditor session's
         //    invocation joins back to its tick with nothing asked of the agent.
         //

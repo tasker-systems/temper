@@ -1788,11 +1788,39 @@ export interface components {
             nodes: components["schemas"]["AtlasNode"][];
         };
         /**
+         * @description One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.
+         *
+         *     The finding rides along because it is not derivable from the pair at the point of use — the
+         *     session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the
+         *     authorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which
+         *     then refuses if the two disagree. Carrying it is what lets the session address the finding it
+         *     was actually given rather than one it inferred.
+         */
+        AuditCitation: {
+            /**
+             * Format: uuid
+             * @description The citing block.
+             */
+            block_id: string;
+            /**
+             * Format: uuid
+             * @description The finding the citing block belongs to — the path segment of the audit write.
+             */
+            finding_id: string;
+            /**
+             * Format: uuid
+             * @description The cited source. Always resource-kind; only resource citations are auditable.
+             */
+            source_id: string;
+        };
+        /**
          * @description One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.
          *
          *     `uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has
-         *     not yet weighed; the sweep orders by it descending, so the most-cited/least-audited findings head
-         *     the queue (spec §6.3).
+         *     not yet weighed. It ranks the uncovered findings — most-cited/least-audited first — but it is no
+         *     longer the whole ordering: since `20260726000010` the sweep interleaves the uncovered and stale
+         *     classes by rank, because a stale finding is fully covered by construction and a plain
+         *     `uncovered DESC` would park it behind every stuck finding forever (spec §6.3).
          */
         AuditSweepRow: {
             /**
@@ -2086,10 +2114,10 @@ export interface components {
         };
         /**
          * @description A citation-audit job claimed for fan-out — the auditor twin of
-         *     [`crate::types::workflow_job::ClaimedJob`], carrying the finding list the job was enqueued with.
+         *     [`crate::types::workflow_job::ClaimedJob`], carrying the citation list the job was enqueued with.
          *
          *     One isolated session per entry, exactly as the steward's fan-out works; the difference is that
-         *     each session iterates `findings` rather than tending one target.
+         *     each session iterates `citations` rather than tending one target.
          */
         ClaimedAuditJob: {
             /**
@@ -2098,12 +2126,19 @@ export interface components {
              */
             attempts: number;
             /**
+             * @description The citations this run must weigh — the payload the enqueue carried, read back verbatim.
+             *
+             *     Every entry is work this principal has NOT already done: the enqueue resolved them through
+             *     `resource_auditable_citations`, so the session needs no skip logic and is given no
+             *     opportunity to exercise any. That is the whole point of the grain change — the invariant is
+             *     held by what the session receives, not by an instruction it is asked to follow.
+             */
+            citations: components["schemas"]["AuditCitation"][];
+            /**
              * Format: uuid
              * @description The single cognitive map this claimed run audits within.
              */
             cogmap_id: string;
-            /** @description The findings this run must audit — the payload the enqueue carried, read back verbatim. */
-            findings: string[];
             /**
              * Format: uuid
              * @description The queue row id.

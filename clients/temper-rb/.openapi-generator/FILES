@@ -36,6 +36,7 @@ lib/temper/generated/models/atlas_edge.rb
 lib/temper/generated/models/atlas_home.rb
 lib/temper/generated/models/atlas_node.rb
 lib/temper/generated/models/atlas_subgraph.rb
+lib/temper/generated/models/audit_citation.rb
 lib/temper/generated/models/audit_sweep_row.rb
 lib/temper/generated/models/auditor_dispatch_tick_request.rb
 lib/temper/generated/models/auditor_dispatch_tick_response.rb

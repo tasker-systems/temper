@@ -33,11 +33,21 @@ a claim about the citation, you have drifted. Rewrite it or skip it.
 
 # The loop
 
-You are handed ONE cognitive map and an ordered list of findings within it. The list is
-ordered by how much of each finding's evidence is still unweighed **or has gone out of
-date** — a finding whose text changed since you last weighed it is offered again even
-though every citation is already covered, so a `0` here means "nothing unweighed", not
-"nothing to do". Work it in the order given. Everything below is per finding.
+You are handed ONE cognitive map and an ordered list of **citations** within it, each given
+as `finding · block · source`. That list is your work, and it is complete: the server
+resolved it and then removed every citation you have already weighed, so each entry is one
+you have not given a verdict on, or one that has changed since you did.
+
+**Do not construct your own work list.** A finding's full provenance includes citations
+already weighed, and re-weighing them is the single thing this dispatch exists to prevent.
+You will still read that provenance — step 4 — but as *context for judgement*, never as the
+set to iterate.
+
+The list is ordered by how much of each finding's evidence is still unweighed **or has gone
+out of date** — a finding whose text changed since you last weighed it is offered again even
+though its citations are covered. Work it in the order given. Citations of the same finding
+arrive adjacent to one another, so steps 1-2 are done once for the whole run, steps 3-5 once
+per finding as you reach its first citation, and steps 6-8 once per citation.
 
 1. **Open the envelope once for the whole run.** `temper__invocation_open`, at the very
    start, before the first finding. Every act you author this run carries its
@@ -48,19 +58,23 @@ though every citation is already covered, so a `0` here means "nothing unweighed
 3. **Read the finding** (`temper__get_resource`) — its content, and what connection each of
    its blocks is actually asserting. You cannot weigh a citation without knowing the claim
    it is attached to.
-4. **List its citations** (`temper__get_block_provenance`). This returns one row per
-   `(block, source)` contribution: `block_id`, `source_kind`, `source_id`, `accretion_seq`.
-   **Only `source_kind == "resource"` rows are auditable.** Skip `remote` and `event` rows
-   entirely — do not try to audit them; the write path refuses them, deliberately, because
-   the standing projection does not read them either.
-   **Keep `block_id` and `source_id` paired as they came back.** The write path refuses a
-   `(block, source)` pair that is not a live citation, so a one-row transposition while
-   iterating this list is an error you will see, not a verdict that lands and moves nothing.
-   If you get one, re-read the row rather than retrying the same pair.
-5. **Note the size of the citation set** before you weigh any single member. A connection
-   resting on one source and a connection resting on six are different claims about
-   evidence, and the same source can be worth more or less depending on which it is.
-6. **For each auditable citation, read the cited source** (`temper__get_resource`) — enough
+4. **Read its full provenance for context** (`temper__get_block_provenance`), which returns
+   one row per `(block, source)` contribution: `block_id`, `source_kind`, `source_id`,
+   `accretion_seq`. This is **not** your work list — your work list is what you were handed,
+   and it is a subset of this. What you need from here is the denominator: how much evidence
+   the finding rests on in total, including citations you or another auditor already weighed.
+   **Only `source_kind == "resource"` rows are auditable**, and your list contains only
+   those; `remote` and `event` rows appear here but are never work.
+   **Use the `block_id` and `source_id` exactly as your list gave them.** The write path
+   refuses a `(block, source)` pair that is not a live citation, so a transposition is an
+   error you will see, not a verdict that lands and moves nothing. If you get one, re-read
+   the entry rather than retrying the same pair.
+5. **Note the size of the citation set** — the full one from step 4, not the length of your
+   list — before you weigh any single member. A connection resting on one source and a
+   connection resting on six are different claims about evidence, and the same source can be
+   worth more or less depending on which it is. Your list may name one citation of a finding
+   that has eight; that finding is still resting on eight.
+6. **For each citation on your list, read the cited source** (`temper__get_resource`) — enough
    to judge whether it can bear the connection, and no further. Use
    `temper__resource_lineage` when the source's own derivation matters to that judgement,
    and `temper__search` when you need to see whether the map already treats the two as
@@ -71,9 +85,10 @@ though every citation is already covered, so a `0` here means "nothing unweighed
    **Never** sweep trails across a finding's whole citation set as a first pass. Most
    citations do not need it; reach for it when the citing act's own confidence is what is
    in question.
-8. **Emit one verdict per auditable citation** (`temper__record_citation_audit`), using the
-   scale below. Then move to the next finding.
-9. **When every finding in your list is worked**, call `complete_audit_job` with the cogmap
+8. **Emit exactly one verdict per entry on your list** (`temper__record_citation_audit`),
+   using the scale below. Then move to the next entry. One verdict per entry, no more and no
+   fewer — the list was filtered so that this is the whole job.
+9. **When every citation in your list is worked**, call `complete_audit_job` with the cogmap
    id, then `temper__invocation_close`. In that order.
 
 ## What you weigh

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
-use temper_core::types::auditor::{AuditJobPayload, AuditSweepRow};
+use temper_core::types::auditor::{AuditCitation, AuditJobPayload, AuditSweepRow};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::workflow_job::clamp_auditor_cap;
 
@@ -29,11 +29,11 @@ use temper_core::types::workflow_job::clamp_auditor_cap;
 pub struct CogmapAuditWork {
     /// The queue's grain — `kb_workflow_jobs.cogmap_id`.
     pub cogmap_id: Uuid,
-    /// The auditor's grain — every swept finding homed in that cogmap.
+    /// The auditor's grain — every citation in that cogmap this principal should weigh.
     pub payload: AuditJobPayload,
 }
 
-/// Sweep the principal's cogmap-homed findings with incomplete audit coverage, most-uncovered-first
+/// Sweep the principal's cogmap-homed findings with incomplete audit coverage or stale citations
 /// (spec §6.3). `cap` is a **finding** budget — `audit_drift_sweep`'s `p_limit` — resolved through
 /// [`clamp_auditor_cap`], which supplies the default AND bounds the request. The bound is
 /// load-bearing, not hygiene: the sweep's `scored` CTE calls `resource_citation_magnitude` and
@@ -83,21 +83,25 @@ pub async fn drift_sweep(
 /// discard every other one** — no error, no log, N findings become 1. Grouping here is what makes
 /// the enqueue call one-per-cogmap by construction.
 ///
-/// Order is preserved on both axes: the cogmaps come out in the order their first finding appeared,
-/// and each finding list keeps the sweep's `uncovered DESC` ordering. The sweep's prioritization is
-/// the only prioritization the auditor has, and re-sorting here would throw it away.
-pub fn group_by_cogmap(rows: &[AuditSweepRow]) -> Vec<CogmapAuditWork> {
+/// Order is preserved on both axes: the cogmaps come out in the order their first citation appeared,
+/// and each citation list keeps the order `expand_to_citations` handed over, which is the sweep's.
+/// That ordering is rank-interleaved rather than plain `uncovered DESC` since `20260726000010` — it
+/// is the only prioritization the auditor has, and re-sorting here would throw it away.
+///
+/// Takes citations rather than sweep rows since `20260727000050` — a finding that expands to zero
+/// auditable citations contributes nothing and does not create an empty job.
+pub fn group_by_cogmap(citations: &[(Uuid, AuditCitation)]) -> Vec<CogmapAuditWork> {
     let mut order: Vec<CogmapAuditWork> = Vec::new();
     let mut seen: HashMap<Uuid, usize> = HashMap::new();
-    for row in rows {
-        match seen.get(&row.cogmap_id) {
-            Some(&idx) => order[idx].payload.findings.push(row.finding_id),
+    for (cogmap_id, citation) in citations {
+        match seen.get(cogmap_id) {
+            Some(&idx) => order[idx].payload.citations.push(citation.clone()),
             None => {
-                seen.insert(row.cogmap_id, order.len());
+                seen.insert(*cogmap_id, order.len());
                 order.push(CogmapAuditWork {
-                    cogmap_id: row.cogmap_id,
+                    cogmap_id: *cogmap_id,
                     payload: AuditJobPayload {
-                        findings: vec![row.finding_id],
+                        citations: vec![citation.clone()],
                     },
                 });
             }
@@ -106,31 +110,104 @@ pub fn group_by_cogmap(rows: &[AuditSweepRow]) -> Vec<CogmapAuditWork> {
     order
 }
 
+/// Expand a finding-grained sweep into the citations this principal should actually weigh.
+///
+/// ONE round trip, not one per finding: the swept finding ids go down as an array and
+/// `resource_auditable_citations` is applied per element with `CROSS JOIN LATERAL`. A per-finding
+/// loop would be N+1 queries against a function that is already `STABLE` and gated internally.
+///
+/// `WITH ORDINALITY` preserves the sweep's order across the array round trip — without it the
+/// planner is free to return the unnested rows in any order, which would silently discard the
+/// prioritization that is the auditor's only sense of what matters most. That prioritization is
+/// `audit_drift_sweep`'s rank-interleaved ordering, not a plain `uncovered DESC`, since
+/// `20260726000010` — see `expansion_keeps_the_sweeps_priority_order`, which asserts it survives.
+///
+/// Auth: `resource_auditable_citations` carries the same `resources_visible_to` gate its siblings
+/// do, so an unreadable finding yields zero rows here rather than leaking. The sweep has already
+/// applied that gate too; this is the defense-in-depth the repo asks for, not a redundant filter.
+pub async fn expand_to_citations(
+    pool: &PgPool,
+    principal: ProfileId,
+    rows: &[AuditSweepRow],
+) -> ApiResult<Vec<(Uuid, AuditCitation)>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cogmaps: Vec<Uuid> = rows.iter().map(|r| r.cogmap_id).collect();
+    let findings: Vec<Uuid> = rows.iter().map(|r| r.finding_id).collect();
+
+    let expanded = sqlx::query!(
+        r#"
+        SELECT f.cogmap_id   AS "cogmap_id!: Uuid",
+               f.finding_id  AS "finding_id!: Uuid",
+               ac.block_id   AS "block_id!: Uuid",
+               ac.source_id  AS "source_id!: Uuid"
+          FROM unnest($1::uuid[], $2::uuid[]) WITH ORDINALITY AS f(cogmap_id, finding_id, ord)
+          CROSS JOIN LATERAL resource_auditable_citations(f.finding_id, $3) ac
+         ORDER BY f.ord, ac.block_id, ac.source_id
+        "#,
+        &cogmaps,
+        &findings,
+        *principal,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(expanded
+        .into_iter()
+        .map(|r| {
+            (
+                r.cogmap_id,
+                AuditCitation {
+                    finding_id: r.finding_id,
+                    block_id: r.block_id,
+                    source_id: r.source_id,
+                },
+            )
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod grouping_tests {
     use super::*;
 
-    fn row(cogmap: Uuid, finding: Uuid, uncovered: i32) -> AuditSweepRow {
-        AuditSweepRow {
-            cogmap_id: cogmap,
-            finding_id: finding,
-            uncovered,
-        }
+    /// One expanded citation as `expand_to_citations` hands it over: the cogmap it groups under,
+    /// paired with the `(finding, block, source)` triple the session will act on.
+    fn cite(cogmap: Uuid, finding: Uuid, block: u128, source: u128) -> (Uuid, AuditCitation) {
+        (
+            cogmap,
+            AuditCitation {
+                finding_id: finding,
+                block_id: Uuid::from_u128(block),
+                source_id: Uuid::from_u128(source),
+            },
+        )
     }
 
-    /// LOAD-BEARING — this is the assertion the whole grain fix exists to satisfy, and it fails
-    /// against a per-finding enqueue design: three findings in one cogmap must yield ONE unit of
-    /// queue work carrying THREE findings, never three units (of which the queue's single-flight
-    /// index would silently keep one) and never one carrying a single finding.
+    /// LOAD-BEARING — this is the assertion the whole grouping exists to satisfy, and it fails
+    /// against a per-finding enqueue design: the citations of three findings in one cogmap must
+    /// yield ONE unit of queue work carrying ALL of them, never three units (of which the queue's
+    /// single-flight index would silently keep one).
+    ///
+    /// `f1` deliberately carries TWO citations. That is what makes this a *citation*-grain
+    /// assertion rather than a renamed finding-grain one: four entries from three findings cannot be
+    /// produced by anything still counting findings, and the payload's length no longer equals the
+    /// swept-row count.
     #[test]
-    fn many_findings_in_one_cogmap_become_one_job_carrying_them_all() {
+    fn many_findings_in_one_cogmap_become_one_job_carrying_every_citation() {
         let cogmap = Uuid::from_u128(1);
         let (f1, f2, f3) = (
             Uuid::from_u128(11),
             Uuid::from_u128(12),
             Uuid::from_u128(13),
         );
-        let work = group_by_cogmap(&[row(cogmap, f1, 5), row(cogmap, f2, 3), row(cogmap, f3, 1)]);
+        let work = group_by_cogmap(&[
+            cite(cogmap, f1, 101, 201),
+            cite(cogmap, f1, 101, 202),
+            cite(cogmap, f2, 102, 203),
+            cite(cogmap, f3, 103, 204),
+        ]);
 
         assert_eq!(
             work.len(),
@@ -140,9 +217,19 @@ mod grouping_tests {
         );
         assert_eq!(work[0].cogmap_id, cogmap);
         assert_eq!(
-            work[0].payload.findings,
-            vec![f1, f2, f3],
-            "all three findings ride the one payload, in the sweep's uncovered-DESC order"
+            work[0].payload.citations.len(),
+            4,
+            "four citations, not three findings — the payload is measured in the auditor's unit"
+        );
+        assert_eq!(
+            work[0]
+                .payload
+                .citations
+                .iter()
+                .map(|c| c.finding_id)
+                .collect::<Vec<_>>(),
+            vec![f1, f1, f2, f3],
+            "every finding's citations ride the one payload, in the order the sweep produced them"
         );
     }
 
@@ -154,8 +241,12 @@ mod grouping_tests {
             Uuid::from_u128(12),
             Uuid::from_u128(13),
         );
-        // Interleaved, as an uncovered-DESC sweep across two maps genuinely is.
-        let work = group_by_cogmap(&[row(a, f1, 9), row(b, f2, 4), row(a, f3, 2)]);
+        // Interleaved, as a sweep spanning two maps genuinely is.
+        let work = group_by_cogmap(&[
+            cite(a, f1, 101, 201),
+            cite(b, f2, 102, 202),
+            cite(a, f3, 103, 203),
+        ]);
 
         assert_eq!(
             work.len(),
@@ -163,9 +254,50 @@ mod grouping_tests {
             "two cogmaps, two jobs — they never dedup each other"
         );
         assert_eq!(work[0].cogmap_id, a, "a appeared first");
-        assert_eq!(work[0].payload.findings, vec![f1, f3]);
+        assert_eq!(
+            work[0]
+                .payload
+                .citations
+                .iter()
+                .map(|c| c.finding_id)
+                .collect::<Vec<_>>(),
+            vec![f1, f3]
+        );
         assert_eq!(work[1].cogmap_id, b);
-        assert_eq!(work[1].payload.findings, vec![f2]);
+        assert_eq!(
+            work[1]
+                .payload
+                .citations
+                .iter()
+                .map(|c| c.finding_id)
+                .collect::<Vec<_>>(),
+            vec![f2]
+        );
+    }
+
+    /// Two citations of ONE finding that differ only in their block are two units of work, not one.
+    /// Grouping keys on the cogmap and nothing else — deduping by finding here would re-create the
+    /// grain bug inside the very function that fixed it.
+    #[test]
+    fn two_blocks_of_one_finding_citing_one_source_stay_two_citations() {
+        let cogmap = Uuid::from_u128(1);
+        let finding = Uuid::from_u128(11);
+        let work = group_by_cogmap(&[
+            cite(cogmap, finding, 101, 201),
+            cite(cogmap, finding, 102, 201),
+        ]);
+
+        assert_eq!(work.len(), 1);
+        assert_eq!(
+            work[0]
+                .payload
+                .citations
+                .iter()
+                .map(|c| c.block_id)
+                .collect::<Vec<_>>(),
+            vec![Uuid::from_u128(101), Uuid::from_u128(102)],
+            "same finding, same source, different citing blocks — each is its own verdict"
+        );
     }
 
     #[test]
@@ -295,16 +427,20 @@ mod tests {
         }
     }
 
-    /// A finding homed in `cogmap` with exactly one live, unaudited resource-kind citation →
-    /// `magnitude = 1`, `coverage = 0`, so `audit_drift_sweep` returns it with `uncovered = 1`.
-    async fn seed_finding_with_one_citation(pool: &PgPool, s: &Seeded, slug: &str) -> Uuid {
-        let source: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $1) RETURNING id",
-        )
-        .bind(format!("{slug}-source"))
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    /// A finding homed in `cogmap` citing `n` live, unaudited resource-kind sources from ONE block
+    /// → `magnitude = n`, `coverage = 0`, so `audit_drift_sweep` returns it with `uncovered = n`.
+    ///
+    /// One block with `n` provenance rows rather than `n` blocks: `resource_live_citations` returns
+    /// `DISTINCT (block_id, source_id)`, so the citation count is the pair count either way, and the
+    /// single-block shape keeps the fixture honest about what varies.
+    ///
+    /// Returns the finding and its `(block, source)` pairs in insertion order.
+    async fn seed_finding_with_citations(
+        pool: &PgPool,
+        s: &Seeded,
+        slug: &str,
+        n: usize,
+    ) -> (Uuid, Vec<(Uuid, Uuid)>) {
         let finding: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $1) RETURNING id",
         )
@@ -332,22 +468,84 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
+
+        let mut citations = Vec::with_capacity(n);
+        for i in 0..n {
+            let source: Uuid = sqlx::query_scalar(
+                "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $1) RETURNING id",
+            )
+            .bind(format!("{slug}-source-{i}"))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO kb_block_provenance \
+                   (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
+                 VALUES ($1, 'resource', $2, $3, $4)",
+            )
+            .bind(block)
+            .bind(source)
+            .bind(s.event)
+            .bind(i as i32)
+            .execute(pool)
+            .await
+            .unwrap();
+            citations.push((block, source));
+        }
+        (finding, citations)
+    }
+
+    /// The single-citation case, which is what most tests here want.
+    async fn seed_finding_with_one_citation(pool: &PgPool, s: &Seeded, slug: &str) -> Uuid {
+        seed_finding_with_citations(pool, s, slug, 1).await.0
+    }
+
+    /// Record an audit of `(block, source)` attributed to `profile`.
+    ///
+    /// A raw insert, matching this module's fixture convention — it stamps `audited_by_profile_id`
+    /// directly rather than going through the projector, which in production fills it from the
+    /// owning event's emitter. What matters to these tests is only that the column names the
+    /// principal, since that is what `resource_auditable_citations` filters on.
+    ///
+    /// The event is minted because it is genuinely required, not for symmetry:
+    /// `audited_by_event_id` is `NOT NULL` with an FK to `kb_events`, and `resource_stale_citations`
+    /// compares audit timestamps against block events. Its emitter entity is owned by `profile` so
+    /// the two attributions cannot disagree if a later test does route through the projector.
+    async fn record_audit(pool: &PgPool, profile: Uuid, block: Uuid, source: Uuid, value: f64) {
+        let entity: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'auditor-entity') RETURNING id",
+        )
+        .bind(profile)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let event: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id) \
+             VALUES ((SELECT id FROM kb_event_types WHERE name = 'citation_audited'), $1) \
+             RETURNING id",
+        )
+        .bind(entity)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         sqlx::query(
-            "INSERT INTO kb_block_provenance \
-               (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
-             VALUES ($1, 'resource', $2, $3, 0)",
+            "INSERT INTO kb_citation_audits \
+               (block_id, source_kind, source_id, value, audited_by_event_id, \
+                audited_by_profile_id) \
+             VALUES ($1, 'resource', $2, $3, $4, $5)",
         )
         .bind(block)
         .bind(source)
-        .bind(s.event)
+        .bind(value)
+        .bind(event)
+        .bind(profile)
         .execute(pool)
         .await
         .unwrap();
-        finding
     }
 
-    /// The findings the tick actually enqueued for `cogmap`, read straight off the queue row.
-    async fn queued_findings(pool: &PgPool, cogmap: Uuid) -> Vec<Uuid> {
+    /// The citations the tick actually enqueued for `cogmap`, read straight off the queue row.
+    async fn queued_citations(pool: &PgPool, cogmap: Uuid) -> Vec<AuditCitation> {
         let payload: serde_json::Value = sqlx::query_scalar(
             "SELECT payload FROM kb_workflow_jobs \
               WHERE cogmap_id = $1 AND persona = 'auditor' AND dispatch_type = 'citation-audit'",
@@ -358,27 +556,48 @@ mod tests {
         .unwrap();
         serde_json::from_value::<AuditJobPayload>(payload)
             .unwrap()
-            .findings
+            .citations
     }
 
-    /// THE GRAIN TEST (spec §6.1). Three uncovered findings in ONE cogmap must produce exactly one
-    /// queue row carrying all three.
+    /// The distinct findings represented in a citation list, sorted — the finding-grain projection
+    /// of a citation-grain payload.
+    fn findings_of(citations: &[AuditCitation]) -> Vec<Uuid> {
+        let mut out: Vec<Uuid> = citations.iter().map(|c| c.finding_id).collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// THE GRAIN TEST (spec §6.1), now at citation grain. Three uncovered findings in ONE cogmap
+    /// must produce exactly one queue row carrying every auditable citation of all three.
     ///
     /// It falsifies the per-finding design directly: against an enqueue-per-swept-row tick, the
     /// first `workflow_job_enqueue` would create the row and the next two would hit
     /// `uq_workflow_jobs_in_flight` and return NULL through `ON CONFLICT DO NOTHING`
     /// (`20260705000001_workflow_jobs.sql:43-45,59-62`). The job count would still be 1 — so a test
     /// that only counted jobs would PASS against the broken design. The load-bearing assertion is
-    /// therefore the payload: `findings.len() == 3`, which a per-finding tick could never produce.
+    /// therefore the payload's contents, which a per-finding tick could never produce.
+    ///
+    /// `finding-a` carries THREE citations while its siblings carry one each, so the payload holds
+    /// five entries drawn from three findings. That spread is what keeps this a citation-grain
+    /// assertion after `20260727000050` rather than a renamed finding-grain one: five-from-three
+    /// distinguishes the new payload from both a per-finding enqueue (which would carry one
+    /// finding) and a list that merely renamed `findings` to `citations` (which would carry three).
+    ///
+    /// Verified to bite: bypassing `group_by_cogmap` with a per-citation enqueue fails this test.
+    /// The pure `grouping_tests` above stay green under that same bypass, because it routes around
+    /// the function rather than breaking it — which is why this DB-level test has to exist.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn three_findings_in_one_cogmap_enqueue_one_job_carrying_three(pool: PgPool) {
+    async fn three_findings_in_one_cogmap_enqueue_one_job_carrying_every_citation(pool: PgPool) {
         let s = seed(&pool).await;
-        let mut expected = vec![
-            seed_finding_with_one_citation(&pool, &s, "finding-a").await,
-            seed_finding_with_one_citation(&pool, &s, "finding-b").await,
-            seed_finding_with_one_citation(&pool, &s, "finding-c").await,
-        ];
-        expected.sort();
+        let (a, a_cites) = seed_finding_with_citations(&pool, &s, "finding-a", 3).await;
+        let (b, b_cites) = seed_finding_with_citations(&pool, &s, "finding-b", 1).await;
+        let (c, c_cites) = seed_finding_with_citations(&pool, &s, "finding-c", 1).await;
+        let mut expected_findings = vec![a, b, c];
+        expected_findings.sort();
+        let mut expected_pairs: Vec<(Uuid, Uuid)> =
+            a_cites.into_iter().chain(b_cites).chain(c_cites).collect();
+        expected_pairs.sort();
 
         let backend = DbBackend::new(pool.clone(), s.principal.into());
         let claimed = backend
@@ -400,19 +619,139 @@ mod tests {
             "one cogmap is one job, however many findings drifted"
         );
 
-        let mut carried = ours[0].findings.clone();
+        assert_eq!(
+            findings_of(&ours[0].citations),
+            expected_findings,
+            "the claimed job represents ALL THREE findings — a per-finding enqueue would have kept \
+             one and let ON CONFLICT DO NOTHING discard the other two in silence"
+        );
+        let mut carried: Vec<(Uuid, Uuid)> = ours[0]
+            .citations
+            .iter()
+            .map(|c| (c.block_id, c.source_id))
+            .collect();
         carried.sort();
         assert_eq!(
-            carried, expected,
-            "the claimed job carries ALL THREE findings — a per-finding enqueue would have kept one \
-             and let ON CONFLICT DO NOTHING discard the other two in silence"
+            carried, expected_pairs,
+            "and it carries all FIVE citations, not one per finding — the payload is the auditor's \
+             unit of work, so `finding-a`'s three citations are three entries"
         );
 
-        let mut persisted = queued_findings(&pool, s.cogmap).await;
-        persisted.sort();
+        let persisted = queued_citations(&pool, s.cogmap).await;
         assert_eq!(
-            persisted, expected,
+            findings_of(&persisted),
+            expected_findings,
             "and the list is on the queue row itself, not only in the claim's return value"
+        );
+        let mut persisted_pairs: Vec<(Uuid, Uuid)> = persisted
+            .iter()
+            .map(|c| (c.block_id, c.source_id))
+            .collect();
+        persisted_pairs.sort();
+        assert_eq!(persisted_pairs, expected_pairs);
+    }
+
+    /// **The wiring witness, and the task's own outcome asserted end to end through the tick.**
+    ///
+    /// `resource_auditable_citations` has its own witnesses in temper-substrate, and the grouping
+    /// has its own above — but nothing tested that the tick actually *routes* the sweep through the
+    /// producer. That gap is exactly where the defect lived before `20260727000050`: the sweep was
+    /// correct, the queue was correct, and the payload still carried work the principal had already
+    /// done.
+    ///
+    /// Verified to bite: against an expansion reverted to `resource_live_citations` (every live
+    /// citation, unfiltered) the payload comes back with all three and the remainder assertion
+    /// fails. Note it is the REMAINDER assertion that catches it — the two above it still pass,
+    /// because an unfiltered payload does dispatch the finding and does represent it. A test that
+    /// stopped at "the finding is dispatched" would have been green against the defect.
+    ///
+    /// Both halves in one test on purpose, mirroring the substrate witness: a tick that dropped the
+    /// whole finding once any citation was weighed would satisfy "does not re-offer" and silently
+    /// starve the remainder, and would look from the queue's side exactly like draining correctly.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_partially_weighed_finding_is_dispatched_with_only_its_remainder(pool: PgPool) {
+        let s = seed(&pool).await;
+        let (finding, cites) = seed_finding_with_citations(&pool, &s, "finding-a", 3).await;
+        let (block, weighed) = cites[0];
+        record_audit(&pool, s.principal, block, weighed, 0.5).await;
+
+        let claimed = DbBackend::new(pool.clone(), s.principal.into())
+            .auditor_dispatch_tick(AuditorDispatchTick {
+                cap: None,
+                correlation: None,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap()
+            .value;
+
+        let ours: Vec<_> = claimed.iter().filter(|j| j.cogmap_id == s.cogmap).collect();
+        assert_eq!(ours.len(), 1, "the finding is still dispatched");
+        assert_eq!(
+            findings_of(&ours[0].citations),
+            vec![finding],
+            "the finding is NOT skipped because one of its citations is weighed"
+        );
+
+        let mut carried: Vec<(Uuid, Uuid)> = ours[0]
+            .citations
+            .iter()
+            .map(|c| (c.block_id, c.source_id))
+            .collect();
+        carried.sort();
+        let mut remainder = vec![cites[1], cites[2]];
+        remainder.sort();
+        assert_eq!(
+            carried, remainder,
+            "exactly the two unweighed citations ride the payload — the weighed one is withheld, so \
+             the session is given no opportunity to re-weigh it and needs no instruction not to"
+        );
+        assert!(
+            !carried.contains(&(block, weighed)),
+            "stated as absence too, since this is the defect itself: source {weighed} was weighed \
+             minutes ago and must not come back"
+        );
+    }
+
+    /// The expansion preserves the sweep's ordering across the array round trip — the claim
+    /// `WITH ORDINALITY` exists to make true, and the auditor's only sense of what matters most.
+    ///
+    /// `audit_drift_sweep` ranks the uncovered class by `(magnitude - coverage) DESC` before
+    /// interleaving (`20260726000010`), so the four-citation finding outranks the one-citation one.
+    /// Without `ORDINALITY` the planner is free to return the unnested rows in any order and this
+    /// prioritization is silently discarded — with no error and no log, which is why it is asserted
+    /// rather than assumed.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn expansion_keeps_the_sweeps_priority_order(pool: PgPool) {
+        let s = seed(&pool).await;
+        // Seeded least-urgent first, so insertion order cannot be mistaken for sweep order.
+        let (minor, _) = seed_finding_with_citations(&pool, &s, "finding-minor", 1).await;
+        let (major, _) = seed_finding_with_citations(&pool, &s, "finding-major", 4).await;
+
+        let swept = drift_sweep(&pool, s.principal.into(), None).await.unwrap();
+        let ours: Vec<_> = swept
+            .iter()
+            .filter(|r| r.cogmap_id == s.cogmap)
+            .cloned()
+            .collect();
+        assert_eq!(
+            ours.iter().map(|r| r.finding_id).collect::<Vec<_>>(),
+            vec![major, minor],
+            "precondition: the sweep really does rank the four-citation finding first, so the \
+             assertion below is about the expansion and not about the sweep"
+        );
+
+        let expanded = expand_to_citations(&pool, s.principal.into(), &ours)
+            .await
+            .unwrap();
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|(_, c)| c.finding_id)
+                .collect::<Vec<_>>(),
+            vec![major, major, major, major, minor],
+            "the sweep's order survives the array round trip — all four of the urgent finding's \
+             citations precede the minor one's"
         );
     }
 
@@ -428,7 +767,11 @@ mod tests {
             Persona::Auditor.as_str(),
             DispatchType::CitationAudit.as_str(),
             serde_json::to_value(AuditJobPayload {
-                findings: vec![Uuid::from_u128(1)],
+                citations: vec![AuditCitation {
+                    finding_id: Uuid::from_u128(1),
+                    block_id: Uuid::from_u128(101),
+                    source_id: Uuid::from_u128(201),
+                }],
             })
             .unwrap(),
         )
@@ -440,7 +783,11 @@ mod tests {
             Persona::Auditor.as_str(),
             DispatchType::CitationAudit.as_str(),
             serde_json::to_value(AuditJobPayload {
-                findings: vec![Uuid::from_u128(2)],
+                citations: vec![AuditCitation {
+                    finding_id: Uuid::from_u128(2),
+                    block_id: Uuid::from_u128(102),
+                    source_id: Uuid::from_u128(202),
+                }],
             })
             .unwrap(),
         )
@@ -454,7 +801,7 @@ mod tests {
              enqueue loop would look successful while dropping work"
         );
         assert_eq!(
-            queued_findings(&pool, s.cogmap).await,
+            findings_of(&queued_citations(&pool, s.cogmap).await),
             vec![Uuid::from_u128(1)],
             "the surviving row still carries the FIRST payload — the second finding is simply gone"
         );
@@ -621,8 +968,8 @@ mod tests {
 
         assert!(
             claimed.iter().any(|j| j.cogmap_id == a.cogmap
-                && j.findings.len() == 1
-                && j.findings[0] == a_finding),
+                && j.citations.len() == 1
+                && j.citations[0].finding_id == a_finding),
             "precondition: A really did claim its OWN work, so an empty result cannot be why the \
              assertion below holds"
         );
