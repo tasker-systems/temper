@@ -598,7 +598,7 @@ pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("profile not found".to_string()))?;
 
     Ok(profile)
 }

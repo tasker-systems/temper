@@ -84,7 +84,7 @@ pub async fn show_visible(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("cognitive map not found or not readable".to_string()))?;
 
     let charter =
         crate::backend::substrate_read::cogmap_charter_select(pool, profile_id, cogmap_id).await?;

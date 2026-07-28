@@ -188,7 +188,7 @@ async fn unknown_team_is_not_found(pool: PgPool) {
     .await;
 
     assert!(
-        matches!(denied, Err(ApiError::NotFound)),
+        matches!(denied, Err(ApiError::NotFound(_))),
         "unknown team must be NotFound, got {denied:?}"
     );
 }

@@ -926,6 +926,11 @@ pub async fn get_own_request(
 }
 
 /// Withdraw the pending join request for this profile.
+/// Both of `withdraw_request`'s not-found exits. One string, because to the caller they are one
+/// fact — nothing of theirs is pending — and two would answer a question about the *instance*
+/// (is a gating team configured?) that the public settings endpoint withholds.
+const NOTHING_TO_WITHDRAW: &str = "no pending join request to withdraw";
+
 pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult<()> {
     // Standing first (auth before writes): Withdraw is legal only from `Requested` (§6), so a
     // principal with nothing pending is refused here rather than reaching the row UPDATE.
@@ -943,7 +948,11 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
-        return Err(ApiError::NotFound);
+        // Same refusal as "no matching request" below. To the caller the two are one fact —
+        // there is nothing of theirs to withdraw — and distinguishing them would disclose
+        // whether a gating team is configured, which `handlers/access.rs` deliberately withholds
+        // from the public settings read.
+        return Err(ApiError::NotFound(NOTHING_TO_WITHDRAW.to_string()));
     };
 
     let result = sqlx::query_scalar!(
@@ -965,7 +974,7 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
 
     match result {
         Some(_request_id) => Ok(()),
-        None => Err(ApiError::NotFound),
+        None => Err(ApiError::NotFound(NOTHING_TO_WITHDRAW.to_string())),
     }
 }
 
@@ -1103,7 +1112,7 @@ pub async fn review_request(
     )
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("join request not found".to_string()))?;
 
     // On approval, grant the requester access. Under D11 access IS an `approved`
     // `kb_principal_standing` row (`has_system_access` reads nothing else), so the decision and the

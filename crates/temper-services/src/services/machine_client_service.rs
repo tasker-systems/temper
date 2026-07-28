@@ -95,7 +95,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<MachineClient> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)
+    .ok_or_else(|| ApiError::NotFound("machine client not found".to_string()))
 }
 
 /// [`get`], authorized for a surface caller (B2 D5). [`get`] itself stays unauthorized: it is the
@@ -238,7 +238,7 @@ pub async fn rotate_secret(
     )
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("machine client not found".to_string()))?;
 
     if row.issuer != "temper" {
         return Err(ApiError::BadRequest(format!(

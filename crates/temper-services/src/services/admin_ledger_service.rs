@@ -30,6 +30,7 @@ use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{EventRef, RefTarget};
 use uuid::Uuid;
 
+use crate::authz::ACTOR_HISTORY_REFUSAL;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 
@@ -132,7 +133,9 @@ pub async fn list_by_subject(
     if types.is_empty() {
         // Reads deny with 404, not 403 — the deny-split invariant. A 403 would confirm the
         // ledger has something to hide about this subject.
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "ledger entries not found or not readable".to_string(),
+        ));
     }
 
     // The `rel` is pinned to `subject` deliberately. `[{"target": …}]` alone would also match a
@@ -175,7 +178,7 @@ pub async fn list_by_actor(
     // `readable_event_types`; both hold regardless of how the instance is configured. That is
     // intended: reading your own authorship is not an admin act.
     if !access_service::has_system_access(pool, caller).await? {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(ACTOR_HISTORY_REFUSAL.to_string()));
     }
 
     // Reading someone else's history is an audit, and audits are admin-only. The `has_system_access`

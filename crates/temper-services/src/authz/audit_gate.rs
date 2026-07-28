@@ -119,6 +119,25 @@ use super::ScopedAuthority;
 use crate::error::{ApiError, ApiResult};
 use crate::services::machine_client_service;
 
+/// **The one refusal string every finding-shaped 404 renders**, across both the audit gate and the
+/// two reads beside it.
+///
+/// Five sites must be indistinguishable to a caller: an unknown block ([`finding_of_block`]), an
+/// unreadable or absent finding ([`AuditAuthority::denial`]), the path/block transposition guard
+/// and the audit-trail read (`citation_audit_service`), and the evidence read
+/// (`evidential_standing_service`). If any one of them names its own cause, the set stops being an
+/// equivalence class and a prober can diff the refusals to learn which of "no such finding",
+/// "exists but you may not read it", and "you may read it but you wrote it" applies — the exact
+/// disclosure the 404-in-place-of-403 choice exists to prevent.
+///
+/// Deliberately a shared constant rather than five string literals. Five literals is not the same
+/// defence written five times; it is five defences that will drift, silently, the first time one
+/// of them is "improved". `citation_audit_trail_test` asserts the equality directly.
+///
+/// The wording covers all three causes without electing between them — it is ambiguous *by
+/// construction*, which is the point.
+pub(crate) const FINDING_REFUSAL: &str = "finding not found or not readable";
+
 /// Is `caller` a registered, unrevoked machine principal?
 ///
 /// The conjunct spec §7 names, in ONE spelling shared by all three Set 5 gates — the audit write
@@ -176,7 +195,9 @@ pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult
     .fetch_optional(pool)
     .await?;
 
-    resource.map(ResourceId::from).ok_or(ApiError::NotFound)
+    resource
+        .map(ResourceId::from)
+        .ok_or_else(|| ApiError::NotFound(FINDING_REFUSAL.to_string()))
 }
 
 /// The scope of an audit decision: the **citation**, plus the finding it hangs on.
@@ -332,7 +353,7 @@ impl ScopedAuthority for AuditAuthority {
     /// unreadable case would tell a prober "you may see this finding but you wrote it", leaking the
     /// authorship relation the audit trail otherwise only exposes to readers.
     fn denial() -> ApiError {
-        ApiError::NotFound
+        ApiError::NotFound(FINDING_REFUSAL.to_string())
     }
 }
 
@@ -415,7 +436,7 @@ impl ScopedAuthority for AuditorJobAuthority {
     /// OpenAPI response already documents: cogmap ids travel in share flows, so a `Forbidden` would
     /// confirm that a guessed id names a real map.
     fn denial() -> ApiError {
-        ApiError::NotFound
+        ApiError::NotFound("cognitive map not found or not readable".to_string())
     }
 }
 
@@ -890,7 +911,7 @@ mod tests {
                 .await
                 .expect_err("every non-admitting arm denies");
             assert!(
-                matches!(err, ApiError::NotFound),
+                matches!(err, ApiError::NotFound(_)),
                 "{label} must be refused with NotFound, never Forbidden — a distinguishable \
                  refusal is an existence oracle (and, for the author, an authorship oracle)"
             );
@@ -904,7 +925,7 @@ mod tests {
         let err = citation_subject(&pool, BlockId::new(), Uuid::now_v7())
             .await
             .expect_err("no such block");
-        assert!(matches!(err, ApiError::NotFound));
+        assert!(matches!(err, ApiError::NotFound(_)));
     }
 
     // ── the dispatch-tick gate ────────────────────────────────────────────────
@@ -1029,7 +1050,7 @@ mod tests {
             .await
             .expect_err("both arms deny");
             assert!(
-                matches!(err, ApiError::NotFound),
+                matches!(err, ApiError::NotFound(_)),
                 "{label} must be 404 — one arm for 'no such map' and 'not yours'"
             );
         }

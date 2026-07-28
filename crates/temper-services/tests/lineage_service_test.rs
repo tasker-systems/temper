@@ -271,7 +271,7 @@ async fn unreadable_seed_is_not_found(pool: PgPool) -> sqlx::Result<()> {
         .await
         .expect_err("A is invisible to p_out");
     assert!(
-        matches!(err, temper_services::error::ApiError::NotFound),
+        matches!(err, temper_services::error::ApiError::NotFound(_)),
         "invisible seed → NotFound, not an empty leak"
     );
 

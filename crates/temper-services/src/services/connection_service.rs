@@ -52,7 +52,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Connection> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)
+    .ok_or_else(|| ApiError::NotFound("connection not found or not readable".to_string()))
 }
 
 /// [`get`], gated on the *existing row's* owning team.
@@ -1650,7 +1650,7 @@ mod tests {
         let err = svc::grant_reach(&pool, admin, c.id, ghost, Some("typo".into()))
             .await
             .expect_err("a team that does not exist cannot receive reach");
-        assert!(matches!(err, ApiError::NotFound), "got {err:?}");
+        assert!(matches!(err, ApiError::NotFound(_)), "got {err:?}");
 
         assert!(
             !reach_grant_exists(&pool, c.id, ghost).await,

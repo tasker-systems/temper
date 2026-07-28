@@ -97,7 +97,9 @@ pub async fn cogmap_neighborhood_slice(
         .fetch_one(pool)
         .await?;
     if !readable {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "cognitive map not found or not readable".to_string(),
+        ));
     }
 
     let depth = req.depth.min(MAX_DEPTH) as i32;
@@ -189,7 +191,9 @@ pub async fn cogmap_panorama(
         .fetch_one(pool)
         .await?;
     if !readable {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "cognitive map not found or not readable".to_string(),
+        ));
     }
 
     // Default lens (D2): the lens with the most live regions for THIS cogmap;
@@ -364,7 +368,9 @@ pub async fn region_composition_slice(
     .fetch_one(pool)
     .await?;
     if (readable as usize) < regions.len() {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "region not found or not readable".to_string(),
+        ));
     }
 
     let depth = depth.clamp(1, 3);

@@ -87,8 +87,25 @@ pub async fn get_visible(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)
+    .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
 }
+
+/// **The one refusal every third-party context lookup renders.**
+///
+/// A caller resolving `@handle/slug` has three ways to fail — no such handle, no such context
+/// under it, or one that exists but is not theirs to see — and telling them apart answers
+/// questions the caller has no standing to ask: whether a handle names a real profile, and, one
+/// guess per request, what another user's private contexts are called. At base all three rendered
+/// the bare `Not found` and were indistinguishable for free; carrying a message is what makes the
+/// property something to hold deliberately.
+///
+/// A constant rather than a literal per site, for the reason `FINDING_REFUSAL` gives: four copies
+/// of one defence is four defences that drift. `the_three_handle_slug_refusals_are_indistinguishable`
+/// asserts the byte-identity directly.
+///
+/// The `@me` arm is deliberately **not** bound by this and still names the slug — that slug is the
+/// caller's own, so echoing it discloses nothing they did not supply.
+const CONTEXT_REFUSAL: &str = "context not found or not readable";
 
 /// Resolve a context ref to a `ContextId`, gated to what `principal` may see.
 ///
@@ -118,18 +135,34 @@ pub async fn resolve_context_ref(
             )
             .fetch_optional(pool)
             .await?;
-            found.map(ContextId::from).ok_or(ApiError::NotFound)
+            found
+                .map(ContextId::from)
+                .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
         }
         ContextRef::OwnerSlug { owner, slug } => match owner {
             ContextOwnerRef::Me => lookup_profile_context(pool, *principal, slug).await,
             ContextOwnerRef::Handle(handle) => {
+                // All three exits below render `CONTEXT_REFUSAL` and nothing else. An unresolvable
+                // handle must not be distinguishable from a resolvable one, or the arm becomes a
+                // membership oracle over every handle on the instance.
                 let owner_id =
                     sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE handle = $1", handle)
                         .fetch_optional(pool)
                         .await?
-                        .ok_or(ApiError::NotFound)?;
-                // Resolve the context, then gate visibility to the principal.
-                let cid = lookup_profile_context(pool, owner_id, slug).await?;
+                        .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+                // Resolve the context, then gate visibility to the principal. The inner lookup
+                // names the slug — right for `@me`, wrong here, where "no such slug" and "exists
+                // but not yours" must read alike — so its refusal is rewritten. Only `NotFound` is
+                // rewritten; a genuine fault still propagates as itself.
+                let cid =
+                    lookup_profile_context(pool, owner_id, slug)
+                        .await
+                        .map_err(|e| match e {
+                            ApiError::NotFound(_) => {
+                                ApiError::NotFound(CONTEXT_REFUSAL.to_string())
+                            }
+                            other => other,
+                        })?;
                 ensure_context_visible(pool, *principal, *cid).await?;
                 Ok(cid)
             }
@@ -138,7 +171,11 @@ pub async fn resolve_context_ref(
                     sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", team_slug)
                         .fetch_optional(pool)
                         .await?
-                        .ok_or(ApiError::NotFound)?;
+                        .ok_or_else(|| {
+                            ApiError::NotFound(format!(
+                                "team {team_slug} not found or not readable"
+                            ))
+                        })?;
                 // Membership gate — non-member gets Forbidden, not NotFound.
                 let is_member = sqlx::query_scalar!(
                     r#"SELECT EXISTS(
@@ -160,7 +197,9 @@ pub async fn resolve_context_ref(
                 )
                 .fetch_optional(pool)
                 .await?
-                .ok_or(ApiError::NotFound)?;
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("context {slug} not found or not readable"))
+                })?;
                 Ok(ContextId::from(id))
             }
         },
@@ -181,7 +220,7 @@ async fn lookup_profile_context(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound(format!("context {slug} not found or not readable")))?;
     Ok(ContextId::from(id))
 }
 
@@ -201,7 +240,7 @@ async fn ensure_context_visible(
     if visible {
         Ok(())
     } else {
-        Err(ApiError::NotFound)
+        Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
     }
 }
 
@@ -271,7 +310,9 @@ pub async fn resolve_create_owner(
             let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
                 .fetch_optional(pool)
                 .await?
-                .ok_or(ApiError::NotFound)?;
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("team {slug} not found or not readable"))
+                })?;
             match team_service::role_on_team(pool, team_id, caller).await? {
                 Some(role) if team_service::can_manage(role) => {}
                 _ => return Err(ApiError::Forbidden),
@@ -346,7 +387,7 @@ async fn ensure_context_and_team_exist(
     .fetch_one(pool)
     .await?;
     if !context_exists {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound("context not found".to_string()));
     }
     let team_exists = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "ok!""#,
@@ -355,7 +396,7 @@ async fn ensure_context_and_team_exist(
     .fetch_one(pool)
     .await?;
     if !team_exists {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound("team not found".to_string()));
     }
     Ok(())
 }

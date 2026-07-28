@@ -137,7 +137,7 @@ async fn non_member_cannot_see_team_owned_context(pool: PgPool) {
         .await
         .expect_err("non-member must not resolve a team-owned context by UUID");
     assert!(
-        matches!(err, ApiError::NotFound),
+        matches!(err, ApiError::NotFound(_)),
         "expected NotFound for non-member UUID resolve, got {err:?}"
     );
 
