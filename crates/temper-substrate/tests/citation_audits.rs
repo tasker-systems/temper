@@ -2313,3 +2313,216 @@ async fn stale_predicate_refuses_a_finding_the_principal_cannot_read(pool: sqlx:
          refuse it rather than answer a question about a resource this principal cannot see"
     );
 }
+
+// ── Citation-grain dispatch — `resource_auditable_citations` ────────────────────────────────────
+//
+// Migration `20260727000050_auditable_citations_at_citation_grain.sql`, task
+// `019fa5eb-2819-7e71-bd27-0d2875f60960`.
+//
+// THE DEFECT THESE WITNESS: the dispatch payload named findings while the auditor's unit of work is
+// a citation, so a finding selected on its LAST uncovered citation was worked in full and every
+// already-weighed citation of it was weighed again. Reproduced on production 2026-07-27 — finding
+// `019f5cdd-ba0b-7fa2-90b1-e78ca7979254`, 1 of 8 weighed, still swept at `uncovered: 7`.
+//
+// These reuse `stale_fixture` and audit with the sweeping principal's own entity, for the reason in
+// the tier-1 header above: `audited_by_profile_id` resolves from the owning event's emitter, so
+// auditing as `system` while asking about `principal` would make every assertion vacuously true.
+
+/// The `(block, source)` pairs this principal should weigh, ordered so assertions are positional.
+async fn auditable_citations(
+    pool: &sqlx::PgPool,
+    finding: ResourceId,
+    principal: ProfileId,
+) -> Vec<(Uuid, Uuid)> {
+    sqlx::query_as(
+        "SELECT block_id, source_id FROM resource_auditable_citations($1, $2) \
+          ORDER BY block_id, source_id",
+    )
+    .bind(finding.uuid())
+    .bind(principal.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Add a second live cited source to `block`, so a finding can be PARTIALLY weighed.
+async fn second_source(
+    pool: &sqlx::PgPool,
+    f: &StaleFixture,
+    block: Uuid,
+    slug: &str,
+) -> ResourceId {
+    let home = make_home(pool, f.owner, &format!("{slug}-src2-home")).await;
+    let source = make_resource(
+        pool,
+        f.owner,
+        f.emitter,
+        home,
+        "source",
+        &format!("temper://{slug}/source2"),
+    )
+    .await;
+    cite(pool, block, source.uuid()).await;
+    source
+}
+
+/// LOAD-BEARING — this is the defect itself. A citation this principal has weighed must not be
+/// offered back to it, and the finding must still be dispatched with the REMAINDER rather than
+/// dropped. Both halves in one test on purpose: a fix that withheld the whole finding once any
+/// citation was weighed would satisfy the first half and silently starve the rest, and would look
+/// from the queue's side exactly like draining correctly.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_weighed_citation_is_withheld_and_the_remainder_still_offered(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "auditable-remainder").await;
+    let block = first_block(&pool, f.finding).await;
+    let source2 = second_source(&pool, &f, block, "auditable-remainder").await;
+
+    let before = auditable_citations(&pool, f.finding, f.principal).await;
+    assert_eq!(
+        before.len(),
+        2,
+        "both live citations are auditable before anything is weighed: got {before:?}"
+    );
+
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    let after = auditable_citations(&pool, f.finding, f.principal).await;
+    assert_eq!(
+        after,
+        vec![(block, source2.uuid())],
+        "exactly the unweighed citation remains — the weighed one is withheld and the finding is \
+         NOT skipped wholesale"
+    );
+}
+
+/// The no-repeater invariant is PER PRINCIPAL, and this is the half that keeps it from becoming a
+/// global suppression. Cross-principal audit is the entire premise of the substrate; a second
+/// auditor must still be offered a citation the first one weighed.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn another_principal_is_still_offered_a_citation_this_one_weighed(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "auditable-cross").await;
+    let block = first_block(&pool, f.finding).await;
+
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    assert!(
+        auditable_citations(&pool, f.finding, f.principal)
+            .await
+            .is_empty(),
+        "the auditing principal has nothing left to weigh on this finding"
+    );
+
+    let (other, _other_entity) = make_auditor(&pool, "auditable-cross-other").await;
+    join_principal_to_cogmap(&pool, other.uuid(), f.cogmap, "auditable-cross-other-team").await;
+
+    assert_eq!(
+        auditable_citations(&pool, f.finding, other).await,
+        vec![(block, f.source.uuid())],
+        "a DIFFERENT principal is still offered it — suppressing this would collapse \
+         'assessed by another party' exactly the way a shared credential would"
+    );
+}
+
+/// Withholding is not permanent. Once the cited block changes, the citation re-enters this
+/// principal's work — otherwise the fix for re-auditing would have created the frozen-verdict defect
+/// tier-1 staleness exists to prevent, one grain down.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_weighed_citation_re_enters_once_it_goes_stale(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "auditable-stale").await;
+    let block = first_block(&pool, f.finding).await;
+
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    assert!(
+        auditable_citations(&pool, f.finding, f.principal)
+            .await
+            .is_empty(),
+        "withheld immediately after being weighed"
+    );
+
+    mutate_block(
+        &pool,
+        block,
+        f.emitter,
+        "the assertion now says something else",
+    )
+    .await;
+
+    assert_eq!(
+        auditable_citations(&pool, f.finding, f.principal).await,
+        vec![(block, f.source.uuid())],
+        "the block changed under the verdict, so the citation is auditable again"
+    );
+}
+
+/// The RBAC gate is inherited, not re-implemented. An unreadable finding yields zero rows rather
+/// than raising or leaking, matching the zero-rows-to-404 dialect the audit write gate answers in —
+/// so this producer can never become an existence oracle.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unreadable_finding_offers_no_auditable_citations(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "auditable-gated").await;
+    let (stranger, _entity) = make_auditor(&pool, "auditable-gated-stranger").await;
+
+    assert!(
+        !auditable_citations(&pool, f.finding, f.principal)
+            .await
+            .is_empty(),
+        "control: the reaching principal does see work, so the next assertion is about \
+         READABILITY and not about an empty fixture"
+    );
+    assert!(
+        auditable_citations(&pool, f.finding, stranger)
+            .await
+            .is_empty(),
+        "a principal with no path to the cogmap is told nothing about this finding"
+    );
+}
+
+/// The extraction's own invariant: the boolean and the set cannot disagree, because the boolean IS
+/// an EXISTS over the set. Asserted rather than assumed — the whole point of extracting the body was
+/// that two copies of this predicate would drift, and nothing else in the suite compares them.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_staleness_boolean_agrees_with_the_staleness_set(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "auditable-agree").await;
+    let block = first_block(&pool, f.finding).await;
+
+    for stage in [
+        "before any audit",
+        "after auditing",
+        "after a block mutation",
+    ] {
+        let boolean: bool = sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+            .bind(f.finding.uuid())
+            .bind(f.principal.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let set_nonempty: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM resource_stale_citations($1, $2))")
+                .bind(f.finding.uuid())
+                .bind(f.principal.uuid())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            boolean, set_nonempty,
+            "boolean and set must agree ({stage}) — they are one definition since 20260727000050"
+        );
+
+        match stage {
+            "before any audit" => {
+                fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+                    .await
+                    .unwrap();
+            }
+            "after auditing" => {
+                mutate_block(&pool, block, f.emitter, "revised prose").await;
+            }
+            _ => {}
+        }
+    }
+}
