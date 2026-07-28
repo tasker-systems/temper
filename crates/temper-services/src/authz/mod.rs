@@ -48,7 +48,7 @@ mod two_sided;
 // deliberately NOT a `ScopedAuthority`).
 pub(crate) use audit_gate::{
     citation_subject, finding_of_block, require_machine_principal, AuditAuthority,
-    AuditorJobAuthority,
+    AuditorJobAuthority, FINDING_REFUSAL,
 };
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};

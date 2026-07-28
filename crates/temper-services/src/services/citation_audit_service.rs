@@ -61,7 +61,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::authz::finding_of_block;
+use crate::authz::{finding_of_block, FINDING_REFUSAL};
 use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
@@ -87,7 +87,9 @@ pub async fn record_citation_audit(
     // onto a block of a different finding.
     let resolved_finding = finding_of_block(pool, cmd.block).await?;
     if resolved_finding != path_finding {
-        return Err(ApiError::NotFound);
+        // Same string as every other finding-shaped refusal — a transposition attempt must not be
+        // distinguishable from an unknown block or an unreadable finding.
+        return Err(ApiError::NotFound(FINDING_REFUSAL.to_string()));
     }
 
     let backend = DbBackend::new(pool.clone(), profile_id);
@@ -128,7 +130,7 @@ pub async fn list_citation_audits(
         .await
         .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
     if !readable {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(FINDING_REFUSAL.to_string()));
     }
 
     let rows = readback::citation_audit_trail(pool, profile_id, finding)

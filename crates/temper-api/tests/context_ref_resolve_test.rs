@@ -218,7 +218,7 @@ async fn bare_uuid_not_found_when_not_visible(pool: PgPool) {
         .expect_err("non-visible context UUID should not resolve");
 
     assert!(
-        matches!(err, ApiError::NotFound),
+        matches!(err, ApiError::NotFound(_)),
         "expected NotFound for non-visible UUID, got {err:?}"
     );
 }
@@ -288,7 +288,7 @@ async fn handle_slug_not_found_when_not_shared(pool: PgPool) {
         .expect_err("unshared @handle/slug should not resolve");
 
     assert!(
-        matches!(err, ApiError::NotFound),
+        matches!(err, ApiError::NotFound(_)),
         "expected NotFound for unshared @handle/slug, got {err:?}"
     );
 }

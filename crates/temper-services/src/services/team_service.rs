@@ -104,7 +104,9 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
     if exists {
         Ok(())
     } else {
-        Err(ApiError::NotFound)
+        Err(ApiError::NotFound(
+            "team not found or not readable".to_string(),
+        ))
     }
 }
 
@@ -136,7 +138,7 @@ pub async fn create_team(
         )
         .fetch_optional(pool)
         .await?
-        .ok_or(ApiError::NotFound)?;
+        .ok_or_else(|| ApiError::NotFound("parent team not found or not readable".to_string()))?;
         match role_on_team(pool, parent_id, creator).await? {
             Some(role) if can_manage(role) => {}
             _ => return Err(ApiError::Forbidden),
@@ -292,7 +294,7 @@ pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> Api
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("team not found or not readable".to_string()))?;
 
     let members = sqlx::query_as!(
         TeamMemberDetail,
@@ -353,7 +355,7 @@ pub async fn update_team(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("team not found or not readable".to_string()))?;
 
     Ok(row)
 }
@@ -397,7 +399,7 @@ pub async fn delete_team(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> Api
         return Err(if is_root {
             ApiError::Conflict("the temper-system root team cannot be deleted".to_string())
         } else {
-            ApiError::NotFound
+            ApiError::NotFound("team not found or not readable".to_string())
         });
     }
     Ok(())
@@ -440,7 +442,7 @@ pub async fn remove_member(
 
     let (_target_role, source) = load_member(pool, team_id, target)
         .await?
-        .ok_or(ApiError::NotFound)?;
+        .ok_or_else(|| ApiError::NotFound("team member not found".to_string()))?;
 
     if matches!(source, TeamMemberSource::Idp) {
         return Err(ApiError::Conflict(
@@ -530,7 +532,7 @@ pub async fn change_role(
 
     let (_current_role, source) = load_member(pool, team_id, target)
         .await?
-        .ok_or(ApiError::NotFound)?;
+        .ok_or_else(|| ApiError::NotFound("team member not found".to_string()))?;
 
     if matches!(source, TeamMemberSource::Idp) {
         return Err(ApiError::Conflict(
@@ -704,7 +706,7 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
 
         let denied = team_detail(&pool, ProfileId::from(outsider), team).await;
-        assert!(matches!(denied, Err(ApiError::NotFound)));
+        assert!(matches!(denied, Err(ApiError::NotFound(_))));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -903,7 +905,7 @@ mod lifecycle_tests {
 
         let denied =
             change_role(&pool, ProfileId::from(owner), team, ghost, TeamRole::Member).await;
-        assert!(matches!(denied, Err(ApiError::NotFound)));
+        assert!(matches!(denied, Err(ApiError::NotFound(_))));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1024,7 +1026,7 @@ mod lifecycle_tests {
             description: None,
         };
         let denied = update_team(&pool, ProfileId::from(owner), team, &req).await;
-        assert!(matches!(denied, Err(ApiError::NotFound)));
+        assert!(matches!(denied, Err(ApiError::NotFound(_))));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1046,7 +1048,7 @@ mod lifecycle_tests {
         let after = list_teams(&pool, ProfileId::from(owner)).await.unwrap();
         assert!(!after.iter().any(|t| t.id == team));
         let shown = team_detail(&pool, ProfileId::from(owner), team).await;
-        assert!(matches!(shown, Err(ApiError::NotFound)));
+        assert!(matches!(shown, Err(ApiError::NotFound(_))));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

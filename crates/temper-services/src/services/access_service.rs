@@ -943,7 +943,9 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "no gating team is configured".to_string(),
+        ));
     };
 
     let result = sqlx::query_scalar!(
@@ -965,7 +967,9 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
 
     match result {
         Some(_request_id) => Ok(()),
-        None => Err(ApiError::NotFound),
+        None => Err(ApiError::NotFound(
+            "no pending join request to withdraw".to_string(),
+        )),
     }
 }
 
@@ -1103,7 +1107,7 @@ pub async fn review_request(
     )
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("join request not found".to_string()))?;
 
     // On approval, grant the requester access. Under D11 access IS an `approved`
     // `kb_principal_standing` row (`has_system_access` reads nothing else), so the decision and the

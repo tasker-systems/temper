@@ -103,7 +103,9 @@ pub async fn accept_invitation(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| {
+        ApiError::NotFound("invitation not found, already used, or expired".to_string())
+    })?;
 
     let team_slug = sqlx::query_scalar!("SELECT slug FROM kb_teams WHERE id = $1", inv.team_id)
         .fetch_one(pool)
@@ -179,7 +181,9 @@ pub async fn decline_invitation(pool: &PgPool, _caller: ProfileId, token: &str) 
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| {
+        ApiError::NotFound("invitation not found, already used, or expired".to_string())
+    })?;
 
     match status {
         InvitationStatus::Declined => Ok(()),
@@ -658,7 +662,7 @@ mod tests {
         let err = accept_invitation(&pool, invitee, "deadbeef")
             .await
             .unwrap_err();
-        assert!(matches!(err, ApiError::NotFound));
+        assert!(matches!(err, ApiError::NotFound(_)));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

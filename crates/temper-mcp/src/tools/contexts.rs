@@ -23,8 +23,10 @@ fn map_api_error(context: &str, err: ApiError) -> rmcp::ErrorData {
             ),
             None,
         ),
-        ApiError::NotFound => {
-            rmcp::ErrorData::invalid_params(format!("{context}: context or team not found"), None)
+        // Carry the service's own message rather than replacing it with a constant: it names
+        // which of the context or the team was unresolvable, which this arm could only guess at.
+        ApiError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("{context}: {msg}"), None)
         }
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
@@ -221,7 +223,13 @@ mod tests {
             forbidden.message.contains("administer the context"),
             "{forbidden:?}"
         );
-        let not_found = map_api_error("share_context", ApiError::NotFound);
-        assert!(not_found.message.contains("not found"), "{not_found:?}");
+        let not_found = map_api_error(
+            "share_context",
+            ApiError::NotFound("team seed-team not found or not readable".to_string()),
+        );
+        assert!(
+            not_found.message.contains("seed-team"),
+            "the service's message must survive onto MCP, not be replaced: {not_found:?}"
+        );
     }
 }

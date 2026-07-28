@@ -39,7 +39,7 @@ pub async fn ingest_delta(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("cognitive map not found or not readable".to_string()))?;
     let watermark = cursors.watermark;
 
     let row = sqlx::query!(
@@ -724,7 +724,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, ApiError::NotFound),
+            matches!(err, ApiError::NotFound(_)),
             "deny → 404, no existence oracle"
         );
     }

@@ -92,7 +92,9 @@ pub async fn resource_lineage(
     .await?;
 
     if !visible {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "resource not found or not readable".to_string(),
+        ));
     }
 
     let ancestors = walk(pool, profile_id, resource_id, "ancestors", max_depth).await?;

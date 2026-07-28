@@ -227,10 +227,7 @@ pub async fn cogmap_show(
         cogmap_service::show_visible(&svc.api_state.pool, ProfileId::from(profile.id), cogmap_id)
             .await
             .map_err(|e| match e {
-                ApiError::NotFound => rmcp::ErrorData::invalid_params(
-                    "cognitive map not found or not readable".to_string(),
-                    None,
-                ),
+                ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
                 other => {
                     rmcp::ErrorData::internal_error(format!("cogmap_show failed: {other}"), None)
                 }

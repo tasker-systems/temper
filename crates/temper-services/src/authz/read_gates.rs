@@ -54,8 +54,12 @@ impl ScopedAuthority for TeamReadAuthority {
     /// are globally unique and used in share flows"* (`team_service.rs:277`). A `Forbidden` here
     /// would confirm that a guessed slug names a real team, which is exactly what the refusal is
     /// withholding.
+    ///
+    /// The message says "or not readable" for the same reason, and cannot say more: `denial` is
+    /// static and argument-free, so it has no access to the slug it is refusing. The ambiguity is
+    /// a property of the signature, not of anyone remembering to preserve it.
     fn denial() -> ApiError {
-        ApiError::NotFound
+        ApiError::NotFound("team not found or not readable".to_string())
     }
 }
 
@@ -99,7 +103,9 @@ impl ScopedAuthority for ActorHistoryAuthority {
 
     /// `NotFound`, matching what this axis has always returned: a `Forbidden` would confirm that
     /// the queried profile exists and has ledger authorship, which is what the refusal withholds.
+    /// The message withholds the same thing — and, `denial` being static, structurally cannot
+    /// name the profile even by accident.
     fn denial() -> ApiError {
-        ApiError::NotFound
+        ApiError::NotFound("actor history not found or not readable".to_string())
     }
 }

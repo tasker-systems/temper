@@ -21,6 +21,8 @@ use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::standing::StandingShape;
 use temper_substrate::readback;
 
+use crate::authz::FINDING_REFUSAL;
+
 /// Read a finding's evidential-standing shape, scoped to the principal's read access.
 ///
 /// The `id`-bridge: the handler passes bare `Uuid`s (handler-parity with `edge_service`);
@@ -40,7 +42,7 @@ pub async fn resource_evidence(
     )
     .await
     .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound(FINDING_REFUSAL.to_string()))?;
 
     Ok(StandingShape {
         finding_id: row.finding_id,

@@ -16,8 +16,15 @@ pub enum ClientError {
     #[error("system access required")]
     SystemAccessRequired(Box<CliAccessDetails>),
 
-    #[error("{resource} not found")]
-    NotFound { resource: String },
+    /// Carries the server's own message verbatim and renders it bare.
+    ///
+    /// This was `{ resource: String }`, parsed from an `error.resource` field the server has
+    /// never emitted — `openapi.json` publishes `code`, `message`, `details` and nothing else —
+    /// so every real 404 fell through to the `"unknown"` default and rendered `unknown not
+    /// found`. It now reads `error.message`, exactly as the 409, 422 and 5xx arms beside it
+    /// always have.
+    #[error("{message}")]
+    NotFound { message: String },
 
     #[error("conflict: {message}")]
     Conflict { message: String },

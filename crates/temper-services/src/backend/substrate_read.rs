@@ -405,7 +405,7 @@ pub async fn get_meta_batch_select(
                 map.insert(*id, resp);
             }
             // A not-visible id is simply absent from the map; a genuine fault still propagates.
-            Err(ApiError::NotFound) => {}
+            Err(ApiError::NotFound(_)) => {}
             Err(e) => return Err(e),
         }
     }

@@ -87,7 +87,7 @@ pub async fn get_visible(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)
+    .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
 }
 
 /// Resolve a context ref to a `ContextId`, gated to what `principal` may see.
@@ -118,7 +118,9 @@ pub async fn resolve_context_ref(
             )
             .fetch_optional(pool)
             .await?;
-            found.map(ContextId::from).ok_or(ApiError::NotFound)
+            found
+                .map(ContextId::from)
+                .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
         }
         ContextRef::OwnerSlug { owner, slug } => match owner {
             ContextOwnerRef::Me => lookup_profile_context(pool, *principal, slug).await,
@@ -127,7 +129,9 @@ pub async fn resolve_context_ref(
                     sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE handle = $1", handle)
                         .fetch_optional(pool)
                         .await?
-                        .ok_or(ApiError::NotFound)?;
+                        .ok_or_else(|| {
+                            ApiError::NotFound(format!("no profile with handle {handle}"))
+                        })?;
                 // Resolve the context, then gate visibility to the principal.
                 let cid = lookup_profile_context(pool, owner_id, slug).await?;
                 ensure_context_visible(pool, *principal, *cid).await?;
@@ -138,7 +142,11 @@ pub async fn resolve_context_ref(
                     sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", team_slug)
                         .fetch_optional(pool)
                         .await?
-                        .ok_or(ApiError::NotFound)?;
+                        .ok_or_else(|| {
+                            ApiError::NotFound(format!(
+                                "team {team_slug} not found or not readable"
+                            ))
+                        })?;
                 // Membership gate — non-member gets Forbidden, not NotFound.
                 let is_member = sqlx::query_scalar!(
                     r#"SELECT EXISTS(
@@ -160,7 +168,9 @@ pub async fn resolve_context_ref(
                 )
                 .fetch_optional(pool)
                 .await?
-                .ok_or(ApiError::NotFound)?;
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("context {slug} not found or not readable"))
+                })?;
                 Ok(ContextId::from(id))
             }
         },
@@ -181,7 +191,7 @@ async fn lookup_profile_context(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound(format!("context {slug} not found or not readable")))?;
     Ok(ContextId::from(id))
 }
 
@@ -201,7 +211,9 @@ async fn ensure_context_visible(
     if visible {
         Ok(())
     } else {
-        Err(ApiError::NotFound)
+        Err(ApiError::NotFound(
+            "context not found or not readable".to_string(),
+        ))
     }
 }
 
@@ -271,7 +283,9 @@ pub async fn resolve_create_owner(
             let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
                 .fetch_optional(pool)
                 .await?
-                .ok_or(ApiError::NotFound)?;
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("team {slug} not found or not readable"))
+                })?;
             match team_service::role_on_team(pool, team_id, caller).await? {
                 Some(role) if team_service::can_manage(role) => {}
                 _ => return Err(ApiError::Forbidden),
@@ -346,7 +360,7 @@ async fn ensure_context_and_team_exist(
     .fetch_one(pool)
     .await?;
     if !context_exists {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound("context not found".to_string()));
     }
     let team_exists = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "ok!""#,
@@ -355,7 +369,7 @@ async fn ensure_context_and_team_exist(
     .fetch_one(pool)
     .await?;
     if !team_exists {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound("team not found".to_string()));
     }
     Ok(())
 }

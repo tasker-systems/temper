@@ -121,14 +121,14 @@ async fn unreadable_finding_is_not_found(pool: PgPool) {
     // An existing but unreadable finding: the in-SQL gate yields zero rows → None → NotFound.
     let existing = resource_evidence(&pool, stranger, goal).await;
     assert!(
-        matches!(existing, Err(ApiError::NotFound)),
+        matches!(existing, Err(ApiError::NotFound(_))),
         "the in-SQL gate hides an unreadable finding as NotFound: {existing:?}"
     );
 
     // An absent finding is likewise NotFound (leak-safe: denied and absent are indistinguishable).
     let absent = resource_evidence(&pool, stranger, Uuid::now_v7()).await;
     assert!(
-        matches!(absent, Err(ApiError::NotFound)),
+        matches!(absent, Err(ApiError::NotFound(_))),
         "an absent finding is NotFound: {absent:?}"
     );
 }

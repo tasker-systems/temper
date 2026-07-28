@@ -445,7 +445,7 @@ async fn a_non_admin_cannot_read_the_ledger(pool: PgPool) {
     .expect_err("an outsider must not read the admin ledger");
 
     assert!(
-        matches!(err, ApiError::NotFound),
+        matches!(err, ApiError::NotFound(_)),
         "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
     );
 }
@@ -544,7 +544,7 @@ async fn the_actor_keeps_their_own_history_without_the_capability(pool: PgPool) 
     )
     .await
     .expect_err("no capability on this subject ⇒ the subject axis denies");
-    assert!(matches!(subject_err, ApiError::NotFound));
+    assert!(matches!(subject_err, ApiError::NotFound(_)));
 
     // The actor axis returns it anyway. That is the decision.
     let mine = admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
@@ -577,7 +577,7 @@ async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
         admin_ledger_service::list_by_actor(&pool, f.outsider_profile, f.admin_profile, 50, 0)
             .await
             .expect_err("a non-admin must not audit another profile's acts");
-    assert!(matches!(err, ApiError::NotFound));
+    assert!(matches!(err, ApiError::NotFound(_)));
 
     // ...and the admin may.
     let audit = admin_ledger_service::list_by_actor(&pool, f.admin_profile, f.admin_profile, 50, 0)
@@ -640,7 +640,7 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
         .await
         .expect_err("without system access there is no reader, so there is no history");
     assert!(
-        matches!(err, ApiError::NotFound),
+        matches!(err, ApiError::NotFound(_)),
         "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
     );
 

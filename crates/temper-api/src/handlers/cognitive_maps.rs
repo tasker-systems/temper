@@ -323,7 +323,7 @@ pub async fn analytics(
     )
     .await?
     .map(Json)
-    .ok_or(ApiError::NotFound)
+    .ok_or_else(|| ApiError::NotFound("cognitive map not found or not readable".to_string()))
 }
 
 #[utoipa::path(

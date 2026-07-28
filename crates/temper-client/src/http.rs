@@ -398,9 +398,9 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
             }
         }
         404 => {
-            let resource =
-                parse_error_field(body, "resource").unwrap_or_else(|| "unknown".to_owned());
-            ClientError::NotFound { resource }
+            let message =
+                parse_error_field(body, "message").unwrap_or_else(|| "not found".to_owned());
+            ClientError::NotFound { message }
         }
         409 => {
             let message =
@@ -498,18 +498,41 @@ mod tests {
         assert!(matches!(err, ClientError::Forbidden));
     }
 
+    /// A 404 carries the server's own message through to the caller.
+    ///
+    /// The body here is the shape the server actually emits — `{"error":{"code","message"}}`,
+    /// exactly what `openapi.json` publishes and `ApiError::into_response` writes.
+    ///
+    /// This test previously hand-wrote `"resource":"workspace/abc"` and asserted it parsed out.
+    /// The server has never emitted a `resource` field — not since `71b82d45` introduced this
+    /// branch — so the fixture supplied what production omits, and the test stayed green about a
+    /// contract that did not exist. Every real 404 fell through to `"unknown"` and the CLI printed
+    /// `unknown not found`. **A fixture that provides what production omits cannot fail.**
+    ///
+    /// The guard against the *real* serializer (rather than this crate's belief about it) is
+    /// `a_failed_goal_link_names_the_goal_at_the_caller` in `tests/e2e/tests/goal_edge_e2e_test.rs`,
+    /// which drives a live server. This one pins the parse in isolation.
     #[test]
-    fn test_404_with_resource_field() {
+    fn test_404_carries_the_servers_message() {
         let body =
-            r#"{"error":{"code":"not_found","resource":"workspace/abc","message":"not found"}}"#;
+            r#"{"error":{"code":"NOT_FOUND","message":"goal 019f81e9 not found or not readable"}}"#;
         let err = map_status_to_error(status(404), body);
-        assert!(matches!(err, ClientError::NotFound { resource } if resource == "workspace/abc"));
+        assert!(
+            matches!(&err, ClientError::NotFound { message }
+                if message == "goal 019f81e9 not found or not readable"),
+            "got {err:?}"
+        );
     }
 
+    /// A malformed or message-less 404 still renders something honest, rather than inventing a
+    /// subject the server never named.
     #[test]
-    fn test_404_without_resource_falls_back_to_unknown() {
+    fn test_404_without_message_falls_back() {
         let err = map_status_to_error(status(404), "{}");
-        assert!(matches!(err, ClientError::NotFound { resource } if resource == "unknown"));
+        assert!(
+            matches!(&err, ClientError::NotFound { message } if message == "not found"),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -711,7 +734,7 @@ mod tests {
         assert!(!should_retry(
             &reqwest::Method::GET,
             &ClientError::NotFound {
-                resource: "x".to_owned()
+                message: "x not found".to_owned()
             }
         ));
         assert!(!should_retry(

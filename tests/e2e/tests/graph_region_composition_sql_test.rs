@@ -409,7 +409,7 @@ async fn service_entry_gate_denies_unreadable_region(pool: sqlx::PgPool) {
         .await
         .expect_err("stranger must be denied");
     assert!(
-        matches!(err, temper_services::error::ApiError::NotFound),
+        matches!(err, temper_services::error::ApiError::NotFound(_)),
         "unreadable region → NotFound, got {err:?}"
     );
 }
