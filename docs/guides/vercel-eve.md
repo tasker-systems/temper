@@ -1,18 +1,34 @@
-# Deploying an Eve agent to Vercel (the steward)
+# Deploying an Eve agent to Vercel (the steward and the citation auditor)
 
-This guide covers deploying a Temper **Eve agent** — currently the team-self-cognition
-**steward** (`packages/agent-workflows/steward/`) — to Vercel: the isolated-project tooling
-rules, how the deploy actually reaches Vercel (by **git**, and why the CLI path is now a trap),
-the environment contract, registering the agent's machine credential, and the verify loop.
+This guide covers deploying the Temper **Eve agents** in `packages/agent-workflows/steward/` to
+Vercel: the isolated-project tooling rules, how the deploy actually reaches Vercel (by **git**, and
+why the CLI path is now a trap), the environment contract, registering the machine credentials, and
+the verify loop.
 
-Two prerequisites, both prior and separate:
+**One Vercel project, two agents, and their separation is the product.** The project ships the
+team-self-cognition **steward** (the root agent) and the Set 5 **citation auditor** (a declared
+subagent at `agent/subagents/auditor/`). They are colocated but must never share a credential, a
+model, or cogmap write reach — see [Two principals](#two-principals-never-one) below. Getting that
+wrong produces no deploy-time error and no log line; it produces an auditor that 404s every audit it
+attempts.
 
-- The agent's target cognitive map(s) must exist on the instance. Birthing and binding a map is
+> **The auditor currently has NO schedule and cannot fire.** Its dispatcher lives at
+> `disabled/auditor.schedule.ts`, outside the agent root, so eve registers no cron for it (eve
+> creates one Vercel Cron Job per file in `agent/schedules/`). Enabling it is a `git mv` **plus an
+> operator decision**, never a side effect of a merge. Everything below describes what to have in
+> place *before* that decision.
+
+Three prerequisites, all prior and separate:
+
+- The agents' target cognitive map(s) must exist on the instance. Birthing and binding a map is
   covered in [team-self-cognition-bootstrap.md](./team-self-cognition-bootstrap.md).
-- The agent's **machine credential must be registered before its first call.** The credential model
-  — the two mint paths, reach, rotation, revocation — lives in
+- **Each machine credential must be registered before its first call.** The credential model — the
+  two mint paths, reach, rotation, revocation — lives in
   [machine-credentials.md](./machine-credentials.md). This guide does not restate it; it tells you
-  which values the steward reads and when to register.
+  which values these agents read and when to register.
+- **Each principal must be *admitted*, which registration does not do.** See
+  [Admission](#admission-the-gate-with-no-deploy-time-symptom) — this is the gate that has bitten
+  most recently, and it is invisible until every request 403s.
 
 ## The agent is a workspace-isolated Eve project
 
@@ -125,9 +141,41 @@ You do **not** need `eve link` at all: its jobs are (a) link the project — `ve
 — and (b) fetch an AI Gateway credential, which the deployed agent gets automatically via Vercel
 OIDC (see below).
 
-## The machine credential: register it BEFORE the first tick
+## Two principals, never one
 
-The steward authenticates as a **machine principal** — its own agent profile, not a proxied human.
+The steward and the auditor each authenticate as their own **machine principal**. Three things must
+never be shared, and eve's declared-subagent isolation is what enforces them at runtime:
+
+| | steward (root agent) | citation auditor (declared subagent) |
+|---|---|---|
+| Credential | `TEMPER_M2M_*` / `TEMPER_CONNECT_CONNECTOR` / `TEMPER_TOKEN` | `TEMPER_AUDITOR_M2M_*` / `TEMPER_AUDITOR_TOKEN` — **no Connect** |
+| Model | `STEWARD_MODEL` (default `minimax/minimax-m3`) | `AUDITOR_MODEL` (default `anthropic/claude-haiku-4.5`) |
+| Cogmap reach | `--cogmap <ref>` — **write**, it authors into its map | `--cogmap <ref>:ro` — **read-only**, or omitted entirely |
+
+Why each one, because none is arbitrary:
+
+- **Credential.** One credential is one `kb_events.emitter_entity_id`. A shared client id leaves the
+  ledger unable to tell an audit from the citation it audits, and makes every steward-authored
+  finding *self-authored* to the auditor — `AuditAuthority::Author`, whose denial arm renders
+  **404**. Spec §5.2.
+- **Model.** Code colocation does not create epistemic dependence, but **shared trained priors do**.
+  Running the auditor on a different model is the one lever that genuinely attacks that (spec §5.3),
+  so the two defaults are deliberately **inverted** — each one's fallback is the other's primary, on
+  the documented trade that an auditor which cannot run at all provides less independence than one
+  that briefly runs on the same family. Set `AUDITOR_MODEL_FALLBACKS=""` if you would rather the
+  tick fail than collapse the personas.
+- **Reach.** A **writable** `--cogmap` grant classifies the auditor as `AuditAuthority::Author` for
+  every finding in that map via `can_modify_resource`, and **404s every audit it attempts** — with
+  nothing failing at deploy time and nothing in the logs naming the cause. `:ro`, or nothing. See
+  `docs/auth/machine-token-contract.md` §C.
+
+> **Connect is not an option for the auditor, structurally.** A Vercel Connect connector is
+> *deployment*-scoped, and both agents share one deployment — so a Connect token would authenticate
+> the auditor **as the steward**, which is precisely the collapse above. `auditorFetch` therefore
+> offers only M2M and a static dev token.
+
+## The machine credentials: register them BEFORE the first tick
+
 Registration is **fail-closed**: `resolve_machine_from_claims` (`temper-services`, the single
 machine entry point for both temper-api and temper-mcp) is a lookup in `kb_machine_clients` or a
 **401**. There is **no just-in-time create branch**.
@@ -136,34 +184,82 @@ machine entry point for both temper-api and temper-mcp) is a lookup in `kb_machi
 > grant it reach" flow.** That flow does not merely no-op now — every call 401s, forever, until the
 > client id is registered. Register **first**, with **explicit reach**, then deploy.
 
-Pick the mint path by who owns the secret — the full model, including reach containment and
-rotation, is [machine-credentials.md](./machine-credentials.md):
+Pick the mint path by **who owns the secret** — this is the one axis on which the two issuer
+variants differ. The full model, including reach containment and rotation, is
+[machine-credentials.md](./machine-credentials.md):
 
 ```bash
-# Auth0-fronted instance (temperkb.io today): register the Auth0 M2M app you created.
-temper admin machine provision --client-id <auth0-client-id> --label "steward" \
-  --owner-team <team> \
-  --team <team>:member \
-  --cogmap <cogmap-ref>
+# ── Auth0-fronted instance (temperkb.io today) ───────────────────────────────
+# You create the M2M application in Auth0; temper registers the client id it will present.
+# TWO SEPARATE AUTH0 APPLICATIONS — one per principal. Never one app with two consumers.
+temper admin machine provision --client-id <auth0-steward-client-id> --label "steward" \
+  --owner-team <team> --team <team>:member --cogmap <cogmap-ref>
 
-# Instance where Temper is the Authorization Server (AS_ISSUER set): Temper mints the
-# credential itself. Prints a `tmpr_…` client id and a one-time secret.
+temper admin machine provision --client-id <auth0-auditor-client-id> --label "citation-auditor" \
+  --owner-team <team> --team <team>:member --cogmap <cogmap-ref>:ro
+
+# ── Instance where Temper is the Authorization Server (AS_ISSUER set) ────────
+# Temper mints the credential itself. Prints a `tmpr_…` client id and a one-time secret.
 temper admin machine issue --label "steward" \
-  --owner-team <team> \
-  --team <team>:member \
-  --cogmap <cogmap-ref>
+  --owner-team <team> --team <team>:member --cogmap <cogmap-ref>
+
+temper admin machine issue --label "citation-auditor" \
+  --owner-team <team> --team <team>:member --cogmap <cogmap-ref>:ro
 ```
 
 - **`issue` requires an instance whose AS is Temper's own.** An instance has exactly one issuer, so
   a temper-minted token will not validate on an Auth0-fronted instance. Use `provision` there.
-- **Reach is explicit and plural, never inferred from `--owner-team`.** The steward needs two
-  things and both must be granted here: **read** on the sources it distills (via `--team`
-  membership) and **write** on the map(s) it tends (via `--cogmap`, which grants read+write unless
-  you suffix `:ro`). Clearing the ingest-delta threshold is not enough — the agent must be able to
-  *read* the corpus, which is a property of its profile.
+- **Reach is explicit and plural, never inferred from `--owner-team`**, which records the machine's
+  *owner* and is never consulted for authorization. The steward needs **read** on the sources it
+  distills (via `--team` membership) and **write** on the map(s) it tends. The auditor needs read
+  on both the findings and their cited sources — `--team` membership — and **must not** have
+  cogmap write.
 - If you need to widen reach after the fact, use `temper team add-member` and
   `temper cogmap grant --to-profile <agent-profile-id> --write` — the profile already exists,
-  because registration created it.
+  because registration created it. For the auditor, grant **without** `--write`.
+- Rotating the IdP **secret** needs no temper action (the client id is unchanged, so authorship
+  history stays continuous). Rotating the IdP **application** needs `temper admin machine rebind`,
+  which binds the new client id to the existing agent profile.
+
+### Admission: the gate with no deploy-time symptom
+
+**Registration is not admission.** Since D11 (`20260720000110_repoint_predicates.sql`)
+`has_system_access` reads `kb_principal_standing` alone, and **every mint door births a principal
+`denied`** — reach does not clear it, and neither `provision` nor `issue` does.
+
+```bash
+temper admin access approve <agent-profile-id>   # per principal, both of them
+```
+
+This gate is issuer-independent — identical under Auth0 and AS — and it is the one that actually
+bit on 2026-07-27. It has **no deploy-time signal whatsoever**: the token mints, the claims are
+perfect, `kb_machine_clients` looks right, and every request returns `403 SYSTEM_ACCESS_REQUIRED`.
+If you are debugging an agent whose credential is demonstrably valid, check standing before
+anything else.
+
+### The two issuer variants, side by side
+
+Everything else in this guide is issuer-independent. This is the whole delta:
+
+| | Auth0-fronted (`AUTH0_*`) | Temper-as-AS (`AS_ISSUER` set) |
+|---|---|---|
+| Who mints the secret | Auth0 — you create the M2M app | Temper — `machine issue`, printed **once** |
+| Register with | `temper admin machine provision --client-id <auth0-id>` | `temper admin machine issue` (registers as it mints) |
+| Client id shape | Auth0's opaque id | `tmpr_…` |
+| `*_M2M_AUDIENCE` | **required** — must equal the API's `AUTH_AUDIENCE` | **omit it** — the AS ignores a request-supplied audience and mints with its server-side `AS_AUDIENCE` |
+| `*_M2M_TOKEN_URL` | `https://<tenant>.auth0.com/oauth/token` | `https://<instance>/oauth/token` |
+| Mint body encoding | form-encoded **or** JSON (Auth0 tolerates both) | **form-encoded only** |
+| Admission (`access approve`) | required | required |
+| `kb_machine_clients` registration | required | required |
+
+> **Auth0 is the more permissive issuer, so it hides AS-mode defects.** Both rows above where the
+> variants differ in *tolerance* rather than *value* are real bugs that stayed green for as long as
+> Auth0 was the only issuer any client faced. The JSON-vs-form one is documented in
+> `clients/temper-ts/src/credentials.ts`: RFC 6749 §4 mandates form encoding, Auth0 tolerates JSON,
+> and Temper's AS reads the body with `req.formData()` — so a JSON mint never reaches its grant
+> branch and fails only on AS. **Anything verified only against Auth0 is verified against the
+> lenient case.** Use `ClientCredentials` from `temper-ts` rather than hand-rolling a mint; it is
+> the one implementation that is correct against both.
 
 ## Environment contract
 
@@ -181,8 +277,15 @@ required`, thrown by the connection's `requireEnv` guard — working as designed
 | `TEMPER_M2M_AUDIENCE` | **only for an external IdP** | The API audience the minted token targets (must equal the API's `AUTH_AUDIENCE`). **OMIT it for a temper-issued (`tmpr_`) credential** — Temper's AS ignores a request-supplied audience entirely and mints with its server-side `AS_AUDIENCE`. Requiring this var is exactly what previously made the steward unable to consume a temper-issued credential. |
 | `STEWARD_MODEL` | optional | The primary model, as an AI Gateway model id (same form as the default, `minimax/minimax-m3`). See below — a change needs a **redeploy**, and a typo fails the **build**. |
 | `STEWARD_MODEL_FALLBACKS` | optional | Comma-separated AI Gateway model ids, tried in order after the primary fails. Defaults to `anthropic/claude-haiku-4.5`. Deduped, and the primary is dropped from the list if repeated there. |
-| `TEMPER_CONNECT_CONNECTOR` | fallback | Vercel Connect connector id. Used **only** when `TEMPER_M2M_CLIENT_ID` is unset. **On the Auth0-fronted instance this cannot mint an app token** — see below. |
+| `TEMPER_CONNECT_CONNECTOR` | fallback | Vercel Connect connector id. Used **only** when `TEMPER_M2M_CLIENT_ID` is unset. **On the Auth0-fronted instance this cannot mint an app token** — see below. **Steward only** — a connector is deployment-scoped, so it can never identify the auditor. |
 | `TEMPER_TOKEN` | dev only | An already-OAuth-obtained temper token. Drives `eve dev`. Cannot re-mint, so a 401 on it is terminal (by design — see `temperFetch`). |
+| `TEMPER_AUDITOR_M2M_CLIENT_ID` | auditor, prod | The **auditor's own** machine client id — a second Auth0 M2M app, or a second `tmpr_…`. Never the steward's. |
+| `TEMPER_AUDITOR_M2M_CLIENT_SECRET` | auditor, prod | The auditor's client secret. Vercel env only. |
+| `TEMPER_AUDITOR_M2M_TOKEN_URL` | auditor, prod | Same issuer as the steward's — one instance, one issuer. Only the credential differs. |
+| `TEMPER_AUDITOR_M2M_AUDIENCE` | **external IdP only** | Same rule as `TEMPER_M2M_AUDIENCE`: required for Auth0, **omitted** for a `tmpr_` credential. |
+| `TEMPER_AUDITOR_TOKEN` | dev only | Static auditor bearer for `eve dev`. The unset-with-no-`CLIENT_ID` case **throws** rather than silently falling back to the steward's identity. |
+| `AUDITOR_MODEL` | optional | The auditor's primary model. Defaults to `anthropic/claude-haiku-4.5` — deliberately **not** the steward's default. Same build-time freeze and redeploy-to-change semantics. |
+| `AUDITOR_MODEL_FALLBACKS` | optional | Defaults to `minimax/minimax-m3` (the steward's primary — a documented availability trade). Set to `""` to make the tick fail rather than collapse the two personas onto one model. |
 
 The auth strategy is resolved once, in `agent/lib/temper-auth.ts`, and is **machine-identity-first**:
 
@@ -261,8 +364,11 @@ vercel connect create https://temperkb.io/mcp --name steward
 ## Verify
 
 - **Cron Jobs** (Vercel → *Settings → Cron Jobs*): every `defineSchedule` becomes a Vercel Cron
-  Job, evaluated in **UTC**. Expect two, both hourly (`0 * * * *`): the steward dispatch tick and
-  the region-materialize tick.
+  Job, evaluated in **UTC**. Expect **two**, both hourly (`0 * * * *`): the steward dispatch tick
+  and the region-materialize tick. **A third — the auditor's, at `30 * * * *` — appears only once
+  `disabled/auditor.schedule.ts` is moved into `agent/schedules/`.** If you see three and did not
+  make that decision, someone enabled a production cron in a merge; that is the thing the file
+  lives outside the agent root to prevent.
 - **Logs** (Vercel → *Observability → Logs*): the dispatch tick logs
   `[steward-dispatch] tick <correlation-id> starting`, then the claimed-job count (or
   `(no drift)`), then fans out. `[steward-materialize]` logs its candidate count. An unregistered
@@ -289,6 +395,34 @@ The steward **fans out**. There is no single map it tends, and no env var naming
 
 Widening what the steward tends is therefore a **grant**, not a redeploy: add the agent profile to
 a team, or grant it write on a map, and the next sweep picks it up.
+
+### How an auditor tick works — the queue is cogmap-grained, the work is CITATION-grained
+
+Same fan-out shape as the steward, with one extra server-side step that is the whole point of the
+design. `POST /api/auditor/dispatch` runs **reap → sweep → expand → group → enqueue → claim**:
+
+- `audit_drift_sweep` selects **findings** whose citations are uncovered or have gone stale.
+- **`resource_auditable_citations(finding, principal)` then expands each one into the citations
+  *this principal* has not already weighed** — live citations minus what it already audited, plus
+  any that went stale since. This is the step that makes the invariant structural.
+- Those citations group by cogmap into **one job per map**, because `kb_workflow_jobs` enforces
+  single-flight on `(cogmap_id, persona, dispatch_type)` and a per-finding enqueue would have
+  `ON CONFLICT DO NOTHING` silently discard all but the first.
+
+So `ClaimedAuditJob.citations` is a list of `(finding, block, source)` triples, **every one of which
+is work this credential has not done**. The session needs no skip logic and is given no opportunity
+to exercise any — the guarantee is held by *what the session receives*, not by an instruction it is
+asked to follow.
+
+> **This is why the auditor must be its own principal, restated from the write side.** The filter is
+> *per principal*, not per citation: a citation another principal weighed is still offered, because
+> cross-principal audit is the entire premise. Point two agents at one client id and they become one
+> principal — each silently suppressing the other's remaining work.
+
+Before it shipped (`20260727000050`), the payload carried bare finding ids and the dispatch prompt
+told the session it "does not need to re-check whether they need auditing" — so a finding with 1 of
+8 citations weighed was re-worked in full, every tick. If you are reading logs from before that,
+that is what you are seeing.
 
 ## Observing a tick — the DB is the source of truth, not the logs
 
@@ -323,6 +457,37 @@ Three things that read as bugs but aren't:
   the `--team` / `--cogmap` reach you registered it with. A genuine auth failure (unregistered or
   revoked client id) is a `401` with an explicit message naming the client id.
 
+### Observing an auditor tick
+
+The verdicts land in **`kb_citation_audits`**, one row per `(block, source)` weighed, each carrying
+`audited_by_profile_id` (filled by the projector from the **owning event's** emitter, never from an
+ambient principal — so a replay cannot re-attribute history). `GET /api/resources/{id}/citation-audits`
+reads the attributed trail for any finding you can already see. The dispatch tick itself logs:
+
+```
+[auditor-dispatch] tick <corr>: claimed N job(s): <job>→<cogmap>(M citation(s) across K finding(s))
+```
+
+Four readings that look like failures but are not:
+
+- **`claimed 0 job(s) (no auditable citations)` is the steady state, not a fault.** Once every live
+  citation this principal can reach has been weighed and nothing has changed since, there is
+  genuinely nothing to do. It is the *expected* output of a healthy corpus between edits.
+- **A job carrying fewer citations than the finding has is the fix working.** A finding with 8
+  citations and 1 already weighed contributes **7**. Compare against
+  `resource_auditable_citations`, never against `resource_live_citations`.
+- **An empty `citations` list on a claimed job means a pre-deploy payload.**
+  `AuditJobPayload::citations` is `#[serde(default)]` precisely so a job enqueued before the grain
+  change deserializes to empty rather than failing the claim; the schedule skips those, and the
+  sweep re-offers their findings next tick. Self-healing — but if you see it on a *fresh* job, the
+  expansion returned nothing and that is worth a look.
+- **`404` on an audit write is the self-audit denial arm, and it is almost always a reach
+  misconfiguration.** `AuditAuthority` is readability *minus* a self-audit denial, and both denial
+  arms render `NotFound` to match the evidence read's zero-rows→404 (so the write can never become
+  an existence oracle). If **every** audit 404s, the auditor almost certainly holds **write** on the
+  cogmap — making it `Author` for every finding there — or is sharing the steward's client id.
+  Check the `--cogmap` suffix before suspecting the data.
+
 > **Historical note (edges).** An early prod tick authored 17 nodes but **0 edges**:
 > `assert_relationship` failed for every cogmap-homed source with *"no rows returned by a query that
 > expected to return at least one row."* The edge-home lookup hard-filtered `anchor_table='kb_contexts'`,
@@ -341,6 +506,15 @@ Three things that read as bugs but aren't:
 - `packages/agent-workflows/steward/agent/lib/model-config.ts` — the model resolution and why it is
   build-time.
 - `packages/agent-workflows/steward/agent/schedules/steward.ts` — the fan-out dispatcher.
-- `clients/temper-ts/src/credentials.ts` — the shared `ClientCredentials` mint.
+- `clients/temper-ts/src/credentials.ts` — the shared `ClientCredentials` mint, correct against
+  **both** issuers. Read it before hand-rolling one.
+- `docs/auth/machine-token-contract.md` §C — the auditor's credential + reach constraints, and why a
+  writable cogmap grant 404s every audit.
+- `packages/agent-workflows/steward/disabled/auditor.schedule.ts` — the auditor dispatcher, and the
+  gate list to read **before** restoring it.
+- `packages/agent-workflows/steward/agent/subagents/auditor/instructions.md` — what the auditor
+  weighs, the scale, and why its work list is handed to it rather than derived.
 - `docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md` — the steward directory design.
 - `docs/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md` — the fan-out design.
+- `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` — the citation-audit
+  design (§5.2 credential isolation, §5.3 model isolation, §6 dispatch).
