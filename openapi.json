@@ -7162,9 +7162,35 @@
           }
         }
       },
+      "AuditCitation": {
+        "type": "object",
+        "description": "One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.\n\nThe finding rides along because it is not derivable from the pair at the point of use — the\nsession addresses its write as `POST /api/resources/{finding}/citation-audits`, and the\nauthorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which\nthen refuses if the two disagree. Carrying it is what lets the session address the finding it\nwas actually given rather than one it inferred.",
+        "required": [
+          "finding_id",
+          "block_id",
+          "source_id"
+        ],
+        "properties": {
+          "block_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The citing block."
+          },
+          "finding_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The finding the citing block belongs to — the path segment of the audit write."
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cited source. Always resource-kind; only resource citations are auditable."
+          }
+        }
+      },
       "AuditSweepRow": {
         "type": "object",
-        "description": "One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.\n\n`uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has\nnot yet weighed; the sweep orders by it descending, so the most-cited/least-audited findings head\nthe queue (spec §6.3).",
+        "description": "One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.\n\n`uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has\nnot yet weighed. It ranks the uncovered findings — most-cited/least-audited first — but it is no\nlonger the whole ordering: since `20260726000010` the sweep interleaves the uncovered and stale\nclasses by rank, because a stale finding is fully covered by construction and a plain\n`uncovered DESC` would park it behind every stuck finding forever (spec §6.3).",
         "required": [
           "cogmap_id",
           "finding_id",
@@ -7565,12 +7591,12 @@
       },
       "ClaimedAuditJob": {
         "type": "object",
-        "description": "A citation-audit job claimed for fan-out — the auditor twin of\n[`crate::types::workflow_job::ClaimedJob`], carrying the finding list the job was enqueued with.\n\nOne isolated session per entry, exactly as the steward's fan-out works; the difference is that\neach session iterates `findings` rather than tending one target.",
+        "description": "A citation-audit job claimed for fan-out — the auditor twin of\n[`crate::types::workflow_job::ClaimedJob`], carrying the citation list the job was enqueued with.\n\nOne isolated session per entry, exactly as the steward's fan-out works; the difference is that\neach session iterates `citations` rather than tending one target.",
         "required": [
           "id",
           "cogmap_id",
           "attempts",
-          "findings"
+          "citations"
         ],
         "properties": {
           "attempts": {
@@ -7578,18 +7604,17 @@
             "format": "int32",
             "description": "How many times this job has now been claimed (1 on first dispatch)."
           },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditCitation"
+            },
+            "description": "The citations this run must weigh — the payload the enqueue carried, read back verbatim.\n\nEvery entry is work this principal has NOT already done: the enqueue resolved them through\n`resource_auditable_citations`, so the session needs no skip logic and is given no\nopportunity to exercise any. That is the whole point of the grain change — the invariant is\nheld by what the session receives, not by an instruction it is asked to follow."
+          },
           "cogmap_id": {
             "type": "string",
             "format": "uuid",
             "description": "The single cognitive map this claimed run audits within."
-          },
-          "findings": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "The findings this run must audit — the payload the enqueue carried, read back verbatim."
           },
           "id": {
             "type": "string",

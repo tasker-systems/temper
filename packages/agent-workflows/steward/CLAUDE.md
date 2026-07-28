@@ -26,14 +26,18 @@ project ships the **citation auditor** (Set 5) as a declared subagent at `agent/
 > one that actually bit). **All four are now closed** as of 2026-07-27: the auditor principal is
 > provisioned, registered, admitted, and has recorded a real audit against production. The
 > **trigger-model redesign is also done** — task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` closed
-> 2026-07-26 (tier 1 shipped; tier 2 retargeted onto the steward and closed 2026-07-27). What
-> blocks restoring the cron is one build item, **D6**: the dispatch payload is finding-grained
-> while the unit of work is citation-grained, so a tick re-audits citations already weighed
-> (register `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md` §3;
-> measured on production 2026-07-27). Turning a production cron back on remains an operator
-> decision regardless. The
-> subagent, its channel, tools and instructions are all live and unchanged — only the trigger is
-> gone.
+> 2026-07-26 (tier 1 shipped; tier 2 retargeted onto the steward and closed 2026-07-27). The last
+> build item, **D6**, is now **closed** too: the dispatch payload was finding-grained while the unit
+> of work is citation-grained, so a tick re-audited citations already weighed (register
+> `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md` §3; measured on
+> production 2026-07-27). `20260727000050_auditable_citations_at_citation_grain.sql` and task
+> `019fa5eb-2819-7e71-bd27-0d2875f60960` moved the payload to `citations`, expanded per principal
+> through `resource_auditable_citations`, so a session is handed only work it has not done.
+> **Nothing but the operator decision now stands between this and an hourly cron** — restoring is a
+> `git mv` back into `agent/schedules/`, and it is deliberately not a consequence of the grain work
+> landing. The subagent, its channel and tools are live and unchanged; its instructions were
+> updated with the grain (the work list is citations, and step 4's provenance read is now context
+> for judgement rather than the set to iterate) — only the trigger is gone.
 
 Code
 colocation does not create epistemic dependence — the two have separate instructions, separate

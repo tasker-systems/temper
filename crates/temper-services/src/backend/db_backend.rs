@@ -2980,7 +2980,7 @@ impl Backend for DbBackend {
         workflow_job_service::reap(&self.pool, "lease expired").await?;
 
         // 2. Deterministic, principal-scoped sweep over cogmap-homed findings with incomplete
-        //    audit coverage, most-uncovered-first.
+        //    audit coverage or stale citations, in the sweep's own rank-interleaved order.
         let drifted = auditor_service::drift_sweep(&self.pool, self.profile_id, cmd.cap).await?;
 
         // 3. Expand each swept finding into the citations THIS principal has not already weighed.
@@ -3008,7 +3008,7 @@ impl Backend for DbBackend {
             .await?;
         }
 
-        // 4. Claim for fan-out, stamping this tick's correlation onto each claimed row exactly as
+        // 5. Claim for fan-out, stamping this tick's correlation onto each claimed row exactly as
         //    the steward tick does — `invocation_open` inherits it, so an auditor session's
         //    invocation joins back to its tick with nothing asked of the agent.
         //

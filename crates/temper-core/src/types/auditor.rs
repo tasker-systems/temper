@@ -33,8 +33,10 @@ use uuid::Uuid;
 /// One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.
 ///
 /// `uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has
-/// not yet weighed; the sweep orders by it descending, so the most-cited/least-audited findings head
-/// the queue (spec §6.3).
+/// not yet weighed. It ranks the uncovered findings — most-cited/least-audited first — but it is no
+/// longer the whole ordering: since `20260726000010` the sweep interleaves the uncovered and stale
+/// classes by rank, because a stale finding is fully covered by construction and a plain
+/// `uncovered DESC` would park it behind every stuck finding forever (spec §6.3).
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditSweepRow {
@@ -82,8 +84,8 @@ pub struct AuditCitation {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditJobPayload {
-    /// Every citation in this cogmap that this principal should weigh, in the sweep's
-    /// most-uncovered-first finding order. The session iterates this list.
+    /// Every citation in this cogmap that this principal should weigh, in the sweep's own finding
+    /// order, with one finding's citations contiguous. The session iterates this list.
     #[serde(default)]
     pub citations: Vec<AuditCitation>,
 }

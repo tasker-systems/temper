@@ -133,6 +133,9 @@ use temper_workflow::types::resource::{
         temper_core::types::auditor::AuditorJobCompleteAck,
         // Registered explicitly: `.routes()` collects schemas from request/response BODIES, and
         // `ClaimedAuditJob` is only ever reached transitively through `AuditorDispatchTickResponse`.
+        // Its own fields need no such line — `AuditCitation` rides in on the derive's recursion, as
+        // `openapi.json`'s `#/components/schemas/AuditCitation` shows. The gap is at the entry
+        // point, not at every hop.
         temper_core::types::auditor::ClaimedAuditJob,
         temper_core::types::invitation::TeamInvitation,
         temper_core::types::invitation::InvitationStatus,

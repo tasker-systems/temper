@@ -14,16 +14,16 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A citation-audit job claimed for fan-out — the auditor twin of [`crate::types::workflow_job::ClaimedJob`], carrying the finding list the job was enqueued with.  One isolated session per entry, exactly as the steward's fan-out works; the difference is that each session iterates `findings` rather than tending one target.
+  # A citation-audit job claimed for fan-out — the auditor twin of [`crate::types::workflow_job::ClaimedJob`], carrying the citation list the job was enqueued with.  One isolated session per entry, exactly as the steward's fan-out works; the difference is that each session iterates `citations` rather than tending one target.
   class ClaimedAuditJob < ApiModelBase
     # How many times this job has now been claimed (1 on first dispatch).
     attr_accessor :attempts
 
+    # The citations this run must weigh — the payload the enqueue carried, read back verbatim.  Every entry is work this principal has NOT already done: the enqueue resolved them through `resource_auditable_citations`, so the session needs no skip logic and is given no opportunity to exercise any. That is the whole point of the grain change — the invariant is held by what the session receives, not by an instruction it is asked to follow.
+    attr_accessor :citations
+
     # The single cognitive map this claimed run audits within.
     attr_accessor :cogmap_id
-
-    # The findings this run must audit — the payload the enqueue carried, read back verbatim.
-    attr_accessor :findings
 
     # The queue row id.
     attr_accessor :id
@@ -32,8 +32,8 @@ module Temper::Generated
     def self.attribute_map
       {
         :'attempts' => :'attempts',
+        :'citations' => :'citations',
         :'cogmap_id' => :'cogmap_id',
-        :'findings' => :'findings',
         :'id' => :'id'
       }
     end
@@ -52,8 +52,8 @@ module Temper::Generated
     def self.openapi_types
       {
         :'attempts' => :'Integer',
+        :'citations' => :'Array<AuditCitation>',
         :'cogmap_id' => :'String',
-        :'findings' => :'Array<String>',
         :'id' => :'String'
       }
     end
@@ -86,18 +86,18 @@ module Temper::Generated
         self.attempts = nil
       end
 
+      if attributes.key?(:'citations')
+        if (value = attributes[:'citations']).is_a?(Array)
+          self.citations = value
+        end
+      else
+        self.citations = nil
+      end
+
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
       else
         self.cogmap_id = nil
-      end
-
-      if attributes.key?(:'findings')
-        if (value = attributes[:'findings']).is_a?(Array)
-          self.findings = value
-        end
-      else
-        self.findings = nil
       end
 
       if attributes.key?(:'id')
@@ -116,12 +116,12 @@ module Temper::Generated
         invalid_properties.push('invalid value for "attempts", attempts cannot be nil.')
       end
 
-      if @cogmap_id.nil?
-        invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
+      if @citations.nil?
+        invalid_properties.push('invalid value for "citations", citations cannot be nil.')
       end
 
-      if @findings.nil?
-        invalid_properties.push('invalid value for "findings", findings cannot be nil.')
+      if @cogmap_id.nil?
+        invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
       end
 
       if @id.nil?
@@ -136,8 +136,8 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @attempts.nil?
+      return false if @citations.nil?
       return false if @cogmap_id.nil?
-      return false if @findings.nil?
       return false if @id.nil?
       true
     end
@@ -153,6 +153,16 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] citations Value to be assigned
+    def citations=(citations)
+      if citations.nil?
+        fail ArgumentError, 'citations cannot be nil'
+      end
+
+      @citations = citations
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] cogmap_id Value to be assigned
     def cogmap_id=(cogmap_id)
       if cogmap_id.nil?
@@ -160,16 +170,6 @@ module Temper::Generated
       end
 
       @cogmap_id = cogmap_id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] findings Value to be assigned
-    def findings=(findings)
-      if findings.nil?
-        fail ArgumentError, 'findings cannot be nil'
-      end
-
-      @findings = findings
     end
 
     # Custom attribute writer method with validation
@@ -188,8 +188,8 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           attempts == o.attempts &&
+          citations == o.citations &&
           cogmap_id == o.cogmap_id &&
-          findings == o.findings &&
           id == o.id
     end
 
@@ -202,7 +202,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [attempts, cogmap_id, findings, id].hash
+      [attempts, citations, cogmap_id, id].hash
     end
 
     # Builds the object from hash

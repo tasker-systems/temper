@@ -1,5 +1,5 @@
 import { defineSchedule } from "eve/schedules";
-import { TEMPER_TS_VERSION } from "temper-ts";
+import { TEMPER_TS_VERSION, type components } from "temper-ts";
 
 import auditorWorker from "../agent/channels/auditor-worker.js";
 import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
@@ -60,19 +60,24 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  * steward (PR #557). F9 — "verify pg_uuidv7 ordering on Neon" — was **dissolved**, not verified:
  * rev. 3 of the design changed the comparand to a timestamp, so no generator dependency remains.
  *
- * What still stands is **D6, and it is a build item, not a design one**: the dispatch payload is
- * finding-grained (`AuditJobPayload::findings`, `ClaimedAuditJob::findings`) while the unit of work
- * is citation-grained, and the prompt below *actively forbids* the re-check that would compensate
- * ("you do not need to re-check whether they need auditing"). Measured on production 2026-07-27:
- * finding `019f5cdd-ba0b-7fa2-90b1-e78ca7979254` was audited on one of its 8 citations and is STILL
- * returned by the sweep at `uncovered: 7` — so a restored hourly tick re-dispatches it and the agent
- * emits verdicts on all 8, re-auditing the one already weighed. Register §3.
+ * The payload-grain defect that stood here — the last build item — is **CLOSED**. The dispatch
+ * payload was finding-grained (`AuditJobPayload::findings`, `ClaimedAuditJob::findings`) while the
+ * unit of work is a citation, and the prompt below *actively forbade* the re-check that would have
+ * compensated ("you do not need to re-check whether they need auditing"). Measured on production
+ * 2026-07-27: finding `019f5cdd-ba0b-7fa2-90b1-e78ca7979254` was audited on one of its 8 citations
+ * and was STILL returned by the sweep at `uncovered: 7`, so a restored hourly tick would have
+ * re-dispatched it and the agent emitted verdicts on all 8. Register §3.
  *
- * The cadence and the selection predicate below are settled; only the payload grain is not. The
- * register also records that the dispatch prompt below tells the agent not to re-check whether a
- * finding needs auditing (finding grain) while its unit of work is a citation (citation grain),
- * which duplicates verdicts on already-audited citations. Restoring is `git mv` back into
- * `agent/schedules/`, and it should happen as part of that work, after the three gates above.
+ * Fixed by `20260727000050_auditable_citations_at_citation_grain.sql` and task
+ * `019fa5eb-2819-7e71-bd27-0d2875f60960`: the server expands each swept finding through
+ * `resource_auditable_citations` before it reaches the payload, so a session is handed only
+ * citations THIS principal has not already weighed. The invariant is now held by what the session
+ * receives rather than by an instruction it is asked to follow — which is why the prompt below no
+ * longer tells the agent anything about re-checking. There is nothing left to re-check.
+ *
+ * The cadence and the selection predicate below are settled. **Restoring is now purely a `git mv`
+ * back into `agent/schedules/` plus an operator's decision to enable a production cron** — no
+ * build item stands behind it, and it is deliberately NOT a consequence of the grain work closing.
  *
  * The auditor subagent, its channel, its tools and its instructions are all untouched and still
  * build; only the trigger is withdrawn.
@@ -91,10 +96,12 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  *    session per claimed job.
  * 2. **The fan-out is over the WORKFLOW, never over an agent's target.** One session, one job, one
  *    cogmap. What differs from the steward is *inside* a session: an auditor session iterates the
- *    finding list its job carries. That list exists because the queue's single-flight index is
- *    `(cogmap_id, persona, dispatch_type)` while the auditor's unit of work is a finding — so the
- *    server groups by cogmap and puts the findings in the payload rather than enqueuing per finding,
- *    which `ON CONFLICT DO NOTHING` would silently collapse to one (spec §6.1).
+ *    citation list its job carries. That list exists because the queue's single-flight index is
+ *    `(cogmap_id, persona, dispatch_type)` while the auditor's unit of work is a citation — so the
+ *    server groups by cogmap and puts the citations in the payload rather than enqueuing per
+ *    finding, which `ON CONFLICT DO NOTHING` would silently collapse to one (spec §6.1). Since
+ *    `20260727000050` the list is citation-grained and pre-filtered per principal: every entry is
+ *    work this credential has not already done.
  * 3. **A correlation id minted per tick and threaded across the app boundary** — logged here before
  *    the outbound fetch, sent as `x-auditor-correlation-id`, echoed back by the server, and stamped
  *    onto every claimed job so each session's `invocation_open` inherits it server-side. The prompt
@@ -130,6 +137,15 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  * steward tick are then auditable within the same hour without the two ticks writing concurrently
  * over one map. Single-flight and lease-reaping live in the server, so a fixed cadence is safe.
  */
+/**
+ * The claimed-job wire shape, taken from the generated OpenAPI client rather than hand-mirrored.
+ *
+ * A structural duplicate of this shape is what let the payload grain drift here unnoticed once
+ * already: the schedule went on reading `findings` because nothing tied its hand-written type to
+ * the Rust one. Now a grain change downstream restales this file at typecheck.
+ */
+type ClaimedAuditJob = components["schemas"]["ClaimedAuditJob"];
+
 export default defineSchedule({
   cron: "30 * * * *", // hourly at :30, UTC — trailing the steward's tick; the server gates the rest
   async run({ receive, waitUntil, appAuth }) {
@@ -160,7 +176,7 @@ export default defineSchedule({
           const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
 
           const { claimed, correlation_id: stampedId } = (await res.json()) as {
-            claimed: { id: string; cogmap_id: string; findings: string[] }[];
+            claimed: ClaimedAuditJob[];
             correlation_id?: string;
           };
 
@@ -178,18 +194,27 @@ export default defineSchedule({
           console.log(
             `[auditor-dispatch] tick ${correlationId}: claimed ${claimed.length} job(s)` +
               (claimed.length
-                ? `: ${claimed.map((j) => `${j.id}→${j.cogmap_id}(${j.findings.length} finding(s))`).join(", ")}`
-                : " (no uncovered citations)") +
+                ? `: ${claimed
+                    .map(
+                      (j) =>
+                        `${j.id}→${j.cogmap_id}(${j.citations.length} citation(s) across ` +
+                        `${new Set(j.citations.map((c) => c.finding_id)).size} finding(s))`,
+                    )
+                    .join(", ")}`
+                : " (no auditable citations)") +
               ` (dispatch vercel-id ${dispatchVercelId})`,
           );
 
-          // A job with an empty finding list is not work. It can only arise from a payload written by
-          // an older shape, and delegating it would spend a model session to discover that.
-          const workable = claimed.filter((job) => job.findings.length > 0);
+          // A job with an empty citation list is not work. Since `20260727000050` this is the shape a
+          // pre-deploy payload deserializes to — `AuditJobPayload::citations` is `#[serde(default)]`,
+          // so an older job claims successfully and arrives here empty rather than failing the claim.
+          // Delegating it would spend a model session to discover it has nothing to weigh; skipping
+          // costs nothing, because the sweep re-offers those findings on the next tick.
+          const workable = claimed.filter((job) => job.citations.length > 0);
           if (workable.length !== claimed.length) {
             console.warn(
               `[auditor-dispatch] tick ${correlationId}: ${claimed.length - workable.length} claimed ` +
-                `job(s) carried no findings and were skipped`,
+                `job(s) carried no citations and were skipped`,
             );
           }
 
@@ -221,18 +246,21 @@ export default defineSchedule({
  * auditor's credential. Everything about *how to audit* lives there, not here: a prompt duplicated
  * across a schedule and an instructions file is a prompt that will drift.
  */
-function auditSessionPrompt(job: { id: string; cogmap_id: string; findings: string[] }): string {
+function auditSessionPrompt(job: ClaimedAuditJob): string {
+  const findingCount = new Set(job.citations.map((c) => c.finding_id)).size;
   return (
     `This is a CITATION AUDIT dispatch, not a stewardship tick. Do not call any temper tool ` +
     `yourself and do not distill anything. Make exactly one tool call — the \`auditor\` subagent — ` +
     `passing it the message below verbatim, then stop and report what it returned.\n\n` +
     `---\n` +
-    `Audit the citations of the findings listed below, which are homed in cognitive map ` +
-    `${job.cogmap_id} (dispatch job ${job.id}). They were selected by the deterministic coverage ` +
-    `sweep because they carry cited sources no auditor has yet weighed, so you do not need to ` +
-    `re-check whether they need auditing. Work them in the order given — the list is ordered by ` +
-    `how much of each finding's evidence is still unweighed.\n\n` +
-    `Findings to audit (${job.findings.length}):\n` +
-    job.findings.map((f) => `- ${f}`).join("\n")
+    `Weigh the citations listed below, which belong to findings homed in cognitive map ` +
+    `${job.cogmap_id} (dispatch job ${job.id}). This list IS your work and it is complete: the ` +
+    `server resolved it through the coverage sweep and then removed every citation you have ` +
+    `already weighed, so each entry is one you have not yet given a verdict on, or one that has ` +
+    `changed since you did. Work them in the order given; it is ordered by how much of each ` +
+    `finding's evidence is still unweighed.\n\n` +
+    `Citations to weigh (${job.citations.length} across ${findingCount} finding(s)), as ` +
+    `finding · block · source:\n` +
+    job.citations.map((c) => `- ${c.finding_id} · ${c.block_id} · ${c.source_id}`).join("\n")
   );
 }
