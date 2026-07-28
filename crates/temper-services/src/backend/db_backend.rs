@@ -807,6 +807,36 @@ impl DbBackend {
     /// admin firewalls use. Calling it (rather than restating "is the target visible") keeps edge
     /// *authorship* and edge *visibility* answering to one definition — otherwise a caller could
     /// author an edge that the same rules then hide from them.
+    /// Is this goal linkable by the caller — i.e. does it exist and can they read it?
+    ///
+    /// Same predicate as [`Self::check_endpoint_readable`], run EARLY so a bad `--goal` fails
+    /// before any write, and carrying a message that names the goal. The generic form renders
+    /// `kb_resources <uuid> not found`, which tells a caller neither which of their two ids was
+    /// the problem nor that the failure was about the goal at all — the observed text was a
+    /// bare `unknown not found`.
+    ///
+    /// `NotFound` rather than `Forbidden`, matching the endpoint gate: confirming that a goal
+    /// exists but is unreadable would make create an existence oracle over resources the caller
+    /// has no standing to see.
+    async fn check_goal_linkable(&self, goal: uuid::Uuid) -> Result<(), TemperError> {
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT endpoint_readable_by_profile($1, $2, $3)",
+            *self.profile_id,
+            "kb_resources",
+            goal,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if can.unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(TemperError::NotFound(format!(
+                "goal {goal} not found or not readable; no resource was created"
+            )))
+        }
+    }
+
     async fn check_endpoint_readable(
         &self,
         endpoint_table: &str,
@@ -1658,6 +1688,16 @@ impl DbBackend {
             chunks: incoming_chunks,
             sources,
         };
+        // Validate the goal BEFORE anything is written. The edge assert below gates the goal
+        // too, but only AFTER the resource is committed — no transaction spans both — so an
+        // unresolvable `--goal` returned a 404 over a resource that had in fact been created.
+        // The caller reasonably reads a 404 as "nothing happened" and retries, minting a second
+        // orphan. Checking here makes the failure TOTAL, and matches the auth-before-writes
+        // ordering this repo already mandates everywhere else.
+        if let Some(goal) = cmd.goal {
+            self.check_goal_linkable(goal.into()).await?;
+        }
+
         let mode = writes::CreateMode { defer, segmented };
         let new_id = writes::create_resource_with_mode(&self.pool, params, act_ctx.clone(), mode)
             .await

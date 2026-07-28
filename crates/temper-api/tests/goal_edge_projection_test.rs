@@ -263,3 +263,107 @@ fn update_goal(resource: ResourceId, goal: Option<GoalPatch>) -> UpdateResource 
         origin: Surface::ApiHttp,
     }
 }
+
+/// A `--goal` naming a resource that does not exist creates NOTHING.
+///
+/// Filed as "the goal ref is silently dropped and the create succeeds". That half closed as a
+/// side effect of the F-1 audit, which gave `assert_edge_from_source_home` an endpoint gate — so
+/// the call now fails. What it did NOT fix is that the resource is committed before the edge is
+/// attempted (no transaction spans both), leaving the caller with a 404 over a resource that
+/// exists.
+///
+/// That is worse than the silence it replaced: a 404 reads as "nothing happened", so the
+/// caller's natural next action is to retry, minting a second orphan. The rule this pins is
+/// that the failure is **total**.
+///
+/// **Asserting the error alone would reproduce the current green** — the pre-fix build already
+/// returned an error here. The load-bearing assertion is the count.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_with_unresolvable_goal_writes_nothing(pool: PgPool) {
+    let (backend, context, profile) = backend_with_context(&pool, "orphan-goal@example.com").await;
+
+    // Well-formed UUID, no such resource — the shape a mistyped ref actually takes, since
+    // `parse_ref` is pure string and never checks existence.
+    let ghost = ResourceId::from(uuid::Uuid::now_v7());
+
+    let before: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM kb_resources r \
+         JOIN kb_resource_homes h ON h.resource_id = r.id \
+         WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = $1",
+    )
+    .bind(Uuid::from(context))
+    .fetch_one(&pool)
+    .await
+    .expect("count before");
+
+    let err = backend
+        .create_resource(create_cmd(context, "task", "ghost-goal", Some(ghost)))
+        .await
+        .expect_err("a --goal that resolves to nothing must not succeed");
+
+    // NotFound, not Forbidden: confirming a goal exists but is unreadable would make create an
+    // existence oracle over resources the caller has no standing to see.
+    assert!(
+        matches!(err, temper_core::error::TemperError::NotFound(_)),
+        "expected NotFound so create cannot be used as an existence oracle; got {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains(&Uuid::from(ghost).to_string()),
+        "the error must name the unresolvable goal — the observed text was a bare \
+         'unknown not found', which identifies neither the goal nor which id was wrong. \
+         Got: {msg}"
+    );
+
+    let after: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM kb_resources r \
+         JOIN kb_resource_homes h ON h.resource_id = r.id \
+         WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = $1",
+    )
+    .bind(Uuid::from(context))
+    .fetch_one(&pool)
+    .await
+    .expect("count after");
+
+    assert_eq!(
+        after, before,
+        "a failed --goal create must leave NO resource behind. An orphan here is the live \
+         defect: the caller sees a 404, believes nothing was written, and retries."
+    );
+    let _ = profile;
+}
+
+/// `update --goal <nonexistent>` rejects without side effects.
+///
+/// The original filing listed this as untested ("only create was probed"). It does not share
+/// create's orphan risk — the resource already exists, so a rejected edge leaves nothing extra
+/// behind — but that is a claim worth holding rather than assuming, since both paths reach the
+/// same helper and a future change to one could quietly move the other.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_with_unresolvable_goal_leaves_the_resource_unlinked(pool: PgPool) {
+    let (backend, context, _profile) =
+        backend_with_context(&pool, "orphan-goal-u@example.com").await;
+
+    let task = backend
+        .create_resource(create_cmd(context, "task", "update-ghost", None))
+        .await
+        .expect("create task")
+        .value
+        .id;
+
+    let ghost = ResourceId::from(uuid::Uuid::now_v7());
+    let err = backend
+        .update_resource(update_goal(task, Some(GoalPatch::Set(ghost))))
+        .await
+        .expect_err("an update --goal that resolves to nothing must not succeed");
+    assert!(
+        matches!(err, temper_core::error::TemperError::NotFound(_)),
+        "expected NotFound; got {err:?}"
+    );
+
+    assert_eq!(
+        advances_edge_count(&pool, task, ghost).await,
+        0,
+        "no advances edge may be minted to a goal that does not exist"
+    );
+}
