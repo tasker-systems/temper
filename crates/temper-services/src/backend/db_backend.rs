@@ -318,6 +318,62 @@ fn properties_from_meta(
     out
 }
 
+/// Union one additive open_meta list onto the value it is accumulating over.
+///
+/// Existing order is preserved and only genuinely new members are appended, so repeating
+/// an add is a no-op rather than a duplicate — the flag reads as "make sure these are
+/// present", which is what a caller typing `--tags docs` twice means.
+///
+/// `base` is the value this key will hold *before* the add: a same-key `open_meta`
+/// replace if the caller sent one, else what is stored. That ordering is what lets
+/// `--open-meta '{"tags":[]}'` plus `--tags x` read as "clear, then add x".
+fn union_list(
+    base: Option<&serde_json::Value>,
+    incoming: &[serde_json::Value],
+) -> serde_json::Value {
+    let mut out: Vec<serde_json::Value> =
+        base.and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    for item in incoming {
+        if !out.contains(item) {
+            out.push(item.clone());
+        }
+    }
+    serde_json::Value::Array(out)
+}
+
+/// Turn an `open_meta_add` patch into the replace-shaped `(key, value)` property pairs the
+/// write path already asserts, by unioning each incoming list over its effective base.
+///
+/// A non-array value is a 400 rather than a silent overwrite. The whole point of this
+/// channel is that it cannot destroy; letting a scalar through would reintroduce exactly
+/// the replace-shaped write it exists to prevent, on the channel documented as safe.
+fn open_meta_add_properties(
+    add: &serde_json::Value,
+    pending_replace: Option<&serde_json::Value>,
+    stored: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<(String, serde_json::Value)>, TemperError> {
+    let Some(obj) = add.as_object() else {
+        return Err(TemperError::BadRequest(
+            "open_meta_add must be a JSON object of list-valued keys".into(),
+        ));
+    };
+    let mut out = Vec::with_capacity(obj.len());
+    for (key, value) in obj {
+        let Some(items) = value.as_array() else {
+            return Err(TemperError::BadRequest(format!(
+                "open_meta_add.{key} must be an array; a scalar would replace the stored \
+                 list, which is what this field exists to prevent. Use open_meta to replace."
+            )));
+        };
+        let base = pending_replace
+            .and_then(|r| r.as_object())
+            .and_then(|r| r.get(key))
+            .or_else(|| stored.get(key));
+        out.push((key.clone(), union_list(base, items)));
+    }
+    Ok(out)
+}
+
 /// Parameters for [`validate_managed_meta_pipeline`] — the shared create/update validation gate.
 struct ManagedValidationParams<'a> {
     /// The caller-supplied managed_meta as a JSON value (pre-strip).
@@ -1806,6 +1862,28 @@ impl Backend for DbBackend {
             properties = properties_from_meta(&incoming, cmd.open_meta.as_ref());
         } else if cmd.open_meta.is_some() {
             properties = properties_from_meta(&serde_json::Value::Null, cmd.open_meta.as_ref());
+        }
+
+        // Additive open-tier keys. Read the stored open tier through the same visibility-gated
+        // readback the meta endpoint uses (`readback::meta`) rather than a bespoke query, so
+        // "what is stored for this key" has one definition. Auth already ran above
+        // (`check_can_modify_next`), so this read cannot widen what the caller may touch.
+        //
+        // The union is resolved HERE, into ordinary replace-shaped property rows, so the write
+        // path below is untouched: `PropertySet` still asserts one value per key. Only the value
+        // it asserts is now "what was there, plus what was asked for".
+        if let Some(add) = cmd.open_meta_add.as_ref() {
+            let stored = readback::meta(&self.pool, self.profile_id, ResourceId::from(new_id))
+                .await
+                .map_err(map_readback_err)?
+                .open;
+            let added = open_meta_add_properties(add, cmd.open_meta.as_ref(), &stored)?;
+            // Shape-gate the union result on the same terms as a replace: a recognized open key
+            // must still land with the right shape, however it was assembled.
+            validate_open_meta_shape(Some(&serde_json::Value::Object(
+                added.iter().cloned().collect(),
+            )))?;
+            properties.extend(added);
         }
 
         // A type-move sets the authoritative `doc_type` property; a context-move re-homes.

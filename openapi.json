@@ -11390,6 +11390,9 @@
               "open_meta": {
                 "description": "Partial open_meta — incoming keys win; absent keys preserved."
               },
+              "open_meta_add": {
+                "description": "Additive open_meta patch: each key's list is UNIONED with the value already\nstored, preserving existing order and appending only what is new.\n\nExists because `open_meta` merges at the KEY level, so sending `{\"tags\":[\"x\"]}`\nreplaces the whole list — which made `--tags`, a flag whose help said *\"Add tag\"*,\nsilently destroy every tag it did not name. Both semantics are legitimate, so they\nget separate channels rather than one channel with a mode: `open_meta` still\nreplaces (and `{\"tags\":[]}` still clears), `open_meta_add` accumulates.\n\nValues must be arrays — a scalar here is a 400, not a silent overwrite. When a key\nappears in BOTH, the replace lands first and the union applies on top of it, so\n`open_meta {\"tags\":[]}` + `open_meta_add {\"tags\":[\"x\"]}` reads as \"clear, then add\"."
+              },
               "sources": {
                 "type": "array",
                 "items": {

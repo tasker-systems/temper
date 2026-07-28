@@ -221,6 +221,10 @@ pub async fn update(
         body,
         managed_meta,
         open_meta: payload.open_meta,
+        // Ingest carries no additive open-tier channel: it is a whole-document write, and the
+        // add semantics exist for the incremental PATCH surface (`--tags`) where "keep what is
+        // already there" is the caller's intent. Re-ingesting a document states it in full.
+        open_meta_add: None,
         // The ingest update path revises body/chunks only; goal links travel via the PATCH
         // (`/api/resources/{id}`) surface, so nothing to project here.
         goal: None,

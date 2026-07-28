@@ -1822,31 +1822,37 @@ fn validate_open_meta_send_side(open_meta: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-/// Combine the update surface's open-tier inputs into one `open_meta` object:
-/// the repeatable list flags (`--tags`/`--relates-to`/…) form the base, then the
-/// explicit `--open-meta` JSON object is merged over it (explicit keys win).
-/// Returns `None` when neither source contributes a key (so a frontmatter-only
-/// update with no open-tier change PATCHes nothing on the open tier).
+/// The update surface's REPLACE channel: the explicit `--open-meta` JSON object.
+///
+/// The repeatable list flags no longer feed this. They used to, and because the wire's
+/// `open_meta` merges at the key level, `--tags docs` on a resource holding six tags wrote
+/// a one-element list and destroyed the other five — silently, with a success response,
+/// under a flag whose help read *"Add tag"*. They now travel on `open_meta_add`
+/// ([`build_open_meta_add_for_update`]), which unions.
+///
+/// `--open-meta` keeps its exact prior meaning, including `{"tags":[]}` to clear a list —
+/// the only way to clear one, and the reason the additive channel is a separate field
+/// rather than a global "lists always union" rule that would have taken clearing away.
 fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_json::Value>> {
-    let mut obj = serde_json::Map::new();
-    if let Some(serde_json::Value::Object(m)) = build_partial_open_meta_from_args(params) {
-        obj.extend(m);
-    }
-    if let Some(raw) = params.open_meta {
-        if let serde_json::Value::Object(m) = parse_open_meta_flag(raw)? {
-            obj.extend(m);
-        }
-    }
-    if obj.is_empty() {
-        Ok(None)
-    } else {
-        let merged = serde_json::Value::Object(obj);
-        // Validate the merged open tier send-side (shape hard-error + discouraged-key warning); the
-        // server re-enforces the shape gate. The typed list flags (`--tags`/…) are already well-shaped,
-        // so in practice this catches a mis-shaped `--open-meta` JSON blob.
-        validate_open_meta_send_side(&merged)?;
-        Ok(Some(merged))
-    }
+    let Some(raw) = params.open_meta else {
+        return Ok(None);
+    };
+    let parsed = parse_open_meta_flag(raw)?;
+    // Shape hard-error + discouraged-key warning, send-side; the server re-enforces it.
+    validate_open_meta_send_side(&parsed)?;
+    Ok(Some(parsed))
+}
+
+/// The update surface's ADD channel: the repeatable list flags (`--tags`/`--relates-to`/…).
+///
+/// Returns `None` when no list flag was passed, so a frontmatter-only update PATCHes
+/// nothing on the open tier.
+fn build_open_meta_add_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_json::Value>> {
+    let Some(partial) = build_partial_open_meta_from_args(params) else {
+        return Ok(None);
+    };
+    validate_open_meta_send_side(&partial)?;
+    Ok(Some(partial))
 }
 
 /// Build a partial `open_meta` JSON object from update CLI list flags. Returns
@@ -1996,6 +2002,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         }),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_open_meta_for_update(params)?,
+        open_meta_add: build_open_meta_add_for_update(params)?,
         goal,
         move_to: build_move_spec_from_args(params),
         context_ref: params.context_to.map(String::from),

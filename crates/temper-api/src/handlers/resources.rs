@@ -354,6 +354,7 @@ pub async fn update(
         body,
         managed_meta,
         open_meta: req.open_meta,
+        open_meta_add: req.open_meta_add,
         goal,
         move_to,
         context_ref: None,

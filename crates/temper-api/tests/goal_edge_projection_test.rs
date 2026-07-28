@@ -249,6 +249,7 @@ async fn list_filters_tasks_by_goal_edge(pool: PgPool) {
 
 fn update_goal(resource: ResourceId, goal: Option<GoalPatch>) -> UpdateResource {
     UpdateResource {
+        open_meta_add: None,
         resource,
         title: None,
         slug: None,

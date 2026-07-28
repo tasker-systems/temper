@@ -70,6 +70,9 @@ pub async fn update_meta(
         body: None,
         managed_meta: Some(payload.managed_meta),
         open_meta: Some(payload.open_meta),
+        // PUT /meta states the meta tiers in full — that is what distinguishes it from the
+        // PATCH surface, which is where the additive channel belongs.
+        open_meta_add: None,
         // Meta-only path is Property-only (Fork 2); the goal edge (relationship-fated) is not a
         // property and travels via the full update path, never the /meta endpoint.
         goal: None,

@@ -63,6 +63,8 @@ module Temper::Generated
 
     attr_accessor :open_meta
 
+    attr_accessor :open_meta_add
+
     # Block-provenance sources this body was distilled from — recorded against the resource's body block, position → accretion `seq`. Resource refs only in T7b; URL/`remote` sources are T7c.  `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent write path, exactly like `act` below). Skipping keeps the generated TS honest — the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource` import. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)
     attr_accessor :sources
 
@@ -112,6 +114,7 @@ module Temper::Generated
         :'goal' => :'goal',
         :'managed_meta' => :'managed_meta',
         :'open_meta' => :'open_meta',
+        :'open_meta_add' => :'open_meta_add',
         :'sources' => :'sources',
         :'title' => :'title',
         :'type_to' => :'type_to'
@@ -147,6 +150,7 @@ module Temper::Generated
         :'goal' => :'String',
         :'managed_meta' => :'ManagedMeta',
         :'open_meta' => :'Object',
+        :'open_meta_add' => :'Object',
         :'sources' => :'Array<ProvenanceSource>',
         :'title' => :'String',
         :'type_to' => :'String'
@@ -172,6 +176,7 @@ module Temper::Generated
         :'goal',
         :'managed_meta',
         :'open_meta',
+        :'open_meta_add',
         :'title',
         :'type_to'
       ])
@@ -257,6 +262,10 @@ module Temper::Generated
         self.open_meta = attributes[:'open_meta']
       end
 
+      if attributes.key?(:'open_meta_add')
+        self.open_meta_add = attributes[:'open_meta_add']
+      end
+
       if attributes.key?(:'sources')
         if (value = attributes[:'sources']).is_a?(Array)
           self.sources = value
@@ -308,6 +317,7 @@ module Temper::Generated
           goal == o.goal &&
           managed_meta == o.managed_meta &&
           open_meta == o.open_meta &&
+          open_meta_add == o.open_meta_add &&
           sources == o.sources &&
           title == o.title &&
           type_to == o.type_to
@@ -322,7 +332,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, chunks_packed, clear_goal, content, content_block, content_hash, context_to, goal, managed_meta, open_meta, sources, title, type_to].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, chunks_packed, clear_goal, content, content_block, content_hash, context_to, goal, managed_meta, open_meta, open_meta_add, sources, title, type_to].hash
     end
 
     # Builds the object from hash
