@@ -207,6 +207,15 @@ These rules apply to all code in this repository. Subagents and implementation p
 
 Production SQL uses `sqlx::query!()`-family macros, verified at compile time against the real schema. **After changing any SQL or a migration, the `.sqlx` caches must be regenerated — and the workspace ritual does NOT cover test-target queries.** Read the `sqlx-query-cache` skill before touching a query macro or a migration. Tests always run against a real database (Docker Postgres locally, CI database in GitHub Actions).
 
+> **`error[E0282]: type annotations needed` on a `query!` you did not touch means your dev DB is
+> behind `migrations/` — not that the `.sqlx` cache is stale.** Regenerating the cache will not fix
+> it. sqlx's compile-time macros read `.env` (`sqlx-macros-core` → `dotenvy`), so a **bare**
+> `cargo check`/`cargo nextest` picks up `DATABASE_URL` and verifies against the **live** dev
+> database, bypassing the committed cache. `cargo make` tasks are immune — Makefile.toml sets
+> `SQLX_OFFLINE = "true"` globally — which is why this only ever bites outside cargo-make and looks
+> like a cache problem. Fix: `cargo make docker-up`, which now waits for health and applies pending
+> migrations (or `cargo make db-migrate` alone, without cycling the container).
+
 ## Environment
 
 - Docker Postgres on port **5437** (not 5432, to avoid conflicts).

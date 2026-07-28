@@ -409,9 +409,42 @@ script = [
 # Docker Tasks
 # =============================================================================
 
+[tasks.db-migrate]
+description = "Apply any pending sqlx migrations to the development database (idempotent)"
+# Kept separately callable so a `git pull` that lands migrations can be reconciled without
+# cycling the container.
+script = ['''
+if ! command -v sqlx > /dev/null 2>&1; then
+  echo "db-migrate: sqlx-cli not found — skipping. Install with: cargo install sqlx-cli"
+  exit 0
+fi
+sqlx migrate run
+''']
+
 [tasks.docker-up]
-description = "Start PostgreSQL development database"
-script = ["docker compose up -d"]
+description = "Start PostgreSQL development database and bring its schema up to date"
+# `--wait` blocks until the compose healthcheck passes; without it the migrate step races the
+# container and fails on a connection refused.
+#
+# Migrating here rather than leaving it to the caller fixes a trap that cost real time more than
+# once. `sqlx`'s compile-time `query!` macros read `.env` (sqlx-macros-core depends on dotenvy), so
+# a **bare** `cargo check`/`cargo nextest` picks up `DATABASE_URL` and verifies queries against the
+# LIVE dev database — the committed `.sqlx` cache is bypassed. (`cargo make` tasks are immune: this
+# repo sets `SQLX_OFFLINE = "true"` globally in Makefile.toml, which is why the failure only ever
+# shows up outside cargo-make.) So the moment the dev DB drifts behind `migrations/`, every query!
+# touching a new column fails with:
+#
+#     error[E0282]: type annotations needed ... cannot infer type
+#
+# which names neither sqlx nor migrations, and reads like a stale-query-cache problem. It is not —
+# regenerating the cache will not fix it. A container that is running but a migration behind is the
+# whole cause, so starting it and migrating it are one step.
+dependencies = ["docker-start", "db-migrate"]
+
+[tasks.docker-start]
+private = true
+description = "Start the compose stack and block until Postgres reports healthy"
+script = ["docker compose up -d --wait"]
 
 [tasks.docker-down]
 description = "Stop PostgreSQL development database"
