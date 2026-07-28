@@ -260,6 +260,13 @@ pub struct CliSection {
     /// Default color choice: `"auto"` | `"always"` | `"never"`. `None` when unset.
     #[serde(default)]
     pub color: Option<String>,
+    /// How many recent sessions `temper warmup` surfaces as pointers. `None` when unset.
+    #[serde(default)]
+    pub warmup_sessions: Option<usize>,
+    /// How many active goals `temper warmup` lists. `None` when unset. A cap here is
+    /// never silent — the primer always reports the true active total alongside.
+    #[serde(default)]
+    pub warmup_goals: Option<usize>,
 }
 
 /// Cloud API section of the configuration.

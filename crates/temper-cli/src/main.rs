@@ -463,10 +463,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 })
             }
         },
-        Commands::Warmup { context } => {
+        Commands::Warmup {
+            context,
+            sessions,
+            goals,
+        } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            let context = context.as_deref();
-            temper_cli::commands::warmup::run(&config, context, output_format)
+            temper_cli::commands::warmup::run(&config, &context, sessions, goals, output_format)
         }
         Commands::Invitations => temper_cli::actions::runtime::with_client(|client| {
             Box::pin(async move {

@@ -4,10 +4,17 @@
 //!
 //! temper is cloud-only: the local vault directory is a read-only projection
 //! cache that is empty/absent on a fresh device. These tests prove that the
-//! warmup primer lists sessions from the cloud API (NOT by scanning the local
-//! vault with `fs::read_dir`), fetches the most-recent session's body via the
-//! content endpoint, and surfaces only in-progress tasks — all with an EMPTY
-//! vault directory (nothing is ever projected to disk).
+//! warmup primer reads standing state from the cloud API (NOT by scanning the
+//! local vault with `fs::read_dir`) — active goals, in-progress tasks, and recent
+//! session pointers — all with an EMPTY vault directory (nothing is ever projected
+//! to disk).
+//!
+//! **Retired here, as a named remainder rather than a silent gap**:
+//! `warmup_truncates_long_session_body`, which asserted the 500-line cap on
+//! `last_session_content`. That field no longer exists — the primer carries no
+//! session prose at all — so the behavior it guarded is gone rather than untested.
+//! Nothing can re-introduce it without re-adding the field, which is a compile-time
+//! change, not a silent regression.
 //!
 //! Sessions and tasks are seeded via the API client (`app.client.ingest()`),
 //! so nothing is written to the vault directory. Each test then drives the
@@ -136,23 +143,65 @@ async fn seed_task(
         .expect("seed task via client");
 }
 
+/// Seed a goal via the API client, carrying `temper-status` — the field the primer
+/// reads to decide what is standing.
+async fn seed_goal(
+    client: &temper_client::TemperClient,
+    context: &str,
+    slug: &str,
+    title: &str,
+    status: &str,
+) {
+    let managed = serde_json::json!({ "temper-status": status });
+    let payload = IngestPayload {
+        segmented: None,
+        goal: None,
+        title: title.to_string(),
+        origin_uri: format!("kb://{context}/goal/{slug}"),
+        context_ref: format!("@me/{context}"),
+        home_cogmap_id: None,
+        doc_type_name: "goal".to_string(),
+        content_hash: None,
+        content: String::new(),
+        metadata: None,
+        managed_meta: Some(managed),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("seed goal via client");
+}
+
+/// Default display limits for tests that are not exercising the caps themselves.
+fn default_limits() -> temper_cli::commands::warmup::WarmupLimits {
+    temper_cli::commands::warmup::WarmupLimits {
+        sessions: 5,
+        goals: 20,
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Test 1: warmup lists sessions newest-first, fetches last body, filters tasks
+// Test 1: sessions come back as pointers, newest-first
 // ---------------------------------------------------------------------------
 
-/// Seed several sessions (in ascending creation order) plus two tasks (one
-/// in-progress, one not) in a context via the API, then drive
-/// `build_warmup_result` in cloud mode with an EMPTY vault dir and assert:
-///   - `recent_sessions` are the API sessions, most-recent-first;
-///   - `last_session_content` is the most-recent session's body (proving the
-///     content fetch round-trips);
-///   - `in_progress_tasks` contains only the in-progress task.
+/// Seed several sessions in ascending creation order, then drive
+/// `build_warmup_result` in cloud mode with an EMPTY vault dir and assert the primer
+/// lists them most-recent-first.
 ///
-/// The empty-vault-dir part is the whole point: this is fresh-device
-/// correctness — a `fs::read_dir` scan would return nothing.
+/// The empty-vault-dir part is the whole point: this is fresh-device correctness — a
+/// `fs::read_dir` scan would return nothing.
+///
+/// Split from the in-progress-task assertions (below) deliberately. They were one test,
+/// and because the task half is blocked on a readback gap the whole test carried
+/// `#[ignore]` — which silently took this session-ordering assertion out of the suite
+/// with it. A blocked assertion should not disable a working one.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: readback does not inject temper-title into managed_meta (substrate §7 Die key), so `load_tasks` errors and `collect_in_progress_tasks` swallows it to an empty list — `in_progress_tasks` is always 0. The sessions half of this test is unaffected; the task assertions are blocked on the readback-identity gap"]
-async fn warmup_lists_sessions_and_filters_tasks(pool: sqlx::PgPool) {
+async fn warmup_lists_sessions_newest_first(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
     app.client
@@ -168,33 +217,66 @@ async fn warmup_lists_sessions_and_filters_tasks(pool: sqlx::PgPool) {
 
     // Seed in ascending creation order so the LAST seeded is the most recent.
     // The ingest path stamps `created = now()`, so insertion order == age.
-    seed_session(
-        &app.client,
-        "myapp",
-        "2026-05-28-first",
-        "First Session",
-        "# First\n\nOldest session body.\n",
-    )
-    .await;
-    seed_session(
-        &app.client,
-        "myapp",
-        "2026-05-29-second",
-        "Second Session",
-        "# Second\n\nMiddle session body.\n",
-    )
-    .await;
-    let newest_body = "# Third\n\nNewest session body — this should be last_session_content.\n";
-    seed_session(
-        &app.client,
-        "myapp",
-        "2026-05-30-third",
-        "Third Session",
-        newest_body,
-    )
-    .await;
+    for (slug, title) in [
+        ("2026-05-28-first", "First Session"),
+        ("2026-05-29-second", "Second Session"),
+        ("2026-05-30-third", "Third Session"),
+    ] {
+        seed_session(&app.client, "myapp", slug, title, "# Body\n\nSome prose.\n").await;
+    }
 
-    // Tasks: one in-progress (must surface), one backlog (must be filtered out).
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                "@me/myapp",
+                default_limits(),
+            )
+            .expect("build_warmup_result must succeed in cloud mode")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    let titles: Vec<&str> = result
+        .recent_sessions
+        .iter()
+        .map(|s| s.title.as_str())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["Third Session", "Second Session", "First Session"],
+        "sessions must be ordered most-recent-first from the API"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: only in-progress tasks surface
+// ---------------------------------------------------------------------------
+
+/// Seed one in-progress and one backlog task; only the in-progress one may surface.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[ignore = "deferred: readback does not inject temper-title into managed_meta (substrate §7 Die key), so `load_tasks` errors and `collect_in_progress_tasks` swallows it to an empty list — `in_progress_tasks` is always 0. Blocked on the readback-identity gap, NOT on this command"]
+async fn warmup_surfaces_only_in_progress_tasks(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp", None)
+        .await
+        .expect("create myapp context");
+
     seed_task(
         &app.client,
         "myapp",
@@ -222,56 +304,30 @@ async fn warmup_lists_sessions_and_filters_tasks(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("myapp"))
-                .expect("build_warmup_result must succeed in cloud mode")
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                "@me/myapp",
+                default_limits(),
+            )
+            .expect("build_warmup_result must succeed")
         })
     })
     .await
     .expect("spawn_blocking joined");
 
-    // Sessions: newest-first.
-    let titles: Vec<&str> = result
-        .recent_sessions
-        .iter()
-        .map(|s| s.title.as_str())
-        .collect();
-    assert_eq!(
-        titles,
-        vec!["Third Session", "Second Session", "First Session"],
-        "sessions must be ordered most-recent-first from the API"
-    );
-
-    // Last session content is the newest session's body (content fetch worked).
-    let last = result
-        .last_session_content
-        .as_deref()
-        .expect("most-recent session must have content");
-    assert!(
-        last.contains("Newest session body"),
-        "last_session_content must be the most-recent session's reconstructed body; got: {last}"
-    );
-    assert!(
-        !last.contains("Oldest") && !last.contains("Middle"),
-        "last_session_content must be ONLY the newest session, not older bodies; got: {last}"
-    );
-
-    // In-progress filter: only the active task.
     assert_eq!(
         result.in_progress_tasks.len(),
         1,
         "only the in-progress task must surface"
     );
-    let active = &result.in_progress_tasks[0];
-    assert_eq!(active.slug, "task-active");
-    assert_eq!(active.title, "Active Task");
+    assert_eq!(result.in_progress_tasks[0].slug, "task-active");
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: warmup caps sessions at the limit
+// Test 3: sessions are capped at the configured limit
 // ---------------------------------------------------------------------------
 
-/// Seed more sessions than the warmup limit (5) and assert the result caps at
-/// the limit, keeping the most-recent ones.
+/// Seed more sessions than the limit and assert the result caps, keeping the newest.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -306,8 +362,15 @@ async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("@me/myapp"))
-                .expect("build_warmup_result must succeed")
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                "@me/myapp",
+                temper_cli::commands::warmup::WarmupLimits {
+                    sessions: 5,
+                    goals: 20,
+                },
+            )
+            .expect("build_warmup_result must succeed")
         })
     })
     .await
@@ -316,20 +379,23 @@ async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
     assert_eq!(
         result.recent_sessions.len(),
         5,
-        "recent_sessions must be capped at the warmup limit"
+        "recent_sessions must be capped at the configured limit"
     );
-    // Newest (i=7) must be first.
     assert_eq!(result.recent_sessions[0].title, "Session 7");
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: a session body longer than MAX_SESSION_LINES is truncated
+// Test 4: only active goals surface, and they carry a usable ref
 // ---------------------------------------------------------------------------
 
-/// Seed a session whose body exceeds `MAX_SESSION_LINES` (500) and assert
-/// `last_session_content` is truncated to exactly that many lines.
+/// Seed goals across every `temper-status` value and assert the primer reports exactly
+/// the active ones.
+///
+/// This is the assertion that must not be written as `list --status active`: that flag
+/// is a no-op (no `status` field on `ResourceListParams`), so it returns every row and
+/// the test would pass while reporting completed and cancelled goals as standing.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn warmup_truncates_long_session_body(pool: sqlx::PgPool) {
+async fn warmup_reports_only_active_goals(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
     app.client
@@ -343,19 +409,10 @@ async fn warmup_truncates_long_session_body(pool: sqlx::PgPool) {
         .await
         .expect("create myapp context");
 
-    // 600 lines — well over the 500-line cap.
-    let body = (0..600)
-        .map(|i| format!("line {i}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    seed_session(
-        &app.client,
-        "myapp",
-        "2026-05-30-long",
-        "Long Session",
-        &body,
-    )
-    .await;
+    seed_goal(&app.client, "myapp", "g-active", "Standing Goal", "active").await;
+    seed_goal(&app.client, "myapp", "g-done", "Finished Goal", "completed").await;
+    seed_goal(&app.client, "myapp", "g-dead", "Dropped Goal", "cancelled").await;
+    seed_goal(&app.client, "myapp", "g-held", "Paused Goal", "paused").await;
 
     let global_config = app.vault_dir.path().join("no-such-config.toml");
     let api_url = format!("http://{}", app.addr);
@@ -365,25 +422,110 @@ async fn warmup_truncates_long_session_body(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("@me/myapp"))
-                .expect("build_warmup_result must succeed")
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                "@me/myapp",
+                default_limits(),
+            )
+            .expect("build_warmup_result must succeed")
         })
     })
     .await
     .expect("spawn_blocking joined");
 
-    let content = result
-        .last_session_content
-        .expect("long session must have content");
-    let line_count = content.lines().count();
+    let titles: Vec<&str> = result
+        .active_goals
+        .iter()
+        .map(|g| g.title.as_str())
+        .collect();
     assert_eq!(
-        line_count, 500,
-        "session body must be truncated to MAX_SESSION_LINES (500); got {line_count}"
+        titles,
+        vec!["Standing Goal"],
+        "only temper-status=active goals may be reported as standing"
     );
-    // First line preserved; line 500+ dropped.
-    assert!(content.starts_with("line 0"), "first line must be kept");
+    assert_eq!(
+        result.active_goal_total, 1,
+        "active_goal_total must count active goals only"
+    );
+
+    // The ref must be usable — decorated `sluggify(title)-<uuid>`, which `parse_ref`
+    // resolves. A title in a primer with no way to open it is a dead end.
+    let goal_ref = &result.active_goals[0].r#ref;
     assert!(
-        !content.contains("line 500"),
-        "lines past the cap must be dropped"
+        goal_ref.starts_with("standing-goal-"),
+        "ref must be the decorated slug-uuid form; got {goal_ref}"
+    );
+    assert!(
+        temper_workflow::operations::parse_ref(goal_ref).is_ok(),
+        "the emitted ref must resolve through parse_ref; got {goal_ref}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: a capped goal list still reports the true total
+// ---------------------------------------------------------------------------
+
+/// Seed more active goals than the display cap and assert the list caps while
+/// `active_goal_total` still reports the truth.
+///
+/// Silent truncation is the failure this witnesses: a primer that shows 2 of 5 standing
+/// goals without saying so reads as "these are all of them".
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_capped_goal_list_still_reports_true_total(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp", None)
+        .await
+        .expect("create myapp context");
+
+    for i in 0..5 {
+        seed_goal(
+            &app.client,
+            "myapp",
+            &format!("g{i}"),
+            &format!("Goal {i}"),
+            "active",
+        )
+        .await;
+    }
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                "@me/myapp",
+                temper_cli::commands::warmup::WarmupLimits {
+                    sessions: 5,
+                    goals: 2,
+                },
+            )
+            .expect("build_warmup_result must succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    assert_eq!(
+        result.active_goals.len(),
+        2,
+        "the displayed list must respect the configured goal cap"
+    );
+    assert_eq!(
+        result.active_goal_total, 5,
+        "active_goal_total must report every active goal, not just the displayed ones — \
+         a cap that hides its own existence is silent truncation"
     );
 }

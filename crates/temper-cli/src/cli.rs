@@ -221,10 +221,18 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Context primer for new sessions
+    /// Context primer for new sessions — active goals, in-progress tasks, recent session pointers
     Warmup {
+        /// Context ref (`@owner/slug` or UUID). Required — no context name is
+        /// guaranteed to exist for a given principal, so there is no safe default.
         #[arg(long)]
-        context: Option<String>,
+        context: String,
+        /// How many recent sessions to surface. Precedence: --sessions → cli.warmup_sessions config → 5
+        #[arg(long)]
+        sessions: Option<usize>,
+        /// How many active goals to list. Precedence: --goals → cli.warmup_goals config → 20
+        #[arg(long)]
+        goals: Option<usize>,
     },
     /// List the pending team invitations addressed to you
     Invitations,
