@@ -353,6 +353,34 @@ pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Validate a goal-status value (the `--status` list filter) against the goal schema's
+/// `temper-status` enum.
+///
+/// Lives here, in the crate both surfaces already depend on, so the CLI's send-side check
+/// and `substrate_read`'s receive-side check are the **same** predicate rather than two
+/// copies. Symmetric defense is the repo's pattern; two independently-written copies of it
+/// are how the two ends drift, and a status the writer accepts but the filter rejects is a
+/// status you can set and then never find.
+///
+/// Reading the enum from `goal.schema.json` rather than restating it as a const is the
+/// same argument one level down: the write path already validates against the schema.
+pub fn validate_goal_status(value: &str) -> Result<()> {
+    const FIELD: &str = "temper-status";
+    let fields = updatable_fields("goal")?;
+    let Some((_, schema_prop)) = fields.iter().find(|(name, _)| name == FIELD) else {
+        // The goal schema always declares temper-status. If it stops, fail loudly rather
+        // than falling back to accepting anything — accepting anything is the defect this
+        // exists to remove.
+        return Err(TemperError::Project(format!(
+            "goal schema declares no {FIELD}; cannot validate status"
+        )));
+    };
+    match validate_field_value(FIELD, value, schema_prop) {
+        Some(err) => Err(TemperError::Project(err)),
+        None => Ok(()),
+    }
+}
+
 /// Validate a field value against a schema property definition.
 pub fn validate_field_value(
     field_name: &str,

@@ -243,6 +243,12 @@ pub struct ResourceListParams {
     pub owner: Option<String>,
     pub q: Option<String>,
     pub stage: Option<String>,
+    /// Goal-status filter (goal only): matches `temper-status` via the
+    /// `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the
+    /// goal schema's enum surface-side, so an unknown value is an error rather than a
+    /// silent full scan — which is what this field's absence used to produce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     /// Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns
     /// only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP
     /// resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the

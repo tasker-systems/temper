@@ -4,9 +4,11 @@
 //!
 //! `temper resource list --type task --context <ctx> --stage <stage>` must
 //! return ONLY the tasks at that stage. The filter rides through
-//! `ResourceListParams.stage` into the server-side `build_filters`, which
-//! adds a `vb.stage = $n` predicate against the `vault_resources_browse`
-//! view (`m.managed_meta->>'temper-stage' AS stage`).
+//! `ResourceListParams.stage` into the server-side `filtered_visible_page`,
+//! which adds a `wp.stage = $n` predicate against the
+//! `kb_resource_workflow_props` pivot view (migration 20260709000002).
+//! See `resource_list_status_filter_test.rs` for the `status` sibling, which
+//! shares this mechanism by construction.
 //!
 //! Tasks are seeded via the API client (`app.client.ingest()`), each carrying
 //! a `temper-stage` managed_meta key, then listed through the real

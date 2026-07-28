@@ -7,7 +7,7 @@
 //! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
 //! is unqualified against the one schema (the connection carries the search_path).
 //!
-//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/owner/`q`-title), sort, and paginate the
+//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/status/owner/`q`-title), sort, and paginate the
 //! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
 //! to a context UUID before filtering so bare names are rejected (spec Decision 1). Full-text/vector `q`
 //! on the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
@@ -85,8 +85,18 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
     }
 }
 
+/// Receive-side half of the `--status` validation, as a 400.
+///
+/// The predicate is `temper_workflow::schema::validate_goal_status`, shared with the
+/// CLI's send-side check — one definition, so the door an agent uses and the door a human
+/// uses cannot disagree about which statuses exist. Only the error mapping is local.
+fn validate_goal_status(value: &str) -> ApiResult<()> {
+    temper_workflow::schema::validate_goal_status(value)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))
+}
+
 /// Resolve the visible set, apply the `ResourceListParams` filters (context_ref /
-/// doc_type_name / stage / owner / `q` title-match) + sort + pagination IN SQL, and
+/// doc_type_name / stage / status / owner / `q` title-match) + sort + pagination IN SQL, and
 /// return only the page's ids (so the caller reconstructs the page, not every visible
 /// row — this also fixes the prior all-rows N+1).
 ///
@@ -149,6 +159,14 @@ async fn filtered_visible_page(
             "context_ref and cogmap scope are mutually exclusive".into(),
         ));
     }
+    // Reject a `status` outside the goal enum HERE rather than only in the CLI, so every
+    // door gets it: the CLI's own check is a friendlier early error, but MCP and raw HTTP
+    // reach this function directly. Without it an unknown value silently matches nothing,
+    // which is the same family as the defect this filter was added to fix — a filter that
+    // reports a confident empty page for what is really a typo.
+    if let Some(status) = params.status.as_deref() {
+        validate_goal_status(status)?;
+    }
     let sort = params.sort.unwrap_or_default();
     let dir = match params.order.unwrap_or_default() {
         SortOrder::Asc => "ASC",
@@ -193,6 +211,7 @@ async fn filtered_visible_page(
                      AND NOT ge.is_folded))
             AND ($10::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($10)
                  AND cogmap_readable_by_profile($1, h.anchor_id)))
+            AND ($11::text IS NULL OR wp.status = $11)
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -210,6 +229,7 @@ async fn filtered_visible_page(
         .bind(params.goal)
         .bind(super::db_backend::GOAL_EDGE_LABEL)
         .bind(cogmap_ids)
+        .bind(params.status.as_deref())
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
