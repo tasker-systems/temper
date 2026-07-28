@@ -63,6 +63,13 @@ export type ResourceListParams = { kb_doc_type_id: string | null,
  */
 context_ref: string | null, doc_type_name: string | null, owner: string | null, q: string | null, stage: string | null, 
 /**
+ * Goal-status filter (goal only): matches `temper-status` via the
+ * `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the
+ * goal schema's enum surface-side, so an unknown value is an error rather than a
+ * silent full scan — which is what this field's absence used to produce.
+ */
+status: string | null, 
+/**
  * Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns
  * only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP
  * resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the

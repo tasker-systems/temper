@@ -953,32 +953,57 @@ fn warn_truncated(total: i64, returned: usize) {
     ));
 }
 
+/// A type-scoped filter was combined with a doc type it cannot apply to.
+///
+/// These three combinations used to emit a hint saying the filter was "ignored for
+/// {type}" — and then send it anyway, so `--type goal --stage backlog` printed
+/// *"ignored for goal"* above `total: 0` while 48 goals existed. The word was false in
+/// the most expensive direction: a caller reading it attributes the empty page to
+/// "nothing matches" rather than to the filter they were told was inert.
+///
+/// A hard error rather than a genuinely-ignored flag, because silently dropping an
+/// explicit filter is the same class of lie one layer over: the caller asked to narrow
+/// and got an unnarrowed set back with no way to tell.
+fn mismatched_filter_err(flag: &str, only_for: &str, actual: &str) -> TemperError {
+    TemperError::Project(format!(
+        "{flag} applies only to --type {only_for}, but --type {actual} was given. \
+         Drop {flag}, or list --type {only_for}."
+    ))
+}
+
+/// Send-side half of the `--status` validation.
+///
+/// The predicate itself is `schema::validate_goal_status` — shared with
+/// `substrate_read`'s receive-side check so the two ends cannot disagree about which
+/// statuses exist. Checking here as well buys a faster, friendlier failure (no round
+/// trip), not a second opinion.
+///
+/// Rejection is half the fix and the more important half: the defect's signature was
+/// *accepting everything* (`--status bogus-value` returned all 43 goals), not returning
+/// a wrong subset.
+fn validate_status_filter(value: &str) -> Result<()> {
+    schema::validate_goal_status(value)
+}
+
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
-    // Hints for filters that only apply to certain types (unchanged).
+    // Type-scoped filters. Each is a hard error on a mismatched doc type: all three are
+    // sent to the server unconditionally, so "ignored" was never true of any of them.
     if params.stage.is_some() && params.doc_type != "task" {
-        output::hint(format!(
-            "--stage filter is only meaningful for tasks; ignored for {}.",
-            params.doc_type
-        ));
+        return Err(mismatched_filter_err("--stage", "task", params.doc_type));
     }
     if params.goal.is_some() && params.doc_type != "task" {
-        output::hint(format!(
-            "--goal filter is only meaningful for tasks; ignored for {}.",
-            params.doc_type
-        ));
+        return Err(mismatched_filter_err("--goal", "task", params.doc_type));
     }
     if params.status.is_some() && params.doc_type != "goal" {
-        output::hint(format!(
-            "--status filter is only meaningful for goals; ignored for {}.",
-            params.doc_type
-        ));
+        return Err(mismatched_filter_err("--status", "goal", params.doc_type));
     }
 
     if let Some(s) = params.stage {
-        if params.doc_type == "task" {
-            vault::validate_stage(s)?;
-        }
+        vault::validate_stage(s)?;
+    }
+    if let Some(s) = params.status {
+        validate_status_filter(s)?;
     }
 
     if params.meta_only {
@@ -1014,6 +1039,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         context_ref: context.clone(),
         cogmap_ids,
         stage: params.stage.map(str::to_string),
+        status: params.status.map(str::to_string),
         q: params.title_contains.map(str::to_string),
         goal: goal_id,
         sort,
@@ -1105,6 +1131,7 @@ fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
         context_ref: params.context.map(ToString::to_string),
         cogmap_ids,
         stage: params.stage.map(str::to_string),
+        status: params.status.map(str::to_string),
         q: params.title_contains.map(str::to_string),
         goal: goal_id,
         sort,
@@ -2155,6 +2182,57 @@ fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result
 mod list_helpers_tests {
     use super::*;
     use temper_workflow::types::resource::{ResourceSortField, SortOrder};
+
+    /// Every value the goal schema declares is accepted by the `--status` filter.
+    ///
+    /// Enumerated rather than spot-checked: the filter and the write path must accept the
+    /// same set, and a value writable but not filterable would be a status you can set and
+    /// then never find.
+    #[test]
+    fn status_filter_accepts_every_schema_status() {
+        for status in ["active", "completed", "paused", "cancelled"] {
+            assert!(
+                validate_status_filter(status).is_ok(),
+                "--status {status} is declared by goal.schema.json and must be accepted"
+            );
+        }
+    }
+
+    /// The guard for the original defect: `--status bogus-value` returned all 43 goals.
+    ///
+    /// Paired deliberately with the accept-test above. A filter test alone cannot see
+    /// "accepts everything" — that was green for every valid value while the bug was live.
+    #[test]
+    fn status_filter_rejects_a_value_outside_the_enum() {
+        let err = validate_status_filter("bogus-value")
+            .expect_err("a status outside the goal enum must be rejected, not scanned");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bogus-value"),
+            "the error must name the offending value so the caller can fix it; got: {msg}"
+        );
+    }
+
+    /// A type-scoped filter on the wrong doc type errors instead of claiming to be ignored.
+    ///
+    /// All three of `--stage`/`--goal`/`--status` are sent to the server unconditionally,
+    /// so the previous hint — "ignored for {type}" — was false, and false in the expensive
+    /// direction: `--type goal --stage backlog` printed it above `total: 0` while 48 goals
+    /// existed, inviting the reader to conclude no goals matched.
+    #[test]
+    fn mismatched_filter_error_names_the_flag_and_both_types() {
+        let err = mismatched_filter_err("--stage", "task", "goal");
+        let msg = err.to_string();
+        assert!(msg.contains("--stage"), "must name the flag; got: {msg}");
+        assert!(
+            msg.contains("task") && msg.contains("goal"),
+            "must name both the type it applies to and the type given; got: {msg}"
+        );
+        assert!(
+            !msg.contains("ignored"),
+            "must not repeat the word that made the old hint false; got: {msg}"
+        );
+    }
 
     #[test]
     fn parse_sort_field_aliases() {

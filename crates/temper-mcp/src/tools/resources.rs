@@ -177,6 +177,15 @@ pub struct ListResourcesInput {
     pub context_ref: Option<String>,
     /// Filter by doc type name (e.g. "task", "research").
     pub doc_type_name: Option<String>,
+    /// Filter tasks by workflow stage: `backlog`, `in-progress`, `done`, `cancelled`.
+    /// Meaningful only for `doc_type_name = "task"` — no other doc type carries a stage,
+    /// so combining them matches nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    /// Filter goals by lifecycle status: `active`, `completed`, `paused`, `cancelled`.
+    /// Meaningful only for `doc_type_name = "goal"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     /// Filter by goal: a ref (UUID or decorated `slug-<uuid>`) of a goal resource. Returns only
     /// resources linked to it via a live `advances`→goal edge (task-only in practice).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -881,6 +890,8 @@ pub async fn list_resources(
     let params = temper_workflow::types::resource::ResourceListParams {
         context_ref: input.context_ref.clone(),
         doc_type_name: input.doc_type_name.clone(),
+        stage: input.stage.clone(),
+        status: input.status.clone(),
         goal: goal.map(uuid::Uuid::from),
         cogmap_ids,
         limit: input.limit.or(Some(50)).map(|l| l.min(200)),
@@ -1613,12 +1624,33 @@ mod fields_projection_tests {
         let _input = ListResourcesInput {
             context_ref: None,
             doc_type_name: None,
+            stage: None,
+            status: None,
             goal: None,
             cogmap: None,
             limit: None,
             offset: None,
             fields: Some(vec!["managed_meta".to_string()]),
         };
+    }
+
+    /// MCP can filter by `stage` and `status`, not only by goal and cogmap.
+    ///
+    /// Until 2026-07-28 `ListResourcesInput` carried neither, so the door agents come
+    /// through could not narrow a task list by stage at all while the CLI and API could —
+    /// a parity gap discoverable only by an agent attempting it and getting everything
+    /// back. Constructed via the deserializer rather than a struct literal so this also
+    /// pins the wire names an MCP caller actually sends.
+    #[test]
+    fn list_resources_input_accepts_stage_and_status() {
+        let input: ListResourcesInput = serde_json::from_value(serde_json::json!({
+            "doc_type_name": "goal",
+            "stage": "in-progress",
+            "status": "active",
+        }))
+        .expect("stage and status must deserialize from the MCP wire shape");
+        assert_eq!(input.stage.as_deref(), Some("in-progress"));
+        assert_eq!(input.status.as_deref(), Some("active"));
     }
 
     #[test]

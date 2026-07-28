@@ -4093,6 +4093,18 @@
             }
           },
           {
+            "name": "status",
+            "in": "query",
+            "description": "Goal-status filter (goal only): matches `temper-status` via the\n`kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the\ngoal schema's enum surface-side, so an unknown value is an error rather than a\nsilent full scan — which is what this field's absence used to produce.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "goal",
             "in": "query",
             "description": "Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns\nonly resources joined to this goal via a live `advances`→goal edge. The CLI/MCP\nresolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the\nquery. `None` = no goal filter.",
