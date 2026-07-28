@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
-use temper_core::types::auditor::{AuditJobPayload, AuditSweepRow};
+use temper_core::types::auditor::{AuditCitation, AuditJobPayload, AuditSweepRow};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::workflow_job::clamp_auditor_cap;
 
@@ -29,7 +29,7 @@ use temper_core::types::workflow_job::clamp_auditor_cap;
 pub struct CogmapAuditWork {
     /// The queue's grain — `kb_workflow_jobs.cogmap_id`.
     pub cogmap_id: Uuid,
-    /// The auditor's grain — every swept finding homed in that cogmap.
+    /// The auditor's grain — every citation in that cogmap this principal should weigh.
     pub payload: AuditJobPayload,
 }
 
@@ -84,26 +84,86 @@ pub async fn drift_sweep(
 /// the enqueue call one-per-cogmap by construction.
 ///
 /// Order is preserved on both axes: the cogmaps come out in the order their first finding appeared,
-/// and each finding list keeps the sweep's `uncovered DESC` ordering. The sweep's prioritization is
-/// the only prioritization the auditor has, and re-sorting here would throw it away.
-pub fn group_by_cogmap(rows: &[AuditSweepRow]) -> Vec<CogmapAuditWork> {
+/// and each citation list keeps the sweep's `uncovered DESC` finding ordering. The sweep's
+/// prioritization is the only prioritization the auditor has, and re-sorting here would throw it
+/// away.
+///
+/// Takes citations rather than sweep rows since `20260727000050` — a finding that expands to zero
+/// auditable citations contributes nothing and does not create an empty job.
+pub fn group_by_cogmap(citations: &[(Uuid, AuditCitation)]) -> Vec<CogmapAuditWork> {
     let mut order: Vec<CogmapAuditWork> = Vec::new();
     let mut seen: HashMap<Uuid, usize> = HashMap::new();
-    for row in rows {
-        match seen.get(&row.cogmap_id) {
-            Some(&idx) => order[idx].payload.findings.push(row.finding_id),
+    for (cogmap_id, citation) in citations {
+        match seen.get(cogmap_id) {
+            Some(&idx) => order[idx].payload.citations.push(citation.clone()),
             None => {
-                seen.insert(row.cogmap_id, order.len());
+                seen.insert(*cogmap_id, order.len());
                 order.push(CogmapAuditWork {
-                    cogmap_id: row.cogmap_id,
+                    cogmap_id: *cogmap_id,
                     payload: AuditJobPayload {
-                        findings: vec![row.finding_id],
+                        citations: vec![citation.clone()],
                     },
                 });
             }
         }
     }
     order
+}
+
+/// Expand a finding-grained sweep into the citations this principal should actually weigh.
+///
+/// ONE round trip, not one per finding: the swept finding ids go down as an array and
+/// `resource_auditable_citations` is applied per element with `CROSS JOIN LATERAL`. A per-finding
+/// loop would be N+1 queries against a function that is already `STABLE` and gated internally.
+///
+/// `WITH ORDINALITY` preserves the sweep's order across the array round trip — without it the
+/// planner is free to return the unnested rows in any order, which would silently discard the
+/// `uncovered DESC` prioritization that is the auditor's only sense of what matters most.
+///
+/// Auth: `resource_auditable_citations` carries the same `resources_visible_to` gate its siblings
+/// do, so an unreadable finding yields zero rows here rather than leaking. The sweep has already
+/// applied that gate too; this is the defense-in-depth the repo asks for, not a redundant filter.
+pub async fn expand_to_citations(
+    pool: &PgPool,
+    principal: ProfileId,
+    rows: &[AuditSweepRow],
+) -> ApiResult<Vec<(Uuid, AuditCitation)>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cogmaps: Vec<Uuid> = rows.iter().map(|r| r.cogmap_id).collect();
+    let findings: Vec<Uuid> = rows.iter().map(|r| r.finding_id).collect();
+
+    let expanded = sqlx::query!(
+        r#"
+        SELECT f.cogmap_id   AS "cogmap_id!: Uuid",
+               f.finding_id  AS "finding_id!: Uuid",
+               ac.block_id   AS "block_id!: Uuid",
+               ac.source_id  AS "source_id!: Uuid"
+          FROM unnest($1::uuid[], $2::uuid[]) WITH ORDINALITY AS f(cogmap_id, finding_id, ord)
+          CROSS JOIN LATERAL resource_auditable_citations(f.finding_id, $3) ac
+         ORDER BY f.ord, ac.block_id, ac.source_id
+        "#,
+        &cogmaps,
+        &findings,
+        *principal,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(expanded
+        .into_iter()
+        .map(|r| {
+            (
+                r.cogmap_id,
+                AuditCitation {
+                    finding_id: r.finding_id,
+                    block_id: r.block_id,
+                    source_id: r.source_id,
+                },
+            )
+        })
+        .collect())
 }
 
 #[cfg(test)]

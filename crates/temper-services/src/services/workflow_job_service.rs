@@ -148,7 +148,7 @@ pub async fn claim_audit(
                 id: r.id,
                 cogmap_id: r.cogmap_id,
                 attempts: r.attempts,
-                findings: payload.findings,
+                citations: payload.citations,
             })
         })
         .collect()

@@ -2983,9 +2983,15 @@ impl Backend for DbBackend {
         //    audit coverage, most-uncovered-first.
         let drifted = auditor_service::drift_sweep(&self.pool, self.profile_id, cmd.cap).await?;
 
-        // 3. Collapse finding grain → queue grain, then enqueue ONE job per cogmap carrying its
-        //    finding list. Already-active maps skip via the in-flight index.
-        for work in auditor_service::group_by_cogmap(&drifted) {
+        // 3. Expand each swept finding into the citations THIS principal has not already weighed.
+        //    Without this the session was handed findings and told not to re-check, so it re-weighed
+        //    every citation of a partially-audited finding on every tick (20260727000050).
+        let auditable =
+            auditor_service::expand_to_citations(&self.pool, self.profile_id, &drifted).await?;
+
+        // 4. Collapse citation grain → queue grain, then enqueue ONE job per cogmap carrying its
+        //    citation list. Already-active maps skip via the in-flight index.
+        for work in auditor_service::group_by_cogmap(&auditable) {
             let payload = serde_json::to_value(&work.payload).map_err(|e| {
                 crate::error::ApiError::Internal(format!(
                     "citation-audit job payload for cogmap {} is not serializable: {e}",
