@@ -2438,17 +2438,50 @@ mod build_helpers_tests {
         assert!(parse_open_meta_flag("{not json").is_err());
     }
 
+    /// The two open-tier channels stay separate all the way to the wire.
+    ///
+    /// This replaces `build_open_meta_for_update_merges_explicit_over_list_flags`, which
+    /// asserted the merge that WAS the data-loss bug: folding `--tags` into `open_meta`
+    /// made it a key-level replace, so adding one tag destroyed the rest. The test is
+    /// rewritten rather than deleted because the merge it pinned is precisely what must
+    /// never come back — a deleted test leaves nothing standing between here and it.
     #[test]
-    fn build_open_meta_for_update_merges_explicit_over_list_flags() {
+    fn list_flags_and_explicit_open_meta_travel_on_separate_channels() {
         let mut params = empty_update_params("foo");
         let tags = vec!["a".to_string(), "b".to_string()];
         params.tags = &tags;
         params.open_meta = Some(r#"{"marker":"x"}"#);
-        let out = build_open_meta_for_update(&params)
+
+        let replace = build_open_meta_for_update(&params)
             .expect("ok")
             .expect("some open_meta");
-        assert_eq!(out.get("tags"), Some(&serde_json::json!(["a", "b"])));
-        assert_eq!(out.get("marker"), Some(&serde_json::json!("x")));
+        assert_eq!(replace.get("marker"), Some(&serde_json::json!("x")));
+        assert!(
+            replace.get("tags").is_none(),
+            "--tags must NOT ride the replace channel; that is what destroyed sibling \
+             tags. Got: {replace}"
+        );
+
+        let add = build_open_meta_add_for_update(&params)
+            .expect("ok")
+            .expect("some open_meta_add");
+        assert_eq!(add.get("tags"), Some(&serde_json::json!(["a", "b"])));
+        assert!(
+            add.get("marker").is_none(),
+            "--open-meta must NOT ride the add channel; it is the only way to replace \
+             or clear a list. Got: {add}"
+        );
+    }
+
+    /// The add channel is absent when no list flag was passed, so a frontmatter-only
+    /// update PATCHes nothing on the open tier.
+    #[test]
+    fn open_meta_add_is_none_without_list_flags() {
+        let mut params = empty_update_params("foo");
+        params.open_meta = Some(r#"{"marker":"x"}"#);
+        assert!(build_open_meta_add_for_update(&params)
+            .expect("ok")
+            .is_none());
     }
 
     #[test]
