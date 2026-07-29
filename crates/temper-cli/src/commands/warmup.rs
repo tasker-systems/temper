@@ -1,9 +1,8 @@
 use serde::Serialize;
 use temper_core::types::config::CliSection;
 use temper_workflow::operations::decorated_ref;
-use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{
-    ResourceDetail, ResourceListParams, ResourceRow, ResourceSortField, SortOrder,
+    ResourceListParams, ResourceRow, ResourceSortField, SortOrder,
 };
 
 use crate::actions::runtime;
@@ -21,6 +20,10 @@ const DEFAULT_RECENT_SESSIONS: usize = 5;
 const DEFAULT_ACTIVE_GOALS: usize = 20;
 
 /// `temper-status` value that marks a goal as standing.
+///
+/// Sent as the list endpoint's `status` filter rather than compared client-side. That
+/// filter is validated against the goal schema's enum on both sides, so a typo here is a
+/// 400 naming the legal values, not a primer that silently reports no goals as standing.
 const GOAL_STATUS_ACTIVE: &str = "active";
 
 /// A pointer to a recent session — date and title, never a body.
@@ -163,22 +166,28 @@ pub fn build_warmup_result(
 
 /// Fetch active goals and recent session pointers over one client runtime.
 ///
+/// Both filters are the query's, not this function's: goals are narrowed by
+/// `status = active` and sessions by doc type, each capped server-side. Nothing is
+/// re-tested after it arrives.
+///
 /// Returns `(displayed_goals, total_active_goals, sessions)`.
 fn collect_standing_state(
     context_ref: &str,
     limits: WarmupLimits,
 ) -> Result<(Vec<WarmupGoal>, usize, Vec<WarmupSession>)> {
-    // Goals: `limit: None` means "no cap" (the server returns every matching row — the
-    // same thing `resource list --all` asks for). Unbounded is deliberate: the status
-    // filter runs client-side, so a page cap here would truncate *before* filtering and
-    // silently under-report what is in force.
+    // Goals: the server filters to `status = active` and `total` counts the *filtered*
+    // set, so the page cap is safe — it bounds what is displayed without touching what is
+    // counted. This asked for every goal unbounded (`limit: None`, `meta_only`) while the
+    // status test ran client-side, because a cap would then have truncated *before*
+    // filtering and under-reported what is in force. That is no longer the trade: the
+    // filter moved into the query, and with it the reason to over-fetch.
     let goal_params = ResourceListParams {
         doc_type_name: Some("goal".to_string()),
         context_ref: Some(context_ref.to_string()),
+        status: Some(GOAL_STATUS_ACTIVE.to_string()),
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),
-        limit: None,
-        meta_only: Some(true),
+        limit: Some(limits.goals as i64),
         ..Default::default()
     };
 
@@ -197,18 +206,16 @@ fn collect_standing_state(
         Box::pin(async move {
             let goal_response = client
                 .resources()
-                .list_meta(&goal_params)
+                .list(&goal_params)
                 .await
                 .map_err(runtime::client_err_to_temper)?;
 
-            let active: Vec<WarmupGoal> = goal_response
-                .rows
-                .iter()
-                .filter(|detail| is_active_goal(detail))
-                .map(goal_from_detail)
-                .collect();
-            let active_goal_total = active.len();
-            let displayed = active.into_iter().take(limits.goals).collect();
+            let displayed: Vec<WarmupGoal> = goal_response.rows.iter().map(goal_from_row).collect();
+            // The true count of what is in force comes from the query's `total`, which
+            // counts the filtered set and is unaffected by the page cap above. Deriving it
+            // from `displayed.len()` instead would make every capped list look complete —
+            // the exact confusion `active_goal_total` exists to prevent.
+            let active_goal_total = goal_response.total as usize;
 
             let session_response = client
                 .resources()
@@ -223,39 +230,24 @@ fn collect_standing_state(
     })
 }
 
-/// Whether a goal row is standing.
-///
-/// Status truth is `managed_meta["temper-status"]`, read here rather than asked of the
-/// list endpoint on purpose: `ResourceListParams` carries **no** `status` field, so
-/// `resource list --status active` returns every row and accepts values outside the
-/// enum without error. Under that flag, *presence* is the lie — a row it returns is no
-/// evidence at all of being active. (The flag's own fix is task
-/// `019fa607-25f3-7bd0-88b4-ab8b7844225f`; this read does not depend on it landing.)
-///
-/// A goal with no `managed_meta` is **not** treated as active: an unknown status must
-/// not enter a primer claiming to say what is in force.
-fn is_active_goal(detail: &ResourceDetail) -> bool {
-    status_is_active(&detail.managed_meta)
-}
-
-/// The status predicate itself, over just the meta tier.
-///
-/// Split from [`is_active_goal`] so the rule is testable without standing up a whole
-/// `ResourceDetail` — the judgment worth pinning is "which statuses count", not the
-/// field access.
-fn status_is_active(managed_meta: &Option<ManagedMeta>) -> bool {
-    managed_meta
-        .as_ref()
-        .and_then(|meta| meta.status.as_deref())
-        .is_some_and(|status| status == GOAL_STATUS_ACTIVE)
-}
-
-/// Derive a [`WarmupGoal`] from a meta row, computing the decorated ref the same way
+/// Derive a [`WarmupGoal`] from a goal row, computing the decorated ref the same way
 /// `resource list` renders it.
-fn goal_from_detail(detail: &ResourceDetail) -> WarmupGoal {
+///
+/// The row is already known to be standing: the query asked for `status = active`, so
+/// there is no client-side status test to apply here.
+///
+/// There used to be one. This read deliberately compared `managed_meta["temper-status"]`
+/// itself because `ResourceListParams` carried no `status` field at all, which made
+/// `resource list --status active` return every row and accept values outside the enum —
+/// under that flag, *presence* was the lie. Task
+/// `019fa607-25f3-7bd0-88b4-ab8b7844225f` (PR #564) closed it: the filter now rides into
+/// `filtered_visible_page` as a real predicate over the `kb_resource_workflow_props`
+/// pivot, with the value rejected against the goal schema's enum receive-side. Asking the
+/// query is now both correct and the only copy of the rule.
+fn goal_from_row(row: &ResourceRow) -> WarmupGoal {
     WarmupGoal {
-        title: detail.row.title.clone(),
-        r#ref: decorated_ref(&detail.row.title, detail.row.id),
+        title: row.title.clone(),
+        r#ref: decorated_ref(&row.title, row.id),
     }
 }
 
@@ -287,10 +279,17 @@ fn collect_in_progress_tasks(config: &Config, context_ref: &str) -> Vec<WarmupTa
         .collect()
 }
 
+/// **Retired here, as a named remainder rather than a silent gap**:
+/// `only_status_active_counts_as_standing`, which pinned the client-side rule that only
+/// `temper-status = active` reads as standing (and that a goal with no status does not).
+/// The rule did not disappear — it moved into the query as `status = active`, so there is
+/// no longer a local predicate to unit-test. Its witness moved down the stack with it:
+/// `warmup_reports_only_active_goals` in `tests/e2e/tests/cloud_warmup_e2e_test.rs` seeds
+/// goals across every status value and drives a real server, so it now exercises the
+/// filter that actually runs instead of a second copy of the rule.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_workflow::types::managed_meta::ManagedMeta;
 
     fn cli_section(sessions: Option<usize>, goals: Option<usize>) -> CliSection {
         CliSection {
@@ -324,27 +323,13 @@ mod tests {
         assert_eq!(limits.goals, 8, "--goals must outrank cli.warmup_goals");
     }
 
-    /// Status truth is `managed_meta["temper-status"]`. A goal carrying no managed_meta
-    /// is NOT active: an unknown status must not enter a primer that claims to report
-    /// what is in force.
+    /// The value sent as the list endpoint's `status` filter must be one the goal schema
+    /// actually declares. A typo would not fail loudly at this layer on its own — it would
+    /// ride out as a filter value — so pin it against the same schema the server validates
+    /// against, rather than against a second hand-written list of statuses.
     #[test]
-    fn only_status_active_counts_as_standing() {
-        let with_status = |status: Option<&str>| ManagedMeta {
-            status: status.map(str::to_string),
-            ..Default::default()
-        };
-
-        assert!(status_is_active(&Some(with_status(Some("active")))));
-        assert!(!status_is_active(&Some(with_status(Some("completed")))));
-        assert!(!status_is_active(&Some(with_status(Some("cancelled")))));
-        assert!(!status_is_active(&Some(with_status(Some("paused")))));
-        assert!(
-            !status_is_active(&Some(with_status(None))),
-            "a goal with no status must not read as active"
-        );
-        assert!(
-            !status_is_active(&None),
-            "a goal with no managed_meta at all must not read as active"
-        );
+    fn the_active_filter_value_is_a_status_the_schema_declares() {
+        temper_workflow::schema::validate_goal_status(GOAL_STATUS_ACTIVE)
+            .expect("GOAL_STATUS_ACTIVE must be a status the goal schema declares");
     }
 }
