@@ -16,28 +16,37 @@ quality.
 **Two agents live here, and their separation is the product.** Besides the root steward, this
 project ships the **citation auditor** (Set 5) as a declared subagent at `agent/subagents/auditor/`.
 
-> **The auditor has NO SCHEDULE — it is disabled and cannot fire.** Its dispatcher lives at
-> `disabled/auditor.schedule.ts` (outside the agent root, still typechecked) so eve registers no
-> cron for it — eve creates one Vercel Cron Job per file in `agent/schedules/`. It shipped enabled in
-> PR #531, fired hourly from 2026-07-24T23:16Z, and failed every tick on an unprovisioned
-> `TEMPER_AUDITOR_TOKEN` until it was withdrawn on 2026-07-25. Read that file's header before
-> restoring it: it enumerates **four** gates between this file and a working audit (its own list
-> said "three" until 2026-07-27 — it omitted the post-D11 system-access admission, which is the
-> one that actually bit). **All four are now closed** as of 2026-07-27: the auditor principal is
-> provisioned, registered, admitted, and has recorded a real audit against production. The
-> **trigger-model redesign is also done** — task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` closed
-> 2026-07-26 (tier 1 shipped; tier 2 retargeted onto the steward and closed 2026-07-27). The last
-> build item, **D6**, is now **closed** too: the dispatch payload was finding-grained while the unit
-> of work is citation-grained, so a tick re-audited citations already weighed (register
-> `docs/superpowers/specs/2026-07-25-auditor-trigger-model-outcome-register.md` §3; measured on
-> production 2026-07-27). `20260727000050_auditable_citations_at_citation_grain.sql` and task
-> `019fa5eb-2819-7e71-bd27-0d2875f60960` moved the payload to `citations`, expanded per principal
-> through `resource_auditable_citations`, so a session is handed only work it has not done.
-> **Nothing but the operator decision now stands between this and an hourly cron** — restoring is a
-> `git mv` back into `agent/schedules/`, and it is deliberately not a consequence of the grain work
-> landing. The subagent, its channel and tools are live and unchanged; its instructions were
-> updated with the grain (the work list is citations, and step 4's provenance read is now context
-> for judgement rather than the set to iterate) — only the trigger is gone.
+> **The auditor's cron is LIVE as of 2026-07-29** — `agent/schedules/auditor.ts`, hourly at `:30`,
+> trailing the steward's `0 * * * *`. eve creates one Vercel Cron Job per file in `agent/schedules/`,
+> so **this file's location is the on/off switch**: withdrawing the capability again means moving it
+> back out, not guarding `run`.
+>
+> **A deployment with no auditor credential no-ops rather than failing.** `run` checks
+> `credentialConfigured(AUDITOR_CREDENTIALS)` and returns early with a log line. This is a **skip,
+> never a fallback** — `auditorFetch` still throws rather than borrowing the steward's credential,
+> and that is pinned by test. It exists because this schedule ships in the repo, so every fork and
+> self-hosted deploy gets the cron whether or not it runs an auditor; without the skip they all fail
+> hourly on a credential they never meant to set. Only **total** absence skips: a partially
+> configured auditor (client id set, secret missing) still fails loudly, because that is a
+> misconfiguration by someone who meant to run one, and silence there means believing you are
+> auditing when you are not.
+>
+> It shipped enabled once before, in PR #531, fired hourly from 2026-07-24T23:16Z, and failed every
+> tick on an unprovisioned `TEMPER_AUDITOR_TOKEN` until it was withdrawn on 2026-07-25. Both lessons
+> from that are now structural rather than remembered: enabling a production cron is an operator
+> decision (the file's location), and an absent optional credential must no-op (the guard).
+>
+> Read `agent/schedules/auditor.ts`'s header for the **four** gates between this cron and a working
+> audit (its own list said "three" until 2026-07-27 — it omitted the post-D11 system-access
+> admission, which is the one that actually bit). All four are closed on temperkb.io as of
+> 2026-07-27; a fork standing up an auditor walks the same four. The trigger-model redesign is done
+> (task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`, closed 2026-07-26; tier 2 retargeted onto the
+> steward and closed 2026-07-27), and the last build item **D6** closed with
+> `20260727000050_auditable_citations_at_citation_grain.sql` and task
+> `019fa5eb-2819-7e71-bd27-0d2875f60960`: the payload is now `citations`, expanded per principal
+> through `resource_auditable_citations`, so a session is handed only work it has not done. Its
+> instructions were updated with the grain — the work list is citations, and step 4's provenance
+> read is context for judgement rather than the set to iterate.
 
 Code
 colocation does not create epistemic dependence — the two have separate instructions, separate

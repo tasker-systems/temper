@@ -12,11 +12,13 @@ model, or cogmap write reach — see [Two principals](#two-principals-never-one)
 wrong produces no deploy-time error and no log line; it produces an auditor that 404s every audit it
 attempts.
 
-> **The auditor currently has NO schedule and cannot fire.** Its dispatcher lives at
-> `disabled/auditor.schedule.ts`, outside the agent root, so eve registers no cron for it (eve
-> creates one Vercel Cron Job per file in `agent/schedules/`). Enabling it is a `git mv` **plus an
-> operator decision**, never a side effect of a merge. Everything below describes what to have in
-> place *before* that decision.
+> **The auditor's cron is live, but the auditor itself is OPTIONAL — and that combination is safe.**
+> eve creates one Vercel Cron Job per file in `agent/schedules/`, so the schedule's *location* is
+> the on/off switch; enabling or withdrawing it is a `git mv` **plus an operator decision**, never a
+> side effect of a merge. **A deployment that sets no auditor credential no-ops the tick** with a
+> log line instead of failing, so you can run this agent with no auditor at all and get a quiet,
+> green cron. A deployment that sets a *partial* credential still fails loudly — that is a
+> misconfiguration, not an absence. Everything below is what to have in place if you *do* want one.
 
 Three prerequisites, all prior and separate:
 
@@ -364,11 +366,13 @@ vercel connect create https://temperkb.io/mcp --name steward
 ## Verify
 
 - **Cron Jobs** (Vercel → *Settings → Cron Jobs*): every `defineSchedule` becomes a Vercel Cron
-  Job, evaluated in **UTC**. Expect **two**, both hourly (`0 * * * *`): the steward dispatch tick
-  and the region-materialize tick. **A third — the auditor's, at `30 * * * *` — appears only once
-  `disabled/auditor.schedule.ts` is moved into `agent/schedules/`.** If you see three and did not
-  make that decision, someone enabled a production cron in a merge; that is the thing the file
-  lives outside the agent root to prevent.
+  Job, evaluated in **UTC**. Expect **three**: the steward dispatch tick and the region-materialize
+  tick, both hourly at `0 * * * *`, and the auditor dispatch tick at `30 * * * *` — half an hour
+  behind, so citations a steward tick authors are auditable within the same hour without the two
+  writing concurrently over one map. **The auditor's cron exists whether or not you run an
+  auditor**; with no auditor credential it logs `no auditor credential on this deployment —
+  skipping tick` and returns green. That is the intended resting state for a deployment that does
+  not use one.
 - **Logs** (Vercel → *Observability → Logs*): the dispatch tick logs
   `[steward-dispatch] tick <correlation-id> starting`, then the claimed-job count (or
   `(no drift)`), then fans out. `[steward-materialize]` logs its candidate count. An unregistered
@@ -510,7 +514,7 @@ Four readings that look like failures but are not:
   **both** issuers. Read it before hand-rolling one.
 - `docs/auth/machine-token-contract.md` §C — the auditor's credential + reach constraints, and why a
   writable cogmap grant 404s every audit.
-- `packages/agent-workflows/steward/disabled/auditor.schedule.ts` — the auditor dispatcher, and the
+- `packages/agent-workflows/steward/agent/schedules/auditor.ts` — the auditor dispatcher, its
   gate list to read **before** restoring it.
 - `packages/agent-workflows/steward/agent/subagents/auditor/instructions.md` — what the auditor
   weighs, the scale, and why its work list is handed to it rather than derived.

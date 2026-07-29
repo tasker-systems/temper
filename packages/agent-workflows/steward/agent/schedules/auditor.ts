@@ -1,37 +1,44 @@
 import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION, type components } from "temper-ts";
 
-import auditorWorker from "../agent/channels/auditor-worker.js";
-import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
+import auditorWorker from "../channels/auditor-worker.js";
+import {
+  AUDITOR_CREDENTIALS,
+  auditorFetch,
+  credentialConfigured,
+  requireEnv,
+} from "../lib/temper-auth.js";
 
 /**
- * ═══ DISABLED 2026-07-25 — this file is deliberately OUTSIDE the eve agent root. ═══
+ * ═══ ENABLED 2026-07-29, after all four gates below closed and the grain fix shipped. ═══
  *
  * eve registers exactly one Vercel Cron Job per file under `agent/schedules/`
  * (`node_modules/eve/docs/schedules.mdx`: *"Each one is a single file under `agent/schedules/`
- * carrying a cron expression"*). Moving it out is therefore the only way to stop the cron
- * EXISTING. Guarding the `run` body would have left an hourly job that fires and no-ops, which is
- * still an enabled schedule — and "enabled" is the thing being withdrawn here, not "erroring".
+ * carrying a cron expression"*), so this file's LOCATION is the on/off switch. It lived outside
+ * the agent root from 2026-07-25 until now for exactly that reason.
  *
- * It sits here rather than in `agent/disabled/` because eve warns
- * `[discover/unsupported-directory]` on any unrecognized directory inside the agent root, and a
- * warning printed on every production build is noise that teaches people to skip warnings. It is
- * still typechecked — `tsconfig.json` includes this directory — so it cannot rot silently while
- * it waits.
+ * **Turning this off again means moving the file back out, not guarding `run`.** The
+ * unconfigured-skip below is not an off switch: on a deployment that HAS an auditor credential the
+ * cron fires and works. Withdrawing the capability is a `git mv` plus an operator decision, the
+ * same way restoring it was.
  *
- * **Why it was turned off.** It shipped enabled in PR #531 and began firing in production on
- * 2026-07-24T23:16Z. Every tick since died at `requireEnv("TEMPER_AUDITOR_TOKEN")` before its
- * outbound fetch — ~18 consecutive failures, unannounced, while the subsystem is still being
- * designed. The credential requirement is real (see below), documented in
- * `docs/auth/machine-token-contract.md` §C, and was never surfaced as a deploy action item:
- * `DEPLOYING.md` mentions the auditor only for its migration cutover. Enabling a scheduled agent
- * against production is an operator decision, and it was never taken.
+ * **The history this file exists to not repeat.** It shipped enabled in PR #531 and began firing in
+ * production on 2026-07-24T23:16Z. Every tick died at `requireEnv("TEMPER_AUDITOR_TOKEN")` before
+ * its outbound fetch — ~18 consecutive failures, unannounced, while the subsystem was still being
+ * designed. Two separate lessons came out of that, and both are now structural rather than
+ * remembered: enabling a production cron is an operator decision (hence the `git mv`), and an
+ * *absent* optional credential must no-op rather than fail (hence the guard in `run`). The
+ * credential requirement is real (see below), documented in
+ * `docs/auth/machine-token-contract.md` §C, and was not surfaced as a deploy action item at the
+ * time: `DEPLOYING.md` mentions the auditor only for its migration cutover.
  *
- * **This is not a fix for the credential.** Nothing here is broken in a way a token would repair.
- * FOUR independent gates stand between this file and a single audit row, and the token is only
- * the first. (This list said "three" until 2026-07-27 and omitted gate 3 — which was already
- * true when the list was written, D11 having landed five days earlier. All four are now CLOSED
- * on temperkb.io; the list is kept because restoring this file is not the only path back here.)
+ * **A configured auditor still needs all FOUR gates below.** The guard in `run` skips a deployment
+ * that has no auditor at all; it does nothing for one that has a credential and is missing a gate.
+ * Those still fail loudly, which is correct — they are misconfigurations, not absences. The token
+ * is only the first of the four. (This list said "three" until 2026-07-27 and omitted gate 3 —
+ * which was already true when the list was written, D11 having landed five days earlier. All four
+ * are CLOSED on temperkb.io; the list is kept because this instance is not the only deployment,
+ * and a fork standing up an auditor walks the same four.)
  *
  *   1. ✅ A SECOND machine principal, provisioned per `machine-token-contract.md` §C — its own IdP
  *      application, `--team <ref>:member`, and cogmap reach absent or `:ro`. Never the steward's
@@ -52,8 +59,8 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  *   4. ✅ The Set 5 migration cutover, which `DEPLOYING.md:78-86` says is non-additive and must not
  *      ride an auto-deploy of `main`. Until an operator runs it, `/api/auditor/dispatch` 500s.
  *
- * **Do not restore this file by itself — but the reason has changed, so read this rather than
- * assuming.** The trigger-model redesign is **DONE**, not in flight: task
+ * **The trigger-model redesign that once blocked this is DONE, not in flight** — recorded here
+ * because "is the trigger model settled?" is the first question anyone auditing this cron asks: task
  * `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` closed 2026-07-26 with tier 1 shipped
  * (`20260726000010_auditor_tier1_staleness.sql`, selection is `uncovered OR stale`), and tier 2 was
  * deferred onto `019f9bb3-e2cf-7710-9b90-db4ebefb8f64`, which closed 2026-07-27 retargeted onto the
@@ -75,12 +82,9 @@ import { auditorFetch, requireEnv } from "../agent/lib/temper-auth.js";
  * receives rather than by an instruction it is asked to follow — which is why the prompt below no
  * longer tells the agent anything about re-checking. There is nothing left to re-check.
  *
- * The cadence and the selection predicate below are settled. **Restoring is now purely a `git mv`
- * back into `agent/schedules/` plus an operator's decision to enable a production cron** — no
- * build item stands behind it, and it is deliberately NOT a consequence of the grain work closing.
- *
- * The auditor subagent, its channel, its tools and its instructions are all untouched and still
- * build; only the trigger is withdrawn.
+ * The cadence and the selection predicate below are settled, and no build item stands behind this
+ * cron any more. It was restored by an operator decision taken separately from the grain work
+ * landing — deliberately not as a consequence of it.
  *
  * ─────────────────────────────────────────────────────────────────────────────────────────────
  *
@@ -149,6 +153,31 @@ type ClaimedAuditJob = components["schemas"]["ClaimedAuditJob"];
 export default defineSchedule({
   cron: "30 * * * *", // hourly at :30, UTC — trailing the steward's tick; the server gates the rest
   async run({ receive, waitUntil, appAuth }) {
+    // The auditor is OPTIONAL; the steward is not. This file ships in the repo, and eve registers
+    // one Vercel Cron Job per file here — so every fork and self-hosted deploy of this agent gets
+    // this cron whether or not it runs an auditor. Without this guard each of those deployments
+    // fails hourly, forever, on a credential they never intended to set. That is not a signal, it
+    // is noise that teaches people to ignore a red cron.
+    //
+    // **This is a skip, never a fallback.** It does not widen what may authenticate as the auditor:
+    // `auditorFetch` still throws rather than borrowing the steward's credential, and
+    // `tests/auditor.test.ts` pins that. A borrowed credential would make every steward-authored
+    // finding self-authored to the auditor and collapse the adversarial premise entirely — so the
+    // fix for "unconfigured" is to not start, never to start as somebody else.
+    //
+    // Only TOTAL absence skips. A partially-configured auditor (client id set, secret missing)
+    // passes this check and then throws in `build` — deliberately, because that is a
+    // misconfiguration by someone who *meant* to run an auditor, and silence there is the far worse
+    // failure: a deployment that believes it is auditing and is not.
+    if (!credentialConfigured(AUDITOR_CREDENTIALS)) {
+      console.log(
+        "[auditor-dispatch] no auditor credential on this deployment — skipping tick. " +
+          "Set TEMPER_AUDITOR_M2M_CLIENT_ID (+ _SECRET, _TOKEN_URL) to enable it, or " +
+          "TEMPER_AUDITOR_TOKEN for local dev. This is a deliberate no-op, not a failure.",
+      );
+      return;
+    }
+
     waitUntil(
       (async () => {
         const correlationId = crypto.randomUUID();
