@@ -365,7 +365,8 @@ pub enum Commands {
         r#ref: String,
     },
 
-    /// Print the CLI version, optionally with the running binary's SHA-256.
+    /// Print the CLI version, optionally with the running binary's SHA-256 or
+    /// an offline manifest verdict.
     ///
     /// `temper --version` / `-V` (injected by clap) is the terse form. This
     /// subcommand renders a typed report through the `--format json|toon`
@@ -375,6 +376,12 @@ pub enum Commands {
         /// Also compute and print the SHA-256 of the running binary.
         #[arg(long)]
         checksum: bool,
+
+        /// Verify the installed files against the release manifest beside
+        /// them. Offline: detects corruption and drift, not an attacker who
+        /// could replace both the binary and the manifest.
+        #[arg(long)]
+        verify: bool,
     },
 
     /// Self-update the CLI to the latest release (curl-script installs only).
