@@ -20,17 +20,34 @@ set -eu
 
 REPO="tasker-systems/temper"
 REQUESTED_VERSION=""
+LOCAL_ARCHIVE=""
+LOCAL_MANIFEST=""
+# Written into INSTALL_DIR only on a successful, verified install (never on a
+# rolled-back one) — matches `MANIFEST_FILENAME` in `manifest.rs` (Task 2), so
+# `temper version --verify` reads the same file this script writes.
+MANIFEST_FILENAME=".temper-manifest.json"
 
 while [ $# -gt 0 ]; do
     case $1 in
         --version) REQUESTED_VERSION="$2"; shift 2 ;;
         --version=*) REQUESTED_VERSION="${1#*=}"; shift ;;
+        --archive) LOCAL_ARCHIVE="$2"; shift 2 ;;
+        --archive=*) LOCAL_ARCHIVE="${1#*=}"; shift ;;
+        --manifest) LOCAL_MANIFEST="$2"; shift 2 ;;
+        --manifest=*) LOCAL_MANIFEST="${1#*=}"; shift ;;
         -h|--help)
             cat <<EOF
-Usage: install.sh [--version VERSION]
+Usage: install.sh [--version VERSION] [--archive PATH] [--manifest PATH]
 
   --version VERSION   Install a specific release tag (e.g. v0.1.0).
                       Defaults to the latest release.
+  --archive PATH      Install from an already-downloaded, already-verified
+                      archive instead of downloading one. Used by
+                      \`temper update\`, which verifies provenance itself before
+                      handing the archive over.
+  --manifest PATH     Use this per-file manifest instead of fetching the
+                      published one. Required alongside --archive, since
+                      there is then no network fetch to source it from.
 EOF
             exit 0
             ;;
@@ -101,38 +118,70 @@ ARCHIVE="temper-${VERSION}-${TARGET}.tar.gz"
 URL_BASE="https://github.com/${REPO}/releases/download/${VERSION}"
 ARCHIVE_URL="${URL_BASE}/${ARCHIVE}"
 SHA_URL="${URL_BASE}/${ARCHIVE}.sha256"
+MANIFEST="temper-${VERSION}-${TARGET}.manifest.json"
+MANIFEST_URL="${URL_BASE}/${MANIFEST}"
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "  Downloading ${ARCHIVE}..."
-# A STALL detector, not a duration cap.
-#
-# `--max-time 300` was a hard wall-clock ceiling on the whole transfer. The archive now carries the
-# embedding model (~81 MB gzipped, ~99 MB total), which turns that ceiling into a minimum required
-# throughput of ~330 KB/s — below which curl exits 28, `set -eu` aborts, and `--retry` restarts from
-# byte 0 under a fresh 300 s budget, so it fails on EVERY attempt, permanently. A slow-but-working
-# connection would simply never be able to install.
-#
-# `--speed-limit`/`--speed-time` keep the original intent (a black-holed or stalled transfer fails
-# instead of hanging forever) without punishing a slow one: abort only if throughput stays under
-# 1 KB/s for 60 s straight. `-C -` resumes a partial file across retries rather than restarting.
-curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 60 \
-    --retry 2 --retry-connrefused -C - \
-    "$ARCHIVE_URL" -o "$TMPDIR/$ARCHIVE"
-curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-connrefused \
-    "$SHA_URL" -o "$TMPDIR/$ARCHIVE.sha256"
-
-echo "  Verifying checksum..."
-cd "$TMPDIR"
-if [ "$OS" = "Darwin" ]; then
-    EXPECTED=$(awk '{print $1}' "$ARCHIVE.sha256")
-    ACTUAL=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
-    [ "$EXPECTED" = "$ACTUAL" ] || { echo "error: checksum mismatch"; exit 1; }
+if [ -n "$LOCAL_ARCHIVE" ]; then
+    # Handed a pre-verified archive by `temper update`, which has already
+    # checked provenance (attestation) and integrity (manifest). Re-downloading
+    # would reopen exactly the TOCTOU gap that flag exists to close: verify one
+    # object, install another.
+    [ -f "$LOCAL_ARCHIVE" ] || { echo "error: --archive file not found: $LOCAL_ARCHIVE" >&2; exit 1; }
+    cp "$LOCAL_ARCHIVE" "$TMPDIR/$ARCHIVE"
+    echo "  Using pre-verified archive: ${LOCAL_ARCHIVE}"
 else
-    sha256sum -c "$ARCHIVE.sha256" >/dev/null
+    echo "  Downloading ${ARCHIVE}..."
+    # A STALL detector, not a duration cap.
+    #
+    # `--max-time 300` was a hard wall-clock ceiling on the whole transfer. The archive now carries the
+    # embedding model (~81 MB gzipped, ~99 MB total), which turns that ceiling into a minimum required
+    # throughput of ~330 KB/s — below which curl exits 28, `set -eu` aborts, and `--retry` restarts from
+    # byte 0 under a fresh 300 s budget, so it fails on EVERY attempt, permanently. A slow-but-working
+    # connection would simply never be able to install.
+    #
+    # `--speed-limit`/`--speed-time` keep the original intent (a black-holed or stalled transfer fails
+    # instead of hanging forever) without punishing a slow one: abort only if throughput stays under
+    # 1 KB/s for 60 s straight. `-C -` resumes a partial file across retries rather than restarting.
+    curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 60 \
+        --retry 2 --retry-connrefused -C - \
+        "$ARCHIVE_URL" -o "$TMPDIR/$ARCHIVE"
+    curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-connrefused \
+        "$SHA_URL" -o "$TMPDIR/$ARCHIVE.sha256"
+
+    echo "  Verifying checksum..."
+    cd "$TMPDIR"
+    if [ "$OS" = "Darwin" ]; then
+        EXPECTED=$(awk '{print $1}' "$ARCHIVE.sha256")
+        ACTUAL=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
+        [ "$EXPECTED" = "$ACTUAL" ] || { echo "error: checksum mismatch"; exit 1; }
+    else
+        sha256sum -c "$ARCHIVE.sha256" >/dev/null
+    fi
+    cd - >/dev/null
 fi
-cd - >/dev/null
+
+# --- Per-file manifest acquisition -------------------------------------------
+# An explicit --manifest always wins (this is what lets the test harness, and
+# a future `temper update --archive` caller who already fetched+verified one,
+# avoid a network round-trip). Absent that, a fresh download fetches the
+# published manifest alongside the archive; --archive with no --manifest has
+# no other source to draw one from, so it is a hard error rather than a
+# silent skip of per-file verification.
+if [ -n "$LOCAL_MANIFEST" ]; then
+    [ -f "$LOCAL_MANIFEST" ] || { echo "error: --manifest file not found: $LOCAL_MANIFEST" >&2; exit 1; }
+    cp "$LOCAL_MANIFEST" "$TMPDIR/$MANIFEST"
+    echo "  Using supplied manifest: ${LOCAL_MANIFEST}"
+elif [ -n "$LOCAL_ARCHIVE" ]; then
+    echo "error: --archive requires --manifest (no network fetch to source per-file verification from)" >&2
+    exit 1
+else
+    echo "  Downloading manifest..."
+    curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-connrefused \
+        "$MANIFEST_URL" -o "$TMPDIR/$MANIFEST"
+fi
 
 # INSTALL_DIR is overridable via TEMPER_INSTALL_DIR so `temper update` can aim
 # the swap at the directory the *running* binary actually lives in (which can
@@ -158,6 +207,75 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 echo "  Extracting..."
 tar -xzf "$TMPDIR/$ARCHIVE" -C "$STAGING"
+
+# --- Per-file manifest verification ------------------------------------------
+# The archive-level .sha256 (or the caller's own check, on --archive) proves
+# the ARCHIVE arrived intact; this proves each FILE inside it is the one
+# published, which is what makes "is my temper the one you shipped?" answerable
+# at all. Deliberately dependency-free (no jq): install.sh is a `curl | sh`
+# installer whose only tools are curl, tar, and shasum/sha256sum, and a
+# manifest gate that requires jq would be a regression for anyone without it.
+#
+# emit-manifest.sh (the producer) writes default jq-pretty-printed JSON, which
+# puts one key per line and preserves the `{path, sha256, size}` construction
+# order within each object — so a `path` line is always immediately followed
+# by its `sha256` line. That is what makes this awk pass tractable: no bracket
+# counting or JSON parsing, just "remember the last path, emit on sha256".
+sha_of_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+manifest_pairs() {
+    awk '
+        /"path":/ {
+            p = $0
+            sub(/^[^"]*"path": *"/, "", p)
+            sub(/".*$/, "", p)
+            path = p
+            next
+        }
+        /"sha256":/ {
+            s = $0
+            sub(/^[^"]*"sha256": *"/, "", s)
+            sub(/".*$/, "", s)
+            printf "%s\t%s\n", path, s
+        }
+    ' "$1"
+}
+
+# Checks every file the manifest lists against $1 (a directory). Runs the
+# whole list before returning, so a single invocation reports every mismatch
+# rather than just the first. Returns non-zero if anything failed.
+verify_manifest_against_dir() {
+    CHECK_DIR="$1"
+    CHECK_FAILED=0
+    while IFS="$(printf '\t')" read -r REL EXPECTED_SHA; do
+        [ -n "$REL" ] || continue
+        if [ ! -f "$CHECK_DIR/$REL" ]; then
+            echo "error: manifest lists $REL but it is missing from $CHECK_DIR" >&2
+            CHECK_FAILED=1
+            continue
+        fi
+        ACTUAL_SHA=$(sha_of_file "$CHECK_DIR/$REL")
+        if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "error: $REL has sha256 $ACTUAL_SHA, expected $EXPECTED_SHA" >&2
+            CHECK_FAILED=1
+        fi
+    done <<EOF
+$(manifest_pairs "$TMPDIR/$MANIFEST")
+EOF
+    [ "$CHECK_FAILED" -eq 0 ]
+}
+
+echo "  Verifying file manifest..."
+if ! verify_manifest_against_dir "$STAGING"; then
+    echo "error: file manifest verification failed; your existing install was left untouched." >&2
+    exit 1
+fi
 
 # --- Verification gate -------------------------------------------------------
 # Prove the new binary runs on THIS host BEFORE disturbing the live install. A
@@ -202,11 +320,16 @@ else
     exit 1
 fi
 
-# Re-point the symlink, then confirm the LIVE binary runs before discarding the
-# backup. Only now — after the on-disk install is proven good — is OLD dropped.
-# If the live check fails, roll all the way back to the preserved backup.
+# Re-point the symlink, then confirm the LIVE binary runs AND still matches the
+# manifest before discarding the backup. Only now — after the on-disk install
+# is proven good — is OLD dropped, and only now is the manifest written into
+# INSTALL_DIR: a rolled-back install must never leave a manifest describing an
+# install that is no longer there. If either check fails, roll all the way
+# back to the preserved backup through the same machinery as the run-gate
+# failure above — no second rollback path.
 ln -sf "$INSTALL_DIR/temper" "$BIN_DIR/temper"
-if "$INSTALL_DIR/temper" --version >/dev/null 2>&1; then
+if "$INSTALL_DIR/temper" --version >/dev/null 2>&1 && verify_manifest_against_dir "$INSTALL_DIR"; then
+    cp "$TMPDIR/$MANIFEST" "$INSTALL_DIR/$MANIFEST_FILENAME"
     rm -rf "$OLD"
 else
     echo "error: the installed binary failed its post-install check; rolling back..." >&2

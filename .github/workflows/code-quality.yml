@@ -172,6 +172,16 @@ jobs:
       - name: Guard test — check-ts-rs-drift
         run: bash .github/scripts/test-check-ts-rs-drift.sh
 
+      # Release-integrity harnesses. emit-manifest produces the per-file manifest the CLI parses;
+      # test-install drives install.sh with a locally-built archive. Both are pure bash and belong
+      # here for the same reason as the rest: a manifest generator that silently emitted constant
+      # hashes, or an installer that stopped verifying, would leave every other check green.
+      - name: Guard test — emit-manifest
+        run: bash .github/scripts/test-emit-manifest.sh
+
+      - name: Guard test — install.sh
+        run: bash scripts/install/test-install.sh
+
   typescript-quality:
     name: TypeScript Quality
     runs-on: ubuntu-latest
