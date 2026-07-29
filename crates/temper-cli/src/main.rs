@@ -183,6 +183,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 }
                 ResourceAction::List {
                     r#type,
+                    tag,
                     context,
                     cogmap,
                     limit,
@@ -198,7 +199,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 } => temper_cli::commands::resource::list(
                     &config,
                     temper_cli::commands::resource::ListParams {
-                        doc_type: &r#type,
+                        doc_type: r#type.as_deref(),
+                        tag: &tag,
                         context: context.as_deref(),
                         cogmap: &cogmap,
                         limit,

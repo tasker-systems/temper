@@ -4118,6 +4118,18 @@
             }
           },
           {
+            "name": "tags",
+            "in": "query",
+            "description": "Tag filter: a comma-separated list of tags. Returns only resources whose `open_meta.tags`\ncontains **every** tag listed (AND, so each added tag narrows — the same direction every\nother filter here composes in). Matching is exact per tag and **case-insensitive**: the\nfold happens receive-side in `filtered_visible_page`, so the CLI, MCP and raw HTTP cannot\ndisagree about it.\n\nA CSV string rather than a `Vec` for the same reason as `cogmap_ids`: the list endpoint is a\nGET whose params ride the query string (serde_urlencoded, which does not encode sequences).\nNo tag in the corpus contains a comma (verified against production, 580 distinct tags), and\na tag containing one cannot be expressed through this transport — which is a constraint on\nthe tag vocabulary, not a silent truncation: the split is on `,` and each piece is trimmed.\n\nUnlike `stage` (task-only) and `status` (goal-only), tags are **not** doc-type-scoped — 14\ndoc types carry them in production. So there is deliberately no mismatched-filter refusal\nfor this field; pairing it with any `doc_type_name`, or with none, is meaningful.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "cogmap_ids",
             "in": "query",
             "description": "Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in\none of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.\nA CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the\nquery string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each\n`--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.",

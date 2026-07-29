@@ -7,7 +7,7 @@
 //! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
 //! is unqualified against the one schema (the connection carries the search_path).
 //!
-//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/status/owner/`q`-title), sort, and paginate the
+//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/status/tags/owner/`q`-title), sort, and paginate the
 //! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
 //! to a context UUID before filtering so bare names are rejected (spec Decision 1). Full-text/vector `q`
 //! on the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
@@ -96,7 +96,7 @@ fn validate_goal_status(value: &str) -> ApiResult<()> {
 }
 
 /// Resolve the visible set, apply the `ResourceListParams` filters (context_ref /
-/// doc_type_name / stage / status / owner / `q` title-match) + sort + pagination IN SQL, and
+/// doc_type_name / stage / status / tags / owner / `q` title-match) + sort + pagination IN SQL, and
 /// return only the page's ids (so the caller reconstructs the page, not every visible
 /// row — this also fixes the prior all-rows N+1).
 ///
@@ -167,6 +167,30 @@ async fn filtered_visible_page(
     if let Some(status) = params.status.as_deref() {
         validate_goal_status(status)?;
     }
+    // Tag filter: CSV → lowercased, trimmed, deduped `text[]`. The case fold lives HERE and only
+    // here, so the CLI, MCP and raw HTTP cannot disagree about whether `CI` and `ci` are one tag.
+    // (Production carries six pairs that differ only by case — authn/AuthN, ci/CI, cli/CLI,
+    // authz/AuthZ, vercel/Vercel, pr-482/PR-482 — so this is a live distinction, not a hypothetical.)
+    //
+    // Deduping matters for the containment predicate below only as hygiene, but trimming does not:
+    // `--tag a --tag b` arrives as "a,b" and a caller writing "a, b" must not be asking for " b".
+    //
+    // An empty CSV (or one that trims away entirely) is `None` — no filter — rather than an empty
+    // array. `text[] @> '{}'` is TRUE for every row, so binding the empty array would turn a
+    // caller's "" into a silent full scan; treating it as absent is the same outcome, honestly named.
+    let tag_filter: Option<Vec<String>> = match params.tags.as_deref() {
+        Some(csv) => {
+            let mut tags: Vec<String> = csv
+                .split(',')
+                .map(|t| t.trim().to_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect();
+            tags.sort();
+            tags.dedup();
+            (!tags.is_empty()).then_some(tags)
+        }
+        None => None,
+    };
     let sort = params.sort.unwrap_or_default();
     let dir = match params.order.unwrap_or_default() {
         SortOrder::Asc => "ASC",
@@ -212,6 +236,26 @@ async fn filtered_visible_page(
             AND ($10::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($10)
                  AND cogmap_readable_by_profile($1, h.anchor_id)))
             AND ($11::text IS NULL OR wp.status = $11)
+            -- Tag filter. A correlated subquery in the same idiom as the goal filter above,
+            -- rather than a join: tags live in `kb_properties` as a JSONB ARRAY under the single
+            -- key `tags`, not as a column on the `kb_resource_workflow_props` pivot (which holds
+            -- one scalar per key). So this cannot be a sixth pivot column the way `status` was.
+            --
+            -- `text[] @> text[]` is containment, which IS the AND semantics: the row matches when
+            -- its tag set contains every requested tag. Both sides are lowercased — the bind is
+            -- folded in Rust, the row's tags by `lower(t)` here — so the match is case-insensitive
+            -- with one fold on each side and no `lower()` on the bind at query time.
+            --
+            -- A resource with no `tags` property aggregates to NULL, and `NULL @> $12` is NULL,
+            -- so it is correctly excluded. Three production resources carry `tags: []`; they
+            -- aggregate to the empty array and are likewise excluded for any non-empty filter.
+            AND ($12::text[] IS NULL OR (
+                  SELECT coalesce(array_agg(DISTINCT lower(t)), '{{}}')
+                    FROM kb_properties tp
+                    CROSS JOIN LATERAL jsonb_array_elements_text(tp.property_value) AS t
+                   WHERE tp.owner_table = 'kb_resources' AND tp.owner_id = r.id
+                     AND tp.property_key = 'tags' AND NOT tp.is_folded
+                ) @> $12)
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -230,6 +274,7 @@ async fn filtered_visible_page(
         .bind(super::db_backend::GOAL_EDGE_LABEL)
         .bind(cogmap_ids)
         .bind(params.status.as_deref())
+        .bind(tag_filter.as_deref())
         .fetch_all(pool)
         .await
         .map_err(api_err)?;

@@ -255,6 +255,23 @@ pub struct ResourceListParams {
     /// query. `None` = no goal filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<Uuid>,
+    /// Tag filter: a comma-separated list of tags. Returns only resources whose `open_meta.tags`
+    /// contains **every** tag listed (AND, so each added tag narrows — the same direction every
+    /// other filter here composes in). Matching is exact per tag and **case-insensitive**: the
+    /// fold happens receive-side in `filtered_visible_page`, so the CLI, MCP and raw HTTP cannot
+    /// disagree about it.
+    ///
+    /// A CSV string rather than a `Vec` for the same reason as `cogmap_ids`: the list endpoint is a
+    /// GET whose params ride the query string (serde_urlencoded, which does not encode sequences).
+    /// No tag in the corpus contains a comma (verified against production, 580 distinct tags), and
+    /// a tag containing one cannot be expressed through this transport — which is a constraint on
+    /// the tag vocabulary, not a silent truncation: the split is on `,` and each piece is trimmed.
+    ///
+    /// Unlike `stage` (task-only) and `status` (goal-only), tags are **not** doc-type-scoped — 14
+    /// doc types carry them in production. So there is deliberately no mismatched-filter refusal
+    /// for this field; pairing it with any `doc_type_name`, or with none, is meaningful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<String>,
     /// Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in
     /// one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set.
     /// A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the

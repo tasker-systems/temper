@@ -1093,7 +1093,8 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
             temper_cli::commands::resource::list(
                 &cli_config,
                 temper_cli::commands::resource::ListParams {
-                    doc_type: "session",
+                    doc_type: Some("session"),
+                    tag: &[],
                     context: Some("@me/myapp"),
                     cogmap: &[],
                     limit: Some(20),

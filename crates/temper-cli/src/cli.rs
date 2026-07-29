@@ -481,11 +481,19 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
-    /// List resources of a given type
+    /// List resources, optionally of a given type
     List {
-        /// Resource type (task, goal, session, research, concept, decision)
+        /// Resource type (task, goal, session, research, concept, decision).
+        /// Optional — omit to list across every doc type, which is what makes a
+        /// cross-type axis like `--tag` answerable in one call.
         #[arg(long)]
-        r#type: String,
+        r#type: Option<String>,
+        /// Filter by tag (repeatable). `--tag a --tag b` returns resources carrying
+        /// BOTH — each added tag narrows. Matching is exact and case-insensitive.
+        /// Not doc-type-scoped: tags span every doc type, so this composes with
+        /// `--type` or stands alone.
+        #[arg(long = "tag")]
+        tag: Vec<String>,
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,

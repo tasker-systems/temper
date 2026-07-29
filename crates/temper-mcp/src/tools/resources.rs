@@ -186,6 +186,12 @@ pub struct ListResourcesInput {
     /// Meaningful only for `doc_type_name = "goal"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Filter by tag. Returns resources carrying **every** tag listed (AND — each added tag
+    /// narrows). Matching is exact per tag and case-insensitive. Unlike `stage` and `status`,
+    /// tags are NOT doc-type-scoped — 14 doc types carry them — so this composes with any
+    /// `doc_type_name`, or with none, to enumerate a whole axis in one call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     /// Filter by goal: a ref (UUID or decorated `slug-<uuid>`) of a goal resource. Returns only
     /// resources linked to it via a live `advances`→goal edge (task-only in practice).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -894,6 +900,26 @@ pub async fn list_resources(
         _ => None,
     };
 
+    // Join the tag list into the CSV the list params carry (same transport constraint as
+    // `cogmap_ids`). A tag containing a comma is refused rather than split: over this wire it
+    // would silently become two tags and return a narrower set than asked for. Case folding and
+    // trimming are the server's job (`filtered_visible_page`), so this door cannot disagree with
+    // the CLI about what matches.
+    let tags: Option<String> = match input.tags.as_deref() {
+        Some(list) if !list.is_empty() => {
+            for t in list {
+                if t.contains(',') {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!("bad tag {t:?}: a tag may not contain a comma"),
+                        None,
+                    ));
+                }
+            }
+            Some(list.join(","))
+        }
+        _ => None,
+    };
+
     // Build list params — context_ref is resolved server-side by filtered_visible_page;
     // bare context names are rejected there (spec Decision 1).
     let params = temper_workflow::types::resource::ResourceListParams {
@@ -901,6 +927,7 @@ pub async fn list_resources(
         doc_type_name: input.doc_type_name.clone(),
         stage: input.stage.clone(),
         status: input.status.clone(),
+        tags,
         goal: goal.map(uuid::Uuid::from),
         cogmap_ids,
         limit: input.limit.or(Some(50)).map(|l| l.min(200)),
@@ -1635,6 +1662,7 @@ mod fields_projection_tests {
             doc_type_name: None,
             stage: None,
             status: None,
+            tags: None,
             goal: None,
             cogmap: None,
             limit: None,
@@ -1660,6 +1688,28 @@ mod fields_projection_tests {
         .expect("stage and status must deserialize from the MCP wire shape");
         assert_eq!(input.stage.as_deref(), Some("in-progress"));
         assert_eq!(input.status.as_deref(), Some("active"));
+    }
+
+    /// MCP takes `tags` as a LIST, not the CSV the HTTP layer carries.
+    ///
+    /// The wire shapes diverge on purpose: the list endpoint is a GET whose params ride the
+    /// query string (serde_urlencoded encodes no sequences), so the CSV is a transport
+    /// constraint of *that* door — not a shape to propagate to a JSON-RPC caller that can send
+    /// an array natively. The join to CSV happens inside the tool. Constructed via the
+    /// deserializer so this pins the wire name an MCP caller actually sends.
+    #[test]
+    fn list_resources_input_accepts_a_tag_list() {
+        let input: ListResourcesInput = serde_json::from_value(serde_json::json!({
+            "tags": ["ci", "security"],
+        }))
+        .expect("tags must deserialize as a list from the MCP wire shape");
+        assert_eq!(
+            input.tags.as_deref(),
+            Some(["ci".to_string(), "security".to_string()].as_slice())
+        );
+        // And no doc_type_name is required alongside it — tags are not doc-type-scoped, which
+        // is what lets one call enumerate an axis that spans 14 doc types.
+        assert_eq!(input.doc_type_name, None);
     }
 
     #[test]
