@@ -168,11 +168,24 @@ async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiRes
         return Ok(profile);
     }
 
-    // 5: brand new profile + auth link, then provision its emitter entities and
-    // default context.
-    let (profile_id, handle) = create_new_profile_and_link(pool, claims).await?;
-    let mut conn = pool.acquire().await?;
-    provision_profile_entities(&mut conn, profile_id, &handle).await?;
+    // 5: brand new profile + auth link, then provision its emitter entities and default context —
+    // in ONE transaction, so an interrupted registration leaves no profile at all.
+    //
+    // These were two auto-committing statements on separate connections. The profile, its auth link
+    // and its standing committed first; if the `acquire` or the provisioning then failed — pool
+    // exhaustion, a transient blip — the request 500'd but the profile SURVIVED with zero
+    // `kb_entities`. Step 1 above then found the auth link on every retry and returned early, so
+    // provisioning never ran again: the profile could sign in, could link Slack (a plain INSERT
+    // needing no emitter), and 500'd on any evented write, with no path back.
+    // `20260716000020_backfill_legacy_profile_emitters.sql` exists because two production profiles
+    // reached exactly that state; it repaired the instances without closing the path that makes them.
+    //
+    // This is the shared site for BOTH human doors — OAuth via `auth::authenticate` and SAML via
+    // `auth::resolve_federated_human` — so the transaction covers both.
+    let mut tx = pool.begin().await?;
+    let (profile_id, handle) = create_new_profile_and_link(&mut tx, claims).await?;
+    provision_profile_entities(&mut tx, profile_id, &handle).await?;
+    tx.commit().await?;
 
     get_by_id(pool, ProfileId::from(profile_id)).await
 }
@@ -386,12 +399,18 @@ async fn create_link_for_existing_profile(
 
 /// Phase 5a: create a brand-new profile and its default auth link. Returns the
 /// new profile id and the generated handle (the latter feeds emitter provisioning).
+///
+/// Takes a connection, not the pool, so the caller can run it and Phase 5b in ONE transaction —
+/// a profile that commits without its emitter entities is permanently stranded (see the caller).
+/// Every write below must therefore stay on `conn`; reaching for the pool for any one of them
+/// (most temptingly `standing_service::provision`) puts that write outside the transaction and
+/// restores the bug in a form a rollback no longer covers.
 async fn create_new_profile_and_link(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     claims: &AuthClaims,
 ) -> ApiResult<(Uuid, String)> {
     let display_name = claims.email.split('@').next().unwrap_or("user").to_string();
-    let handle = generate_profile_handle(pool, &display_name).await?;
+    let handle = generate_profile_handle_conn(&mut *conn, &display_name).await?;
 
     let profile_id = Uuid::now_v7();
 
@@ -406,7 +425,7 @@ async fn create_new_profile_and_link(
         &display_name,
         &claims.email as &str,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     let auth_link_id = Uuid::now_v7();
@@ -423,7 +442,7 @@ async fn create_new_profile_and_link(
         &claims.email as &str,
         claims.email_verified == Some(true),
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     // D11 — every door births Denied. THIS IS THE SHARED SITE for both human doors (SAML via
@@ -432,8 +451,10 @@ async fn create_new_profile_and_link(
     // design the doors had to DIVERGE here, and a constant at this site would have been permissive
     // and silent — every signup born approved, with nothing to notice. Approval is a separate,
     // admin-authored act.
-    crate::services::standing_service::provision(
-        pool,
+    // `provision_conn`, NOT `provision` — the pool-taking twin writes on a different connection
+    // and would commit this standing row even when the surrounding transaction rolls back.
+    crate::services::standing_service::provision_conn(
+        &mut *conn,
         temper_core::types::ids::ProfileId::from(profile_id),
         temper_principal::Provisioner::OauthFirstLogin,
     )
@@ -1219,6 +1240,99 @@ mod tests {
             emitter_count(&pool, profile_id).await,
             Surface::ALL.len() as i64,
             "concurrent provisioning must yield exactly one emitter per surface",
+        );
+    }
+
+    async fn count_by_profile(pool: &PgPool, table: &str, profile_id: Uuid) -> i64 {
+        // The column is `id` on kb_profiles and `profile_id` everywhere else.
+        let column = if table == "kb_profiles" {
+            "id"
+        } else {
+            "profile_id"
+        };
+        sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE {column} = $1"))
+            .bind(profile_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|e| panic!("count {table}: {e}"))
+    }
+
+    /// The stranding bite test. Step 5 of `resolve_human_from_claims` used to be two
+    /// auto-committing statements on separate connections, so a failure *after* the profile
+    /// committed left it behind with zero `kb_entities` — and step 1's link lookup then
+    /// short-circuited every retry, so provisioning never ran again and the profile was stranded
+    /// for good.
+    ///
+    /// Rolling the transaction back stands in for "the request died after the profile was
+    /// created". What makes this a guard rather than a tautology is the STANDING assertion: the
+    /// realistic regression is someone reaching for the pool-taking `standing_service::provision`
+    /// (or `generate_profile_handle`, or a bare `.execute(pool)`) inside this transaction. Such a
+    /// write lands on a different connection and SURVIVES this rollback, so the standing row would
+    /// outlive the profile it describes and this test would go red naming it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_interrupted_registration_leaves_no_stranded_profile(pool: PgPool) {
+        let claims = human_claims("auth0|interrupted-registration", "stranded@example.com");
+
+        let mut tx = pool.begin().await.expect("begin");
+        let (profile_id, handle) = create_new_profile_and_link(&mut tx, &claims)
+            .await
+            .expect("create profile and link");
+        provision_profile_entities(&mut tx, profile_id, &handle)
+            .await
+            .expect("provision entities");
+
+        // The interruption: real work, and then no commit.
+        tx.rollback().await.expect("rollback");
+
+        for table in [
+            "kb_profiles",
+            "kb_profile_auth_links",
+            "kb_entities",
+            "kb_principal_standing",
+        ] {
+            assert_eq!(
+                count_by_profile(&pool, table, profile_id).await,
+                0,
+                "an interrupted registration must leave no {table} row — a profile that survives \
+                 without its emitters can never be healed, because the auth-link lookup makes \
+                 every retry return early",
+            );
+        }
+    }
+
+    /// The other half of the acceptance: the already-working path is unchanged. A first sign-in
+    /// still lands a fully provisioned profile — every surface emitter, plus the D11 standing row
+    /// every mint door births — now committed together rather than in sequence.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_first_sign_in_commits_profile_entities_and_standing_together(pool: PgPool) {
+        let claims = human_claims("auth0|first-sign-in", "newcomer@example.com");
+
+        let profile = resolve_from_claims(&pool, &claims)
+            .await
+            .expect("first sign-in resolves a profile");
+
+        assert_eq!(
+            emitter_count(&pool, profile.id).await,
+            Surface::ALL.len() as i64,
+            "a first sign-in must provision one emitter per surface",
+        );
+        assert_eq!(
+            count_by_profile(&pool, "kb_principal_standing", profile.id).await,
+            1,
+            "D11 — every mint door births standing",
+        );
+
+        // Signing in again is the early-return path (step 1), which must create nothing further.
+        let again = resolve_from_claims(&pool, &claims)
+            .await
+            .expect("second sign-in resolves the same profile");
+        assert_eq!(
+            again.id, profile.id,
+            "the second sign-in must not mint anew"
+        );
+        assert_eq!(
+            emitter_count(&pool, profile.id).await,
+            Surface::ALL.len() as i64,
         );
     }
 
