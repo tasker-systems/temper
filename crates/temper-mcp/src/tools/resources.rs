@@ -684,11 +684,11 @@ pub async fn create_resource(
                 .to_string(),
             None,
         ),
-        TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
-            "Context or doc_type not found. Use create_context / list_doc_types to verify."
-                .to_string(),
-            None,
-        ),
+        // Carry the service's message. The constant this replaced named the context and the
+        // doc_type — but a create also fails when `goal` resolves to nothing, and that refusal
+        // then arrived as "verify your context and doc_type", sending the caller to check two
+        // things that were never wrong. Naming one cause is worse than naming none.
+        TemperError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
@@ -846,8 +846,8 @@ pub async fn resource_lineage(
     )
     .await
     .map_err(|e| match e {
-        temper_services::error::ApiError::NotFound => {
-            rmcp::ErrorData::invalid_params("resource not found or not readable".to_string(), None)
+        temper_services::error::ApiError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(msg, None)
         }
         other => rmcp::ErrorData::internal_error(format!("lineage read failed: {other}"), None),
     })?;
@@ -916,13 +916,9 @@ pub async fn list_resources(
             temper_services::error::ApiError::BadRequest(msg) => {
                 rmcp::ErrorData::invalid_params(msg, None)
             }
-            temper_services::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
-                format!(
-                    "unknown filter: context_ref {:?} not found or not visible",
-                    input.context_ref
-                ),
-                None,
-            ),
+            temper_services::error::ApiError::NotFound(msg) => {
+                rmcp::ErrorData::invalid_params(format!("unknown filter: {msg}"), None)
+            }
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
             }

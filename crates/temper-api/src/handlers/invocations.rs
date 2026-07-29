@@ -126,7 +126,7 @@ pub async fn show(
         id,
     )
     .await?
-    .ok_or(ApiError::NotFound)?;
+    .ok_or_else(|| ApiError::NotFound("invocation not found or not readable".to_string()))?;
     Ok(Json(view))
 }
 

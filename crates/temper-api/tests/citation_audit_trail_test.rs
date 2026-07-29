@@ -412,33 +412,58 @@ async fn unreadable_finding_is_not_found_exactly_as_evidence_is(pool: PgPool) {
 
     let stranger = common::seed_profile(&pool, "stranger").await;
 
-    let trail =
-        list_citation_audits(&pool, ProfileId::from(stranger), ResourceId::from(goal)).await;
-    assert!(
-        matches!(trail, Err(ApiError::NotFound)),
-        "an existing but unreadable finding is NotFound, never an empty 200: {trail:?}"
+    /// The rendered refusal, or a panic naming what came back instead.
+    ///
+    /// **The status is no longer the whole signal.** `ApiError::NotFound` carries a message now,
+    /// so "same status" is a strictly weaker claim than this test's own premise — two refusals
+    /// agreeing on 404 while disagreeing on their message are still diffable, and the oracle is
+    /// back. Every refusal below is compared as a *string*, which is why the four are pinned to a
+    /// single shared constant (`authz::audit_gate::FINDING_REFUSAL`) rather than written out four
+    /// times.
+    fn refusal<T: std::fmt::Debug>(r: Result<T, ApiError>, what: &str) -> String {
+        match r {
+            Err(ApiError::NotFound(msg)) => msg,
+            other => panic!("{what} must refuse with NotFound; got {other:?}"),
+        }
+    }
+
+    let trail = refusal(
+        list_citation_audits(&pool, ProfileId::from(stranger), ResourceId::from(goal)).await,
+        "an existing but unreadable finding's trail (never an empty 200)",
     );
-    let evidence = resource_evidence(&pool, stranger, goal).await;
-    assert!(
-        matches!(evidence, Err(ApiError::NotFound)),
-        "the sibling read refuses identically — same status, no diffable signal: {evidence:?}"
+    let evidence = refusal(
+        resource_evidence(&pool, stranger, goal).await,
+        "the sibling evidence read",
     );
 
     let absent_id = Uuid::now_v7();
-    let absent_trail = list_citation_audits(
-        &pool,
-        ProfileId::from(stranger),
-        ResourceId::from(absent_id),
-    )
-    .await;
-    assert!(
-        matches!(absent_trail, Err(ApiError::NotFound)),
-        "an absent finding is NotFound too: {absent_trail:?}"
+    let absent_trail = refusal(
+        list_citation_audits(
+            &pool,
+            ProfileId::from(stranger),
+            ResourceId::from(absent_id),
+        )
+        .await,
+        "an absent finding's trail",
     );
-    let absent_evidence = resource_evidence(&pool, stranger, absent_id).await;
-    assert!(
-        matches!(absent_evidence, Err(ApiError::NotFound)),
-        "…and so is it on /evidence: {absent_evidence:?}"
+    let absent_evidence = refusal(
+        resource_evidence(&pool, stranger, absent_id).await,
+        "an absent finding on /evidence",
+    );
+
+    // The equivalence class, asserted rather than assumed. Unreadable and absent, trail and
+    // evidence: four refusals, one string. If any one of them ever names its own cause, a prober
+    // diffs these four and learns which of "no such finding" and "exists but not yours" applies.
+    assert_eq!(
+        [&trail, &evidence, &absent_trail, &absent_evidence]
+            .map(String::as_str)
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        1,
+        "all four refusals must be byte-identical, not merely both 404: \
+         unreadable-trail {trail:?}, unreadable-evidence {evidence:?}, \
+         absent-trail {absent_trail:?}, absent-evidence {absent_evidence:?}"
     );
 
     // And the owner still reads it, so the deny above is the gate working, not the fixture failing.

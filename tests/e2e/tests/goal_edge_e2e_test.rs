@@ -15,20 +15,15 @@ use temper_core::types::ingest::{pack_chunks, IngestPayload};
 use temper_workflow::types::resource::{ResourceListParams, ResourceUpdateRequest};
 use uuid::Uuid;
 
-/// Seed a resource via the API client, optionally linked to a goal id. Returns the
-/// created resource id.
-async fn seed(
-    client: &temper_client::TemperClient,
-    context: &str,
-    doc_type: &str,
-    slug: &str,
-    goal: Option<Uuid>,
-) -> Uuid {
+/// Build the create payload. Shared by [`seed`] (which expects success) and [`try_seed`]
+/// (which hands the caller the raw `Result`), so the failure path exercises the *same*
+/// payload shape the success path does rather than a bespoke one.
+fn seed_payload(context: &str, doc_type: &str, slug: &str, goal: Option<Uuid>) -> IngestPayload {
     let mut managed = serde_json::Map::new();
     managed.insert("temper-mode".to_string(), serde_json::json!("build"));
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
 
-    let payload = IngestPayload {
+    IngestPayload {
         segmented: None,
         title: format!("Goal e2e {slug}"),
         origin_uri: format!("kb://{context}/{doc_type}/{slug}"),
@@ -44,10 +39,33 @@ async fn seed(
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
         sources: Vec::new(),
-    };
-    let row = client
+    }
+}
+
+/// Attempt a create and hand back the raw client result, errors included.
+async fn try_seed(
+    client: &temper_client::TemperClient,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+    goal: Option<Uuid>,
+) -> temper_client::error::Result<temper_workflow::types::resource::ResourceRow> {
+    client
         .ingest()
-        .create(&payload)
+        .create(&seed_payload(context, doc_type, slug, goal))
+        .await
+}
+
+/// Seed a resource via the API client, optionally linked to a goal id. Returns the
+/// created resource id.
+async fn seed(
+    client: &temper_client::TemperClient,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+    goal: Option<Uuid>,
+) -> Uuid {
+    let row = try_seed(client, context, doc_type, slug, goal)
         .await
         .expect("seed resource via client");
     Uuid::from(row.id)
@@ -259,5 +277,46 @@ async fn goal_create_list_update_clear_roundtrip(pool: sqlx::PgPool) {
         tasks_for_goal(&app.client, context_id, goal).await,
         vec!["linked"],
         "update --clear-goal must fold the edge and drop the resource from the set"
+    );
+}
+
+/// A `--goal` naming a resource that does not exist must fail with an error that **names the
+/// goal ref**, out at the caller — not merely somewhere inside the server.
+///
+/// This assertion sits deliberately at a level a backend-level one does not. PR #566 shipped
+/// `check_goal_linkable` writing exactly that message, guarded by a test in
+/// `temper-api/tests/goal_edge_projection_test.rs` asserting on `err.to_string()` from
+/// `backend.create_resource(...)` — the `DbBackend` **directly**, never crossing HTTP. At that
+/// level the message is intact, so the assertion passed honestly and said nothing about what a
+/// caller sees. Downstream, three layers discarded it and the CLI printed `unknown not found`.
+///
+/// So this drives the real wire (`temper-client` → `temper-api`) and then the CLI's single
+/// lifter, `client_err_to_temper` — the function that produces the string a user actually reads.
+/// The count assertion in the sibling backend test was always at the right level and stays
+/// there; it is only the *message* half that needed moving out here.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_failed_goal_link_names_the_goal_at_the_caller(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("goalnames", None)
+        .await
+        .expect("create goalnames context");
+
+    let missing = Uuid::now_v7();
+    let err = try_seed(&app.client, "goalnames", "task", "orphan", Some(missing))
+        .await
+        .expect_err("a goal that resolves to nothing must fail the create");
+
+    let rendered = temper_cli::actions::runtime::client_err_to_temper(err).to_string();
+
+    assert!(
+        rendered.contains(&missing.to_string()),
+        "the error a caller reads must name the unresolvable goal ref; got {rendered:?}"
     );
 }

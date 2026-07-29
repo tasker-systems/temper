@@ -227,10 +227,7 @@ pub async fn cogmap_show(
         cogmap_service::show_visible(&svc.api_state.pool, ProfileId::from(profile.id), cogmap_id)
             .await
             .map_err(|e| match e {
-                ApiError::NotFound => rmcp::ErrorData::invalid_params(
-                    "cognitive map not found or not readable".to_string(),
-                    None,
-                ),
+                ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
                 other => {
                     rmcp::ErrorData::internal_error(format!("cogmap_show failed: {other}"), None)
                 }
@@ -368,10 +365,9 @@ pub async fn cogmap_materialize(
                 "cogmap_materialize: cannot author this cognitive map".to_string(),
                 None,
             ),
-            TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
-                "cogmap_materialize: cognitive map not found".to_string(),
-                None,
-            ),
+            TemperError::NotFound(msg) => {
+                rmcp::ErrorData::invalid_params(format!("cogmap_materialize: {msg}"), None)
+            }
             other => rmcp::ErrorData::internal_error(format!("cogmap_materialize: {other}"), None),
         })?;
 

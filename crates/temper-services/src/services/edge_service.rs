@@ -46,7 +46,9 @@ pub async fn list_resource_edges(
     .await?;
 
     if !visible {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "resource not found or not readable".to_string(),
+        ));
     }
 
     let edges = sqlx::query_as::<_, GraphEdgeRow>(
@@ -113,7 +115,9 @@ pub async fn list_edge_facets(
     .await?;
 
     if !visible {
-        return Err(ApiError::NotFound);
+        return Err(ApiError::NotFound(
+            "edge not found or not readable".to_string(),
+        ));
     }
 
     // Attribution is joined here rather than left to the caller: the edge's own trail cannot

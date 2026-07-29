@@ -5,8 +5,18 @@ use utoipa::ToSchema;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
-    #[error("Not found")]
-    NotFound,
+    /// Renders as the bare message, with no `Not found:` prefix — unlike `BadRequest` and
+    /// `Conflict`, whose prefixes double up by the time the client re-renders them. The payload
+    /// is the whole sentence (`goal <id> not found or not readable`), so a caller reads one
+    /// clause rather than a label stacked on a label.
+    ///
+    /// **Where `NotFound` stands in for `Forbidden`, the message must not confirm existence.**
+    /// Several gates return 404 deliberately so a probe cannot become an existence oracle over
+    /// subjects the caller has no standing to see. Those sites render through
+    /// `ScopedAuthority::denial` (`crate::authz`), which is static and argument-free and so
+    /// *cannot* name the subject even by accident — see the note on that method.
+    #[error("{0}")]
+    NotFound(String),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Forbidden")]
@@ -70,7 +80,7 @@ pub struct ErrorDetail {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {
-            ApiError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             ApiError::SystemAccessRequired { .. } => {
@@ -93,7 +103,7 @@ impl IntoResponse for ApiError {
         let status_code = status.as_u16();
 
         match &self {
-            ApiError::NotFound => {
+            ApiError::NotFound(_) => {
                 tracing::debug!(status_code, error_code = code, %message, "not found");
             }
             ApiError::Conflict(_) => {
@@ -137,7 +147,7 @@ impl IntoResponse for ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(err: sqlx::Error) -> Self {
         match &err {
-            sqlx::Error::RowNotFound => ApiError::NotFound,
+            sqlx::Error::RowNotFound => ApiError::NotFound("not found".to_string()),
             sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
                 ApiError::Conflict("Resource already exists".to_string())
             }
@@ -159,7 +169,7 @@ impl From<ApiError> for temper_core::error::TemperError {
     fn from(err: ApiError) -> Self {
         use temper_core::error::{CliAccessDetails, TemperError};
         match err {
-            ApiError::NotFound => TemperError::NotFound("resource not found".to_string()),
+            ApiError::NotFound(s) => TemperError::NotFound(s),
             ApiError::Forbidden => TemperError::Forbidden,
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
@@ -186,7 +196,7 @@ impl From<temper_core::error::TemperError> for ApiError {
 
         match err {
             // Clean cases that mirror the inbound conversion
-            TemperError::NotFound(_) => ApiError::NotFound,
+            TemperError::NotFound(s) => ApiError::NotFound(s),
             TemperError::Forbidden => ApiError::Forbidden,
             TemperError::Unauthorized(s) => ApiError::Unauthorized(s),
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
@@ -230,13 +240,6 @@ impl From<temper_core::error::TemperError> for ApiError {
 mod tests {
     use super::*;
     use temper_core::error::TemperError;
-
-    #[test]
-    fn api_error_not_found_maps_to_temper_not_found() {
-        let api: ApiError = ApiError::NotFound;
-        let t: TemperError = api.into();
-        assert!(matches!(t, TemperError::NotFound(_)));
-    }
 
     #[test]
     fn api_error_forbidden_maps_to_temper_forbidden() {
@@ -310,10 +313,31 @@ mod tests {
 
     // Outbound conversion tests (TemperError -> ApiError)
 
+    /// The message **survives** the mapping.
+    ///
+    /// This test previously asserted only `matches!(t, ApiError::NotFound)` — true of the unit
+    /// variant, and true of nothing else worth knowing. It pinned the discard: the service layer
+    /// wrote a message naming what was missing and the door dropped it, so every 404 rendered as
+    /// the bare string `Not found`. Carrying the string is the contract now, and asserting the
+    /// variant alone would not notice if it were dropped again.
     #[test]
-    fn temper_error_not_found_maps_to_api_not_found() {
+    fn temper_error_not_found_carries_message() {
         let t: ApiError = TemperError::NotFound("item missing".into()).into();
-        assert!(matches!(t, ApiError::NotFound));
+        match t {
+            ApiError::NotFound(s) => assert_eq!(s, "item missing"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    /// And it survives the *inbound* direction too, so a client-side round-trip does not quietly
+    /// re-flatten what the outbound direction just preserved.
+    #[test]
+    fn api_error_not_found_carries_message_to_temper() {
+        let t: TemperError = ApiError::NotFound("goal 42 not found".into()).into();
+        match t {
+            TemperError::NotFound(s) => assert_eq!(s, "goal 42 not found"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     #[test]

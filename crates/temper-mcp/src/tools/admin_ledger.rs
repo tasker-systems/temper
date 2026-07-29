@@ -27,8 +27,8 @@ const MAX_LIMIT: i64 = 200;
 fn map_err(e: ApiError) -> rmcp::ErrorData {
     match e {
         // The deny-split invariant, carried onto MCP: refusal is indistinguishable from absence.
-        ApiError::NotFound => {
-            rmcp::ErrorData::invalid_params("admin_ledger: nothing readable here".to_string(), None)
+        ApiError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("admin_ledger: {msg}"), None)
         }
         ApiError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => rmcp::ErrorData::internal_error(format!("admin_ledger: {other}"), None),

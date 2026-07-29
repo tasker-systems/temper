@@ -32,7 +32,7 @@ async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<HomeRow> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)
+    .ok_or_else(|| ApiError::NotFound("resource not found".to_string()))
 }
 
 /// Is there a team T where caller manages T, `resource` is homed in a context shared
