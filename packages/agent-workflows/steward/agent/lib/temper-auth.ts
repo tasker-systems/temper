@@ -78,6 +78,27 @@ export const AUDITOR_CREDENTIALS: CredentialEnv = {
   staticToken: "TEMPER_AUDITOR_TOKEN",
 };
 
+/**
+ * Is a credential for this principal configured on this deployment AT ALL?
+ *
+ * **"Not configured" and "configured but broken" are different states and must stay
+ * distinguishable.** [`build`] throws on both — correctly, because the alternative is borrowing
+ * another principal's identity — but a caller that can meaningfully *skip* needs to tell them
+ * apart. This answers only the first question; it never relaxes the second.
+ *
+ * Deliberately derived from the same [`CredentialEnv`] `build` reads, and in the same order, so the
+ * two cannot drift on what "configured" means. A partially-configured principal (client id present,
+ * secret absent) reads as **configured** here and then throws in `build` — which is the point: that
+ * is a misconfiguration, not an absence, and it must be loud.
+ *
+ * Empty-string env vars count as absent, matching [`requireEnv`] and `build`'s own truthiness
+ * checks — Vercel surfaces a declared-but-empty variable as `""`, not `undefined`.
+ */
+export function credentialConfigured(names: CredentialEnv = STEWARD_CREDENTIALS): boolean {
+  const connector = names.connector ? process.env[names.connector] : undefined;
+  return Boolean(process.env[names.clientId] || connector || process.env[names.staticToken]);
+}
+
 /** One cached credential per principal, keyed by its client-id env name. */
 const cache = new Map<string, Credentials>();
 

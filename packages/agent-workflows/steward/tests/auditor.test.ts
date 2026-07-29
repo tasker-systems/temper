@@ -184,6 +184,117 @@ describe("auditor credentials", () => {
     );
   });
 
+  // ── "not configured" vs "configured and failing" ────────────────────────────────────────────
+  //
+  // These two states must never collapse into each other. The auditor is OPTIONAL and its schedule
+  // ships in the repo, so every fork that deploys this agent gets the cron; without a skip they all
+  // fail hourly on a credential they never meant to set, and a permanently-red cron trains people
+  // to ignore red crons. But a deployment that DID configure an auditor and got it wrong must fail
+  // loudly — silence there means believing you are auditing when you are not.
+  //
+  // The predicate is the seam. It must never become an excuse to authenticate as someone else:
+  // "throws rather than borrowing" above is the invariant this must not weaken.
+  it("reports the auditor as unconfigured when neither credential var is set", async () => {
+    const { credentialConfigured, AUDITOR_CREDENTIALS } = await import(
+      "../agent/lib/temper-auth.js"
+    );
+    expect(credentialConfigured(AUDITOR_CREDENTIALS)).toBe(false);
+  });
+
+  it("does NOT read the steward's credential as the auditor being configured", async () => {
+    // The exact shape of the security hole: a fully-configured steward must leave the auditor
+    // unconfigured, so the tick skips rather than proceeding under the steward's identity.
+    process.env.TEMPER_M2M_CLIENT_ID = "steward-client";
+    process.env.TEMPER_M2M_CLIENT_SECRET = "steward-secret";
+    process.env.TEMPER_M2M_TOKEN_URL = "https://issuer.example/oauth/token";
+    process.env.TEMPER_CONNECT_CONNECTOR = "some-connector";
+    process.env.TEMPER_TOKEN = "steward-dev-token";
+
+    const { credentialConfigured, AUDITOR_CREDENTIALS } = await import(
+      "../agent/lib/temper-auth.js"
+    );
+    expect(credentialConfigured(AUDITOR_CREDENTIALS)).toBe(false);
+  });
+
+  it("reports a PARTIALLY configured auditor as configured, so it fails loudly instead of skipping", async () => {
+    // Client id present, secret and token url absent. This is a misconfiguration by someone who
+    // meant to run an auditor — it must NOT be mistaken for absence and silently skipped.
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_ID = "tmpr_auditor";
+
+    const { credentialConfigured, AUDITOR_CREDENTIALS, auditorFetch } = await import(
+      "../agent/lib/temper-auth.js"
+    );
+    expect(credentialConfigured(AUDITOR_CREDENTIALS)).toBe(true);
+    // Asserts that it throws naming a MISSING AUDITOR var — not which one. Whichever `build`
+    // evaluates first is an argument-order detail free to change; that the failure is loud and
+    // points at the auditor's own env is the invariant.
+    await expect(auditorFetch("http://127.0.0.1:1/nope", { method: "GET" })).rejects.toThrow(
+      /TEMPER_AUDITOR_M2M_(CLIENT_SECRET|TOKEN_URL)/,
+    );
+  });
+
+  it("treats a declared-but-empty credential var as absent", async () => {
+    // Vercel surfaces a declared-with-no-value variable as "", not undefined. Reading that as
+    // "configured" would send the tick into `build`, which rejects "" too — turning an empty
+    // declaration into the hourly hard failure this guard exists to prevent.
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_ID = "";
+    process.env.TEMPER_AUDITOR_TOKEN = "";
+
+    const { credentialConfigured, AUDITOR_CREDENTIALS } = await import(
+      "../agent/lib/temper-auth.js"
+    );
+    expect(credentialConfigured(AUDITOR_CREDENTIALS)).toBe(false);
+  });
+
+  it("reports configured on either the M2M client id or the dev static token", async () => {
+    const mod = "../agent/lib/temper-auth.js";
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_ID = "tmpr_auditor";
+    let { credentialConfigured, AUDITOR_CREDENTIALS } = await import(mod);
+    expect(credentialConfigured(AUDITOR_CREDENTIALS)).toBe(true);
+
+    delete process.env.TEMPER_AUDITOR_M2M_CLIENT_ID;
+    process.env.TEMPER_AUDITOR_TOKEN = "dev-token";
+    vi.resetModules();
+    ({ credentialConfigured, AUDITOR_CREDENTIALS } = await import(mod));
+    expect(credentialConfigured(AUDITOR_CREDENTIALS)).toBe(true);
+  });
+
+  // THE WIRING. Everything above pins the predicate; this pins that the schedule actually CONSULTS
+  // it. Deleting the guard from `run` leaves every predicate test above green — the same gap that
+  // let the citation-grain defect live between a correct sweep and a correct queue.
+  it("the tick SKIPS entirely when no auditor credential is configured", async () => {
+    process.env.TEMPER_API_URL = "https://example.invalid";
+    // A fully-configured steward, to prove the skip is not merely "no env at all".
+    process.env.TEMPER_TOKEN = "steward-dev-token";
+
+    const schedule = (await import("../agent/schedules/auditor.js")).default;
+    const receive = vi.fn();
+    const waitUntil = vi.fn();
+
+    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+
+    // No background work parked, no session started, and NOT a thrown error.
+    expect(waitUntil).not.toHaveBeenCalled();
+    expect(receive).not.toHaveBeenCalled();
+  });
+
+  it("the tick PROCEEDS when an auditor credential is configured", async () => {
+    process.env.TEMPER_API_URL = "http://127.0.0.1:1";
+    process.env.TEMPER_AUDITOR_TOKEN = "auditor-dev-token";
+
+    const schedule = (await import("../agent/schedules/auditor.js")).default;
+    const receive = vi.fn();
+    const waitUntil = vi.fn();
+
+    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+
+    // The guard must not block a deployment that DID configure an auditor. Parking the work is the
+    // whole assertion — the parked promise then fails against an unreachable host, which is neither
+    // awaited nor asserted on (its retry backoff is a network timing detail, not this claim).
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    (waitUntil.mock.calls[0]?.[0] as Promise<unknown>).catch(() => {});
+  });
+
   it("still carries the shared re-mint-once-on-401 behavior", async () => {
     issuer = await startMockIssuer({
       flavor: "temper-as",
