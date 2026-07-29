@@ -778,7 +778,16 @@ pub struct ShowParams<'a> {
 /// signature compact (and clippy happy).
 #[derive(Debug, Clone, Copy)]
 pub struct ListParams<'a> {
-    pub doc_type: &'a str,
+    /// `--type`: optional. `None` lists across every doc type. It was mandatory until the
+    /// tag filter landed, which made it untenable: tags span 14 doc types in production, so
+    /// forcing a type meant enumerating one axis took 14 calls plus prior knowledge of which
+    /// types exist — a client-side scan wearing a filter's clothes. The API and MCP had
+    /// always taken `doc_type_name` as optional; this closes the gap rather than opening one.
+    pub doc_type: Option<&'a str>,
+    /// `--tag` (repeatable): resources carrying EVERY listed tag (AND), matched exactly and
+    /// case-insensitively. Empty = no tag filter. Joined to the CSV the list endpoint's
+    /// `tags` query param expects. Deliberately NOT doc-type-scoped — see `doc_type`.
+    pub tag: &'a [String],
     pub context: Option<&'a str>,
     /// `--cogmap` (repeatable): scope to resources homed in these cognitive maps (UUID or decorated
     /// refs). Mutually exclusive with `context`. Empty = no cogmap filter.
@@ -833,6 +842,69 @@ fn resolve_cogmap_scope_csv(cogmaps: &[String], context: Option<&str>) -> Result
         ids.push(id.0.to_string());
     }
     Ok(Some(ids.join(",")))
+}
+
+/// Refuse a type-scoped filter paired with a `--type` it cannot apply to. All three are sent
+/// to the server unconditionally, so "ignored" was never true of any of them — a mismatch is
+/// a hard error rather than a hint.
+///
+/// The guard fires **only when a type was actually named**. With `--type` omitted there is no
+/// mismatch to report: `--stage backlog` alone honestly narrows to backlog tasks, because only
+/// tasks carry a stage. Refusing that would be inventing a conflict the caller never stated.
+/// The refusal exists for `--type goal --stage backlog`, where the caller has named a type the
+/// flag demonstrably cannot apply to.
+///
+/// `--tag` is deliberately absent: tags are not doc-type-scoped (14 doc types carry them in
+/// production), so there is no doc type it could mismatch.
+fn check_type_scoped_filters(
+    doc_type: Option<&str>,
+    stage: Option<&str>,
+    goal: Option<&str>,
+    status: Option<&str>,
+) -> Result<()> {
+    let Some(doc_type) = doc_type else {
+        return Ok(());
+    };
+    if stage.is_some() && doc_type != "task" {
+        return Err(mismatched_filter_err("--stage", "task", doc_type));
+    }
+    if goal.is_some() && doc_type != "task" {
+        return Err(mismatched_filter_err("--goal", "task", doc_type));
+    }
+    if status.is_some() && doc_type != "goal" {
+        return Err(mismatched_filter_err("--status", "goal", doc_type));
+    }
+    Ok(())
+}
+
+/// Join repeated `--tag` values into the comma-separated string the list endpoint's `tags`
+/// query param expects (the GET can't carry a `Vec`, same constraint as `--cogmap`). `None`
+/// when no `--tag` was given.
+///
+/// A tag containing a comma is a hard error rather than a silent split. The transport cannot
+/// express it, so `--tag "a,b"` would arrive server-side as two tags and quietly return a
+/// different (narrower) set than the caller asked for — the exact shape of defect this filter's
+/// goal exists to eliminate. No tag in the corpus contains a comma, so this refuses a value
+/// nothing can currently be tagged with; it is a guard against the vocabulary growing one, not
+/// a restriction on today's.
+fn resolve_tag_csv(tags: &[String]) -> Result<Option<String>> {
+    if tags.is_empty() {
+        return Ok(None);
+    }
+    for t in tags {
+        if t.contains(',') {
+            return Err(TemperError::BadRequest(format!(
+                "invalid --tag {t:?}: a tag may not contain a comma (the list filter is \
+                 comma-separated over the wire, so it would silently split into two tags)"
+            )));
+        }
+        if t.trim().is_empty() {
+            return Err(TemperError::BadRequest(
+                "invalid --tag: an empty tag matches nothing; omit the flag instead".into(),
+            ));
+        }
+    }
+    Ok(Some(tags.join(",")))
 }
 
 /// Parse a `--sort <field>[:asc|desc]` argument into an enum pair. The field
@@ -987,17 +1059,7 @@ fn validate_status_filter(value: &str) -> Result<()> {
 
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
-    // Type-scoped filters. Each is a hard error on a mismatched doc type: all three are
-    // sent to the server unconditionally, so "ignored" was never true of any of them.
-    if params.stage.is_some() && params.doc_type != "task" {
-        return Err(mismatched_filter_err("--stage", "task", params.doc_type));
-    }
-    if params.goal.is_some() && params.doc_type != "task" {
-        return Err(mismatched_filter_err("--goal", "task", params.doc_type));
-    }
-    if params.status.is_some() && params.doc_type != "goal" {
-        return Err(mismatched_filter_err("--status", "goal", params.doc_type));
-    }
+    check_type_scoped_filters(params.doc_type, params.stage, params.goal, params.status)?;
 
     if let Some(s) = params.stage {
         vault::validate_stage(s)?;
@@ -1014,7 +1076,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     use temper_workflow::types::resource::ResourceListParams;
 
     let fmt = params.format;
-    let doc_type = params.doc_type.to_string();
+    let doc_type = params.doc_type.map(ToString::to_string);
     let context = params.context.map(ToString::to_string);
     let limit = resolve_list_limit(params.all, params.limit, DEFAULT_LIST_LIMIT);
     let offset = params.offset.unwrap_or(0);
@@ -1034,10 +1096,12 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         .transpose()?
         .map(uuid::Uuid::from);
     let cogmap_ids = resolve_cogmap_scope_csv(params.cogmap, params.context)?;
+    let tags = resolve_tag_csv(params.tag)?;
     let api_params = ResourceListParams {
-        doc_type_name: Some(doc_type.clone()),
+        doc_type_name: doc_type.clone(),
         context_ref: context.clone(),
         cogmap_ids,
+        tags,
         stage: params.stage.map(str::to_string),
         status: params.status.map(str::to_string),
         q: params.title_contains.map(str::to_string),
@@ -1126,10 +1190,12 @@ fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
         .transpose()?
         .map(uuid::Uuid::from);
     let cogmap_ids = resolve_cogmap_scope_csv(params.cogmap, params.context)?;
+    let tags = resolve_tag_csv(params.tag)?;
     let api_params = ResourceListParams {
-        doc_type_name: Some(params.doc_type.to_string()),
+        doc_type_name: params.doc_type.map(ToString::to_string),
         context_ref: params.context.map(ToString::to_string),
         cogmap_ids,
+        tags,
         stage: params.stage.map(str::to_string),
         status: params.status.map(str::to_string),
         q: params.title_contains.map(str::to_string),
@@ -2239,6 +2305,71 @@ mod list_helpers_tests {
             !msg.contains("ignored"),
             "must not repeat the word that made the old hint false; got: {msg}"
         );
+    }
+
+    /// No `--tag` is no filter — `None`, never `Some("")`. An empty CSV would reach the
+    /// server as a filter that matches everything, which is the same "flag present, nothing
+    /// filtered" shape this filter's goal exists to eliminate.
+    #[test]
+    fn no_tag_flag_sends_no_tag_filter() {
+        assert_eq!(resolve_tag_csv(&[]).unwrap(), None);
+    }
+
+    /// Repeated `--tag` joins to the CSV the GET carries. Order is preserved here; the server
+    /// sorts and dedupes, so this only has to be lossless.
+    #[test]
+    fn repeated_tags_join_to_csv() {
+        let tags = vec!["ci".to_string(), "security".to_string()];
+        assert_eq!(
+            resolve_tag_csv(&tags).unwrap().as_deref(),
+            Some("ci,security")
+        );
+    }
+
+    /// A tag containing a comma is REFUSED, not split. Over the wire `--tag "a,b"` would
+    /// arrive as two tags and — because multiple tags AND — return a strictly narrower set
+    /// than the caller asked for, silently. Escalate instead of quietly answering a
+    /// different question.
+    #[test]
+    fn a_tag_containing_a_comma_is_refused_not_split() {
+        let tags = vec!["a,b".to_string()];
+        let err = resolve_tag_csv(&tags)
+            .expect_err("a comma in a tag must be refused — the transport would split it");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("comma"),
+            "the refusal must name the comma so the caller can fix it; got: {msg}"
+        );
+    }
+
+    /// An empty or whitespace-only `--tag` matches nothing and is almost certainly a shell
+    /// accident (`--tag "$UNSET"`). Refuse rather than return a confident empty page.
+    #[test]
+    fn an_empty_tag_is_refused() {
+        assert!(resolve_tag_csv(&["".to_string()]).is_err());
+        assert!(resolve_tag_csv(&["   ".to_string()]).is_err());
+    }
+
+    /// `--stage` on a mismatched `--type` still errors, but omitting `--type` is NOT a
+    /// mismatch. This is the guard that changed when `--type` became optional: with no type
+    /// named there is no conflicting claim to refuse, and `--stage backlog` alone honestly
+    /// narrows to backlog tasks (only tasks carry a stage).
+    #[test]
+    fn a_type_scoped_filter_errors_only_when_a_type_was_named() {
+        // Named and mismatched -> still an error. This is the behavior `--type`'s becoming
+        // optional must not have weakened.
+        assert!(check_type_scoped_filters(Some("goal"), Some("backlog"), None, None).is_err());
+        assert!(check_type_scoped_filters(Some("task"), None, None, Some("active")).is_err());
+        assert!(check_type_scoped_filters(Some("goal"), None, Some("ref"), None).is_err());
+
+        // Named and matching -> no refusal.
+        assert!(check_type_scoped_filters(Some("task"), Some("backlog"), None, None).is_ok());
+        assert!(check_type_scoped_filters(Some("goal"), None, None, Some("active")).is_ok());
+
+        // Type OMITTED -> no refusal for any of them. There is no stated type to conflict with.
+        assert!(check_type_scoped_filters(None, Some("backlog"), None, None).is_ok());
+        assert!(check_type_scoped_filters(None, None, None, Some("active")).is_ok());
+        assert!(check_type_scoped_filters(None, None, Some("ref"), None).is_ok());
     }
 
     #[test]

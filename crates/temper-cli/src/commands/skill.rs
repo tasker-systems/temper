@@ -113,7 +113,9 @@ absence or completeness, **expand or narrow**:
 | `--limit <n>` / `--offset <n>` | A bigger page, or page through the set. |
 | `--sort <field>[:asc\|desc]` | Order by `updated`, `created`, `title`, `stage`, `seq`, `context`, or `doctype`. Direction defaults per field (time/seq → desc, text → asc); default sort is `updated:desc`. |
 | `--title-contains <substr>` | Case-insensitive title filter — narrow instead of paging blind (for topical/semantic search use `temper search`). |
-| `--stage <s>` / `--goal <ref>` (task) · `--status <s>` (goal) | Type-specific filters. |
+| `--stage <s>` / `--goal <ref>` (task) · `--status <s>` (goal) | Type-specific filters. Naming a `--type` they don't apply to is an error, not a silent no-op. |
+| `--tag <t>` (repeatable) | Filter by tag. Repeating **narrows** — `--tag ci --tag security` returns only resources carrying both. Exact match, case-insensitive. Not type-specific: tags span every doc type. |
+| `--type <t>` | Optional. Omit it to list across every doc type — which is how you enumerate a whole tag axis in one call instead of once per type. |
 
 ```bash
 # WRONG: "no maintenance goal exists" — read off a 20-row default page.
@@ -122,6 +124,10 @@ temper resource list --type goal --context @me/temper
 # RIGHT: narrow, or enumerate fully, before asserting absence.
 temper resource list --type goal --context @me/temper --title-contains maintenance
 temper resource list --type goal --context @me/temper --all
+
+# Enumerate a program axis across every doc type — no --type.
+temper resource list --tag ci --all
+temper resource list --tag ci --tag security --all   # carries BOTH
 ```
 
 ## Orientation Projection (cheap reads)
