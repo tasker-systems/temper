@@ -165,6 +165,15 @@ jobs:
           echo "Staging contents:"
           find "$STAGING" -type f
 
+      - name: Emit per-file manifest
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target.triple }}
+          STAGING: staging
+          OUTPUT: temper-v${{ inputs.version }}-${{ matrix.target.triple }}.manifest.json
+        run: bash .github/scripts/release/emit-manifest.sh
+
       - name: Create archive (tar.gz)
         if: matrix.target.archive_ext == 'tar.gz'
         shell: bash
@@ -197,5 +206,6 @@ jobs:
             temper-v${{ inputs.version }}-*.tar.gz
             temper-v${{ inputs.version }}-*.zip
             temper-v${{ inputs.version }}-*.sha256
+            temper-v${{ inputs.version }}-*.manifest.json
           retention-days: 7
           if-no-files-found: error

@@ -29,7 +29,8 @@ echo "Uploading artifacts from ${ARTIFACT_DIR}..."
 shopt -s nullglob
 for f in "${ARTIFACT_DIR}"/temper-*.tar.gz \
          "${ARTIFACT_DIR}"/temper-*.zip \
-         "${ARTIFACT_DIR}"/temper-*.sha256; do
+         "${ARTIFACT_DIR}"/temper-*.sha256 \
+         "${ARTIFACT_DIR}"/temper-*.manifest.json; do
     echo "  Uploading $(basename "$f")..."
     gh release upload "$TAG" "$f" --clobber
 done
