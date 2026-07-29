@@ -119,3 +119,40 @@ grep -q "rolling back" "$STDERR_LOG" \
 [ ! -e "$FRESH_DIR" ] || fail "a fresh install directory was created despite the post-extract gate rejecting the install"
 
 echo "PASS: a tampered archive is rejected by the post-extract gate specifically (isolated from post-swap)"
+
+# --- A manifest that verifies nothing must not verify everything -------------
+# Reproduced during Arc 2: an archive whose binary contained `# EVIL PAYLOAD`
+# installed with exit 0 and printed "✓ Installed", because zero parsed entries
+# left CHECK_FAILED at 0. Both variants below reach that same fail-open.
+
+# Rebuild a known-good archive+manifest pair to test against.
+build_archive
+build_manifest "$TMP/stage" "$TMP/vacuity.manifest.json"
+
+# 1. An empty file list: the manifest genuinely asserts nothing.
+printf '{"version":"0.3.0","target":"x86_64-unknown-linux-gnu","files":[]}\n' \
+  > "$TMP/empty.manifest.json"
+if TEMPER_INSTALL_DIR="$TMP/install-empty" XDG_BIN_HOME="$TMP/bin-empty" \
+     sh "$INSTALL" --archive "$TMP/archive.tar.gz" --manifest "$TMP/empty.manifest.json" \
+        --version v0.3.0 >/dev/null 2>&1; then
+  fail "installer accepted a manifest listing zero files"
+fi
+[ ! -e "$TMP/install-empty" ] || fail "a rejected empty-manifest install left files behind"
+
+echo "PASS: a manifest listing zero files is refused"
+
+# 2. Compact JSON: the manifest declares real entries, but the awk pair parser
+#    emits none (the /"path":/ rule ends in `next`, so /"sha256":/ never fires
+#    when both keys share a line). The bytes are otherwise IDENTICAL to the
+#    good manifest — same files, same hashes — so this is not "compact JSON is
+#    invalid"; it is "a partial parse must refuse, not silently verify nothing."
+#    The zero floor alone would catch this too, but the count cross-check is
+#    what makes the error message true.
+jq -c . < "$TMP/vacuity.manifest.json" > "$TMP/compact.manifest.json"
+if TEMPER_INSTALL_DIR="$TMP/install-compact" XDG_BIN_HOME="$TMP/bin-compact" \
+     sh "$INSTALL" --archive "$TMP/archive.tar.gz" --manifest "$TMP/compact.manifest.json" \
+        --version v0.3.0 >/dev/null 2>&1; then
+  fail "installer accepted a compact manifest whose entries it could not parse"
+fi
+
+echo "PASS: a manifest the parser cannot read is refused, not silently accepted"

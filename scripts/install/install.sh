@@ -221,6 +221,15 @@ tar -xzf "$TMPDIR/$ARCHIVE" -C "$STAGING"
 # order within each object — so a `path` line is always immediately followed
 # by its `sha256` line. That is what makes this awk pass tractable: no bracket
 # counting or JSON parsing, just "remember the last path, emit on sha256".
+#
+# That layout is no longer an assumption this parser RESTS on; it is one it
+# VERIFIES. When it does not hold, the awk pass below does not fail — it emits
+# ZERO pairs (on compact JSON `path` and `sha256` share a line, so the `next`
+# in the path rule means the sha256 rule never fires), and every per-file check
+# is then silently skipped rather than failed. So
+# `verify_manifest_against_dir` cross-checks the pairs actually parsed against
+# an independent count of the entries the manifest declares, and refuses to
+# install on any disagreement.
 sha_of_file() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'
@@ -247,14 +256,25 @@ manifest_pairs() {
     ' "$1"
 }
 
+# How many entries the manifest *claims*, counted independently of the awk
+# pair parser above. `"path"` appears exactly once per entry and nowhere else
+# in the manifest shape ({version, target, files:[{path, sha256, size}]}), so
+# occurrence count is entry count. Counting OCCURRENCES rather than LINES is
+# what makes this catch compact JSON, where every entry shares one line.
+manifest_declared_count() {
+    grep -o '"path":' "$1" | wc -l | tr -d ' '
+}
+
 # Checks every file the manifest lists against $1 (a directory). Runs the
 # whole list before returning, so a single invocation reports every mismatch
 # rather than just the first. Returns non-zero if anything failed.
 verify_manifest_against_dir() {
     CHECK_DIR="$1"
     CHECK_FAILED=0
+    PAIR_COUNT=0
     while IFS="$(printf '\t')" read -r REL EXPECTED_SHA; do
         [ -n "$REL" ] || continue
+        PAIR_COUNT=$((PAIR_COUNT + 1))
         if [ ! -f "$CHECK_DIR/$REL" ]; then
             echo "error: manifest lists $REL but it is missing from $CHECK_DIR" >&2
             CHECK_FAILED=1
@@ -268,6 +288,25 @@ verify_manifest_against_dir() {
     done <<EOF
 $(manifest_pairs "$TMPDIR/$MANIFEST")
 EOF
+    # The loop above is fed by a HERE-DOCUMENT, not a pipe, so its body runs in
+    # this shell and the counters survive. Do not restructure it into
+    # `manifest_pairs … | while read`: that puts the loop in a subshell, both
+    # counters reset to zero on exit, and the fail-open below returns.
+    #
+    # Nothing parsed means nothing was checked — and an unconditional success
+    # return here is a fail-open, not a pass. Two ways in, one floor: a
+    # manifest that genuinely lists no files, and a manifest whose entries we
+    # failed to parse (compact JSON defeats the awk pass above). The count
+    # cross-check separates them so the error message is true in both cases.
+    DECLARED=$(manifest_declared_count "$TMPDIR/$MANIFEST")
+    if [ "$PAIR_COUNT" -eq 0 ]; then
+        echo "error: manifest lists no verifiable files (declared entries: $DECLARED) — refusing to install" >&2
+        return 1
+    fi
+    if [ "$PAIR_COUNT" != "$DECLARED" ]; then
+        echo "error: parsed $PAIR_COUNT of $DECLARED manifest entries — refusing to install on a partial parse" >&2
+        return 1
+    fi
     [ "$CHECK_FAILED" -eq 0 ]
 }
 
