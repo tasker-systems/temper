@@ -1,0 +1,16 @@
+{
+  "version": "0.3.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "files": [
+    {
+      "path": "temper",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "path": "lib/libonnxruntime.so",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    }
+  ]
+}

@@ -10,6 +10,7 @@ pub mod error;
 pub mod extract;
 pub mod format;
 pub mod ids;
+pub mod manifest;
 pub mod output;
 pub mod projection;
 pub mod saml;
