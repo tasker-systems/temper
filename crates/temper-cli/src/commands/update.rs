@@ -10,13 +10,31 @@
 //!
 //! # One installer, one truth
 //!
-//! Rather than reimplement target-triple detection, archive naming, the
-//! dual-tool checksum verify, and the ORT-aware layout in Rust — a second copy
-//! that would drift from a fresh install the instant either changed — this
-//! command shells out to the *canonical* `scripts/install/install.sh`, embedded
-//! at build time via [`include_str!`]. The binary owns only the *policy*
-//! (resolve latest, compare, refuse cargo installs); the script owns the
-//! *mechanism* (download, verify, extract, atomic swap, re-point symlink).
+//! Rather than reimplement target-triple detection, the ORT-aware layout, and
+//! the atomic-swap-with-rollback dance in Rust — a second copy that would
+//! drift from a fresh install the instant either changed — this command
+//! shells out to the *canonical* `scripts/install/install.sh`, embedded at
+//! build time via [`include_str!`]. The script still owns extraction, the
+//! atomic swap, and re-pointing the symlink. What moved to Rust is
+//! **provenance**: `run` now downloads the archive and manifest itself,
+//! verifies the release attestation (mandatory, no bypass) and the per-file
+//! manifest against that exact downloaded archive, and only then hands the
+//! script `--archive`/`--manifest` paths to install *verbatim* — see "the
+//! 'one installer, one truth' tension" below for why the script no longer
+//! downloads on this path.
+//!
+//! # `temper update` and the "one installer, one truth" tension
+//!
+//! A script that downloads its own archive would make Rust's verification
+//! apply to a *different* download than the one actually installed — two
+//! fetches of a moving `releases/latest` tag are not guaranteed to be
+//! byte-identical, and even if they were, verifying one object and
+//! installing another is the textbook TOCTOU shape. So for `temper update`
+//! specifically, Rust performs the one and only download, and
+//! `install.sh --archive <path> --manifest <path>` consumes it as-is — no
+//! second fetch, no second checksum source. A fresh `curl | sh` install
+//! (which never has a locally-verified archive to hand over) still lets the
+//! script download and verify for itself, unchanged.
 //!
 //! # Provenance: refuse `cargo install` builds
 //!
@@ -39,10 +57,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
+use crate::attestation_fetch;
 use crate::commands::version::VERSION;
 use crate::error::{CliError, CliResult, Result, TemperError};
 use crate::format::OutputFormat;
+use crate::manifest::{self, Verdict};
 
 /// The canonical installer, embedded at build time. `temper update` pipes
 /// *this exact script* to `sh`, so its download → verify → atomic-swap →
@@ -173,13 +195,24 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
         return Ok(());
     }
 
-    // 5. Hand off to the embedded installer for download → checksum-verify →
-    //    run-verify → atomic swap. The installer refuses to finalize unless the
-    //    new binary actually runs, so a failure here leaves the prior install
-    //    in place (it prints the exact recovery state to stderr).
-    run_installer(&install_dir, &target_tag)?;
+    // 5. Download the archive + manifest for the target tag into a scratch
+    //    directory, verify the release attestation against the DOWNLOADED
+    //    archive's own digest (mandatory — there is no bypass flag), then
+    //    check every manifest file against that same archive's extracted
+    //    contents. This is the whole point of the restructuring: the object
+    //    Rust verifies is the exact object the installer is about to install,
+    //    not a second, later download of "the same" tag.
+    let (_scratch_dir, archive_path, manifest_path) = download_and_verify_release(&target_tag)?;
 
-    // 6. Confirm the new version landed by running the installed binary. The
+    // 6. Hand off to the embedded installer for extract → atomic swap →
+    //    re-point symlink, passing the already-verified archive and manifest
+    //    so the script performs no download of its own on this path. The
+    //    installer refuses to finalize unless the new binary actually runs,
+    //    so a failure here leaves the prior install in place (it prints the
+    //    exact recovery state to stderr).
+    run_installer(&install_dir, &target_tag, &archive_path, &manifest_path)?;
+
+    // 7. Confirm the new version landed by running the installed binary. The
     //    installer already gated on runnability, so this is a belt-and-braces
     //    confirmation — but a mismatch or an unrunnable read-back is surfaced
     //    loudly rather than swallowed.
@@ -272,14 +305,7 @@ fn resolve_latest_tag() -> Result<String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
     rt.block_on(async {
-        let client = reqwest::Client::builder()
-            // GitHub's API rejects requests without a User-Agent.
-            .user_agent(format!("temper-cli/{VERSION}"))
-            // Bounded timeouts so a black-hole network fails fast instead of
-            // hanging forever (reqwest has no default timeout). Nothing has been
-            // touched at this point, so a timeout is a clean, non-destructive error.
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
+        let client = attestation_fetch::release_http_client_builder(VERSION)
             .build()
             .map_err(|e| TemperError::Network(format!("building HTTP client: {e}")))?;
         let resp = client
@@ -312,12 +338,202 @@ fn resolve_latest_tag() -> Result<String> {
     })
 }
 
-/// Pipe the embedded `install.sh` to `sh -s -- --version <tag>`, aiming it at
-/// the detected `install_dir` (via `TEMPER_INSTALL_DIR`) so the swap targets
-/// exactly where the running binary lives. The installer's own progress
-/// chatter is redirected to stderr so this command's stdout carries only the
-/// final machine-readable report.
-fn run_installer(install_dir: &Path, tag: &str) -> CliResult<()> {
+/// Release archive/manifest asset names, matching `install.sh`'s own
+/// construction (`ARCHIVE="temper-${VERSION}-${TARGET}.tar.gz"`,
+/// `MANIFEST="temper-${VERSION}-${TARGET}.manifest.json"`,
+/// `scripts/install/install.sh` lines ~117-122) exactly — a divergence here
+/// 404s at fetch time.
+fn archive_asset_name(tag: &str, target: &str) -> String {
+    format!("temper-{tag}-{target}.tar.gz")
+}
+fn manifest_asset_name(tag: &str, target: &str) -> String {
+    format!("temper-{tag}-{target}.manifest.json")
+}
+fn release_asset_url(tag: &str, asset: &str) -> String {
+    format!("https://github.com/tasker-systems/temper/releases/download/{tag}/{asset}")
+}
+
+/// Download `url` to `dest`, matching `resolve_latest_tag`'s HTTP posture and
+/// 403-as-rate-limit handling. Network failures propagate as
+/// [`TemperError::Network`] (via [`CliError`]'s `From` impl); a failure to
+/// write the downloaded bytes to disk is a local, install-specific failure
+/// and surfaces as [`CliError::Install`].
+async fn download_to_file(client: &reqwest::Client, url: &str, dest: &Path) -> CliResult<()> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| TemperError::Network(format!("downloading {url}: {e}")))?;
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err(CliError::Temper(TemperError::Network(format!(
+            "GitHub rate-limited or forbidden (HTTP 403) while downloading {url}. Your install \
+             is unchanged — retry in a few minutes."
+        ))));
+    }
+    if !resp.status().is_success() {
+        return Err(CliError::Temper(TemperError::Network(format!(
+            "downloading {url} returned HTTP {}",
+            resp.status()
+        ))));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| TemperError::Network(format!("reading response body from {url}: {e}")))?;
+    std::fs::write(dest, &bytes).map_err(|e| {
+        CliError::Install(format!("writing downloaded file {}: {e}", dest.display()))
+    })?;
+    Ok(())
+}
+
+/// The sha256 hex digest of a local file — the identity both the attestation
+/// lookup and (via the installer's own re-check) the manifest verification
+/// key off.
+fn sha256_of_file(path: &Path) -> CliResult<String> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        CliError::Install(format!(
+            "reading downloaded archive {}: {e}",
+            path.display()
+        ))
+    })?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+/// Extract `archive_path` (a downloaded `.tar.gz`) into `extract_dir` and
+/// check every file the manifest lists against the result — the same
+/// per-file check `install.sh` performs on its own staging directory, run
+/// again here so a bad archive is caught before the installer ever sees it,
+/// not by it. Shells out to `tar` (a tool `install.sh` itself assumes is
+/// present — see its own "the only tools are curl, tar, and shasum" comment)
+/// rather than adding a tar/gzip crate dependency for a one-off extraction.
+fn verify_archive_against_manifest(
+    archive_path: &Path,
+    manifest_path: &Path,
+    extract_dir: &Path,
+) -> CliResult<()> {
+    let manifest_raw = std::fs::read_to_string(manifest_path)
+        .map_err(|e| CliError::Install(format!("reading downloaded manifest: {e}")))?;
+    let downloaded_manifest: manifest::ReleaseManifest = serde_json::from_str(&manifest_raw)
+        .map_err(|e| CliError::Install(format!("parsing downloaded manifest: {e}")))?;
+
+    std::fs::create_dir_all(extract_dir)
+        .map_err(|e| CliError::Install(format!("creating extraction directory: {e}")))?;
+
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive_path)
+        .arg("-C")
+        .arg(extract_dir)
+        .status()
+        .map_err(|e| {
+            CliError::Install(format!("spawning tar to extract downloaded archive: {e}"))
+        })?;
+    if !status.success() {
+        return Err(CliError::Install(format!(
+            "tar exited with {status} extracting the downloaded archive"
+        )));
+    }
+
+    match manifest::verify_dir(&downloaded_manifest, extract_dir) {
+        Verdict::Verified => Ok(()),
+        Verdict::Mismatch { mismatches } => {
+            let detail = mismatches
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{} (expected {}, got {})",
+                        m.path,
+                        m.expected,
+                        m.actual.as_deref().unwrap_or("<missing>")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(CliError::Install(format!(
+                "downloaded archive does not match its published manifest — refusing to \
+                 install: {detail}"
+            )))
+        }
+        Verdict::Unverifiable { reason } => Err(CliError::Install(format!(
+            "could not verify the downloaded archive against its manifest: {reason}"
+        ))),
+    }
+}
+
+/// Download the archive + manifest for `tag` into a fresh scratch directory,
+/// verify the release attestation for the *downloaded* archive's own digest
+/// (mandatory — there is no bypass flag), then verify every manifest file
+/// against that same archive's extracted contents. Returns the scratch
+/// directory (kept alive by the caller for as long as the archive/manifest
+/// paths are needed) plus the verified archive and manifest paths, ready to
+/// hand to `install.sh --archive --manifest`.
+///
+/// This is the ordering the whole restructuring exists for (spec §4):
+/// verifying one download and then having the installer fetch a second,
+/// later one would reopen the exact TOCTOU gap `--archive`/`--manifest`
+/// exist to close.
+fn download_and_verify_release(tag: &str) -> CliResult<(TempDir, PathBuf, PathBuf)> {
+    let target = crate::commands::version::shipped_target_triple().ok_or_else(|| {
+        CliError::Install(format!(
+            "no published release archive for this host ({}-{}); nothing to download or verify",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ))
+    })?;
+
+    let archive_name = archive_asset_name(tag, target);
+    let manifest_name = manifest_asset_name(tag, target);
+
+    let scratch = tempfile::tempdir()
+        .map_err(|e| CliError::Install(format!("creating scratch directory: {e}")))?;
+    let archive_path = scratch.path().join(&archive_name);
+    let manifest_path = scratch.path().join(&manifest_name);
+    let archive_url = release_asset_url(tag, &archive_name);
+    let manifest_url = release_asset_url(tag, &manifest_name);
+
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| CliError::Temper(TemperError::Api(format!("tokio runtime: {e}"))))?;
+    rt.block_on(async {
+        let client = attestation_fetch::release_http_client_builder(VERSION)
+            .build()
+            .map_err(|e| {
+                CliError::Temper(TemperError::Network(format!("building HTTP client: {e}")))
+            })?;
+        download_to_file(&client, &archive_url, &archive_path).await?;
+        download_to_file(&client, &manifest_url, &manifest_path).await?;
+
+        let digest = sha256_of_file(&archive_path)?;
+        // Mandatory, no bypass flag. A network failure here is
+        // `AttestationVerifyError::Network`, distinguishable in its rendered
+        // text from a genuine "not ours" verdict — a dropped connection must
+        // never read as "you've been attacked".
+        attestation_fetch::verify_release_attestation_online(&client, &digest, tag)
+            .await
+            .map_err(|e| CliError::Install(e.to_string()))?;
+        Ok::<(), CliError>(())
+    })?;
+
+    let extract_dir = scratch.path().join("extracted");
+    verify_archive_against_manifest(&archive_path, &manifest_path, &extract_dir)?;
+
+    Ok((scratch, archive_path, manifest_path))
+}
+
+/// Pipe the embedded `install.sh` to
+/// `sh -s -- --version <tag> --archive <archive_path> --manifest <manifest_path>`,
+/// aiming it at the detected `install_dir` (via `TEMPER_INSTALL_DIR`) so the
+/// swap targets exactly where the running binary lives. Passing
+/// `--archive`/`--manifest` is what stops the script from downloading its own
+/// copy — it installs the exact object `download_and_verify_release` already
+/// verified, closing the TOCTOU gap a second fetch would reopen (spec §4).
+/// The installer's own progress chatter is redirected to stderr so this
+/// command's stdout carries only the final machine-readable report.
+fn run_installer(
+    install_dir: &Path,
+    tag: &str,
+    archive_path: &Path,
+    manifest_path: &Path,
+) -> CliResult<()> {
     crate::output::progress(format!("Updating to {tag}…\n"));
 
     let mut child = Command::new("sh")
@@ -325,6 +541,10 @@ fn run_installer(install_dir: &Path, tag: &str) -> CliResult<()> {
         .arg("--")
         .arg("--version")
         .arg(tag)
+        .arg("--archive")
+        .arg(archive_path)
+        .arg("--manifest")
+        .arg(manifest_path)
         // Detection is authoritative: install into the dir the running binary
         // actually lives in, not whatever the XDG default recomputes to.
         .env("TEMPER_INSTALL_DIR", install_dir)
@@ -601,5 +821,122 @@ mod tests {
     fn embedded_installer_is_the_real_script() {
         assert!(INSTALL_SH.contains("REPO=\"tasker-systems/temper\""));
         assert!(INSTALL_SH.contains("Verifying checksum"));
+    }
+
+    /// The installer now accepts `--archive`/`--manifest` (Task 5's
+    /// addition) — guards against `run_installer`'s new args being pointed at
+    /// an embedded script that doesn't understand them, which would fail
+    /// only at update time, not at compile or fast-unit-test time.
+    #[test]
+    fn embedded_installer_understands_archive_and_manifest_flags() {
+        assert!(INSTALL_SH.contains("--archive"));
+        assert!(INSTALL_SH.contains("--manifest"));
+    }
+
+    /// Release asset names must match `install.sh`'s own construction
+    /// exactly (`ARCHIVE="temper-${VERSION}-${TARGET}.tar.gz"`,
+    /// `MANIFEST="temper-${VERSION}-${TARGET}.manifest.json"`) — a mismatch
+    /// here 404s at download time.
+    #[test]
+    fn asset_names_match_install_sh_construction() {
+        assert_eq!(
+            archive_asset_name("v0.3.0", "x86_64-unknown-linux-gnu"),
+            "temper-v0.3.0-x86_64-unknown-linux-gnu.tar.gz"
+        );
+        assert_eq!(
+            manifest_asset_name("v0.3.0", "x86_64-unknown-linux-gnu"),
+            "temper-v0.3.0-x86_64-unknown-linux-gnu.manifest.json"
+        );
+    }
+
+    /// The release asset URL is built under the tag's own download path,
+    /// mirroring `install.sh`'s `URL_BASE="…/releases/download/${VERSION}"`.
+    #[test]
+    fn release_asset_url_uses_the_tags_download_path() {
+        let url = release_asset_url("v0.3.0", "temper-v0.3.0-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(
+            url,
+            "https://github.com/tasker-systems/temper/releases/download/v0.3.0/\
+             temper-v0.3.0-x86_64-unknown-linux-gnu.tar.gz"
+        );
+    }
+
+    /// `sha256_of_file` hashes exactly what's on disk — pinned against a
+    /// known digest rather than only round-tripping through the same
+    /// `Sha256::digest` call the implementation itself uses.
+    #[test]
+    fn sha256_of_file_hashes_the_written_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("archive.tar.gz");
+        std::fs::write(&path, b"hello world").unwrap();
+        let digest = sha256_of_file(&path).unwrap();
+        // A truncated expected literal must never masquerade as a hash
+        // mismatch — assert the length independently of the exact-match
+        // check below, so a future copy-paste error here fails loudly as
+        // "wrong length", not as a confusing "wrong hash".
+        assert_eq!(digest.len(), 64, "sha256 hex must be 64 chars: {digest}");
+        assert_eq!(
+            digest,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    /// THE BITE for `verify_archive_against_manifest`: build a real
+    /// `tar.gz` (via the same `tar` binary the production code shells out
+    /// to) whose contents match a manifest — verifies clean — then rebuild
+    /// it with one byte changed and confirm that specific tamper is caught
+    /// as a `Mismatch`, not silently accepted. Uses the real `tar` binary,
+    /// not a mock, since that's exactly what production does; no network is
+    /// involved.
+    #[test]
+    fn verify_archive_against_manifest_catches_a_tampered_file() {
+        fn make_archive(dir: &std::path::Path, archive_path: &std::path::Path, contents: &[u8]) {
+            let staging = dir.join("staging");
+            std::fs::create_dir_all(&staging).unwrap();
+            std::fs::write(staging.join("temper"), contents).unwrap();
+            let status = Command::new("tar")
+                .arg("-czf")
+                .arg(archive_path)
+                .arg("-C")
+                .arg(&staging)
+                .arg("temper")
+                .status()
+                .expect("tar is available");
+            assert!(status.success());
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let archive_path = tmp.path().join("archive.tar.gz");
+        make_archive(tmp.path(), &archive_path, b"binary-bytes");
+
+        let manifest = manifest::ReleaseManifest {
+            version: "0.3.0".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            files: vec![manifest::ManifestEntry {
+                path: "temper".to_string(),
+                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                size: 12,
+            }],
+        };
+        let manifest_path = tmp.path().join("manifest.json");
+        std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+        // Clean archive verifies.
+        let extract_dir_ok = tmp.path().join("extracted-ok");
+        verify_archive_against_manifest(&archive_path, &manifest_path, &extract_dir_ok)
+            .expect("matching archive verifies");
+
+        // Tampered archive is caught, not silently accepted.
+        let tampered_archive = tmp.path().join("tampered.tar.gz");
+        make_archive(tmp.path(), &tampered_archive, b"TAMPERED!!!!");
+        let extract_dir_bad = tmp.path().join("extracted-bad");
+        let err =
+            verify_archive_against_manifest(&tampered_archive, &manifest_path, &extract_dir_bad)
+                .expect_err("tampered archive must fail verification");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("temper"),
+            "failure must name the mismatching file: {msg}"
+        );
     }
 }

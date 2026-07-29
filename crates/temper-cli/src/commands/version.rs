@@ -28,17 +28,34 @@
 //! ever silently dropped in favor of the other.
 //!
 //! **`--verify --online` re-fetches the published manifest instead of
-//! trusting the local copy.** The offline check compares an install dir
-//! against a manifest *in that same dir* — an actor who replaced the binary
-//! could replace the manifest beside it too. `--online` closes that gap by
+//! trusting the local copy, AND verifies the release attestation over THAT
+//! SAME MANIFEST.** The offline check compares an install dir against a
+//! manifest *in that same dir* — an actor who replaced the binary could
+//! replace the manifest beside it too. `--online` closes that gap by
 //! fetching `temper-v{VERSION}-{triple}.manifest.json` from the release's own
 //! GitHub download path (mirroring `install.sh`'s asset naming exactly, see
-//! `published_manifest_url`) and comparing against *that*. It still does
-//! not verify who produced the release — that is `temper update`'s
-//! attestation check, or `gh attestation verify` run out-of-band (see
-//! `ONLINE_VERIFY_NOTE`). A host whose OS/arch temper does not ship, or a
-//! network failure, both render [`manifest::Verdict::Unverifiable`] — never
-//! an error, and never a false `Verified`.
+//! `published_manifest_url`) and comparing against *that*.
+//!
+//! Once the per-file comparison agrees, the attestation check that follows
+//! MUST be keyed on the manifest's own digest, never the archive's. The
+//! object whose contents this verdict actually depends on is the manifest —
+//! the archive is never inspected on this path — so an attacker with
+//! release-asset write who tampers the manifest (to match a tampered
+//! install) while leaving the genuine, still-attested archive `.sha256`
+//! sidecar untouched must not be able to borrow the archive's real
+//! attestation to vouch for a manifest it says nothing about.
+//! `build-cli-binaries.yml`'s `attest-build-provenance` step lists the
+//! manifest as its own `subject-path` entry alongside the archive, so
+//! `/attestations/sha256:{manifest_digest}` resolves independently — see
+//! `verify_manifest_attestation`, which hashes the EXACT bytes
+//! `fetch_published_manifest_bytes` returned and that the comparison just
+//! used, never a second, later fetch of "the same" manifest (that would
+//! reopen a TOCTOU gap between what was compared and what was attested).
+//! This is what makes `ONLINE_VERIFY_NOTE`'s claim true rather than
+//! aspirational. A host whose OS/arch temper does not ship, a network
+//! failure, or an attestation failure of any class, all render
+//! [`manifest::Verdict::Unverifiable`] — never an error, and never a false
+//! `Verified`.
 //!
 //! **Windows carries no manifest today**, by the design's own deferral
 //! (`install.ps1` ships no `.temper-manifest.json`). `--verify` on Windows
@@ -52,6 +69,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::attestation_fetch::{self, AttestationVerifyError};
 use crate::error::{Result, TemperError};
 use crate::format::OutputFormat;
 use crate::manifest::{self, Verdict};
@@ -112,15 +130,22 @@ const OFFLINE_VERIFY_NOTE: &str = "Offline verification compares the installed f
 
 /// Disclaimer carried in `--verify --online` output. Load-bearing for the same
 /// reason as `OFFLINE_VERIFY_NOTE`: it states plainly what re-fetching the
-/// published manifest does and does not prove. It closes the "an attacker
-/// replaced both files" gap `OFFLINE_VERIFY_NOTE` names, but it is still not a
-/// signature check — that is `temper update`'s attestation verification, or
-/// `gh attestation verify` run out-of-band against the release archive.
+/// published manifest AND verifying the release attestation together prove.
+/// It closes the "an attacker replaced both files" gap `OFFLINE_VERIFY_NOTE`
+/// names, and — as of [`online_verdict`] — it is now also a genuine signature
+/// check, not just a manifest re-fetch. Deliberately says "the manifest's own
+/// digest", not "the archive's": the manifest is the object this verdict's
+/// comparison actually inspects, so it is the object whose provenance must be
+/// checked — a genuine, still-attested archive says nothing about a tampered
+/// manifest sitting beside it.
 const ONLINE_VERIFY_NOTE: &str = "Online verification re-fetches the release manifest published \
     on GitHub for this exact version and host, rather than trusting the copy installed beside \
-    the binary — so a compromised local manifest can no longer hide a compromised binary. It \
-    does not verify who produced the release; that is `temper update`'s attestation check, or \
-    `gh attestation verify` run out-of-band.";
+    the binary — so a compromised local manifest can no longer hide a compromised binary. Once \
+    the manifest agrees, it also verifies GitHub's build-provenance attestation over the sha256 \
+    of that exact manifest (not the archive) against a pinned Sigstore trust root — the manifest \
+    is its own attested subject in the release workflow, and it is the object this check's \
+    comparison actually depends on. A failure at any step (network, trust root, or identity) \
+    renders `unverifiable`, never a false `verified`.";
 
 /// Offline verification report for `temper version --verify`. `checksum` is
 /// present only when `--checksum` was *also* passed (skipped in
@@ -237,7 +262,10 @@ fn shipped_target_triple_for(os: &str, arch: &str) -> Option<&'static str> {
 /// release archives for; callers must render that as
 /// [`Verdict::Unverifiable`], never an error and never a [`Verdict::Mismatch`]
 /// — "we cannot tell" is not "it is wrong".
-fn shipped_target_triple() -> Option<&'static str> {
+///
+/// `pub(crate)`: `update.rs` reuses this exact mapping (rather than a second
+/// copy) to pick the archive it downloads for the running host.
+pub(crate) fn shipped_target_triple() -> Option<&'static str> {
     shipped_target_triple_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
@@ -255,51 +283,58 @@ fn published_manifest_url(version: &str, target: &str) -> String {
     )
 }
 
-/// Re-fetch the published release manifest for `version`/`target` over the
-/// network. Matches the HTTP posture `update.rs::resolve_latest_tag`
-/// establishes — a `temper-cli/{VERSION}` user agent, 10s connect / 30s total
-/// timeout (reqwest has no default timeout, so a black-holed network must not
-/// hang forever), and HTTP 403 mapped to an explicit rate-limit message rather
-/// than a bare 403 that reads like an auth wall — so this crate carries
-/// exactly one HTTP client configuration, not a second one invented here.
-/// Runs its own short-lived tokio runtime for the one request, same as
-/// `resolve_latest_tag`, rather than making this module's `run` async.
-fn fetch_published_manifest(version: &str, target: &str) -> Result<manifest::ReleaseManifest> {
+/// Re-fetch the published release manifest's RAW BYTES for `version`/`target`
+/// over the network — kept verbatim, not just parsed, so [`online_verdict`]
+/// can bind its attestation check to the exact bytes just compared
+/// (`verify_manifest_attestation`) rather than re-fetching "the same"
+/// manifest a second time, which would reopen a TOCTOU gap between what was
+/// compared and what was attested. Matches the HTTP posture
+/// `update.rs::resolve_latest_tag` establishes via the shared
+/// `attestation_fetch::release_http_client_builder` — a `temper-cli/{VERSION}`
+/// user agent, 10s connect / 30s total timeout, and HTTP 403 mapped to an
+/// explicit rate-limit message rather than a bare 403 that reads like an auth
+/// wall.
+async fn fetch_published_manifest_bytes(
+    client: &reqwest::Client,
+    version: &str,
+    target: &str,
+) -> Result<Vec<u8>> {
     let url = published_manifest_url(version, target);
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-    rt.block_on(async {
-        let client = reqwest::Client::builder()
-            .user_agent(format!("temper-cli/{VERSION}"))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| TemperError::Network(format!("building HTTP client: {e}")))?;
-        let resp =
-            client.get(&url).send().await.map_err(|e| {
-                TemperError::Network(format!("fetching published manifest {url}: {e}"))
-            })?;
-        // A 403 is almost always the unauthenticated rate limit (shared NAT/CI
-        // IPs hit it) — flag it as transient rather than leaving a bare "403
-        // Forbidden" that reads like an auth wall. Mirrors
-        // `resolve_latest_tag`'s handling of the same status.
-        if resp.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(TemperError::Network(
-                "GitHub rate-limited or forbidden (HTTP 403) while fetching the published \
-                 manifest. Your install is unchanged — retry in a few minutes."
-                    .to_string(),
-            ));
-        }
-        if !resp.status().is_success() {
-            return Err(TemperError::Network(format!(
-                "fetching published manifest {url} returned HTTP {}",
-                resp.status()
-            )));
-        }
-        resp.json::<manifest::ReleaseManifest>()
-            .await
-            .map_err(|e| TemperError::Api(format!("parsing published manifest JSON: {e}")))
-    })
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| TemperError::Network(format!("fetching published manifest {url}: {e}")))?;
+    // A 403 is almost always the unauthenticated rate limit (shared NAT/CI
+    // IPs hit it) — flag it as transient rather than leaving a bare "403
+    // Forbidden" that reads like an auth wall. Mirrors
+    // `resolve_latest_tag`'s handling of the same status.
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err(TemperError::Network(
+            "GitHub rate-limited or forbidden (HTTP 403) while fetching the published \
+             manifest. Your install is unchanged — retry in a few minutes."
+                .to_string(),
+        ));
+    }
+    if !resp.status().is_success() {
+        return Err(TemperError::Network(format!(
+            "fetching published manifest {url} returned HTTP {}",
+            resp.status()
+        )));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| TemperError::Network(format!("reading published manifest body: {e}")))?;
+    Ok(bytes.to_vec())
+}
+
+/// Parse the published manifest's raw bytes into a [`manifest::ReleaseManifest`].
+/// Pure and split out from the fetch so [`online_verdict`] can hash and parse
+/// the exact same byte buffer without a second fetch.
+fn parse_manifest_bytes(bytes: &[u8]) -> Result<manifest::ReleaseManifest> {
+    serde_json::from_slice(bytes)
+        .map_err(|e| TemperError::Api(format!("parsing published manifest JSON: {e}")))
 }
 
 /// Turn a manifest-fetch outcome into a [`Verdict`]. Pure and injectable — the
@@ -342,23 +377,130 @@ fn unmapped_host_reason(os: &str, arch: &str) -> String {
     )
 }
 
-/// Build the online verdict for `dir`: re-fetch the published manifest for
-/// the running version and host triple, and compare against it — rather than
-/// trusting the local copy an actor who replaced the binary could have
-/// replaced too. An unmapped host and a network failure both render
+/// The (digest, tag) identity `verify_manifest_attestation` checks the
+/// release attestation against, computed from EXACTLY `manifest_bytes` — the
+/// same buffer [`online_verdict`] just ran through [`parse_manifest_bytes`]
+/// and [`manifest::verify_dir`] for the per-file comparison. Split out as a
+/// pure function so the property this whole restructuring exists to
+/// guarantee — "the digest checked is the digest of what was compared,
+/// never a re-fetch, and never the sibling archive's digest" — is
+/// unit-tested without a network call.
+fn manifest_attestation_identity(manifest_bytes: &[u8]) -> (String, String) {
+    (
+        format!("{:x}", Sha256::digest(manifest_bytes)),
+        format!("v{VERSION}"),
+    )
+}
+
+/// Verify GitHub's build-provenance attestation over the sha256 of
+/// `manifest_bytes` — deliberately the MANIFEST's digest, not the archive's.
+/// The manifest is what [`online_verdict`]'s per-file comparison actually
+/// depends on (the archive is never inspected on this path), so it is the
+/// manifest's own provenance that must be checked: an attacker with
+/// release-asset write who tampers the manifest to match a tampered install,
+/// while leaving the genuine, still-attested archive `.sha256` sidecar
+/// untouched, must not be able to borrow the archive's real attestation to
+/// vouch for a manifest it says nothing about. `build-cli-binaries.yml`
+/// attests the manifest as its own `subject-path` entry alongside the
+/// archive, so `/attestations/sha256:{manifest_digest}` resolves
+/// independently of the archive's.
+async fn verify_manifest_attestation(
+    client: &reqwest::Client,
+    manifest_bytes: &[u8],
+) -> std::result::Result<(), AttestationVerifyError> {
+    let (digest, tag) = manifest_attestation_identity(manifest_bytes);
+    attestation_fetch::verify_release_attestation_online(client, &digest, &tag).await
+}
+
+/// Combine an already-computed manifest verdict with an already-computed
+/// attestation result into the final online verdict. Pure and injectable —
+/// mirrors [`verdict_from_manifest_result`]'s own testability pattern.
+/// Attestation only ever overrides a `Verified` manifest verdict (to
+/// `Unverifiable` on failure); a `Mismatch` or a manifest-fetch
+/// `Unverifiable` passes through untouched — attestation can only ever
+/// *downgrade* a `Verified` manifest match, never rescue or override a
+/// verdict the manifest comparison already settled.
+fn finish_online_verdict(
+    manifest_verdict: Verdict,
+    attestation_result: std::result::Result<(), AttestationVerifyError>,
+) -> Verdict {
+    match manifest_verdict {
+        Verdict::Verified => match attestation_result {
+            Ok(()) => Verdict::Verified,
+            Err(e) => Verdict::Unverifiable {
+                reason: e.to_string(),
+            },
+        },
+        other => other,
+    }
+}
+
+/// Build the online verdict for `dir`: re-fetch the published manifest's raw
+/// bytes for the running version and host triple, compare them against the
+/// install dir, and — only once that comparison is `Verified` — verify
+/// GitHub's build-provenance attestation over the sha256 of THOSE SAME BYTES
+/// (never the sibling archive's digest, and never a second, later fetch of
+/// "the same" manifest — see `verify_manifest_attestation` for why the
+/// manifest, not the archive, is the correct object here). An unmapped host,
+/// a network failure, or an attestation failure of any class all render
 /// [`Verdict::Unverifiable`], never an error and never a false `Verified`.
+///
+/// The manifest check alone only ever proved corruption/drift, not
+/// provenance — the gap `ONLINE_VERIFY_NOTE` used to admit before this
+/// module verified anything. Attestation is only worth checking once the
+/// manifest itself agrees with the install: a manifest mismatch or fetch
+/// failure already answers the question on its own, and running an
+/// attestation lookup on top of that would just blur one honest verdict
+/// with another (and would waste a network round-trip on a verdict that's
+/// already decided).
 fn online_verdict(dir: &Path) -> Verdict {
     let Some(target) = shipped_target_triple() else {
         return Verdict::Unverifiable {
             reason: unmapped_host_reason(std::env::consts::OS, std::env::consts::ARCH),
         };
     };
-    verdict_from_manifest_result(
-        VERSION,
-        target,
-        fetch_published_manifest(VERSION, target),
-        dir,
-    )
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return Verdict::Unverifiable {
+                reason: format!("could not start a runtime for online verification: {e}"),
+            };
+        }
+    };
+
+    rt.block_on(async {
+        let client = match attestation_fetch::release_http_client_builder(VERSION).build() {
+            Ok(c) => c,
+            Err(e) => {
+                return Verdict::Unverifiable {
+                    reason: format!("building HTTP client: {e}"),
+                };
+            }
+        };
+
+        let manifest_bytes = match fetch_published_manifest_bytes(&client, VERSION, target).await {
+            Ok(bytes) => bytes,
+            Err(e) => return verdict_from_manifest_result(VERSION, target, Err(e), dir),
+        };
+
+        let manifest_verdict = verdict_from_manifest_result(
+            VERSION,
+            target,
+            parse_manifest_bytes(&manifest_bytes),
+            dir,
+        );
+
+        // Skip the network round-trip entirely when the manifest itself
+        // already disagrees — attestation cannot rescue a bad comparison,
+        // and there is nothing to bind it to that would change the verdict.
+        if !matches!(manifest_verdict, Verdict::Verified) {
+            return manifest_verdict;
+        }
+
+        let attestation_result = verify_manifest_attestation(&client, &manifest_bytes).await;
+        finish_online_verdict(manifest_verdict, attestation_result)
+    })
 }
 
 /// `temper version [--checksum] [--verify [--online]]`.
@@ -764,5 +906,135 @@ mod tests {
         assert_eq!(report.note, ONLINE_VERIFY_NOTE);
         let json = serde_json::to_string(&report).unwrap();
         assert!(json.contains("binary_sha256"));
+    }
+
+    /// `manifest_attestation_identity` is the whole security property Finding
+    /// 2 exists to fix: the digest passed to attestation verification MUST be
+    /// the digest of the manifest bytes actually used for the comparison —
+    /// never the sibling archive's digest, and never a re-fetch. This pins
+    /// that it (a) is a real sha256 of the exact bytes given, computed the
+    /// same way `Sha256::digest` is used everywhere else in this crate, (b)
+    /// carries the `v`-prefixed tag, and (c) is sensitive to its input —
+    /// different bytes must never collapse to the same digest, which would
+    /// be the signature of a "always hash something else" bug.
+    #[test]
+    fn manifest_attestation_identity_hashes_the_exact_bytes_compared() {
+        let bytes = br#"{"version":"0.3.0","target":"x86_64-unknown-linux-gnu","files":[]}"#;
+        let (digest, tag) = manifest_attestation_identity(bytes);
+        assert_eq!(digest, format!("{:x}", Sha256::digest(bytes)));
+        assert_eq!(tag, format!("v{VERSION}"));
+
+        let (other_digest, _) = manifest_attestation_identity(b"a completely different manifest");
+        assert_ne!(
+            digest, other_digest,
+            "different manifest bytes must produce a different digest"
+        );
+    }
+
+    /// `finish_online_verdict`'s composition rule, part 1: a `Verified`
+    /// manifest match plus an `Ok` attestation is the ONLY path to an overall
+    /// `Verified` — this is the positive case the security fix must still
+    /// allow.
+    #[test]
+    fn finish_online_verdict_verified_manifest_and_ok_attestation_is_verified() {
+        let verdict = finish_online_verdict(Verdict::Verified, Ok(()));
+        assert!(matches!(verdict, Verdict::Verified));
+    }
+
+    /// `finish_online_verdict`'s composition rule, part 2 — THE LOAD-BEARING
+    /// CASE for Finding 2: a `Verified` manifest match whose attestation
+    /// check FAILS must render `Unverifiable`, carrying the attestation
+    /// error's own text, never a silent `Verified`. Without this, a matching
+    /// manifest alone (as an attacker who tampered the manifest to describe
+    /// their own tampered install would produce) could pass as `Verified`
+    /// regardless of what the attestation lookup found.
+    #[test]
+    fn finish_online_verdict_verified_manifest_but_failed_attestation_is_unverifiable() {
+        let verdict = finish_online_verdict(
+            Verdict::Verified,
+            Err(AttestationVerifyError::NotOurs(
+                "wrong identity".to_string(),
+            )),
+        );
+        match verdict {
+            Verdict::Unverifiable { reason } => assert!(reason.contains("not ours")),
+            other => panic!("expected Unverifiable, got {other:?}"),
+        }
+    }
+
+    /// `finish_online_verdict`'s composition rule, part 3: a manifest
+    /// `Mismatch` passes straight through regardless of the attestation
+    /// result — attestation can only ever downgrade a `Verified` manifest
+    /// verdict, never rescue or override one the manifest comparison already
+    /// settled. Deliberately passes `Ok(())` here to prove a "successful"
+    /// attestation result cannot paper over a manifest mismatch.
+    #[test]
+    fn finish_online_verdict_manifest_mismatch_passes_through_regardless_of_attestation() {
+        let mismatch = Verdict::Mismatch {
+            mismatches: vec![manifest::Mismatch {
+                path: "temper".into(),
+                expected: "aa".into(),
+                actual: Some("bb".into()),
+            }],
+        };
+        let verdict = finish_online_verdict(mismatch, Ok(()));
+        assert!(matches!(verdict, Verdict::Mismatch { .. }));
+    }
+
+    /// `online_verdict`'s composition rule: attestation is only consulted
+    /// once the manifest itself agrees with the install. A manifest
+    /// `Mismatch` must stand on its own — it is exercised here via
+    /// `verdict_from_manifest_result` directly (no network call), and
+    /// `online_verdict` never runs the attestation check on top of a verdict
+    /// that already isn't `Verified` (see its `if !matches!` short-circuit,
+    /// which passes non-`Verified` manifest verdicts straight through without
+    /// a network round-trip).
+    #[test]
+    fn manifest_mismatch_stands_on_its_own_without_needing_attestation() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A manifest mismatch must short-circuit — no attestation check is
+        // even meaningful once the files themselves disagree.
+        std::fs::write(tmp.path().join("temper"), b"TAMPERED").unwrap();
+        let published = manifest::ReleaseManifest {
+            version: "0.3.0".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            files: vec![manifest::ManifestEntry {
+                path: "temper".to_string(),
+                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                size: 12,
+            }],
+        };
+        let manifest_verdict = verdict_from_manifest_result(
+            "0.3.0",
+            "x86_64-unknown-linux-gnu",
+            Ok(published),
+            tmp.path(),
+        );
+        assert!(matches!(manifest_verdict, Verdict::Mismatch { .. }));
+    }
+
+    /// `parse_manifest_bytes` round-trips the same JSON shape
+    /// `fetch_published_manifest_bytes` would hand it — pins that hashing and
+    /// parsing operate on the same raw representation (no re-encoding step
+    /// that could make the hashed bytes differ from the parsed ones).
+    #[test]
+    fn parse_manifest_bytes_parses_the_same_bytes_that_get_hashed() {
+        let manifest = manifest::ReleaseManifest {
+            version: "0.3.0".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            files: vec![manifest::ManifestEntry {
+                path: "temper".to_string(),
+                sha256: "a".repeat(64),
+                size: 12,
+            }],
+        };
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let parsed = parse_manifest_bytes(&bytes).expect("valid manifest JSON parses");
+        assert_eq!(parsed.version, manifest.version);
+        assert_eq!(parsed.files.len(), 1);
+        // The digest bound to this exact byte buffer, for the record — this
+        // is what `online_verdict` passes to the attestation lookup.
+        let (digest, _) = manifest_attestation_identity(&bytes);
+        assert_eq!(digest, format!("{:x}", Sha256::digest(&bytes)));
     }
 }

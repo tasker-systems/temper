@@ -1,6 +1,7 @@
 pub mod access_gate;
 pub mod actions;
 pub mod attest;
+pub mod attestation_fetch;
 pub mod backend_select;
 pub mod cli;
 pub mod cloud_backend;
