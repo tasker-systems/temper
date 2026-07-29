@@ -142,7 +142,54 @@ because the bundle obtained via `gh attestation download` carries no Rekor **inc
 this crate requires for a v0.3 bundle. This is a property of how that fixture was fetched from the
 GitHub attestations API, not evidence about trust-root injection.
 
-## Residual risk for Task 9
+## RESOLVED (same day): the residual risk is closed
+
+The first fixture was the wrong *kind* of attestation. Re-run against a real SLSA
+**build-provenance** bundle — the kind `attest-build-provenance` actually emits, and therefore the
+kind our pipeline will produce:
+
+```
+$ gh attestation download gh_2.96.0_macOS_arm64.zip --repo cli/cli \
+    --predicate-type https://slsa.dev/provenance/v1
+$ jq -r '.verificationMaterial|keys[]'
+certificate
+timestampVerificationData
+tlogEntries          ← present
+$ jq '.verificationMaterial.tlogEntries[0].inclusionProof'
+PRESENT
+```
+
+and verification then **succeeds end-to-end, offline, against the pinned root**:
+
+```
+bundle parsed OK (no network)
+root[0]: VERIFIED (offline, caller-supplied pinned root)
+root[1]: failed: certificate chain validation failed: UnknownIssuer
+```
+
+**Why the first fixture failed, precisely.** `gh attestation download` without a predicate filter
+returned cli/cli's `https://in-toto.io/attestation/release/v0.2` *release* attestation, which is
+**TSA-timestamped with no `tlogEntries` at all** — GitHub's own trust domain, not the public-good
+Sigstore instance. `sigstore-bundle`'s `validate_v0_3` requires an inclusion proof, so it was
+correctly rejected. Nothing was wrong with the crate or the trust root; the fixture was simply not a
+build-provenance bundle.
+
+**The negative control matters as much as the pass.** `root[1]` — the second trust root in the same
+file — fails with `UnknownIssuer`. A verifier that accepted *any* root would be worthless, so the
+fact that the wrong root is rejected is what makes the `VERIFIED` on `root[0]` mean something.
+
+**Consequences for Task 9:**
+
+- No `skip_tlog()`. `VerificationPolicy::default()` works as-is; the transparency-log guarantee is
+  kept in full. The `skip_tlog` escape hatch below is **not needed and must not be used**.
+- **Pin the public-good root specifically.** The trusted-root file carries more than one root, and
+  they are not interchangeable — verification must be attempted against the one that actually signed
+  our bundles. Pinning the wrong one fails closed (`UnknownIssuer`), which is the safe direction, but
+  it would be a confusing outage.
+- Task 9 must fetch the attestation with the SLSA provenance predicate explicitly, not whatever the
+  API returns by default.
+
+## Original residual risk (superseded by the section above)
 
 **Task 9 must establish how to obtain a bundle carrying its inclusion proof**, and must not assume
 the raw GitHub attestations API response is sufficient. Options to evaluate at implementation time:
