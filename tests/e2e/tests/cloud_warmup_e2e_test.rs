@@ -391,9 +391,16 @@ async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
 /// Seed goals across every `temper-status` value and assert the primer reports exactly
 /// the active ones.
 ///
-/// This is the assertion that must not be written as `list --status active`: that flag
-/// is a no-op (no `status` field on `ResourceListParams`), so it returns every row and
-/// the test would pass while reporting completed and cancelled goals as standing.
+/// This test now carries the whole rule. The primer used to compare
+/// `managed_meta["temper-status"]` itself and a unit test pinned that comparison, because
+/// `ResourceListParams` had no `status` field and `list --status active` returned every
+/// row — writing the assertion through that flag would have passed while reporting
+/// completed and cancelled goals as standing. PR #564 made the filter real, so the primer
+/// asks the query for `status = active` and the client-side copy is gone. What that
+/// moves here is the *subject*: this is no longer a refinement check over a local
+/// predicate but the only witness that the filter which actually runs excludes
+/// non-active goals — which is why it seeds every status value rather than just one
+/// counterexample.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn warmup_reports_only_active_goals(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;

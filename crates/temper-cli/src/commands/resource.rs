@@ -1057,6 +1057,57 @@ fn validate_status_filter(value: &str) -> Result<()> {
     schema::validate_goal_status(value)
 }
 
+/// Build the wire params both list endpoints take from the CLI's own `ListParams`.
+///
+/// `list` and `list --meta-only` differ only in their default page cap and the `meta_only`
+/// flag, and until 2026-07-29 each carried a character-identical copy of this block. The tag
+/// filter had to be added to both — which is exactly the drift the project's "never duplicate
+/// filter logic; the two copies will drift" rule names.
+///
+/// **This is also the only place a `--flag` becomes a wire field, and the only place that is
+/// observable from a test.** `list` returns `Result<()>` and prints its rows with `println!`,
+/// so nothing downstream can see whether an assignment happened: a
+/// `let _ = resolve_tag_csv(params.tag)?;` used to pass the entire suite, for `--tag` and for
+/// every sibling filter. `every_list_flag_reaches_its_api_field` fails when any one of them
+/// stops landing in its field.
+fn list_api_params(
+    params: &ListParams<'_>,
+    default_limit: usize,
+    meta_only: bool,
+) -> Result<temper_workflow::types::resource::ResourceListParams> {
+    let (sort, order) = match params.sort {
+        Some(raw) => {
+            let (f, o) = parse_sort_arg(raw)?;
+            (Some(f), Some(o))
+        }
+        None => (None, None),
+    };
+    // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
+    // `advances`→goal edge. An unparseable ref is a hard error (never a silent drop).
+    let goal = params
+        .goal
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()?
+        .map(uuid::Uuid::from);
+    Ok(temper_workflow::types::resource::ResourceListParams {
+        doc_type_name: params.doc_type.map(ToString::to_string),
+        context_ref: params.context.map(ToString::to_string),
+        cogmap_ids: resolve_cogmap_scope_csv(params.cogmap, params.context)?,
+        tags: resolve_tag_csv(params.tag)?,
+        stage: params.stage.map(str::to_string),
+        status: params.status.map(str::to_string),
+        q: params.title_contains.map(str::to_string),
+        goal,
+        sort,
+        order,
+        limit: resolve_list_limit(params.all, params.limit, default_limit),
+        offset: Some(params.offset.unwrap_or(0) as i64),
+        // The full-list path leaves this at its `None` default; only the meta path asserts it.
+        meta_only: meta_only.then_some(true),
+        ..Default::default()
+    })
+}
+
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     check_type_scoped_filters(params.doc_type, params.stage, params.goal, params.status)?;
@@ -1073,45 +1124,11 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     }
 
     use crate::actions::runtime;
-    use temper_workflow::types::resource::ResourceListParams;
 
     let fmt = params.format;
-    let doc_type = params.doc_type.map(ToString::to_string);
-    let context = params.context.map(ToString::to_string);
-    let limit = resolve_list_limit(params.all, params.limit, DEFAULT_LIST_LIMIT);
     let offset = params.offset.unwrap_or(0);
-    let (sort, order) = match params.sort {
-        Some(raw) => {
-            let (f, o) = parse_sort_arg(raw)?;
-            (Some(f), Some(o))
-        }
-        None => (None, None),
-    };
     let fields_owned: Vec<String> = params.fields.to_vec();
-    // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
-    // `advances`→goal edge. An unparseable ref is a hard error (never a silent drop).
-    let goal_id = params
-        .goal
-        .map(temper_workflow::operations::parse_ref)
-        .transpose()?
-        .map(uuid::Uuid::from);
-    let cogmap_ids = resolve_cogmap_scope_csv(params.cogmap, params.context)?;
-    let tags = resolve_tag_csv(params.tag)?;
-    let api_params = ResourceListParams {
-        doc_type_name: doc_type.clone(),
-        context_ref: context.clone(),
-        cogmap_ids,
-        tags,
-        stage: params.stage.map(str::to_string),
-        status: params.status.map(str::to_string),
-        q: params.title_contains.map(str::to_string),
-        goal: goal_id,
-        sort,
-        order,
-        limit,
-        offset: Some(offset as i64),
-        ..Default::default()
-    };
+    let api_params = list_api_params(&params, DEFAULT_LIST_LIMIT, false)?;
 
     // Cloud-only list: the server query. Any error (network, auth, 4xx/5xx)
     // surfaces as-is — there is no local-scan fallback.
@@ -1173,40 +1190,9 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 /// (`rows`, `total`, `facets`) are preserved untouched.
 fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
-    use temper_workflow::types::resource::ResourceListParams;
 
-    let limit = resolve_list_limit(params.all, params.limit, DEFAULT_META_LIST_LIMIT);
     let offset = params.offset.unwrap_or(0);
-    let (sort, order) = match params.sort {
-        Some(raw) => {
-            let (f, o) = parse_sort_arg(raw)?;
-            (Some(f), Some(o))
-        }
-        None => (None, None),
-    };
-    let goal_id = params
-        .goal
-        .map(temper_workflow::operations::parse_ref)
-        .transpose()?
-        .map(uuid::Uuid::from);
-    let cogmap_ids = resolve_cogmap_scope_csv(params.cogmap, params.context)?;
-    let tags = resolve_tag_csv(params.tag)?;
-    let api_params = ResourceListParams {
-        doc_type_name: params.doc_type.map(ToString::to_string),
-        context_ref: params.context.map(ToString::to_string),
-        cogmap_ids,
-        tags,
-        stage: params.stage.map(str::to_string),
-        status: params.status.map(str::to_string),
-        q: params.title_contains.map(str::to_string),
-        goal: goal_id,
-        sort,
-        order,
-        limit,
-        offset: Some(offset as i64),
-        meta_only: Some(true),
-        ..Default::default()
-    };
+    let api_params = list_api_params(&params, DEFAULT_META_LIST_LIMIT, true)?;
     let fmt = params.format;
     let fields_owned: Vec<String> = params.fields.to_vec();
 
@@ -2348,6 +2334,171 @@ mod list_helpers_tests {
     fn an_empty_tag_is_refused() {
         assert!(resolve_tag_csv(&["".to_string()]).is_err());
         assert!(resolve_tag_csv(&["   ".to_string()]).is_err());
+    }
+
+    /// A `ListParams` with every field defaulted to "absent", for tests that vary one axis.
+    /// Borrows the slices the caller owns, because `ListParams` holds references.
+    fn list_params<'a>(tag: &'a [String], cogmap: &'a [String]) -> ListParams<'a> {
+        ListParams {
+            doc_type: None,
+            tag,
+            context: None,
+            cogmap,
+            limit: None,
+            all: false,
+            offset: None,
+            sort: None,
+            title_contains: None,
+            stage: None,
+            goal: None,
+            status: None,
+            format: crate::format::OutputFormat::Json,
+            meta_only: false,
+            fields: &[],
+        }
+    }
+
+    /// Every `--flag` on `ListParams` lands in the wire field it names.
+    ///
+    /// This is the guard the CLI list path never had. `list` returns `Result<()>` and prints
+    /// its rows, so no test downstream of `list_api_params` can observe an assignment: the one
+    /// e2e that drives `commands::resource::list` passed every filter as absent, which means
+    /// deleting `tags: resolve_tag_csv(...)` — or `stage`, `goal`, `q`, `sort`, `limit`,
+    /// `offset` — kept the whole suite green. The tag filter's own e2e tests do not close this:
+    /// they call `client.resources().list(&ResourceListParams { tags: ... })` directly, one
+    /// call BELOW the seam, so they prove the CSV filters and prove nothing about how it got
+    /// there.
+    ///
+    /// Asserting field-by-field rather than against a whole struct is deliberate: a single
+    /// `assert_eq!` on `ResourceListParams` would fail as one opaque diff, and would need
+    /// rewriting every time an unrelated field is added.
+    #[test]
+    fn every_list_flag_reaches_its_api_field() {
+        use temper_workflow::types::resource::{ResourceSortField, SortOrder};
+
+        let tags = vec!["ci".to_string(), "security".to_string()];
+        let goal_uuid = uuid::Uuid::now_v7();
+        let goal_ref = format!("some-goal-{goal_uuid}");
+
+        let mut params = list_params(&tags, &[]);
+        params.doc_type = Some("task");
+        params.context = Some("@me/temper");
+        params.stage = Some("in-progress");
+        params.goal = Some(goal_ref.as_str());
+        params.title_contains = Some("filter");
+        params.sort = Some("created:asc");
+        params.limit = Some(7);
+        params.offset = Some(3);
+
+        let api = list_api_params(&params, DEFAULT_LIST_LIMIT, false)
+            .expect("a well-formed ListParams must build");
+
+        assert_eq!(api.doc_type_name.as_deref(), Some("task"), "--type");
+        assert_eq!(api.tags.as_deref(), Some("ci,security"), "--tag");
+        assert_eq!(api.context_ref.as_deref(), Some("@me/temper"), "--context");
+        assert_eq!(api.stage.as_deref(), Some("in-progress"), "--stage");
+        assert_eq!(api.goal, Some(goal_uuid), "--goal (resolved from the ref)");
+        assert_eq!(api.q.as_deref(), Some("filter"), "--title-contains -> q");
+        assert_eq!(api.limit, Some(7), "--limit");
+        assert_eq!(api.offset, Some(3), "--offset");
+        // The sort enums derive no `PartialEq`, so these match rather than compare. Both are
+        // closed unit-variant sets, so a `matches!` here is exhaustive over what can be sent.
+        assert!(
+            matches!(api.sort, Some(ResourceSortField::Created)),
+            "--sort field must reach `sort`; got {:?}",
+            api.sort
+        );
+        assert!(
+            matches!(api.order, Some(SortOrder::Asc)),
+            "--sort direction must reach `order`; got {:?}",
+            api.order
+        );
+    }
+
+    /// `--status` and `--cogmap` cannot ride the fixture above — `--status` applies only to
+    /// `--type goal`, and `--cogmap` is mutually exclusive with `--context`. They reach their
+    /// fields on the same terms, and are asserted here so the seam covers all of them.
+    #[test]
+    fn status_and_cogmap_reach_their_api_fields() {
+        let cogmap_uuid = uuid::Uuid::now_v7();
+        let cogmaps = vec![format!("some-map-{cogmap_uuid}")];
+
+        let mut goal_params = list_params(&[], &[]);
+        goal_params.doc_type = Some("goal");
+        goal_params.status = Some("active");
+        let api = list_api_params(&goal_params, DEFAULT_LIST_LIMIT, false)
+            .expect("a goal-scoped --status must build");
+        assert_eq!(api.status.as_deref(), Some("active"), "--status");
+
+        let cogmap_params = list_params(&[], &cogmaps);
+        let api = list_api_params(&cogmap_params, DEFAULT_LIST_LIMIT, false)
+            .expect("a --cogmap with no --context must build");
+        assert_eq!(
+            api.cogmap_ids.as_deref(),
+            Some(cogmap_uuid.to_string().as_str()),
+            "--cogmap (resolved from the ref)"
+        );
+    }
+
+    /// The two list paths differ in exactly two things, and nothing else.
+    ///
+    /// This is what makes one builder safe to share. `list` and `list --meta-only` carried
+    /// character-identical copies of the param build until they were collapsed; the risk of
+    /// collapsing them is that a difference gets flattened away, so both surviving differences
+    /// are pinned. `meta_only` must stay `None` on the full path rather than `Some(false)` —
+    /// the field is `skip_serializing_if = "Option::is_none"`, so the two are different wires.
+    #[test]
+    fn the_two_list_paths_differ_only_in_page_cap_and_meta_flag() {
+        let params = list_params(&[], &[]);
+
+        let full = list_api_params(&params, DEFAULT_LIST_LIMIT, false).expect("full list builds");
+        let meta =
+            list_api_params(&params, DEFAULT_META_LIST_LIMIT, true).expect("meta list builds");
+
+        assert_eq!(full.limit, Some(DEFAULT_LIST_LIMIT as i64));
+        assert_eq!(meta.limit, Some(DEFAULT_META_LIST_LIMIT as i64));
+        assert_eq!(
+            full.meta_only, None,
+            "the full path must not send meta_only"
+        );
+        assert_eq!(meta.meta_only, Some(true));
+
+        // Every OTHER field agrees, so the shared builder is not flattening a third
+        // difference. Compared through serde because `ResourceListParams` derives no
+        // `PartialEq` — and comparing the wire form is the stronger check anyway, since the
+        // wire is what the two paths actually differ on.
+        let mut full_wire = serde_json::to_value(&full).expect("serialize full params");
+        let mut meta_wire = serde_json::to_value(&meta).expect("serialize meta params");
+        for wire in [&mut full_wire, &mut meta_wire] {
+            let obj = wire.as_object_mut().expect("params serialize to an object");
+            obj.remove("limit");
+            obj.remove("meta_only");
+        }
+        assert_eq!(
+            full_wire, meta_wire,
+            "the two paths must differ ONLY in page cap and meta_only"
+        );
+    }
+
+    /// `--all` overrides the default page cap on both paths — it is the one flag whose effect
+    /// is an ABSENT wire value, so an assignment test cannot see it and it needs its own case.
+    #[test]
+    fn all_removes_the_page_cap_on_both_paths() {
+        let mut params = list_params(&[], &[]);
+        params.all = true;
+
+        assert_eq!(
+            list_api_params(&params, DEFAULT_LIST_LIMIT, false)
+                .expect("builds")
+                .limit,
+            None
+        );
+        assert_eq!(
+            list_api_params(&params, DEFAULT_META_LIST_LIMIT, true)
+                .expect("builds")
+                .limit,
+            None
+        );
     }
 
     /// `--stage` on a mismatched `--type` still errors, but omitting `--type` is NOT a
