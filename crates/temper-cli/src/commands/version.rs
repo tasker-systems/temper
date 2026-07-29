@@ -1,5 +1,6 @@
-//! `temper version [--checksum] [--verify]` — version reporting,
-//! running-binary self-attestation, and offline manifest verification.
+//! `temper version [--checksum] [--verify [--online]]` — version reporting,
+//! running-binary self-attestation, and offline (or online) manifest
+//! verification.
 //!
 //! clap injects the terse `temper --version` / `temper -V` for free (the root
 //! `#[command(version = ...)]` in `cli.rs`). This subcommand is the richer,
@@ -25,6 +26,19 @@
 //! complementary facts ("does this install match what was published" vs
 //! "here is this binary's own hash"), not alternatives, so neither flag is
 //! ever silently dropped in favor of the other.
+//!
+//! **`--verify --online` re-fetches the published manifest instead of
+//! trusting the local copy.** The offline check compares an install dir
+//! against a manifest *in that same dir* — an actor who replaced the binary
+//! could replace the manifest beside it too. `--online` closes that gap by
+//! fetching `temper-v{VERSION}-{triple}.manifest.json` from the release's own
+//! GitHub download path (mirroring `install.sh`'s asset naming exactly, see
+//! `published_manifest_url`) and comparing against *that*. It still does
+//! not verify who produced the release — that is `temper update`'s
+//! attestation check, or `gh attestation verify` run out-of-band (see
+//! `ONLINE_VERIFY_NOTE`). A host whose OS/arch temper does not ship, or a
+//! network failure, both render [`manifest::Verdict::Unverifiable`] — never
+//! an error, and never a false `Verified`.
 //!
 //! **Windows carries no manifest today**, by the design's own deferral
 //! (`install.ps1` ships no `.temper-manifest.json`). `--verify` on Windows
@@ -96,6 +110,18 @@ const OFFLINE_VERIFY_NOTE: &str = "Offline verification compares the installed f
     manifest in the same directory. It detects corruption and drift, but not an attacker, who \
     could replace both. Run `temper version --verify --online` for attestation-backed provenance.";
 
+/// Disclaimer carried in `--verify --online` output. Load-bearing for the same
+/// reason as `OFFLINE_VERIFY_NOTE`: it states plainly what re-fetching the
+/// published manifest does and does not prove. It closes the "an attacker
+/// replaced both files" gap `OFFLINE_VERIFY_NOTE` names, but it is still not a
+/// signature check — that is `temper update`'s attestation verification, or
+/// `gh attestation verify` run out-of-band against the release archive.
+const ONLINE_VERIFY_NOTE: &str = "Online verification re-fetches the release manifest published \
+    on GitHub for this exact version and host, rather than trusting the copy installed beside \
+    the binary — so a compromised local manifest can no longer hide a compromised binary. It \
+    does not verify who produced the release; that is `temper update`'s attestation check, or \
+    `gh attestation verify` run out-of-band.";
+
 /// Offline verification report for `temper version --verify`. `checksum` is
 /// present only when `--checksum` was *also* passed (skipped in
 /// serialization otherwise) — mirrors the `VersionReport.checksum` pattern so
@@ -147,6 +173,31 @@ fn build_verify_report(dir: &Path, include_checksum: bool) -> Result<VerifyRepor
                 .to_string(),
         },
     };
+    finish_verify_report(dir, verdict, include_checksum, OFFLINE_VERIFY_NOTE)
+}
+
+/// `temper version --verify --online`'s report builder. Mirrors
+/// [`build_verify_report`] in every respect except where the verdict comes
+/// from: [`online_verdict`] (a freshly re-fetched published manifest) instead
+/// of [`manifest::load_from_dir`] (the local copy beside the binary), and it
+/// carries [`ONLINE_VERIFY_NOTE`] rather than [`OFFLINE_VERIFY_NOTE`].
+fn build_verify_report_online(dir: &Path, include_checksum: bool) -> Result<VerifyReport> {
+    let verdict = online_verdict(dir);
+    finish_verify_report(dir, verdict, include_checksum, ONLINE_VERIFY_NOTE)
+}
+
+/// Assemble the final [`VerifyReport`] from an already-computed `verdict`,
+/// folding in the running binary's self-attestation when `include_checksum`
+/// is set. Shared tail of [`build_verify_report`] and
+/// [`build_verify_report_online`] so the two verdict sources (local file vs.
+/// network fetch) do not each carry their own copy of the checksum-composition
+/// logic.
+fn finish_verify_report(
+    dir: &Path,
+    verdict: Verdict,
+    include_checksum: bool,
+    note: &'static str,
+) -> Result<VerifyReport> {
     let checksum = if include_checksum {
         let (binary_sha256, binary_path) = compute_self_checksum()?;
         Some(BinaryChecksum {
@@ -163,20 +214,171 @@ fn build_verify_report(dir: &Path, include_checksum: bool) -> Result<VerifyRepor
         install_dir: dir.display().to_string(),
         verdict,
         checksum,
-        note: OFFLINE_VERIFY_NOTE,
+        note,
     })
 }
 
-/// `temper version [--checksum] [--verify]`.
+/// Map the running host to one of the three shipped release triples. Split
+/// out from [`shipped_target_triple`] so the mapping itself is unit-testable
+/// against explicit `(os, arch)` pairs, independent of whatever host actually
+/// runs the test suite.
+fn shipped_target_triple_for(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
+        _ => None,
+    }
+}
+
+/// The running host's shipped target triple, resolved from compile-time
+/// `std::env::consts::{OS, ARCH}` — the same host the running binary was
+/// built for. `None` means this host is not one of the three temper ships
+/// release archives for; callers must render that as
+/// [`Verdict::Unverifiable`], never an error and never a [`Verdict::Mismatch`]
+/// — "we cannot tell" is not "it is wrong".
+fn shipped_target_triple() -> Option<&'static str> {
+    shipped_target_triple_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The published manifest asset URL. Mirrors `install.sh`'s own
+/// `ARCHIVE`/`MANIFEST`/`URL_BASE` construction (`scripts/install/install.sh`
+/// lines ~117-122) exactly — `temper-v{version}-{target}.manifest.json` under
+/// the tag's release download path. Kept as one function so the naming has a
+/// single definition: a divergence here 404s at runtime, invisible to a test
+/// that constructs its own expectation instead of deriving it from what the
+/// installer actually uses.
+fn published_manifest_url(version: &str, target: &str) -> String {
+    format!(
+        "https://github.com/tasker-systems/temper/releases/download/v{version}/\
+         temper-v{version}-{target}.manifest.json"
+    )
+}
+
+/// Re-fetch the published release manifest for `version`/`target` over the
+/// network. Matches the HTTP posture `update.rs::resolve_latest_tag`
+/// establishes — a `temper-cli/{VERSION}` user agent, 10s connect / 30s total
+/// timeout (reqwest has no default timeout, so a black-holed network must not
+/// hang forever), and HTTP 403 mapped to an explicit rate-limit message rather
+/// than a bare 403 that reads like an auth wall — so this crate carries
+/// exactly one HTTP client configuration, not a second one invented here.
+/// Runs its own short-lived tokio runtime for the one request, same as
+/// `resolve_latest_tag`, rather than making this module's `run` async.
+fn fetch_published_manifest(version: &str, target: &str) -> Result<manifest::ReleaseManifest> {
+    let url = published_manifest_url(version, target);
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .user_agent(format!("temper-cli/{VERSION}"))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| TemperError::Network(format!("building HTTP client: {e}")))?;
+        let resp =
+            client.get(&url).send().await.map_err(|e| {
+                TemperError::Network(format!("fetching published manifest {url}: {e}"))
+            })?;
+        // A 403 is almost always the unauthenticated rate limit (shared NAT/CI
+        // IPs hit it) — flag it as transient rather than leaving a bare "403
+        // Forbidden" that reads like an auth wall. Mirrors
+        // `resolve_latest_tag`'s handling of the same status.
+        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(TemperError::Network(
+                "GitHub rate-limited or forbidden (HTTP 403) while fetching the published \
+                 manifest. Your install is unchanged — retry in a few minutes."
+                    .to_string(),
+            ));
+        }
+        if !resp.status().is_success() {
+            return Err(TemperError::Network(format!(
+                "fetching published manifest {url} returned HTTP {}",
+                resp.status()
+            )));
+        }
+        resp.json::<manifest::ReleaseManifest>()
+            .await
+            .map_err(|e| TemperError::Api(format!("parsing published manifest JSON: {e}")))
+    })
+}
+
+/// Turn a manifest-fetch outcome into a [`Verdict`]. Pure and injectable — the
+/// `Result` is passed in rather than fetched here — so the two distinct
+/// failure shapes stay separately testable without a live network call: a
+/// successful fetch that disagrees with the install dir renders
+/// [`Verdict::Mismatch`] naming the files, while the fetch itself failing
+/// renders [`Verdict::Unverifiable`] naming the network problem. Collapsing
+/// those two into one message would blur "this check could not run" with
+/// "this check ran and your install is wrong" — completely different user
+/// actions.
+fn verdict_from_manifest_result(
+    version: &str,
+    target: &str,
+    result: Result<manifest::ReleaseManifest>,
+    dir: &Path,
+) -> Verdict {
+    match result {
+        Ok(published) => manifest::verify_dir(&published, dir),
+        Err(e) => Verdict::Unverifiable {
+            reason: format!(
+                "could not reach the published manifest for v{version} ({target}): {e} — this \
+                 says nothing about whether your install matches what was published, only that \
+                 this check could not run. Retry, or fall back to the offline \
+                 `temper version --verify`."
+            ),
+        },
+    }
+}
+
+/// The reason rendered when the running host maps to none of the three
+/// shipped triples. Split out from [`online_verdict`] so the message itself
+/// is unit-testable against explicit `(os, arch)` inputs rather than only
+/// through whatever host happens to run the test suite.
+fn unmapped_host_reason(os: &str, arch: &str) -> String {
+    format!(
+        "no published manifest for this host ({os}-{arch}) — temper ships \
+         aarch64-apple-darwin, x86_64-unknown-linux-gnu, and x86_64-pc-windows-msvc only, so \
+         there is nothing published to compare against"
+    )
+}
+
+/// Build the online verdict for `dir`: re-fetch the published manifest for
+/// the running version and host triple, and compare against it — rather than
+/// trusting the local copy an actor who replaced the binary could have
+/// replaced too. An unmapped host and a network failure both render
+/// [`Verdict::Unverifiable`], never an error and never a false `Verified`.
+fn online_verdict(dir: &Path) -> Verdict {
+    let Some(target) = shipped_target_triple() else {
+        return Verdict::Unverifiable {
+            reason: unmapped_host_reason(std::env::consts::OS, std::env::consts::ARCH),
+        };
+    };
+    verdict_from_manifest_result(
+        VERSION,
+        target,
+        fetch_published_manifest(VERSION, target),
+        dir,
+    )
+}
+
+/// `temper version [--checksum] [--verify [--online]]`.
 ///
 /// `--verify` takes precedence over the plain [`VersionReport`] shape and
-/// renders a [`VerifyReport`] instead — but the two flags themselves compose:
+/// renders a [`VerifyReport`] instead — but the flags themselves compose:
 /// `--verify --checksum` folds the binary self-attestation into the verify
-/// report rather than silently dropping `--checksum`.
-pub fn run(checksum: bool, verify: bool, fmt: OutputFormat) -> Result<()> {
+/// report rather than silently dropping `--checksum`, and `--verify --online`
+/// (clap enforces `online` only ever arrives alongside `verify` via
+/// `requires = "verify"`) sources the verdict from a freshly re-fetched
+/// published manifest instead of the local copy, while still composing with
+/// `--checksum` the same way the offline path does.
+pub fn run(checksum: bool, verify: bool, online: bool, fmt: OutputFormat) -> Result<()> {
     if verify {
         let install_dir = resolve_install_dir()?;
-        let report = build_verify_report(&install_dir, checksum)?;
+        let report = if online {
+            build_verify_report_online(&install_dir, checksum)?
+        } else {
+            build_verify_report(&install_dir, checksum)?
+        };
         let rendered = crate::format::render(&report, fmt)?;
         crate::output::plain(rendered);
         return Ok(());
@@ -396,5 +598,171 @@ mod tests {
             !json.contains("binary_sha256"),
             "no checksum key when not requested: {json}"
         );
+    }
+
+    /// The published-manifest URL must match the asset naming the release
+    /// actually uses (`scripts/install/install.sh` lines ~117-122: `ARCHIVE`,
+    /// `URL_BASE`, `MANIFEST`) — a mismatch here 404s at runtime and is
+    /// invisible to a unit test that constructs its own expectation. This
+    /// expected string is transcribed from install.sh's own construction
+    /// (`URL_BASE="…/releases/download/${VERSION}"`,
+    /// `MANIFEST="temper-${VERSION}-${TARGET}.manifest.json"`, where
+    /// `VERSION` there already carries the `v` prefix), not invented.
+    #[test]
+    fn published_manifest_url_matches_release_asset_naming() {
+        let url = published_manifest_url("0.3.0", "x86_64-unknown-linux-gnu");
+        assert_eq!(
+            url,
+            "https://github.com/tasker-systems/temper/releases/download/v0.3.0/\
+             temper-v0.3.0-x86_64-unknown-linux-gnu.manifest.json"
+        );
+    }
+
+    /// The three shipped triples map correctly from `(os, arch)`.
+    #[test]
+    fn shipped_target_triple_maps_the_three_shipped_hosts() {
+        assert_eq!(
+            shipped_target_triple_for("macos", "aarch64"),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            shipped_target_triple_for("linux", "x86_64"),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            shipped_target_triple_for("windows", "x86_64"),
+            Some("x86_64-pc-windows-msvc")
+        );
+    }
+
+    /// A host temper does not ship for maps to `None` — the signal callers
+    /// must render as `Unverifiable`, never an error and never `Mismatch`.
+    #[test]
+    fn shipped_target_triple_is_none_for_unmapped_hosts() {
+        assert_eq!(shipped_target_triple_for("linux", "aarch64"), None);
+        assert_eq!(shipped_target_triple_for("freebsd", "x86_64"), None);
+        assert_eq!(shipped_target_triple_for("macos", "x86_64"), None);
+    }
+
+    /// The unmapped-host reason names the host and the three shipped triples
+    /// — this is the exact message `online_verdict` renders (never an error,
+    /// never a false `Verified`) when the running host is not one temper
+    /// ships for. Calls the real production function, not a re-derived copy.
+    #[test]
+    fn unmapped_host_reason_names_the_host_and_shipped_triples() {
+        let reason = unmapped_host_reason("freebsd", "x86_64");
+        assert!(reason.contains("no published manifest"), "{reason}");
+        assert!(reason.contains("freebsd-x86_64"), "{reason}");
+        assert!(reason.contains("aarch64-apple-darwin"), "{reason}");
+        assert!(reason.contains("x86_64-unknown-linux-gnu"), "{reason}");
+        assert!(reason.contains("x86_64-pc-windows-msvc"), "{reason}");
+    }
+
+    /// A network failure renders `Unverifiable` with a reason that says the
+    /// check could not run — distinct wording from a `Mismatch`, which would
+    /// instead name disagreeing files. Exercised via
+    /// `verdict_from_manifest_result` directly (no live network call), the
+    /// same dependency-injection seam that keeps `update.rs::resolve_latest_tag`
+    /// itself untested while its pure helpers are.
+    #[test]
+    fn network_failure_renders_unverifiable_not_mismatch_or_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = TemperError::Network("connection refused".to_string());
+        let verdict =
+            verdict_from_manifest_result("0.3.0", "x86_64-unknown-linux-gnu", Err(err), tmp.path());
+        match verdict {
+            Verdict::Unverifiable { reason } => {
+                assert!(
+                    reason.contains("could not reach"),
+                    "reason must say the check could not run: {reason}"
+                );
+                assert!(
+                    !reason.contains("disagrees"),
+                    "a network failure must not be worded like a content disagreement: {reason}"
+                );
+            }
+            other => panic!("expected Unverifiable, got {other:?}"),
+        }
+    }
+
+    /// A successful fetch that matches the install dir renders `Verified` —
+    /// the online path reuses `manifest::verify_dir` rather than a second
+    /// hand-rolled comparison.
+    #[test]
+    fn successful_fetch_matching_dir_renders_verified() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("temper"), b"binary-bytes").unwrap();
+        let published = manifest::ReleaseManifest {
+            version: "0.3.0".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            files: vec![manifest::ManifestEntry {
+                path: "temper".to_string(),
+                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                size: 12,
+            }],
+        };
+        let verdict = verdict_from_manifest_result(
+            "0.3.0",
+            "x86_64-unknown-linux-gnu",
+            Ok(published),
+            tmp.path(),
+        );
+        assert!(matches!(verdict, Verdict::Verified));
+    }
+
+    /// A successful fetch that disagrees with the install dir renders
+    /// `Mismatch` naming the file — distinguishable from the `Unverifiable`
+    /// a network failure produces.
+    #[test]
+    fn successful_fetch_disagreeing_with_dir_renders_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("temper"), b"TAMPERED").unwrap();
+        let published = manifest::ReleaseManifest {
+            version: "0.3.0".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            files: vec![manifest::ManifestEntry {
+                path: "temper".to_string(),
+                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                size: 12,
+            }],
+        };
+        let verdict = verdict_from_manifest_result(
+            "0.3.0",
+            "x86_64-unknown-linux-gnu",
+            Ok(published),
+            tmp.path(),
+        );
+        match verdict {
+            Verdict::Mismatch { mismatches } => assert_eq!(mismatches[0].path, "temper"),
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
+    }
+
+    // `--online` without `--verify` is a usage error, not a silent no-op —
+    // enforced declaratively via clap's `requires = "verify"` on the `online`
+    // arg. Actually exercised (not just documented) in
+    // `cli.rs::version_flag_tests::online_alone_is_a_usage_error`, which
+    // parses `["temper", "version", "--online"]` through the real `Cli`
+    // command and asserts it is rejected.
+
+    /// `--verify --online` must compose with `--checksum` exactly like the
+    /// offline path does: the running binary's self-attestation hash rides
+    /// along regardless of where the verdict came from. Exercised via
+    /// `finish_verify_report` directly — the shared tail
+    /// `build_verify_report_online` delegates to — rather than through
+    /// `build_verify_report_online` itself, which would perform a real
+    /// network fetch on any host mapped to a shipped triple.
+    #[test]
+    fn online_report_composes_verdict_and_checksum_via_finish_verify_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let verdict = Verdict::Unverifiable {
+            reason: "test".to_string(),
+        };
+        let report = finish_verify_report(tmp.path(), verdict, true, ONLINE_VERIFY_NOTE)
+            .expect("checksum of test binary");
+        assert!(report.checksum.is_some());
+        assert_eq!(report.note, ONLINE_VERIFY_NOTE);
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("binary_sha256"));
     }
 }
