@@ -48,3 +48,17 @@ jq -e 'all(.files[]; (.path | startswith("/")) | not)' "$OUT" >/dev/null \
   || fail "manifest contains absolute paths"
 
 echo "PASS: emit-manifest emits the golden wire shape over real bytes"
+
+# 6. A staging dir with no files must not produce a manifest at all. A vacuous
+#    manifest is worse than no manifest: CI would faithfully SIGN it, and
+#    `--verify --online` would then return a signature-backed `verified` over
+#    zero files. Every layer green, nothing checked.
+mkdir -p "$TMP/empty-staging"
+EMPTY_OUT="$TMP/empty.json"
+if VERSION=0.0.0 TARGET=x86_64-unknown-linux-gnu STAGING="$TMP/empty-staging" OUTPUT="$EMPTY_OUT" \
+     bash "$EMIT" >/dev/null 2>&1; then
+  fail "emit-manifest.sh exited 0 on an empty staging dir"
+fi
+[ ! -s "$EMPTY_OUT" ] || fail "emit-manifest.sh wrote a manifest for an empty staging dir"
+
+echo "PASS: an empty staging dir is refused rather than emitting a vacuous manifest"

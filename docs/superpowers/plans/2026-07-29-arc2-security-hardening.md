@@ -160,10 +160,16 @@ Expected: all assertions PASS, including the new one.
 - [ ] **Step 5: Verify the script is still syntactically valid**
 
 ```bash
-sh -n .github/scripts/release/emit-manifest.sh && bash -n .github/scripts/release/emit-manifest.sh
+bash -n .github/scripts/release/emit-manifest.sh && bash -n .github/scripts/test-emit-manifest.sh
 ```
 
 Expected: no output, exit 0.
+
+> **`bash -n`, not `sh -n`.** Unlike `install.sh`, this script is `#!/usr/bin/env bash` and is
+> invoked as bash everywhere (`build-cli-binaries.yml:179`; `bash "$EMIT"` in the harness). It uses
+> bash process substitution at `:44` (`done < <(find …)`), so `sh -n` exits 2 — identically on
+> `HEAD`, so that is not a regression and never was a valid gate here. The POSIX-sh constraint in
+> "Global Constraints" belongs to `install.sh` alone.
 
 - [ ] **Step 6: Commit**
 
