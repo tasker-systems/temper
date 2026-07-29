@@ -72,6 +72,56 @@ Archive contents (flat layout — no versioned top-level directory):
 
 The installer scripts in [scripts/install/](../../scripts/install/) fetch the latest release via the GitHub API, download the matching archive plus checksum, verify, extract into `~/.local/share/temper/` (mac/linux) or `%LOCALAPPDATA%\Programs\temper\` (Windows), and symlink or PATH-update as appropriate.
 
+## Standing obligation: Sigstore root rotation
+
+`temper` verifies release attestations against a Sigstore trust root **pinned
+at build time and compiled into the binary** (`crates/temper-cli/trust/sigstore-public-good-trusted-root.json`,
+embedded via `include_str!` in `attest.rs`) — deliberately not fetched live
+over TUF at verify time. See
+[docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md)
+for why: the Rust TUF ecosystem is unsettled, and pinning converts an open
+ecosystem problem into a closed, auditable release-engineering one — the same
+`EXPECTED_MODEL_SHA256` doctrine (`crates/temper-ingest/build.rs`) applied to
+the trust root itself.
+
+**The cost of that choice is a standing release obligation, not a one-time
+decision: when Sigstore rotates its trust root, cut a release promptly.** A
+binary's pinned root is fixed at the moment it was built. It cannot verify an
+attestation signed under a *newer* root than the one baked in — so once
+Sigstore rotates, every `temper` built before that rotation will fail
+`--verify --online` and `temper update`'s (mandatory, no-bypass) attestation
+check against any release built *after* the rotation, until that older
+`temper` is itself replaced by a build carrying the new root.
+
+Three things bound how bad this is in practice:
+
+- **Updates chain.** vN's pinned root verifies vN+1's attestation as long as
+  no rotation lands between them; vN+1 ships whatever root was current when
+  *it* was built. Only a rotation landing strictly between the version
+  installed and the version being verified against actually bites.
+- **Fulcio's public-good root is long-lived and rotations are rare and
+  pre-announced** — this is not a weekly fire drill.
+- **The failure is loud and distinguishable, never a silent downgrade.**
+  `attest.rs`'s `AttestError::TrustRootUnusable` fires specifically for an
+  unusable/stale pinned root, distinct from `NotOurs` (a bad signature or
+  wrong identity) — the two recoveries do not overlap, and the code never
+  degrades either to a warning that reads as "verified anyway."
+
+**The escape hatch, always available:** re-running `install.sh` fetches a
+fresh archive and verifies it against the archive-level SHA256 sidecar (hash
+verification does not depend on the pinned attestation root at all), so a
+user stuck behind a stale pinned root can always recover a working install
+without waiting for `temper update`'s attestation path to catch up.
+
+**Maintainer action:** when you learn Sigstore has rotated (or is scheduled
+to), treat it the same as any other change that forces a release — update
+`crates/temper-cli/trust/sigstore-public-good-trusted-root.json` from a fresh
+`gh attestation trusted-root`, verify it still contains the public-good root
+(not GitHub's own, no-transparency-log root — see `attest.rs`'s module docs
+for how to tell them apart), and run `cargo make release-prepare` promptly.
+Sitting on a rotation is what turns this bounded, well-understood cost into an
+unbounded one for anyone who hasn't updated recently.
+
 ## ONNX Runtime Versioning
 
 The release workflow pins the bundled ONNX Runtime version via an env var at the top of `.github/workflows/build-cli-binaries.yml`:
@@ -158,6 +208,8 @@ The per-platform matrix entries in `build-cli-binaries.yml` are self-documenting
 
 - [`docs/guides/install.md`](install.md) — user-facing install instructions
 - [`docs/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md`](../superpowers/specs/2026-04-17-temper-cli-binary-release-design.md) — original design doc
+- [`docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`](../superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md) — per-file manifest + attestation design
+- [`docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md) — why the trust root is pinned, and which crate/root
 - [`tools/scripts/release/`](../../tools/scripts/release/) — the shell scripts driving `release-prepare`
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the tag-driven release workflow
 - [`.github/workflows/build-cli-binaries.yml`](../../.github/workflows/build-cli-binaries.yml) — the reusable build matrix

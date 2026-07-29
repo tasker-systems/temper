@@ -89,9 +89,20 @@ cargo install --path crates/temper-cli --locked --features embed,extract\n\
 /// replace the running image). Points at the one action that *does* update: re-
 /// running the PowerShell installer. Deliberately NOT the `cargo install` hint,
 /// which is false advice for a script install.
+///
+/// Also states the Windows declared hole from the binary-attestation design
+/// (`docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`,
+/// "Out of scope → Deferred"): `install.ps1` writes no per-file manifest, so a
+/// Windows install is hash-verified only (the archive checksum) and has no
+/// attestation-verified update path — `temper version --verify` there always
+/// reports `unverifiable`, never `verified`. Per the project goal "no door
+/// offers less than another without saying so," that asymmetry must be stated
+/// here, not left implicit.
 #[cfg(windows)]
 const WINDOWS_REFUSAL: &str = "`temper update` does not yet support self-update on Windows \
-(a running .exe is file-locked). Re-run the installer to update:\n  \
+(a running .exe is file-locked). Windows installs are hash-verified only (the archive \
+checksum) — there is no attestation-verified update path yet, and `temper version --verify` \
+here always reports `unverifiable`, never `verified`. Re-run the installer to update:\n  \
 irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex";
 
 /// GitHub `releases/latest` response — only the field we consume. A typed
