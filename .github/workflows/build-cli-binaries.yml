@@ -22,6 +22,10 @@ jobs:
     name: ${{ matrix.target.name }}
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       SQLX_OFFLINE: 'true'
     strategy:
@@ -197,6 +201,21 @@ jobs:
           ls -lh "$ARCHIVE"
           sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
           cat "${ARCHIVE}.sha256"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          # Each matrix target produces exactly one of .tar.gz/.zip (per its
+          # archive_ext above), never both. subject-path tolerates a
+          # non-matching line in the list — @actions/glob resolves each line
+          # independently and only errors if the *combined* match set across
+          # every line is empty — so the manifest plus whichever archive this
+          # target actually built are attested together without a per-target
+          # conditional here.
+          subject-path: |
+            temper-v${{ inputs.version }}-${{ matrix.target.triple }}.tar.gz
+            temper-v${{ inputs.version }}-${{ matrix.target.triple }}.zip
+            temper-v${{ inputs.version }}-${{ matrix.target.triple }}.manifest.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

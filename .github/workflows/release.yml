@@ -46,6 +46,8 @@ jobs:
     needs: determine-version
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-cli-binaries.yml
     with:
       version: ${{ needs.determine-version.outputs.version }}
