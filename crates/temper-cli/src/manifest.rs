@@ -15,6 +15,11 @@
 //! attestation-backed verification (`temper update`, `--verify --online`)
 //! carries provenance weight. Callers must not render `Verified` as more than
 //! it earned.
+//!
+//! The trichotomy also has a floor: a manifest listing **zero** files asserts
+//! nothing about an install, so it can never be `Verified` — [`verify_dir`]
+//! returns [`Verdict::Unverifiable`] for it. Not `Mismatch`, because nothing
+//! disagreed; there was simply nothing to check.
 
 use std::path::Path;
 
@@ -81,7 +86,24 @@ pub fn load_from_dir(dir: &Path) -> Option<ReleaseManifest> {
 /// Hash every file the manifest lists and compare. Files present in `dir` but
 /// absent from the manifest are ignored — the manifest states what we shipped,
 /// not what the user may not add beside it.
+///
+/// A manifest listing no files is [`Verdict::Unverifiable`], never
+/// [`Verdict::Verified`]: it asserts nothing, so there is nothing it could
+/// have verified.
 pub fn verify_dir(manifest: &ReleaseManifest, dir: &Path) -> Verdict {
+    // A manifest with no entries asserts nothing about this install, so the
+    // loop below cannot fail and the function would return `Verified` over
+    // zero checked files. That is a fail-open, and no attacker is needed to
+    // reach it: a build-side staging drift emits `files: []`, CI faithfully
+    // attests it, and `--verify --online` then returns a genuine,
+    // signature-backed `verified` covering nothing. Not a `Mismatch` — nothing
+    // disagreed; we simply cannot tell.
+    if manifest.files.is_empty() {
+        return Verdict::Unverifiable {
+            reason: "manifest lists no files — it asserts nothing about this install".to_string(),
+        };
+    }
+
     let mut mismatches = Vec::new();
     for entry in &manifest.files {
         match std::fs::read(dir.join(&entry.path)) {
@@ -196,6 +218,31 @@ mod tests {
         match verify_dir(&m, tmp.path()) {
             Verdict::Mismatch { mismatches: ms } => assert!(ms[0].actual.is_none()),
             other => panic!("expected Mismatch, got {other:?}"),
+        }
+    }
+
+    /// A manifest listing zero files asserts nothing, so it cannot verify
+    /// anything. Returning `Verified` here was a reproduced fail-open: an
+    /// archive containing `# EVIL PAYLOAD` installed with exit 0. It is not a
+    /// `Mismatch` either — nothing disagreed; there was simply nothing to check.
+    #[test]
+    fn empty_manifest_is_unverifiable_not_verified() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A real file sits in the dir, so the verdict cannot be blamed on an
+        // empty directory: it is the manifest that asserts nothing.
+        write(tmp.path(), "temper", b"binary-bytes");
+
+        let m = ReleaseManifest {
+            version: "0.3.0".into(),
+            target: "x86_64-unknown-linux-gnu".into(),
+            files: vec![],
+        };
+        match verify_dir(&m, tmp.path()) {
+            Verdict::Unverifiable { reason } => assert!(
+                reason.contains("no files"),
+                "reason should name the vacuity, got: {reason}"
+            ),
+            other => panic!("empty manifest must be unverifiable, got {other:?}"),
         }
     }
 
