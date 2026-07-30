@@ -15,6 +15,7 @@ pub mod ids;
 pub mod manifest;
 pub mod output;
 pub mod projection;
+pub mod reconcile_hint;
 pub mod saml;
 pub mod templates;
 pub mod vault;
