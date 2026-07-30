@@ -37,6 +37,10 @@ jobs:
             triple: aarch64-apple-darwin
             ort_archive: onnxruntime-osx-arm64
             ort_archive_ext: tgz
+            # sha256 of onnxruntime-osx-arm64-<ONNX_RUNTIME_VERSION>.tgz. Bumping
+            # ONNX_RUNTIME_VERSION means recomputing all three of these — see
+            # docs/guides/releasing.md#standing-obligation-onnx-runtime-digest-pinning
+            ort_sha256: 0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde
             lib_name: libonnxruntime.dylib
             lib_dest_dir: lib
             archive_ext: tar.gz
@@ -45,6 +49,7 @@ jobs:
             triple: x86_64-unknown-linux-gnu
             ort_archive: onnxruntime-linux-x64
             ort_archive_ext: tgz
+            ort_sha256: 43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6
             lib_name: libonnxruntime.so
             lib_dest_dir: lib
             archive_ext: tar.gz
@@ -53,6 +58,7 @@ jobs:
             triple: x86_64-pc-windows-msvc
             ort_archive: onnxruntime-win-x64
             ort_archive_ext: zip
+            ort_sha256: 8e3e9c826375352e29cb2614fe44f3d7a4b0ff7b8028ad7a456af9d949a7e8b0
             lib_name: onnxruntime.dll
             lib_dest_dir: .
             archive_ext: zip
@@ -98,6 +104,39 @@ jobs:
           mkdir -p ort-staging
           echo "Downloading ${ORT_URL}..."
           curl -fsSL -o "ort-staging/ort.${ORT_EXT}" "$ORT_URL"
+
+          # Pin the native library we are about to sign. What comes out of this
+          # archive is copied into staging, hashed into the manifest, attested,
+          # and then dlopen'd by the shipped binary — so an unpinned fetch means
+          # we faithfully sign whatever the network handed us, and every
+          # downstream verdict is `verified` over it. The embedding model riding
+          # in the same archive is already pinned via EXPECTED_MODEL_SHA256
+          # (attest.rs cites it as this repo's doctrine); this closes the other
+          # half. Bumping ONNX_RUNTIME_VERSION means recomputing all three
+          # matrix digests — see
+          # docs/guides/releasing.md#standing-obligation-onnx-runtime-digest-pinning
+          #
+          # sha256sum on Linux and on the Windows runner's Git Bash, shasum on
+          # macOS — the same branch as emit-manifest.sh's `sha_of` (:23-29) and
+          # install.sh's `sha_of_file` (:233-239). Never assume one: this matrix
+          # spans macos-14, ubuntu-22.04, AND windows-2022, and this step runs on
+          # all three. Witnesses for the Windows leg are already in this file —
+          # the zip-only archive step (`archive_ext == 'zip'`, i.e. windows-x64
+          # alone) calls `sha256sum` under `shell: bash`, and the unconditional
+          # "Emit per-file manifest" step runs `sha_of` there too.
+          EXPECTED_ORT_SHA="${{ matrix.target.ort_sha256 }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            ACTUAL_ORT_SHA=$(sha256sum "ort-staging/ort.${ORT_EXT}" | awk '{print $1}')
+          else
+            ACTUAL_ORT_SHA=$(shasum -a 256 "ort-staging/ort.${ORT_EXT}" | awk '{print $1}')
+          fi
+          if [[ "$ACTUAL_ORT_SHA" != "$EXPECTED_ORT_SHA" ]]; then
+            echo "error: ONNX Runtime archive sha256 mismatch for ${ORT_URL}" >&2
+            echo "  expected: $EXPECTED_ORT_SHA" >&2
+            echo "  actual:   $ACTUAL_ORT_SHA" >&2
+            exit 1
+          fi
+          echo "ONNX Runtime archive sha256 verified: $ACTUAL_ORT_SHA"
 
           echo "Extracting..."
           if [[ "$ORT_EXT" == "tgz" ]]; then

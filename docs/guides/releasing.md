@@ -135,10 +135,59 @@ This must match the version used by `ort` in `crates/temper-ingest/Cargo.toml` �
 
 1. Update `ort` and its `api-XX` feature in `crates/temper-ingest/Cargo.toml`.
 2. Update `ONNX_RUNTIME_VERSION` in `build-cli-binaries.yml`.
-3. Replace the checked-in Linux `.so` in `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/` (this is used by the Vercel `temper-api` deploy).
-4. Cut a new release.
+3. **Recompute all three `ort_sha256` matrix values** — see the standing obligation below. This is not optional; the build fails closed without it.
+4. Replace the checked-in Linux `.so` in `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/` (this is used by the Vercel `temper-api` deploy).
+5. Cut a new release.
 
 The release workflow downloads the runtime from `github.com/microsoft/onnxruntime/releases` per platform. The four per-platform archives differ in packaging (`.tgz` vs `.zip`) and library name (`libonnxruntime.{dylib,so}` vs `onnxruntime.dll`), all handled in the workflow's matrix.
+
+## Standing obligation: ONNX Runtime digest pinning
+
+Each matrix target in `.github/workflows/build-cli-binaries.yml` carries an
+`ort_sha256` beside its `ort_archive`/`ort_archive_ext`, and the "Download ONNX
+Runtime" step verifies the fetched archive against it before extracting
+anything. The reason is the same `EXPECTED_MODEL_SHA256` doctrine
+(`crates/temper-ingest/build.rs`) applied one layer out: the native library
+extracted from that archive is copied into staging, hashed into the per-file
+manifest, **attested**, and then `dlopen`'d by the shipped binary. An unpinned
+fetch means we faithfully sign whatever the network handed us — and every
+downstream verdict, including a signature-backed `--verify --online`, comes
+back `verified` over it. The model riding in the same archive was already
+pinned; this closes the other half.
+
+**The cost of that choice is a standing obligation, not a one-time decision:
+bumping `ONNX_RUNTIME_VERSION` requires recomputing all three digests in the
+same commit.** The pin is per-version by construction — the digests name
+`onnxruntime-{osx-arm64,linux-x64,win-x64}-<version>` archives, so a version
+bump invalidates every one of them.
+
+Two things bound how bad this is in practice:
+
+- **The failure is loud, immediate, and fails closed.** A stale digest fails
+  the download step on all three runners before a single byte is extracted,
+  staged, hashed, or attested. There is no path where a mismatched archive
+  reaches the signing step, and no variant of this that degrades to a warning.
+- **It fires only on a deliberate version bump.** The digests are stable for
+  the life of an `ONNX_RUNTIME_VERSION` — Microsoft's release assets are
+  immutable — so this is not maintenance that accrues on its own.
+
+**Maintainer action:** recompute all three in the same commit that bumps
+`ONNX_RUNTIME_VERSION`, and paste the real output — never a placeholder. These
+are load-bearing constants.
+
+```bash
+ORT_VER=1.24.2  # the NEW version you are bumping to
+for n in onnxruntime-osx-arm64:tgz onnxruntime-linux-x64:tgz onnxruntime-win-x64:zip; do
+  name="${n%%:*}"; ext="${n##*:}"
+  url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${name}-${ORT_VER}.${ext}"
+  printf '%-28s ' "$name"
+  curl -fsSL "$url" | shasum -a 256 | awk '{print $1}'
+done
+```
+
+Map each line to the matrix entry whose `ort_archive` matches the name printed
+beside it. Getting that mapping wrong fails the build rather than weakening
+it — every target checks its own archive against its own pin.
 
 ## Skipping a Release
 
