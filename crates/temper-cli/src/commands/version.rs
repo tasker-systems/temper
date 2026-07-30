@@ -59,8 +59,9 @@
 //!
 //! **Windows carries no manifest today**, by the design's own deferral
 //! (`install.ps1` ships no `.temper-manifest.json`). `--verify` on Windows
-//! therefore always resolves through the same `load_from_dir` -> `None` path
-//! as a `cargo install` build and reports `unverifiable` — never `verified`.
+//! therefore always resolves through the same `load_from_dir` ->
+//! `LocalManifest::Absent` path as a `cargo install` build and reports
+//! `unverifiable` — never `verified`.
 //! That is emergent from "no manifest present" rather than a Windows-specific
 //! branch, and is the intended behavior, not a gap.
 
@@ -293,6 +294,20 @@ fn plant_baseline(dir: &Path, manifest_bytes: &[u8]) -> BaselineReport {
     }
 }
 
+/// Appended to the reason when a baseline file EXISTS and cannot be used. Kept
+/// separate from [`NO_LOCAL_MANIFEST_REASON`] because the two must never
+/// converge: that one exists to defuse alarm about an ordinary situation, and
+/// this one exists to raise it. A baseline that is present and unparseable is
+/// either corruption or tampering, and the recovery differs — the file has to be
+/// replaced, not merely established.
+const DAMAGED_LOCAL_MANIFEST_SUFFIX: &str =
+    "the baseline beside this binary EXISTS but could not be used, which is not the same as not \
+     having one. Treat it as corruption or tampering of the baseline itself, not of the binary: \
+     this says nothing about whether your install matches what was published, only that the local \
+     record of it is damaged. Run `temper version --verify --online` to check the install against \
+     the published manifest and its attestation; if that reports `verified`, delete the damaged \
+     file and run it again to write a fresh baseline.";
+
 /// Build the offline verdict for an install directory. Absent manifest =>
 /// [`Verdict::Unverifiable`], never [`Verdict::Mismatch`] — "we cannot tell"
 /// is not "it is wrong", the same distinction `CARGO_REFUSAL` draws at
@@ -305,9 +320,17 @@ fn plant_baseline(dir: &Path, manifest_bytes: &[u8]) -> BaselineReport {
 /// whichever flag happened to be checked first.
 fn build_verify_report(dir: &Path, include_checksum: bool) -> Result<VerifyReport> {
     let verdict = match manifest::load_from_dir(dir) {
-        Some(m) => manifest::verify_dir(&m, dir),
-        None => Verdict::Unverifiable {
+        manifest::LocalManifest::Present(m) => manifest::verify_dir(&m, dir),
+        manifest::LocalManifest::Absent => Verdict::Unverifiable {
             reason: NO_LOCAL_MANIFEST_REASON.to_string(),
+        },
+        // Still `Unverifiable` — a damaged baseline is not evidence the binary
+        // is wrong — but it must never borrow the absent message, which opens
+        // by reassuring the reader that "this is not a finding about your
+        // install". For a baseline that exists and cannot be parsed, that
+        // reassurance is the wrong instinct entirely.
+        manifest::LocalManifest::Unreadable { reason } => Verdict::Unverifiable {
+            reason: format!("{reason} — {DAMAGED_LOCAL_MANIFEST_SUFFIX}"),
         },
     };
     finish_verify_report(dir, verdict, include_checksum, OFFLINE_VERIFY_NOTE, None)
@@ -1294,6 +1317,62 @@ mod tests {
         assert!(
             !json.contains("baseline\":"),
             "offline report should carry no baseline key: {json}"
+        );
+    }
+
+    /// F5: a baseline that EXISTS and cannot be parsed must not be reported as
+    /// absence. Asserted end-to-end through `build_verify_report`, because the
+    /// defect was never in the loader alone — it was that the loader's collapsed
+    /// answer reached the user as the reassuring absent-manifest message.
+    ///
+    /// The bite is the negative assertion: with `load_from_dir` returning an
+    /// `Option` and `.ok()?`, this file produced `NO_LOCAL_MANIFEST_REASON`
+    /// verbatim, so `!contains("not a finding about your install")` would fail.
+    #[test]
+    fn a_damaged_baseline_does_not_report_as_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(manifest::MANIFEST_FILENAME),
+            b"{\"version\": truncated",
+        )
+        .unwrap();
+
+        let report = build_verify_report(tmp.path(), false).unwrap();
+        let Verdict::Unverifiable { reason } = &report.verdict else {
+            panic!(
+                "a damaged baseline is not evidence the binary is wrong; \
+                 expected Unverifiable, got {:?}",
+                report.verdict
+            );
+        };
+        assert!(
+            !reason.contains("not a finding about your install"),
+            "a damaged baseline borrowed the absent-manifest reassurance: {reason}"
+        );
+        assert!(
+            reason.contains("EXISTS but could not be used"),
+            "the reason should say the baseline is present and damaged: {reason}"
+        );
+        assert!(
+            reason.contains("delete the damaged file"),
+            "the reason should name the recovery, which differs from the absent case: {reason}"
+        );
+    }
+
+    /// The two reasons must stay distinguishable by construction, not by having
+    /// been written differently once. A future edit that made the damaged case
+    /// reuse the absent text would restore the exact defect F5 named, and the
+    /// test above would still pass if the shared text happened to contain the
+    /// damaged phrases.
+    #[test]
+    fn absent_and_damaged_reasons_share_no_wording() {
+        assert!(
+            !NO_LOCAL_MANIFEST_REASON.contains("EXISTS but could not be used"),
+            "the absent reason must not claim the baseline exists"
+        );
+        assert!(
+            !DAMAGED_LOCAL_MANIFEST_SUFFIX.contains("not a finding about your install"),
+            "the damaged reason must not defuse alarm the way the absent one does"
         );
     }
 

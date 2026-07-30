@@ -83,12 +83,58 @@ pub enum Verdict {
     Unverifiable { reason: String },
 }
 
-/// Load the manifest an install dir carries, if any. `None` means this is not
-/// a manifest-bearing install (e.g. a `cargo install` build) — callers render
-/// that as [`Verdict::Unverifiable`], never as a mismatch.
-pub fn load_from_dir(dir: &Path) -> Option<ReleaseManifest> {
-    let raw = std::fs::read_to_string(dir.join(MANIFEST_FILENAME)).ok()?;
-    serde_json::from_str(&raw).ok()
+/// What an install dir's baseline file turned out to be. Three states, because
+/// **"there is no baseline" and "the baseline is damaged" are different facts**
+/// and only one of them is ordinary.
+///
+/// This started life as an `Option`, and `.ok()?` swallowed a corrupt or
+/// unreadable file into the same `None` an absent one produced. That made the
+/// most alarming case — a baseline that exists and cannot be parsed — render as
+/// the most routine message in the surface ("no release manifest beside this
+/// binary… several ordinary shapes land here"), which is actively misleading
+/// about the one shape that is not ordinary at all. It is the same fail-quiet
+/// class the installer's vacuity floor exists to prevent: nothing was checked,
+/// and the report read as though there was nothing to check.
+#[derive(Debug)]
+pub enum LocalManifest {
+    /// No baseline file in the directory — a `cargo install` build, a Windows
+    /// install, a pre-manifest release, or a self-update out of a pre-manifest
+    /// binary. Ordinary, and renders as [`Verdict::Unverifiable`].
+    Absent,
+    /// A baseline file is present and could not be used: unreadable, not UTF-8,
+    /// or not parseable as a manifest. Still [`Verdict::Unverifiable`] — a
+    /// damaged baseline says nothing about whether the binary is wrong, so it is
+    /// never a [`Verdict::Mismatch`] — but it must never be reported as absence.
+    Unreadable { reason: String },
+    /// A usable baseline.
+    Present(ReleaseManifest),
+}
+
+/// Load the baseline an install dir carries. See [`LocalManifest`] for why an
+/// absent file and a damaged one are not the same answer.
+///
+/// Reads bytes rather than a `String` so a non-UTF-8 file is reported as damaged
+/// rather than folded in with a read error, and matches on
+/// [`std::io::ErrorKind::NotFound`] so only a genuinely missing file is
+/// [`LocalManifest::Absent`] — a permission error on a file that *is* there is
+/// not absence.
+pub fn load_from_dir(dir: &Path) -> LocalManifest {
+    let path = dir.join(MANIFEST_FILENAME);
+    let raw = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LocalManifest::Absent,
+        Err(e) => {
+            return LocalManifest::Unreadable {
+                reason: format!("could not read {}: {e}", path.display()),
+            };
+        }
+    };
+    match serde_json::from_slice(&raw) {
+        Ok(manifest) => LocalManifest::Present(manifest),
+        Err(e) => LocalManifest::Unreadable {
+            reason: format!("could not parse {}: {e}", path.display()),
+        },
+    }
 }
 
 /// Whether a manifest entry's `path` names something strictly inside the
@@ -389,12 +435,57 @@ mod tests {
         }
     }
 
-    /// No manifest in the directory (the `cargo install` shape) yields None,
+    /// No manifest in the directory (the `cargo install` shape) is `Absent`,
     /// which callers must render as Unverifiable — never Mismatch.
     #[test]
-    fn absent_manifest_loads_as_none() {
+    fn absent_manifest_loads_as_absent() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(load_from_dir(tmp.path()).is_none());
+        assert!(matches!(load_from_dir(tmp.path()), LocalManifest::Absent));
+    }
+
+    /// **A baseline that exists and cannot be parsed is not absence.** This is
+    /// the distinction `.ok()?` used to erase, and erasing it sent the one
+    /// alarming case through the most reassuring message in the surface.
+    ///
+    /// Each input is a file that is genuinely THERE, so any of them resolving to
+    /// `Absent` is the defect: truncated JSON, valid JSON of the wrong shape
+    /// (the tampering-shaped case — it parses as JSON and is not a manifest),
+    /// and bytes that are not UTF-8 at all.
+    #[test]
+    fn a_present_but_unusable_manifest_is_unreadable_not_absent() {
+        for (label, bytes) in [
+            ("truncated", b"{\"version\":\"0.3.0\",\"files\":[".to_vec()),
+            ("wrong shape", b"{\"not\":\"a manifest\"}".to_vec()),
+            ("not utf-8", vec![0x7b, 0xff, 0xfe, 0x00, 0x7d]),
+            ("empty", Vec::new()),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(tmp.path().join(MANIFEST_FILENAME), &bytes).unwrap();
+            match load_from_dir(tmp.path()) {
+                LocalManifest::Unreadable { reason } => assert!(
+                    reason.contains(MANIFEST_FILENAME),
+                    "{label}: reason should name the file: {reason}"
+                ),
+                other => panic!("{label}: expected Unreadable, got {other:?}"),
+            }
+        }
+    }
+
+    /// The positive control for the test above: a well-formed baseline still
+    /// loads. Without it, a `load_from_dir` that returned `Unreadable`
+    /// unconditionally would satisfy every assertion there.
+    #[test]
+    fn a_wellformed_manifest_still_loads_as_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(MANIFEST_FILENAME),
+            br#"{"version":"0.3.0","target":"x86_64-unknown-linux-gnu","files":[]}"#,
+        )
+        .unwrap();
+        match load_from_dir(tmp.path()) {
+            LocalManifest::Present(m) => assert_eq!(m.version, "0.3.0"),
+            other => panic!("expected Present, got {other:?}"),
+        }
     }
 
     /// The golden fixture is a *snapshot* of the wire contract shared with the
