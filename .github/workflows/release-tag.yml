@@ -57,8 +57,19 @@ jobs:
   release:
     needs: tag
     if: needs.tag.outputs.created == 'true'
+    # A called workflow's permissions are CAPPED by the caller's — they can be
+    # maintained or reduced through the chain, never elevated. release.yml's
+    # build job requests `id-token: write` + `attestations: write` to sign the
+    # release, so granting only `contents: write` here rejects the entire run at
+    # creation ("is requesting 'attestations: write, id-token: write', but is
+    # only allowed 'contents: write'"). This is the ONLY path that cuts a
+    # release — release.yml's own `push: tags` trigger never fires, because a
+    # tag pushed with GITHUB_TOKEN does not trigger workflows — and PR CI never
+    # exercises it, so the failure would surface first on a real release.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}

@@ -194,8 +194,18 @@ jobs:
 
       - name: Assemble archive contents
         shell: bash
+        # `inputs.version` is a FREE STRING — this workflow carries its own
+        # `workflow_dispatch` (default 'dev', no `type:`, no pattern), so
+        # `actions: write` alone dispatches it directly, with no tag and no
+        # release.yml involved. Expanding it into the run body's TEXT would put
+        # arbitrary code inside the job holding `id-token: write` +
+        # `attestations: write` — the signing job itself. An env var is never
+        # re-parsed as script text. `matrix.target.triple` stays inline: it is a
+        # repo-controlled literal from the matrix above, not caller input.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$INPUT_VERSION"
           TARGET="${{ matrix.target.triple }}"
           STAGING="staging"
           rm -rf "$STAGING"
@@ -264,8 +274,11 @@ jobs:
       - name: Create archive (tar.gz)
         if: matrix.target.archive_ext == 'tar.gz'
         shell: bash
+        # Free-string caller input; see "Assemble archive contents" above.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$INPUT_VERSION"
           TARGET="${{ matrix.target.triple }}"
           ARCHIVE="temper-v${VERSION}-${TARGET}.tar.gz"
           tar -czf "$ARCHIVE" -C staging .
@@ -276,8 +289,11 @@ jobs:
       - name: Create archive (zip)
         if: matrix.target.archive_ext == 'zip'
         shell: bash
+        # Free-string caller input; see "Assemble archive contents" above.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$INPUT_VERSION"
           TARGET="${{ matrix.target.triple }}"
           ARCHIVE="temper-v${VERSION}-${TARGET}.zip"
           (cd staging && 7z a -tzip "../${ARCHIVE}" . >/dev/null)
