@@ -4,7 +4,12 @@ The upload lifecycle describes how files flow from an authenticated client throu
 
 ## Architecture Overview
 
-temper-cloud runs two runtimes in a single Vercel project at **temperkb.io**:
+temper-cloud runs two runtimes in a single Vercel project. That project is named
+**`temper-cloud`** (`prj_ra0MmQYksfePnXvHiTiOGoKigQvY`) and is **not** the project
+serving `temperkb.io` — that hostname belongs to the **`temper-ui`** project
+(`prj_UFUosi5qWyG7Vz830I0pOUkXyynK`), which reverse-proxies `/api`, `/mcp`, `/oauth`
+and `/.well-known` to `API_BASE_URL`. Note also that the Vercel *project* named
+`temper-cloud` is a different thing from the TypeScript *package* of the same name:
 
 - **Rust (axum)** handles the core API: resource CRUD, search, profiles, teams, events
 - **TypeScript (Node.js)** handles file upload and the async processing workflow
