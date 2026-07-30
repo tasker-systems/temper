@@ -837,6 +837,16 @@ Expected: all three jobs report a non-null `permissions`.
 
 **Grounding (CONFORM):** `release.yml:38` reads `TAG="${{ github.ref_name }}"` inside a `run:` block. GitHub expands `${{ }}` into the script text *before* bash sees it, so a crafted ref name executes. Verified in the review that `git check-ref-format` accepts `v1.0.0";id;#`, `` v1.0.0`id` ``, and `v1.0.0$(id)`. The job this lands in holds `id-token: write` and `attestations: write`.
 
+> **Found during implementation: this task's scope was too narrow.** The same `run:` body
+> interpolates **`inputs.tag`** three lines above `github.ref_name` — and it is the *more* dangerous
+> of the two. `github.ref_name` is at least constrained by `git check-ref-format`; `inputs.tag` is a
+> free string arriving from `workflow_dispatch` or from `release-tag.yml:62-64`'s `workflow_call`,
+> constrained by nothing. It is also the exact channel the adjudication's own attack chain uses
+> ("workflow_dispatch `release.yml` with that tag"). Converting only `ref_name` would have closed the
+> fallback while leaving the payload channel open. **Convert both.** Step 2's grep pattern below is
+> likewise too narrow — it omits `inputs.*` — so run the sweep by reading every `run:` body, not by
+> trusting that one pattern.
+
 - [ ] **Step 1: Move the interpolation to `env:`**
 
 Add an `env:` block to that step and read the value as a shell variable, which is never re-parsed as script text:
