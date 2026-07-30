@@ -17,11 +17,22 @@
 //! build time via [`include_str!`]. The script still owns extraction, the
 //! atomic swap, and re-pointing the symlink. What moved to Rust is
 //! **provenance**: `run` now downloads the archive and manifest itself,
-//! verifies the release attestation (mandatory, no bypass) and the per-file
-//! manifest against that exact downloaded archive, and only then hands the
-//! script `--archive`/`--manifest` paths to install *verbatim* — see "the
+//! verifies the release attestation over **both** objects' own digests
+//! (mandatory, no bypass) and the per-file manifest against that exact
+//! downloaded archive, and only then hands the script
+//! `--archive`/`--manifest` paths to install *verbatim* — see "the
 //! 'one installer, one truth' tension" below for why the script no longer
 //! downloads on this path.
+//!
+//! Two attested subjects, because two different objects survive this command.
+//! The archive is what gets **installed**; the manifest is what gets
+//! **persisted** — `install.sh` copies it into the install dir as
+//! `.temper-manifest.json`, where it becomes the permanent baseline for every
+//! future offline `temper version --verify`. Attesting only the archive would
+//! leave that baseline unattested: one hour of release-asset write would blind
+//! tamper detection for the life of the install, with a genuine, still-attested
+//! archive sitting beside it saying nothing about the swapped manifest. Each
+//! digest is the digest of the object it vouches for — never the sibling's.
 //!
 //! # `temper update` and the "one installer, one truth" tension
 //!
@@ -399,13 +410,12 @@ async fn download_to_file(client: &reqwest::Client, url: &str, dest: &Path) -> C
 
 /// The sha256 hex digest of a local file — the identity both the attestation
 /// lookup and (via the installer's own re-check) the manifest verification
-/// key off.
+/// key off. Called for the downloaded archive *and* the downloaded manifest,
+/// each of which is attested on its own digest, so the failure text names the
+/// path rather than assuming an archive.
 fn sha256_of_file(path: &Path) -> CliResult<String> {
     let bytes = std::fs::read(path).map_err(|e| {
-        CliError::Install(format!(
-            "reading downloaded archive {}: {e}",
-            path.display()
-        ))
+        CliError::Install(format!("reading downloaded file {}: {e}", path.display()))
     })?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
@@ -473,11 +483,24 @@ fn verify_archive_against_manifest(
 
 /// Download the archive + manifest for `tag` into a fresh scratch directory,
 /// verify the release attestation for the *downloaded* archive's own digest
-/// (mandatory — there is no bypass flag), then verify every manifest file
-/// against that same archive's extracted contents. Returns the scratch
-/// directory (kept alive by the caller for as long as the archive/manifest
-/// paths are needed) plus the verified archive and manifest paths, ready to
-/// hand to `install.sh --archive --manifest`.
+/// **and** for the *downloaded* manifest's own digest (both mandatory — there
+/// is no bypass flag), then verify every manifest file against that same
+/// archive's extracted contents. Returns the scratch directory (kept alive by
+/// the caller for as long as the archive/manifest paths are needed) plus the
+/// verified archive and manifest paths, ready to hand to
+/// `install.sh --archive --manifest`.
+///
+/// **Both downloads are attested, each on its own digest.** The archive is
+/// what gets installed; the manifest is what gets *persisted* —
+/// `install.sh` copies it into the install dir as `.temper-manifest.json`,
+/// the permanent baseline for every future offline `temper version --verify`.
+/// A manifest that merely arrived beside an attested archive is not attested:
+/// the archive's provenance says nothing about the bytes of a sibling object,
+/// which is exactly why `version.rs`'s `--online` path keys on the manifest's
+/// own digest too (`version.rs:38-53`). `build-cli-binaries.yml`'s
+/// `attest-build-provenance` step lists the manifest as its own `subject-path`
+/// entry alongside the archive, so `/attestations/sha256:{manifest_digest}`
+/// resolves independently.
 ///
 /// This is the ordering the whole restructuring exists for (spec §4):
 /// verifying one download and then having the installer fetch a second,
@@ -521,6 +544,28 @@ fn download_and_verify_release(tag: &str) -> CliResult<(TempDir, PathBuf, PathBu
         attestation_fetch::verify_release_attestation_online(&client, &digest, tag)
             .await
             .map_err(|e| CliError::Install(e.to_string()))?;
+
+        // The check above covers what gets INSTALLED. This one covers what
+        // gets PERSISTED: `install.sh` copies this manifest into the install
+        // dir as `.temper-manifest.json`, where it becomes the permanent
+        // baseline for every future offline `temper version --verify`. An
+        // unattested baseline means one hour of release-asset write blinds
+        // tamper detection for the life of the install — and the genuine,
+        // still-attested archive beside it vouches for none of those bytes.
+        //
+        // Keyed on the manifest's OWN digest, computed from the bytes just
+        // downloaded — never the archive's, and never a second fetch of "the
+        // same" manifest, which would reopen a TOCTOU gap between what was
+        // attested and what is handed to `install.sh --manifest`.
+        // `build-cli-binaries.yml`'s `subject-path` lists the manifest
+        // alongside the archive, so this resolves independently. Same
+        // reasoning as `version.rs`'s online path; the failure is prefixed
+        // with its subject because the two checks are otherwise
+        // indistinguishable in the rendered text.
+        let manifest_digest = sha256_of_file(&manifest_path)?;
+        attestation_fetch::verify_release_attestation_online(&client, &manifest_digest, tag)
+            .await
+            .map_err(|e| CliError::Install(format!("published manifest: {e}")))?;
         Ok::<(), CliError>(())
     })?;
 
@@ -889,6 +934,56 @@ mod tests {
         assert_eq!(
             digest,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    /// `update` persists the downloaded manifest into the install dir as the
+    /// permanent offline baseline (`install.sh` copies it to
+    /// `.temper-manifest.json`), so it must be attested — not merely
+    /// downloaded beside an attested archive. A genuine, still-attested
+    /// archive says nothing about a tampered manifest sitting next to it.
+    ///
+    /// **Why a source-text assertion.** The property is "two attestation
+    /// checks happen on this path, keyed on two different objects' digests",
+    /// and the only way to observe it behaviorally is to reach
+    /// `api.github.com`: `attestation_fetch`'s online verify helper is a free
+    /// function over a concrete `reqwest::Client` with a hardcoded URL base,
+    /// that module's own tests exercise only its pure helpers
+    /// (`extract_predicate_type`, `select_slsa_provenance_bundle`), and
+    /// temper-cli carries no HTTP-mock dev-dependency. There is no injection
+    /// seam to prefer, so this asserts on structure instead — and it bites
+    /// both regressions that matter: deleting the manifest check (the count
+    /// drops to 1) and *swapping* the archive check for it (the archive-digest
+    /// assertion fails), which is the misreading the Arc 2 adjudication
+    /// invites.
+    ///
+    /// The helper's name is deliberately never spelled in this doc comment:
+    /// the slice under test runs from the function's `fn` line up to the
+    /// `split` literal below, so a mention here would land *inside* `body`
+    /// and inflate the count — leaving the assertion green with one real call
+    /// deleted. A tripwire that can no longer fail is worth nothing.
+    #[test]
+    fn download_path_attests_both_archive_and_manifest() {
+        let src = include_str!("update.rs");
+        let body = src
+            .split("fn download_and_verify_release")
+            .nth(1)
+            .expect("download_and_verify_release exists");
+        let calls = body.matches("verify_release_attestation_online").count();
+        assert!(
+            calls >= 2,
+            "expected attestation checks for BOTH the archive and the manifest, found {calls}"
+        );
+        assert!(
+            body.contains("sha256_of_file(&manifest_path)"),
+            "the manifest's own digest must be computed and attested"
+        );
+        // Additive, never a swap: the archive attestation is what covers the
+        // object actually installed, and removing it would regress the
+        // install path.
+        assert!(
+            body.contains("sha256_of_file(&archive_path)"),
+            "the archive's own digest must still be computed and attested"
         );
     }
 
