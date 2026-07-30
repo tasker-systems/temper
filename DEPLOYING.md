@@ -51,9 +51,47 @@ migration gate: the steady state is additive, and additive is backward-compatibl
 construction.
 
 A **non-additive / big-bang** schema change (a rename, a destructive collapse, a
-search-path flip) is **not** an ordinary merge. It is operator-run against each
-target's database via an operator-gated cutover procedure, coordinated with that
-target's deploy. It is never a silent `main` auto-deploy.
+search-path flip, **or a change to a SQL function's return type or signature**) is
+**not** an ordinary merge. It is operator-run against each target's database via an
+operator-gated cutover procedure, coordinated with that target's deploy. It is never
+a silent `main` auto-deploy.
+
+### A function's return type is a wire contract with the binary
+
+`CREATE OR REPLACE FUNCTION` reads like an additive edit — nothing is dropped, no
+table changes, and every caller in the repo is updated in the same commit. It is
+not additive. The binary decodes that function's result by type, so **the running
+binary is a caller you did not update**, and the invariant's second clause — *old
+code against the new schema* — is what breaks.
+
+Worked example, 2026-07-30 (`20260730000010`, PR #576): `facet_set` and
+`property_set` went from `RETURNS uuid` to `RETURNS uuid[]` so one assert could
+report every row it wrote. The migration was applied ahead of its binary, and every
+write through those two wrappers began failing in production:
+
+```
+error occurred while decoding column 0: mismatched types;
+Rust type `core::option::Option<uuid::Uuid>` (as SQL type `UUID`)
+is not compatible with SQL type `UUID[]`
+```
+
+That is `resource create` (every frontmatter property is a `PropertyAssert` through
+`facet_set`), `resource update` with any meta change, and every facet write. Reads
+were unaffected throughout, which is what made it look narrower than it was.
+
+**Two things to carry from it.** First, the blast radius of a shared SQL function is
+its *callers*, not its name — `facet_set` sounds facet-shaped and is the key-agnostic
+assert behind every resource create. Grep the callers before classifying the change.
+Second, there is no schema state that satisfies both binaries at once, so the
+mitigation is not a cleverer migration: it is either deploying the paired binary
+(forward) or reverting the signature *and* the code (back). Pick before applying
+anything, because the two directions conflict.
+
+> **A merge is not a deploy.** The same incident surfaced a second gap: two PRs
+> merged minutes apart and only the first produced a production deployment, so
+> `main` and the running binary diverged with every check green. Green CI asserts
+> that the commit *builds*, never that it *shipped*. When a change requires a
+> coupled deploy, confirm the running commit rather than inferring it from the merge.
 
 ## Applying schema changes per target
 
