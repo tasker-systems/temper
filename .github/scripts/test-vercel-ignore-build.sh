@@ -78,9 +78,11 @@ git -c init.defaultBranch=main clone -q "file://$FIXTURE/origin.git" "$FIXTURE/w
   git checkout -q -b with-migration
   mkdir -p migrations && echo "SELECT 1;" > migrations/20260730_x.sql
   git add migrations && git commit -qm "add migration"
+  git push -q origin with-migration
   # A branch whose diff against main carries no migration.
   git checkout -q main && git checkout -q -b without-migration
   echo more >> README.md && git add README.md && git commit -qm "docs only"
+  git push -q origin without-migration
 )
 
 ( cd "$FIXTURE/work" && git checkout -q with-migration )
@@ -88,6 +90,19 @@ expect_in "$FIXTURE/work" "derived: branch adding a migration builds" 1 VERCEL_E
 
 ( cd "$FIXTURE/work" && git checkout -q without-migration )
 expect_in "$FIXTURE/work" "derived: branch with no migration skips" 0 VERCEL_ENV=preview
+
+# The SHALLOW case — what Vercel actually provides, and what the full clone above cannot
+# see. A shallow boundary commit records no parents, so the branch history and the fetched
+# main are disconnected islands: no merge base resolves and deepening the fetch does not
+# help. The script must still reach the right answer by comparing trees.
+git clone -q --depth=1 --branch without-migration "file://$FIXTURE/origin.git" "$FIXTURE/shallow-nomig" 2>/dev/null
+git clone -q --depth=1 --branch with-migration    "file://$FIXTURE/origin.git" "$FIXTURE/shallow-mig"   2>/dev/null
+if [ -d "$FIXTURE/shallow-nomig/.git" ] && [ -d "$FIXTURE/shallow-mig/.git" ]; then
+  expect_in "$FIXTURE/shallow-nomig" "shallow clone, no migration, skips" 0 VERCEL_ENV=preview
+  expect_in "$FIXTURE/shallow-mig"   "shallow clone, with migration, builds" 1 VERCEL_ENV=preview
+else
+  echo "  FAIL — could not build the shallow fixtures"; fails=$((fails+1))
+fi
 
 # No git checkout at all: build rather than guess. This is the case CHANGED_PATHS
 # set-but-empty does NOT cover — empty means "the changeset is empty", absent means

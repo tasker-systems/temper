@@ -84,8 +84,17 @@ else
 
   base="$(git merge-base FETCH_HEAD HEAD 2>/dev/null || true)"
   if [ -z "${base}" ]; then
-    echo "build: no merge base with ${DEFAULT_BRANCH} within ${FETCH_DEPTH} commits"
-    exit 1
+    # Measured, not assumed: a real preview build reports
+    # `no merge base with main within 200 commits` even though the fetch succeeded.
+    # Vercel's clone is SHALLOW, and a shallow boundary commit has no recorded parents,
+    # so the branch's history and the fetched main are two disconnected islands — no
+    # common ancestor is reachable and DEEPENING THE FETCH DOES NOT HELP.
+    #
+    # Comparing the two trees directly needs no ancestry, so it works regardless. It can
+    # over-report — a migration that landed on main but is not on this branch shows up as
+    # a difference — and over-reporting BUILDS, which is the safe direction.
+    base="FETCH_HEAD"
+    echo "note: no merge base (shallow clone) — comparing trees against ${DEFAULT_BRANCH} tip"
   fi
 
   changed="$(git diff --name-only "${base}" HEAD 2>/dev/null || echo "__UNKNOWN__")"
