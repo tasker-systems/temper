@@ -1,8 +1,15 @@
-//! WS6 §9 chunk-3 read surface over the substrate tables — read-only parity tooling.
+//! WS6 §9 chunk-3 read surface over the substrate tables — **the production read path**.
 //!
-//! This module ports the production read paths (list / meta / body / FTS / vector / neighbors) onto
-//! the synthesized substrate so each can be asserted against the production read for the same logical
-//! query (the parity-read harness in `tests/parity_reads.rs`).
+//! It began as parity tooling: it ported the production reads (list / meta / body / FTS / vector /
+//! neighbors) onto the synthesized substrate so each could be asserted against its production
+//! counterpart for the same logical query. That harness — `crates/temper-next/tests/parity_reads.rs`
+//! — was deleted with temper-next itself in the WS6 endgame collapse (`2fc0412e`, #166), and the
+//! surfaces were wired straight here instead. So the comparison this module was built to enable no
+//! longer exists, and every remaining caller is production: `temper-services`' `substrate_read.rs`
+//! serves body / meta / unified search / wayfind / anchor shape / region metrics / cogmap analytics /
+//! invocation show + list from here, `citation_audit_service` and `evidential_standing_service` the
+//! evidential reads, and `authz/audit_gate` asks [`is_resource_visible`] for its readability half.
+//! A change here changes what the API returns.
 //!
 //! **Access scoping (WS2).** The single-resource and set reads (`list`/`resource_row`/`meta`/`body`/
 //! `fts_search`/`vector_search`) take a `principal` and gate through `resources_visible_to`,
@@ -10,16 +17,29 @@
 //! not-visible single-resource read errors (the read selector maps that to NotFound, never 403); the set
 //! reads JOIN-filter to the visible set. `neighbors` is the lone exception — deliberately UNSCOPED, as it
 //! has no surface caller yet (see its note); the graph-neighbor scoping lands with that surface.
-//! The prod-shape parity tests pass `OWNER_PROFILE` (who owns all 4 active resources), so the scoped
-//! and production result SETS still coincide; a separate test drives a non-owner principal to prove the
-//! gate denies.
+//! The `OWNER_PROFILE` prod-shape fixture this paragraph used to cite went with the parity harness;
+//! what exercises the gate now is `temper-services`' `authz/audit_gate` suite, which asserts both
+//! directions against a real database (e.g. `the_author_of_the_finding_is_refused` checks that
+//! [`is_resource_visible`] returns `true` for the author — so that the refusal it then asserts is
+//! provably the self-audit arm and not a readability failure).
 //!
-//! Most reads are runtime `sqlx::query` (the pgvector `::vector` cast forces runtime; the rest follow
-//! for consistency). The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
+//! Reads are compile-time `query!`-family macros, so each leaves an entry in the workspace `.sqlx`
+//! cache and is checked against the live schema at build time. **Three** are runtime `sqlx::query` /
+//! `query_as`, all for one reason — a `$n::vector` bind the macros cannot type ([`vector_search`],
+//! [`unified_search`], [`wayfind_scope_ids`]). That is the allow-listed exception class and the
+//! whole of it here; it is deliberately not a house style. Until 2026-07-30 sixteen further reads in
+//! this module were runtime *"for consistency"* with those three, which left them absent from the
+//! cache — and the cache is the record a schema/binary change detector reads, so an exemption taken
+//! for tidiness was subtracting from the coverage of a safety check.
+//!
+//! A macro read states its own nullability, so several carry `!` / `?` overrides. Each one is a
+//! claim about the SQL (a set-returning function's contract, a `COALESCE`, an INNER JOIN) and is
+//! commented where it is not obvious — an `!` on a column that can in fact be NULL is a panic, which
+//! is the one way a conversion here can be worse than the `row.get` it replaced.
+//!
+//! The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
 //! (`public`), and the connection's search_path resolves unqualified names and the visibility
-//! function's own unqualified internals correctly with no per-txn `SET LOCAL`. The handful of
-//! compile-time `query!` macros (e.g. [`kernel_slice`]) are likewise unqualified and use the
-//! workspace sqlx cache.
+//! function's own unqualified internals correctly with no per-txn `SET LOCAL`.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -144,7 +164,6 @@ pub struct ListRow {
 /// `resources_visible_to` directly here is equivalent for the profile principal, and is the
 /// incumbent Rust-callable form.
 ///
-/// Runtime `sqlx::query_scalar` (NOT the `query!` macro) — see the module-level note.
 pub async fn is_resource_visible(
     pool: &PgPool,
     principal: ProfileId,
@@ -153,11 +172,16 @@ pub async fn is_resource_visible(
     // `resources_visible_to` and its nested `profile_effective_teams`/`team_ancestors` resolve their
     // unqualified references against the connection search_path (`public` — the one schema), so no
     // per-txn `SET LOCAL`.
-    let visible: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
+    //
+    // `EXISTS` never yields SQL-NULL, but sqlx infers every expression column as nullable, so the
+    // `!` override states what the operator guarantees rather than forcing an `unwrap_or` here.
+    let visible = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2
+           ) AS "visible!""#,
+        principal.uuid(),
+        resource.uuid(),
     )
-    .bind(principal)
-    .bind(resource)
     .fetch_one(pool)
     .await?;
     Ok(visible)
@@ -190,34 +214,37 @@ async fn ensure_visible(
 }
 
 pub async fn list(pool: &PgPool, principal: ProfileId) -> Result<Vec<ListRow>> {
-    let rows = sqlx::query(
-        "SELECT r.origin_uri,
-                r.title,
-                dt.property_value #>> '{}' AS doc_type,
-                wp.stage,
-                wp.mode,
-                wp.effort
-           FROM kb_resources r
-           JOIN resources_visible_to($1) v ON v.resource_id = r.id
-           JOIN kb_properties dt
-             ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
-          ORDER BY r.origin_uri, r.id",
+    // `doc_type!`: the JOIN is INNER, so the row exists; `#>> '{}'` is an expression, which sqlx
+    // infers as nullable regardless. The override states the same thing the pre-macro
+    // `row.get::<String, _>("doc_type")` asserted silently.
+    let rows = sqlx::query!(
+        r#"SELECT r.origin_uri,
+                  r.title,
+                  dt.property_value #>> '{}' AS "doc_type!",
+                  wp.stage,
+                  wp.mode,
+                  wp.effort
+             FROM kb_resources r
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+             JOIN kb_properties dt
+               ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+              AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+             LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
+            ORDER BY r.origin_uri, r.id"#,
+        principal.uuid(),
     )
-    .bind(principal)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|row| ListRow {
-            origin_uri: row.get("origin_uri"),
-            title: row.get("title"),
-            doc_type: row.get("doc_type"),
-            stage: row.get("stage"),
-            mode: row.get("mode"),
-            effort: row.get("effort"),
+            origin_uri: row.origin_uri,
+            title: row.title,
+            doc_type: row.doc_type,
+            stage: row.stage,
+            mode: row.mode,
+            effort: row.effort,
         })
         .collect())
 }
@@ -254,21 +281,20 @@ pub struct ReconstructedMeta {
 /// in `open` here (`is_managed_property_key` returns false for it). That asymmetry cannot occur for the
 /// fixed production key set; if the managed vocabulary ever grows, extend `MANAGED_PROPERTY_KEYS`.
 ///
-/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
-/// module-level note.
+/// Read-only; no writes.
 pub async fn meta(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<ReconstructedMeta, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
-    let rows = sqlx::query(
-        "SELECT property_key, property_value
-           FROM kb_properties
-          WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded
-          ORDER BY created, id",
+    let rows = sqlx::query!(
+        r#"SELECT property_key, property_value
+             FROM kb_properties
+            WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded
+            ORDER BY created, id"#,
+        new_id.uuid(),
     )
-    .bind(new_id)
     .fetch_all(pool)
     .await?;
 
@@ -295,9 +321,9 @@ pub async fn meta(
     // Per-mark weight still does not appear here — `open_meta` is a key→value map with
     // nowhere to put it. The facet read remains the faithful door; this one is honest
     // about the marks, not about their strength.
-    for row in &rows {
-        let key: String = row.get("property_key");
-        let value: Value = row.get("property_value");
+    for row in rows {
+        let key = row.property_key;
+        let value = row.property_value;
         if key == "doc_type" {
             // The authoritative doctype is a JSON string scalar; surface it as the typed field.
             doc_type = Some(match value {
@@ -412,60 +438,62 @@ pub struct ResourceRowParity {
 /// Selects `created`/`updated` from `kb_resources` — populated from `kb_events.occurred_at` at write
 /// time (create sets both to genesis event's `occurred_at`; updates bump `updated`).
 ///
-/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
-/// module-level note.
+/// Read-only; no writes.
 pub async fn resource_row(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<ResourceRowParity, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
-    let row = sqlx::query(
-        "SELECT r.id              AS re_minted_id,
-                r.origin_uri,
-                r.title,
-                r.is_active,
-                r.created,
-                r.updated,
-                r.body_hash,
-                r.ingest_state,
-                r.body_storage,
-                c.id              AS re_minted_context_id,
-                c.name            AS context_name,
-                c.slug            AS context_slug,
-                CASE c.owner_table
-                  WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
-                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
-                END               AS context_owner_ref,
-                cm.id             AS cogmap_id,
-                cm.name           AS cogmap_name,
-                h.owner_profile_id,
-                h.originator_profile_id,
-                p.handle          AS owner_handle,
-                dt.property_value #>> '{}' AS doc_type_name,
-                wp.stage,
-                wp.mode,
-                wp.effort,
-                wp.seq
-           FROM kb_resources r
-           JOIN kb_resource_homes h ON h.resource_id = r.id
-           LEFT JOIN kb_contexts c
-             ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
-           LEFT JOIN kb_cogmaps cm
-             ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'
-           JOIN kb_profiles p ON p.id = h.owner_profile_id
-           JOIN kb_properties dt
-             ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
-          WHERE r.id = $1",
+    // The `?` overrides on the two LEFT-JOINed anchors are the load-bearing ones: a resource is
+    // homed in EITHER a context or a cogmap, so exactly one side is NULL on every row. The `!` pair
+    // covers the CASE/`#>>` expressions, which sqlx infers as nullable because they are expressions,
+    // not because either can actually be absent (`context_owner_ref` is guarded by its own `?`).
+    let row = sqlx::query!(
+        r#"SELECT r.id              AS "re_minted_id!",
+                  r.origin_uri,
+                  r.title,
+                  r.is_active,
+                  r.created,
+                  r.updated,
+                  r.body_hash,
+                  r.ingest_state,
+                  r.body_storage,
+                  c.id              AS "re_minted_context_id?",
+                  c.name            AS "context_name?",
+                  c.slug            AS "context_slug?",
+                  CASE c.owner_table
+                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                    ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+                  END               AS "context_owner_ref?",
+                  cm.id             AS "cogmap_id?",
+                  cm.name           AS "cogmap_name?",
+                  h.owner_profile_id,
+                  h.originator_profile_id,
+                  p.handle          AS owner_handle,
+                  dt.property_value #>> '{}' AS "doc_type_name!",
+                  wp.stage,
+                  wp.mode,
+                  wp.effort,
+                  wp.seq
+             FROM kb_resources r
+             JOIN kb_resource_homes h ON h.resource_id = r.id
+             LEFT JOIN kb_contexts c
+               ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+             LEFT JOIN kb_cogmaps cm
+               ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'
+             JOIN kb_profiles p ON p.id = h.owner_profile_id
+             JOIN kb_properties dt
+               ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+              AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+             LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
+            WHERE r.id = $1"#,
+        new_id.uuid(),
     )
-    .bind(new_id)
     .fetch_one(pool)
     .await?;
 
-    let seq_text: Option<String> = row.get("seq");
-    let seq = match seq_text {
+    let seq = match row.seq {
         Some(s) => Some(s.parse::<i64>().map_err(|e| {
             anyhow::anyhow!("temper-seq {s:?} is not an i64 for resource {new_id}: {e}")
         })?),
@@ -473,29 +501,29 @@ pub async fn resource_row(
     };
 
     Ok(ResourceRowParity {
-        re_minted_id: row.get("re_minted_id"),
-        re_minted_context_id: row.get("re_minted_context_id"),
-        owner_profile_id: row.get("owner_profile_id"),
-        originator_profile_id: row.get("originator_profile_id"),
-        origin_uri: row.get("origin_uri"),
-        title: row.get("title"),
-        is_active: row.get("is_active"),
-        created: row.get("created"),
-        updated: row.get("updated"),
-        context_name: row.get("context_name"),
-        context_slug: row.get("context_slug"),
-        context_owner_ref: row.get("context_owner_ref"),
-        cogmap_id: row.get("cogmap_id"),
-        cogmap_name: row.get("cogmap_name"),
-        doc_type_name: row.get("doc_type_name"),
-        owner_handle: row.get("owner_handle"),
-        stage: row.get("stage"),
-        mode: row.get("mode"),
-        effort: row.get("effort"),
+        re_minted_id: ResourceId::from(row.re_minted_id),
+        re_minted_context_id: row.re_minted_context_id.map(ContextId::from),
+        owner_profile_id: ProfileId::from(row.owner_profile_id),
+        originator_profile_id: ProfileId::from(row.originator_profile_id),
+        origin_uri: row.origin_uri,
+        title: row.title,
+        is_active: row.is_active,
+        created: row.created,
+        updated: row.updated,
+        context_name: row.context_name,
+        context_slug: row.context_slug,
+        context_owner_ref: row.context_owner_ref,
+        cogmap_id: row.cogmap_id,
+        cogmap_name: row.cogmap_name,
+        doc_type_name: row.doc_type_name,
+        owner_handle: row.owner_handle,
+        stage: row.stage,
+        mode: row.mode,
+        effort: row.effort,
         seq,
-        body_hash: row.get("body_hash"),
-        ingest_state: row.get("ingest_state"),
-        body_storage: row.get("body_storage"),
+        body_hash: row.body_hash,
+        ingest_state: row.ingest_state,
+        body_storage: row.body_storage,
     })
 }
 
@@ -553,26 +581,25 @@ pub async fn trailing_breadcrumb(pool: &PgPool, resource: ResourceId) -> Result<
 ///
 /// Reads the tables UNQUALIFIED (like every sibling readback) so they resolve against the connection's
 /// search_path / the single post-collapse `public` schema. Keys by `new_id` directly — the resource id
-/// (preserved verbatim from production). Read-only; no writes. Runtime `sqlx::query` (NEVER the
-/// `query!` macros) — see the module-level note.
+/// (preserved verbatim from production). Read-only; no writes.
 pub async fn body(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<String, ReadbackError> {
-    use sqlx::Row;
     ensure_visible(pool, principal, new_id).await?;
 
     // Path 1: verbatim, coverage-verified. `.flatten()` collapses both "no row" (partial coverage,
     // HAVING excludes it) and "row with NULL agg" (zero live blocks) to `None` → the derived fallback.
-    let verbatim: Option<String> = sqlx::query_scalar(
-        "SELECT string_agg(bc.content, '' ORDER BY b.seq) \
-           FROM kb_content_blocks b \
-           LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
-          WHERE b.resource_id = $1 AND NOT b.is_folded \
-         HAVING count(*) = count(bc.block_revision_id)",
+    // The macro's own nullability is what makes that double-Option explicit rather than incidental.
+    let verbatim = sqlx::query_scalar!(
+        r#"SELECT string_agg(bc.content, '' ORDER BY b.seq)
+             FROM kb_content_blocks b
+             LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+            WHERE b.resource_id = $1 AND NOT b.is_folded
+           HAVING count(*) = count(bc.block_revision_id)"#,
+        new_id.uuid(),
     )
-    .bind(new_id)
     .fetch_optional(pool)
     .await?
     .flatten();
@@ -581,25 +608,29 @@ pub async fn body(
     }
 
     // Path 2: derived reconstruction (legacy pre-PR-3 rows, or partial verbatim coverage).
-    let rows = sqlx::query(
-        "SELECT c.chunk_index, COALESCE(c.header_path, '') AS header_path, \
-                COALESCE(c.heading_depth, 0::smallint) AS heading_depth, cc.content \
-         FROM kb_chunks c \
-         JOIN kb_content_blocks b ON b.id = c.block_id \
-         JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
-         WHERE c.resource_id = $1 AND c.is_current \
-         ORDER BY b.seq, c.chunk_index",
+    // The two `!` overrides are the COALESCE defaults: neither expression can yield NULL, but sqlx
+    // infers every expression column as nullable.
+    let rows = sqlx::query!(
+        r#"SELECT c.chunk_index,
+                  COALESCE(c.header_path, '')            AS "header_path!",
+                  COALESCE(c.heading_depth, 0::smallint) AS "heading_depth!",
+                  cc.content
+             FROM kb_chunks c
+             JOIN kb_content_blocks b ON b.id = c.block_id
+             JOIN kb_chunk_content cc ON cc.chunk_id = c.id
+            WHERE c.resource_id = $1 AND c.is_current
+            ORDER BY b.seq, c.chunk_index"#,
+        new_id.uuid(),
     )
-    .bind(new_id)
     .fetch_all(pool)
     .await?;
     let chunks: Vec<crate::content::ReadChunk> = rows
-        .iter()
+        .into_iter()
         .map(|row| crate::content::ReadChunk {
-            chunk_index: row.get("chunk_index"),
-            header_path: row.get("header_path"),
-            heading_depth: row.get("heading_depth"),
-            content: row.get("content"),
+            chunk_index: row.chunk_index,
+            header_path: row.header_path,
+            heading_depth: row.heading_depth,
+            content: row.content,
         })
         .collect();
     Ok(crate::content::reconstruct_body(&chunks))
@@ -796,8 +827,7 @@ pub async fn find_edge(
 /// (where it holds exactly); a slug-only term legitimately diverges — that's §7 dissolving the slug, not
 /// a defect. The fixture's queries are title/body terms by design.
 ///
-/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
-/// module-level note.
+/// Read-only; no writes.
 pub async fn fts_search(
     pool: &PgPool,
     principal: ProfileId,
@@ -808,21 +838,21 @@ pub async fn fts_search(
     // store a per-row `search_config` in `kb_resource_search_index` — when that lands, this query
     // MUST read the stored config per row instead of hardcoding 'english', or non-English rows will
     // silently fail to match (the stored tsvector and the query will use mismatched configurations).
-    let rows = sqlx::query(
-        "SELECT r.id
-           FROM kb_resource_search_index si
-           JOIN kb_resources r             ON r.id = si.resource_id
-           JOIN resources_visible_to($1) v ON v.resource_id = r.id
-          WHERE r.is_active
-            AND si.search_vector @@ websearch_to_tsquery('english', $2)
-          ORDER BY ts_rank(si.search_vector, websearch_to_tsquery('english', $2)) DESC",
+    let ids = sqlx::query_scalar!(
+        r#"SELECT r.id
+             FROM kb_resource_search_index si
+             JOIN kb_resources r             ON r.id = si.resource_id
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+            WHERE r.is_active
+              AND si.search_vector @@ websearch_to_tsquery('english', $2)
+            ORDER BY ts_rank(si.search_vector, websearch_to_tsquery('english', $2)) DESC"#,
+        principal.uuid(),
+        query,
     )
-    .bind(principal)
-    .bind(query)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.iter().map(|r| r.get::<ResourceId, _>("id")).collect())
+    Ok(ids.into_iter().map(ResourceId::from).collect())
 }
 
 /// Format a `Vec<f32>` as a pgvector text literal (`[a,b,c]`) for binding into a `::vector` cast.
@@ -910,34 +940,42 @@ pub struct CogmapShapeRow {
 /// `cogmap_id` — which is NULL for every context region and so made the old cogmap-keyed read
 /// structurally blind to them.
 ///
-/// Runtime `sqlx::query` (NOT the `query!` macros) — the SQL is unqualified and self-gating; see the
-/// module-level note. Read-only.
+/// The SQL is unqualified and self-gating; see the module-level note. Read-only.
+///
+/// Every column of a set-returning function reads as nullable to sqlx, so the `!` overrides carry
+/// the function's own contract: `region_id`/`lens_id`/`salience`/`member_count` are always present
+/// on a returned row, while `content_cohesion` and `label` are genuinely optional and stay `Option`.
 pub async fn anchor_shape(
     pool: &PgPool,
     anchor: HomeAnchor,
     principal: ProfileId,
     lens_id: Option<LensId>,
 ) -> Result<Vec<CogmapShapeRow>> {
-    let rows = sqlx::query(
-        "SELECT region_id, lens_id, salience, content_cohesion, label, member_count
-           FROM anchor_shape($1, $2, 'profile', $3, $4)",
+    let rows = sqlx::query!(
+        r#"SELECT region_id     AS "region_id!",
+                  lens_id       AS "lens_id!",
+                  salience      AS "salience!",
+                  content_cohesion,
+                  label,
+                  member_count  AS "member_count!"
+             FROM anchor_shape($1, $2, 'profile', $3, $4)"#,
+        anchor.table(),
+        anchor.uuid(),
+        principal.uuid(),
+        lens_id.map(LensId::uuid),
     )
-    .bind(anchor.table())
-    .bind(anchor.uuid())
-    .bind(principal)
-    .bind(lens_id)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|r| CogmapShapeRow {
-            region_id: r.get("region_id"),
-            lens_id: r.get("lens_id"),
-            salience: r.get("salience"),
-            content_cohesion: r.get("content_cohesion"),
-            label: r.get("label"),
-            member_count: r.get("member_count"),
+            region_id: RegionId::from(r.region_id),
+            lens_id: LensId::from(r.lens_id),
+            salience: r.salience,
+            content_cohesion: r.content_cohesion,
+            label: r.label,
+            member_count: r.member_count,
         })
         .collect())
 }
@@ -975,32 +1013,39 @@ pub struct StandingShapeRow {
 /// live (never read from the `kb_resource_standing` memo) so `freshness` reflects the current
 /// moment; the memo/refresh exists for the write-path clock, not as this read's authority.
 ///
-/// Runtime `sqlx::query` (NOT the `query!` macro) — the SQL is unqualified and self-gating; see the
-/// module-level note. Read-only.
+/// The SQL is unqualified and self-gating; see the module-level note. Read-only. The `!` overrides
+/// carry the function's contract — a returned row has every axis; the *absence* of a row is the
+/// deny/absent signal, and that is `Option` on the outside.
 pub async fn resource_standing(
     pool: &PgPool,
     principal: ProfileId,
     finding: ResourceId,
 ) -> Result<Option<StandingShapeRow>> {
-    let row = sqlx::query(
-        "SELECT finding_id, citation_magnitude, audit_coverage, citation_quality,
-                contradiction_balance, freshness, r_parent, band
-           FROM resource_standing_shape($1, 'profile', $2)",
+    let row = sqlx::query!(
+        r#"SELECT finding_id            AS "finding_id!",
+                  citation_magnitude    AS "citation_magnitude!",
+                  audit_coverage        AS "audit_coverage!",
+                  citation_quality      AS "citation_quality!",
+                  contradiction_balance AS "contradiction_balance!",
+                  freshness             AS "freshness!",
+                  r_parent              AS "r_parent!",
+                  band                  AS "band!"
+             FROM resource_standing_shape($1, 'profile', $2)"#,
+        finding.uuid(),
+        principal.uuid(),
     )
-    .bind(finding)
-    .bind(principal)
     .fetch_optional(pool)
     .await?;
 
     Ok(row.map(|r| StandingShapeRow {
-        finding_id: r.get("finding_id"),
-        citation_magnitude: r.get("citation_magnitude"),
-        audit_coverage: r.get("audit_coverage"),
-        citation_quality: r.get("citation_quality"),
-        contradiction_balance: r.get("contradiction_balance"),
-        freshness: r.get("freshness"),
-        r_parent: r.get("r_parent"),
-        band: r.get("band"),
+        finding_id: ResourceId::from(r.finding_id),
+        citation_magnitude: r.citation_magnitude,
+        audit_coverage: r.audit_coverage,
+        citation_quality: r.citation_quality,
+        contradiction_balance: r.contradiction_balance,
+        freshness: r.freshness,
+        r_parent: r.r_parent,
+        band: r.band,
     }))
 }
 
@@ -1062,35 +1107,43 @@ pub struct CitationAuditRecord {
 /// Rows are the audits the standing axes actually summed (joined through `resource_live_citations`
 /// on the full citation key), most recent first.
 ///
-/// Runtime `sqlx::query` (NOT the `query!` macro) — the SQL is unqualified and self-gating; see the
-/// module-level note. Read-only.
+/// The SQL is unqualified and self-gating; see the module-level note. Read-only. `reason` is the one
+/// genuinely optional column (a verdict need carry no rationale); the rest are always present on a
+/// returned row, which is what the `!` overrides state.
 pub async fn citation_audit_trail(
     pool: &PgPool,
     principal: ProfileId,
     finding: ResourceId,
 ) -> Result<Vec<CitationAuditRecord>> {
-    let rows = sqlx::query(
-        "SELECT audit_id, block_id, source_id, value, reason, created,
-                auditor_profile_id, auditor_handle, auditor_display_name
-           FROM resource_citation_audit_trail($1, 'profile', $2)",
+    let rows = sqlx::query!(
+        r#"SELECT audit_id             AS "audit_id!",
+                  block_id             AS "block_id!",
+                  source_id            AS "source_id!",
+                  value                AS "value!",
+                  reason,
+                  created              AS "created!",
+                  auditor_profile_id   AS "auditor_profile_id!",
+                  auditor_handle       AS "auditor_handle!",
+                  auditor_display_name AS "auditor_display_name!"
+             FROM resource_citation_audit_trail($1, 'profile', $2)"#,
+        finding.uuid(),
+        principal.uuid(),
     )
-    .bind(finding)
-    .bind(principal)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|r| CitationAuditRecord {
-            audit_id: r.get("audit_id"),
-            block_id: r.get("block_id"),
-            source_id: r.get("source_id"),
-            value: r.get("value"),
-            reason: r.get("reason"),
-            created: r.get("created"),
-            auditor_profile_id: r.get("auditor_profile_id"),
-            auditor_handle: r.get("auditor_handle"),
-            auditor_display_name: r.get("auditor_display_name"),
+            audit_id: r.audit_id,
+            block_id: BlockId::from(r.block_id),
+            source_id: ResourceId::from(r.source_id),
+            value: r.value,
+            reason: r.reason,
+            created: r.created,
+            auditor_profile_id: ProfileId::from(r.auditor_profile_id),
+            auditor_handle: r.auditor_handle,
+            auditor_display_name: r.auditor_display_name,
         })
         .collect())
 }
@@ -1150,62 +1203,61 @@ pub struct InvocationListRow {
 /// invocation yields `Ok(None)` — never an error (leak-safe, like [`anchor_shape`]). Acts are fetched
 /// ONLY after the envelope passes the gate, so an unreadable invocation never leaks its acts.
 ///
-/// Runtime `sqlx::query` (NOT the `query!` macros) — unqualified, self-gating SQL; see the module-level
-/// note. Read-only.
+/// Unqualified, self-gating SQL; see the module-level note. Read-only.
 pub async fn invocation_show(
     pool: &PgPool,
     invocation_id: Uuid,
     principal: ProfileId,
 ) -> Result<Option<InvocationShowRow>> {
-    let Some(row) = sqlx::query(
-        "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.parent_cogmap_id,
-                i.scoped_entity_id, i.telos_resource_id, i.outcome, i.opened_at, i.closed_at,
-                i.correlation_id
-           FROM kb_invocations i
-          WHERE i.id = $1
-            AND anchor_readable_by_profile($2, 'kb_cogmaps', i.originating_cogmap_id)",
+    let Some(row) = sqlx::query!(
+        r#"SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.parent_cogmap_id,
+                  i.scoped_entity_id, i.telos_resource_id, i.outcome, i.opened_at, i.closed_at,
+                  i.correlation_id
+             FROM kb_invocations i
+            WHERE i.id = $1
+              AND anchor_readable_by_profile($2, 'kb_cogmaps', i.originating_cogmap_id)"#,
+        invocation_id,
+        principal.uuid(),
     )
-    .bind(invocation_id)
-    .bind(principal)
     .fetch_optional(pool)
     .await?
     else {
         return Ok(None);
     };
 
-    let acts = sqlx::query(
-        "SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at, e.invocation_id, e.metadata
-           FROM kb_events e
-           JOIN kb_event_types et ON et.id = e.event_type_id
-          WHERE e.invocation_id = $1
-          ORDER BY e.occurred_at, e.id",
+    let acts = sqlx::query!(
+        r#"SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at, e.invocation_id, e.metadata
+             FROM kb_events e
+             JOIN kb_event_types et ON et.id = e.event_type_id
+            WHERE e.invocation_id = $1
+            ORDER BY e.occurred_at, e.id"#,
+        invocation_id,
     )
-    .bind(invocation_id)
     .fetch_all(pool)
     .await?
-    .iter()
+    .into_iter()
     .map(|r| InvocationActRecord {
-        event_id: r.get("id"),
-        event_kind: r.get("name"),
-        emitter_entity_id: r.get("emitter_entity_id"),
-        occurred_at: r.get("occurred_at"),
-        invocation_id: r.get("invocation_id"),
-        metadata: r.get("metadata"),
+        event_id: r.id,
+        event_kind: r.name,
+        emitter_entity_id: r.emitter_entity_id,
+        occurred_at: r.occurred_at,
+        invocation_id: r.invocation_id,
+        metadata: r.metadata,
     })
     .collect();
 
     Ok(Some(InvocationShowRow {
-        id: row.get("id"),
-        status: row.get("status"),
-        trigger_kind: row.get("trigger_kind"),
-        originating_cogmap_id: row.get("originating_cogmap_id"),
-        parent_cogmap_id: row.get("parent_cogmap_id"),
-        scoped_entity_id: row.get("scoped_entity_id"),
-        telos_resource_id: row.get("telos_resource_id"),
-        outcome: row.get("outcome"),
-        opened_at: row.get("opened_at"),
-        closed_at: row.get("closed_at"),
-        correlation_id: row.get("correlation_id"),
+        id: row.id,
+        status: row.status,
+        trigger_kind: row.trigger_kind,
+        originating_cogmap_id: row.originating_cogmap_id,
+        parent_cogmap_id: row.parent_cogmap_id,
+        scoped_entity_id: row.scoped_entity_id,
+        telos_resource_id: row.telos_resource_id,
+        outcome: row.outcome,
+        opened_at: row.opened_at,
+        closed_at: row.closed_at,
+        correlation_id: row.correlation_id,
         acts,
     }))
 }
@@ -1215,39 +1267,38 @@ pub async fn invocation_show(
 /// never sees its row — empty, never an error). Optionally narrowed by originating `cogmap` and/or
 /// `status`; ordered newest-open-first.
 ///
-/// Runtime `sqlx::query` (NOT the `query!` macros) — unqualified, self-gating SQL; see the module-level
-/// note. Read-only.
+/// Unqualified, self-gating SQL; see the module-level note. Read-only.
 pub async fn invocation_list(
     pool: &PgPool,
     principal: ProfileId,
     cogmap: Option<Uuid>,
     status: Option<String>,
 ) -> Result<Vec<InvocationListRow>> {
-    let rows = sqlx::query(
-        "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.opened_at, i.closed_at,
-                i.correlation_id
-           FROM kb_invocations i
-          WHERE anchor_readable_by_profile($1, 'kb_cogmaps', i.originating_cogmap_id)
-            AND ($2::uuid IS NULL OR i.originating_cogmap_id = $2)
-            AND ($3::text IS NULL OR i.status = $3)
-          ORDER BY i.opened_at DESC",
+    let rows = sqlx::query!(
+        r#"SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.opened_at, i.closed_at,
+                  i.correlation_id
+             FROM kb_invocations i
+            WHERE anchor_readable_by_profile($1, 'kb_cogmaps', i.originating_cogmap_id)
+              AND ($2::uuid IS NULL OR i.originating_cogmap_id = $2)
+              AND ($3::text IS NULL OR i.status = $3)
+            ORDER BY i.opened_at DESC"#,
+        principal.uuid(),
+        cogmap,
+        status,
     )
-    .bind(principal)
-    .bind(cogmap)
-    .bind(status)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|r| InvocationListRow {
-            id: r.get("id"),
-            status: r.get("status"),
-            trigger_kind: r.get("trigger_kind"),
-            originating_cogmap_id: r.get("originating_cogmap_id"),
-            opened_at: r.get("opened_at"),
-            closed_at: r.get("closed_at"),
-            correlation_id: r.get("correlation_id"),
+            id: r.id,
+            status: r.status,
+            trigger_kind: r.trigger_kind,
+            originating_cogmap_id: r.originating_cogmap_id,
+            opened_at: r.opened_at,
+            closed_at: r.closed_at,
+            correlation_id: r.correlation_id,
         })
         .collect())
 }
@@ -1285,8 +1336,7 @@ pub struct Neighbor {
 /// beyond this parity task (SG-5, no speculative surface). Order is NOT contractual — the parity test
 /// compares neighbor SETS.
 ///
-/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
-/// module-level note.
+/// Read-only; no writes.
 ///
 /// `pub(crate)`, NOT `pub`: this is an UNSCOPED read (no principal — see the body note), so exposing it
 /// across the crate boundary would let any external caller pull cross-profile graph structure. Keeping
@@ -1308,34 +1358,39 @@ pub(crate) async fn neighbors(
     // owner could not traverse edges homed in their own PROFILE-owned context — is now CLOSED:
     // migration `20260627000003` added the profile-owned clause (mirroring `context_visible_to`
     // clause 1), so `edges_visible_to` admits an owner to the edges in their own context.
-    let rows = sqlx::query(
-        "SELECT t.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
-                e.polarity::text AS polarity, e.label \
-           FROM kb_edges e \
-           JOIN kb_resources t ON t.id = e.target_id \
-          WHERE e.source_id = $1 \
-            AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources' \
-            AND NOT e.is_folded \
-         UNION ALL \
-         SELECT s.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
-                e.polarity::text AS polarity, e.label \
-           FROM kb_edges e \
-           JOIN kb_resources s ON s.id = e.source_id \
-          WHERE e.target_id = $1 \
-            AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources' \
-            AND NOT e.is_folded",
+    // A UNION takes its column names from the FIRST branch, so the overrides live there. The two
+    // `::text` casts are expressions (nullable to sqlx) over `NOT NULL` enum columns; `origin_uri`
+    // is `NOT NULL` on `kb_resources` and reads as nullable only because it arrives through a UNION.
+    // `label` is the one genuinely absent-able column and stays `Option`.
+    let rows = sqlx::query!(
+        r#"SELECT t.origin_uri     AS "origin_uri!",
+                  e.edge_kind::text AS "edge_kind!",
+                  e.polarity::text  AS "polarity!",
+                  e.label
+             FROM kb_edges e
+             JOIN kb_resources t ON t.id = e.target_id
+            WHERE e.source_id = $1
+              AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+              AND NOT e.is_folded
+            UNION ALL
+           SELECT s.origin_uri, e.edge_kind::text, e.polarity::text, e.label
+             FROM kb_edges e
+             JOIN kb_resources s ON s.id = e.source_id
+            WHERE e.target_id = $1
+              AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+              AND NOT e.is_folded"#,
+        new_id.uuid(),
     )
-    .bind(new_id)
     .fetch_all(executor)
     .await?;
 
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|row| Neighbor {
-            origin_uri: row.get("origin_uri"),
-            edge_kind: row.get("edge_kind"),
-            polarity: row.get("polarity"),
-            label: row.get("label"),
+            origin_uri: row.origin_uri,
+            edge_kind: row.edge_kind,
+            polarity: row.polarity,
+            label: row.label,
         })
         .collect())
 }
@@ -1463,35 +1518,41 @@ pub struct CogmapRegionMetricsRow {
 
 /// The per-region analytics tier read for either anchor kind (SQL `anchor_region_metrics`, T8). Gate
 /// IS in the SQL (deny → empty); folded regions excluded; `lens_id = None` → all lenses, `Some(l)` →
-/// that lens. Rows come back most-central first. Runtime `sqlx::query`.
+/// that lens. Rows come back most-central first.
+///
+/// Only the two identity columns take a `!`: every metric is genuinely optional (see
+/// [`CogmapRegionMetricsRow`] — a context materialized under `workflow-default` carries no telos
+/// term at all), so forcing them non-null would assert exactly the thing the struct denies.
 pub async fn anchor_region_metrics(
     pool: &PgPool,
     anchor: HomeAnchor,
     principal: ProfileId,
     lens_id: Option<LensId>,
 ) -> Result<Vec<CogmapRegionMetricsRow>> {
-    let rows = sqlx::query(
-        "SELECT region_id, lens_id, centrality, content_cohesion, internal_tension,
-                reference_standing, telos_alignment
-           FROM anchor_region_metrics($1, $2, 'profile', $3, $4)",
+    let rows = sqlx::query!(
+        r#"SELECT region_id AS "region_id!",
+                  lens_id   AS "lens_id!",
+                  centrality, content_cohesion, internal_tension,
+                  reference_standing, telos_alignment
+             FROM anchor_region_metrics($1, $2, 'profile', $3, $4)"#,
+        anchor.table(),
+        anchor.uuid(),
+        principal.uuid(),
+        lens_id.map(LensId::uuid),
     )
-    .bind(anchor.table())
-    .bind(anchor.uuid())
-    .bind(principal)
-    .bind(lens_id)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|r| CogmapRegionMetricsRow {
-            region_id: r.get("region_id"),
-            lens_id: r.get("lens_id"),
-            centrality: r.get("centrality"),
-            content_cohesion: r.get("content_cohesion"),
-            internal_tension: r.get("internal_tension"),
-            reference_standing: r.get("reference_standing"),
-            telos_alignment: r.get("telos_alignment"),
+            region_id: RegionId::from(r.region_id),
+            lens_id: LensId::from(r.lens_id),
+            centrality: r.centrality,
+            content_cohesion: r.content_cohesion,
+            internal_tension: r.internal_tension,
+            reference_standing: r.reference_standing,
+            telos_alignment: r.telos_alignment,
         })
         .collect())
 }
@@ -1524,32 +1585,39 @@ pub struct CogmapAnalyticsRow {
 }
 
 /// The map-level analytics read (`cogmap_analytics`). Gate IS in the SQL: a principal who cannot read
-/// the map gets zero rows → `None` (never an error). Runtime `sqlx::query`; `regulation` is decoded
-/// from the function's `json_agg` `jsonb` column.
+/// the map gets zero rows → `None` (never an error). `regulation` is decoded from the function's
+/// `json_agg` `jsonb` column.
+///
+/// The `regulation!` override is the function's own guarantee, not an assumption: its body wraps the
+/// aggregate in `COALESCE(…, '[]'::json)`
+/// (`migrations/20260628000001_cogmap_analytics_read_functions.sql:33-36`), so the column is `[]`
+/// for a map with no regulation and never SQL-NULL. The two staleness timestamps carry no such
+/// coalesce and stay `Option`.
 pub async fn cogmap_analytics(
     pool: &PgPool,
     cogmap_id: CogmapId,
     principal: ProfileId,
 ) -> Result<Option<CogmapAnalyticsRow>> {
-    let row = sqlx::query(
-        "SELECT telos_resource_id, materialized_at, latest_touch, is_stale, regulation
-           FROM cogmap_analytics($1, 'profile', $2)",
+    let row = sqlx::query!(
+        r#"SELECT telos_resource_id AS "telos_resource_id!",
+                  materialized_at,
+                  latest_touch,
+                  is_stale          AS "is_stale!",
+                  regulation        AS "regulation!: sqlx::types::Json<Vec<CogmapRegulationRow>>"
+             FROM cogmap_analytics($1, 'profile', $2)"#,
+        cogmap_id.uuid(),
+        principal.uuid(),
     )
-    .bind(cogmap_id)
-    .bind(principal)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|r| {
-        let regulation: sqlx::types::Json<Vec<CogmapRegulationRow>> = r.get("regulation");
-        CogmapAnalyticsRow {
-            telos_resource_id: r.get("telos_resource_id"),
-            staleness: CogmapStaleness {
-                materialized_at: r.get("materialized_at"),
-                latest_touch: r.get("latest_touch"),
-                is_stale: r.get("is_stale"),
-            },
-            regulation: regulation.0,
-        }
+    Ok(row.map(|r| CogmapAnalyticsRow {
+        telos_resource_id: ResourceId::from(r.telos_resource_id),
+        staleness: CogmapStaleness {
+            materialized_at: r.materialized_at,
+            latest_touch: r.latest_touch,
+            is_stale: r.is_stale,
+        },
+        regulation: r.regulation.0,
     }))
 }
