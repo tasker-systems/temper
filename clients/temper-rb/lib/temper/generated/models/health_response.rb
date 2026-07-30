@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Response body for the health endpoint.
   class HealthResponse < ApiModelBase
+    # The git commit this binary was built from, when the build knew it.  `None` means *this build did not record one* — a local `cargo build`, a `cargo install`, any build outside a Vercel deploy. It never means \"unknown commit\": absence is reported as absence rather than as a placeholder, so a reader can never mistake \"we cannot tell\" for \"we checked\".
+    attr_accessor :commit
+
     attr_accessor :status
 
     attr_accessor :version
@@ -23,6 +26,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'commit' => :'commit',
         :'status' => :'status',
         :'version' => :'version'
       }
@@ -41,6 +45,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'commit' => :'String',
         :'status' => :'String',
         :'version' => :'String'
       }
@@ -49,6 +54,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'commit',
       ])
     end
 
@@ -67,6 +73,10 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'commit')
+        self.commit = attributes[:'commit']
+      end
 
       if attributes.key?(:'status')
         self.status = attributes[:'status']
@@ -131,6 +141,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          commit == o.commit &&
           status == o.status &&
           version == o.version
     end
@@ -144,7 +155,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [status, version].hash
+      [commit, status, version].hash
     end
 
     # Builds the object from hash
