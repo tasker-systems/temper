@@ -618,9 +618,48 @@ way its own source guidance warns about — **expected output was authored, not 
    Verified by mutation — renaming the emitted env in `build.rs` turns it red while the
    `None`-accepting test stays green, which is exactly the gap Step 8 identified.
 
-**Still claimed rather than demonstrated:** Task 2's canary. This PR touches no migration, so its
-own preview is *correctly* skipped by the script it adds. The first chirp needs a migration-carrying
-PR reaching `● Ready` rather than `Canceled`.
+### Task 2 needed two more rounds, and the plan's changeset source was wrong
+
+The script as planned shipped, ran, and reached the wrong answer for a reason no amount of
+re-reading would have found. Recorded in full because the failure is the goal's own subject matter.
+
+**Round 1 — the input the problem withholds.** The plan said the changeset "is derived from
+`VERCEL_GIT_PREVIOUS_SHA`, which Vercel sets in the build environment". The first real deployment
+logged `build: no VERCEL_GIT_PREVIOUS_SHA — cannot determine the changeset` and built. That variable
+is *the SHA of the last **successful** deployment for this project and branch*, and previews here had
+never built successfully — so **the condition the script exists to fix is what withholds its own
+input**. The canary was fail-safe but over-firing: every preview built, inverting the cost decision
+rather than targeting it.
+
+Rather than stack a fallback on four more unverified assumptions, a temporary diagnostic measured the
+container (names and yes/no facts only, never a value). Results: `git` and `.git` present; the clone
+is **shallow**; `origin/main` **absent locally**; `git fetch --depth origin main` **succeeds** —
+network and credentials both available.
+
+**Round 2 — a shallow clone has no merge base.** With the base moved to the merge base with `main` —
+which also fixes a second, subtler wrong: `VERCEL_GIT_PREVIOUS_SHA` asks *"did the last **push** add a
+migration"*, which flickers, rather than *"does this **PR** carry a migration"*, which is stable, and
+would skip precisely the push where a migration's **caller** changed — the real build then reported
+`no merge base with main within 200 commits` **despite the fetch succeeding**. A shallow boundary
+commit records no parents, so the branch history and the fetched `main` are disconnected islands: no
+common ancestor is reachable, and **deepening the fetch cannot help**. Comparing the two *trees*
+needs no ancestry, so that is what it now does. It can over-report — a migration on `main` but not on
+this branch reads as a difference — and over-reporting builds, the safe direction.
+
+**What the guard test could not have caught, and now can.** Its fixture was a full clone, where
+`merge-base` resolves fine. A **shallow** fixture is now included, and mutation-verified: removing the
+tree-comparison fallback reds `shallow clone, no migration, skips` while every full-clone assertion
+stays green. Note also that the two derived assertions are not equally strong — *"branch adding a
+migration builds"* expects exit 1, which is **also the fail-safe**, so it passes vacuously on broken
+derivation. The skip assertions carry the bite.
+
+**Demonstrated in production:** the skip half. A real preview now logs
+`note: no merge base (shallow clone) — comparing trees against main tip` then
+`skip: preview with no migration change`, and the deployment reports `Canceled by Ignored Build Step`.
+
+**Still claimed rather than demonstrated:** the build half — the canary's actual chirp. No PR in this
+sequence touched `migrations/`, so a migration-carrying PR reaching `● Ready` rather than `Canceled`
+remains unobserved. The shallow fixture asserts it; Vercel has not yet been seen doing it.
 
 **Named as unverifiable, not as safe:** `.vercel/repo.json` shows `temper-cloud` is the only project
 in `jcoletaylors-projects` rooted at `.`, so `ignoreCommand` governs it. Whether the wrapbook-scoped
