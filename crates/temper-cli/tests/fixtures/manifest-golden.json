@@ -1,0 +1,26 @@
+{
+  "version": "0.3.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "49cb34e27fc75301ab83ddc594153cbc93ba4f3efdbd8fb09545b725cf742301",
+      "size": 3
+    },
+    {
+      "path": "lib/libonnxruntime.so",
+      "sha256": "8273ef957736e504caa03e5ef80f29bb0e8c81916d935cf1c8aabcc408221650",
+      "size": 3
+    },
+    {
+      "path": "models/model_quantized.onnx",
+      "sha256": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+      "size": 5
+    },
+    {
+      "path": "temper",
+      "sha256": "9a3a45d01531a20e89ac6ae10b0b0beb0492acd7216a368aa062d1a5fecaf9cd",
+      "size": 6
+    }
+  ]
+}

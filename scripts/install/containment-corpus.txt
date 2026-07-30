@@ -1,0 +1,78 @@
+# Shared containment corpus — ONE list, TWO implementations.
+#
+# The manifest path-containment predicate exists twice, in two languages:
+#   - sh:   `is_contained_relative_sh` in scripts/install/install.sh
+#   - Rust: `is_contained_relative`    in crates/temper-cli/src/manifest.rs
+#
+# Both are security predicates deciding whether a manifest entry may name a
+# given path, and neither can be deleted: install.sh must refuse before the
+# atomic swap, and the CLI must refuse when verifying an installed directory.
+# Two implementations of one rule in two languages is the shape that drifts
+# silently, and it HAD drifted — Rust refused a `.` component and sh accepted
+# it. Nothing legitimate emits `./x` so nothing broke, which is exactly why it
+# went unnoticed.
+#
+# This file is the single statement of the rule. Every line is checked against
+# BOTH implementations, and the two harnesses must agree with it and therefore
+# with each other:
+#   - .github/scripts/test-containment-parity.sh  (extracts the sh function)
+#   - manifest.rs::containment_corpus_matches_the_shell  (include_str!)
+#
+# FORMAT: `<verdict>:<path>`, verdict is `accept` or `reject`, and the path is
+# everything after the FIRST colon — so a path may itself contain colons, and
+# `reject:` with nothing after it is the empty path. Blank lines and lines
+# beginning with `#` are ignored. Both harnesses refuse an empty corpus, since a
+# corpus that parses to nothing would let both sides pass while checking nothing.
+#
+# NOTE ON DOMAIN: install.sh runs on macOS and Linux only, and the Rust twin is
+# evaluated on the host. So these verdicts are the UNIX verdicts. A Windows path
+# prefix like `C:/x` is a `Prefix` component to Rust on Windows but two Normal
+# components on Unix, and this corpus asserts the Unix answer — the only one
+# either implementation is reachable under.
+
+# --- The paths a real release actually ships -------------------------------
+accept:temper
+accept:temper.exe
+accept:LICENSE
+accept:README-INSTALL.txt
+accept:lib/libonnxruntime.so
+accept:lib/libonnxruntime.1.22.0.dylib
+accept:models/model_quantized.onnx
+accept:model/bge-base-en-v1.5/model.onnx
+
+# --- Dots that are ordinary filename content, NOT components ---------------
+# A predicate simplified to *..* or *.* would refuse these. They are the reason
+# both implementations test components rather than substrings.
+accept:a/foo..bar/b
+accept:foo..bar
+accept:.hidden
+accept:.config/temper
+accept:x/.hidden/y
+accept:v1.22.0/lib.so
+accept:..leading
+accept:trailing..
+
+# --- Escapes upward: the live hole both arms exist to close ----------------
+reject:../decoy
+reject:..
+reject:a/../../escape
+reject:a/../b
+reject:../
+reject:lib/../../etc/hosts
+
+# --- Absolute: defense in depth on the sh side, a real escape in Rust ------
+reject:/etc/hosts
+reject:/
+reject:/tmp/decoy
+
+# --- CurDir components: the divergence this corpus was written to close ----
+# sh accepted every one of these before it grew a `/./` arm; Rust refused them.
+reject:.
+reject:./temper
+reject:a/./b
+reject:./
+
+# --- Empty --------------------------------------------------------------
+# Not a path at all. Refused by both, and by name rather than by the accident
+# of no file existing at that name.
+reject:

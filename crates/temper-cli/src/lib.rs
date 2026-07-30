@@ -1,5 +1,7 @@
 pub mod access_gate;
 pub mod actions;
+pub mod attest;
+pub mod attestation_fetch;
 pub mod backend_select;
 pub mod cli;
 pub mod cloud_backend;
@@ -10,6 +12,7 @@ pub mod error;
 pub mod extract;
 pub mod format;
 pub mod ids;
+pub mod manifest;
 pub mod output;
 pub mod projection;
 pub mod saml;

@@ -28,14 +28,32 @@ jobs:
     timeout-minutes: 2
     outputs:
       version: ${{ steps.version.outputs.version }}
+    # This job only derives a version string. It needs no write scope — and with
+    # the org default at `default_workflow_permissions: write`, saying nothing
+    # grants it EVERY scope, including `contents: write` and `actions: write`.
+    # That is the pair that completes the signing-oracle chain, and it is the job
+    # the tag values below are expanded in.
+    permissions:
+      contents: read
     steps:
       - name: Extract version from tag
         id: version
+        # Both tag sources arrive as environment variables, never as an
+        # expression inside the script. GitHub expands expressions into the run
+        # body's TEXT before bash parses it, so a crafted value executes.
+        # git check-ref-format accepts all three of these tag names:
+        #   v1.0.0";id;#     v1.0.0`id`     v1.0.0$(id)
+        # and inputs.tag is not even constrained by that — it is a free string
+        # from workflow_dispatch or from release-tag.yml's workflow_call. A shell
+        # variable is never re-parsed as script text.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ -n "${{ inputs.tag }}" ]]; then
-            TAG="${{ inputs.tag }}"
+          if [[ -n "$INPUT_TAG" ]]; then
+            TAG="$INPUT_TAG"
           else
-            TAG="${{ github.ref_name }}"
+            TAG="$REF_NAME"
           fi
           VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -46,6 +64,8 @@ jobs:
     needs: determine-version
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-cli-binaries.yml
     with:
       version: ${{ needs.determine-version.outputs.version }}

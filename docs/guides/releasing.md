@@ -72,6 +72,141 @@ Archive contents (flat layout — no versioned top-level directory):
 
 The installer scripts in [scripts/install/](../../scripts/install/) fetch the latest release via the GitHub API, download the matching archive plus checksum, verify, extract into `~/.local/share/temper/` (mac/linux) or `%LOCALAPPDATA%\Programs\temper\` (Windows), and symlink or PATH-update as appropriate.
 
+## What the attestation does and does not prove
+
+A successful attestation check establishes something precise, and it is worth
+stating plainly before stating its boundary. The artifact in hand is
+byte-for-byte the one `build-cli-binaries.yml` produced, running in GitHub
+Actions, at the **exact** tag requested: signed by a Fulcio certificate whose
+SAN is
+`https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/tags/<tag>`
+(`attest.rs`'s `expected_identity` — that string *is* the property), issued
+under GitHub Actions' OIDC issuer, chained to the pinned public-good Sigstore
+root, and present in Rekor's transparency log (`skip_tlog()` is never called).
+Both online paths check that signature over the digest of the **exact object
+each one just compared** — the manifest's for `--verify --online`, the
+archive's for `temper update`. That is a real property, correctly enforced.
+
+**The attestation binds the builder and the tag. It never binds the source.**
+Anyone with write access to this repo can push a `v*` tag whose workflow builds
+a backdoor, and it will verify perfectly on every path `temper` offers —
+correct signature, correct identity, correct Rekor inclusion proof, correct
+digest. This is inherent to build provenance, not a defect in this
+implementation: SLSA provenance attests *the build*, and a build is only ever
+as trustworthy as the commit it ran against. No verification code closes this;
+what closes it is process — who holds repo write, and what review the release
+PR gets on its way to `main`.
+
+Two things bound how bad this is in practice:
+
+- **The claim is falsifiable by anyone, not just by us.** The attestation names
+  the workflow file and the tag, so a reader can go read exactly what that
+  workflow did at that tag, and confirm the tag's commit is one that went
+  through review. The provenance makes the build *auditable*; it does not make
+  the audit unnecessary.
+- **The boundary is the same for the out-of-band check.** `gh attestation
+  verify` (see [install.md](install.md#out-of-band-audit--verify-without-trusting-tempers-own-code))
+  removes any dependence on `temper`'s own verification code and on our pinned
+  root — a genuinely stronger position — but it verifies the same predicate
+  over the same subject, so it inherits the same limit. Nothing in the
+  ecosystem upgrades "this build" into "this source."
+
+Two residual trusts sit outside the signature chain, and are named here rather
+than left implicit:
+
+- **The bootstrap installer is unsigned.** The
+  `curl -fsSL …/main/scripts/install/install.sh | sh` line in
+  [install.md](install.md#quick-install) fetches over HTTPS from
+  `raw.githubusercontent.com` and is authenticated by TLS and GitHub's control
+  of that host — nothing more. That matters more than it first looks, because
+  it is the recovery path every trust-root failure names: both
+  `AttestError::TrustRootUnusable` and
+  `AttestationVerifyError::TrustRootUnusable` render *"cut a new release or
+  re-run install.sh to get a binary with a current one"*, and a test in each
+  module asserts that the message names `install.sh`. So the escape hatch from
+  a stale pinned root is the one path with no attestation over it. It is still
+  the right hatch — a hatch that depended on the thing that broke would be no
+  hatch — but it is a hatch, not a chain link.
+- **The signing job's action pins do not move on their own.** The three actions
+  the signing job runs (`attest-build-provenance`, `checkout`,
+  `upload-artifact`) are pinned by full commit SHA, because a moving tag on a
+  job holding `attestations: write` is a signing oracle waiting to be
+  repointed. The cost is that a pin can rot arbitrarily far behind upstream,
+  including past security fixes. Dependabot **alerts** and **security
+  updates** — the org-level toggles —
+  do not cover workflow `uses:` pins; only **version updates** with the
+  `github-actions` ecosystem do, and those run solely from a committed config.
+  That config is `.github/dependabot.yml`, and it is the whole bump path: delete
+  it and the pins go stale silently.
+- **The pinned trust root is a hand-committed blob.** `crates/temper-cli/trust/sigstore-public-good-trusted-root.json`
+  reaches the binary through `include_str!` and nothing else. There is no
+  `build.rs` in `temper-cli`, no digest pin over it, and no freshness check —
+  unlike the ONNX Runtime archive and the embedding model, both of which *are*
+  digest-pinned. Its integrity rests on the same review that gates any other
+  committed file, and on the maintainer step below fetching it from
+  `gh attestation trusted-root` rather than anywhere else.
+
+**Maintainer action:** none recurring — this section is a statement of scope,
+not an obligation. Treat it as the thing to keep true: if a future change makes
+a verification path sound stronger than "builder and tag," amend this section
+in the same commit rather than letting the docs drift ahead of the mechanism.
+
+## Standing obligation: Sigstore root rotation
+
+`temper` verifies release attestations against a Sigstore trust root **pinned
+at build time and compiled into the binary** (`crates/temper-cli/trust/sigstore-public-good-trusted-root.json`,
+embedded via `include_str!` in `attest.rs`) — deliberately not fetched live
+over TUF at verify time. See
+[docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md)
+for why: the Rust TUF ecosystem is unsettled, and pinning converts an open
+ecosystem problem into a closed, auditable release-engineering one — the same
+`EXPECTED_MODEL_SHA256` doctrine (`crates/temper-ingest/build.rs`) applied to
+the trust root itself.
+
+**The cost of that choice is a standing release obligation, not a one-time
+decision: when Sigstore rotates its trust root, cut a release promptly.** A
+binary's pinned root is fixed at the moment it was built. It cannot verify an
+attestation signed under a *newer* root than the one baked in — so once
+Sigstore rotates, every `temper` built before that rotation will fail
+`--verify --online` and `temper update`'s (mandatory, no-bypass) attestation
+check against any release built *after* the rotation, until that older
+`temper` is itself replaced by a build carrying the new root.
+
+Three things bound how bad this is in practice:
+
+- **Updates chain.** vN's pinned root verifies vN+1's attestation as long as
+  no rotation lands between them; vN+1 ships whatever root was current when
+  *it* was built. Only a rotation landing strictly between the version
+  installed and the version being verified against actually bites.
+- **Fulcio's public-good root is long-lived and rotations are rare and
+  pre-announced** — this is not a weekly fire drill.
+- **The failure is loud and distinguishable, never a silent downgrade.**
+  `attest.rs`'s `AttestError::TrustRootUnusable` fires specifically for an
+  unusable/stale pinned root, distinct from `NotOurs` (a bad signature or
+  wrong identity) — the two recoveries do not overlap, and the code never
+  degrades either to a warning that reads as "verified anyway."
+
+**The escape hatch, always available:** re-running `install.sh` fetches a
+fresh archive and verifies it against the archive-level SHA256 sidecar (hash
+verification does not depend on the pinned attestation root at all), so a
+user stuck behind a stale pinned root can always recover a working install
+without waiting for `temper update`'s attestation path to catch up. Note what
+that hatch does and does not carry: the sidecar is an integrity check fetched
+from the same release URL base as the archive, and the bootstrap script itself
+is unsigned — so this path recovers a working install, it does not
+independently establish provenance. That is deliberate (a hatch that depended
+on the thing that broke would be no hatch) and is recorded in
+[What the attestation does and does not prove](#what-the-attestation-does-and-does-not-prove).
+
+**Maintainer action:** when you learn Sigstore has rotated (or is scheduled
+to), treat it the same as any other change that forces a release — update
+`crates/temper-cli/trust/sigstore-public-good-trusted-root.json` from a fresh
+`gh attestation trusted-root`, verify it still contains the public-good root
+(not GitHub's own, no-transparency-log root — see `attest.rs`'s module docs
+for how to tell them apart), and run `cargo make release-prepare` promptly.
+Sitting on a rotation is what turns this bounded, well-understood cost into an
+unbounded one for anyone who hasn't updated recently.
+
 ## ONNX Runtime Versioning
 
 The release workflow pins the bundled ONNX Runtime version via an env var at the top of `.github/workflows/build-cli-binaries.yml`:
@@ -85,10 +220,59 @@ This must match the version used by `ort` in `crates/temper-ingest/Cargo.toml` �
 
 1. Update `ort` and its `api-XX` feature in `crates/temper-ingest/Cargo.toml`.
 2. Update `ONNX_RUNTIME_VERSION` in `build-cli-binaries.yml`.
-3. Replace the checked-in Linux `.so` in `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/` (this is used by the Vercel `temper-api` deploy).
-4. Cut a new release.
+3. **Recompute all three `ort_sha256` matrix values** — see the standing obligation below. This is not optional; the build fails closed without it.
+4. Replace the checked-in Linux `.so` in `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/` (this is used by the Vercel `temper-api` deploy).
+5. Cut a new release.
 
 The release workflow downloads the runtime from `github.com/microsoft/onnxruntime/releases` per platform. The four per-platform archives differ in packaging (`.tgz` vs `.zip`) and library name (`libonnxruntime.{dylib,so}` vs `onnxruntime.dll`), all handled in the workflow's matrix.
+
+## Standing obligation: ONNX Runtime digest pinning
+
+Each matrix target in `.github/workflows/build-cli-binaries.yml` carries an
+`ort_sha256` beside its `ort_archive`/`ort_archive_ext`, and the "Download ONNX
+Runtime" step verifies the fetched archive against it before extracting
+anything. The reason is the same `EXPECTED_MODEL_SHA256` doctrine
+(`crates/temper-ingest/build.rs`) applied one layer out: the native library
+extracted from that archive is copied into staging, hashed into the per-file
+manifest, **attested**, and then `dlopen`'d by the shipped binary. An unpinned
+fetch means we faithfully sign whatever the network handed us — and every
+downstream verdict, including a signature-backed `--verify --online`, comes
+back `verified` over it. The model riding in the same archive was already
+pinned; this closes the other half.
+
+**The cost of that choice is a standing obligation, not a one-time decision:
+bumping `ONNX_RUNTIME_VERSION` requires recomputing all three digests in the
+same commit.** The pin is per-version by construction — the digests name
+`onnxruntime-{osx-arm64,linux-x64,win-x64}-<version>` archives, so a version
+bump invalidates every one of them.
+
+Two things bound how bad this is in practice:
+
+- **The failure is loud, immediate, and fails closed.** A stale digest fails
+  the download step on all three runners before a single byte is extracted,
+  staged, hashed, or attested. There is no path where a mismatched archive
+  reaches the signing step, and no variant of this that degrades to a warning.
+- **It fires only on a deliberate version bump.** The digests are stable for
+  the life of an `ONNX_RUNTIME_VERSION` — Microsoft's release assets are
+  immutable — so this is not maintenance that accrues on its own.
+
+**Maintainer action:** recompute all three in the same commit that bumps
+`ONNX_RUNTIME_VERSION`, and paste the real output — never a placeholder. These
+are load-bearing constants.
+
+```bash
+ORT_VER=1.24.2  # the NEW version you are bumping to
+for n in onnxruntime-osx-arm64:tgz onnxruntime-linux-x64:tgz onnxruntime-win-x64:zip; do
+  name="${n%%:*}"; ext="${n##*:}"
+  url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${name}-${ORT_VER}.${ext}"
+  printf '%-28s ' "$name"
+  curl -fsSL "$url" | shasum -a 256 | awk '{print $1}'
+done
+```
+
+Map each line to the matrix entry whose `ort_archive` matches the name printed
+beside it. Getting that mapping wrong fails the build rather than weakening
+it — every target checks its own archive against its own pin.
 
 ## Skipping a Release
 
@@ -158,6 +342,8 @@ The per-platform matrix entries in `build-cli-binaries.yml` are self-documenting
 
 - [`docs/guides/install.md`](install.md) — user-facing install instructions
 - [`docs/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md`](../superpowers/specs/2026-04-17-temper-cli-binary-release-design.md) — original design doc
+- [`docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`](../superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md) — per-file manifest + attestation design
+- [`docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md) — why the trust root is pinned, and which crate/root
 - [`tools/scripts/release/`](../../tools/scripts/release/) — the shell scripts driving `release-prepare`
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the tag-driven release workflow
 - [`.github/workflows/build-cli-binaries.yml`](../../.github/workflows/build-cli-binaries.yml) — the reusable build matrix
