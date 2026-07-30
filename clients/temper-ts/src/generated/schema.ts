@@ -2972,6 +2972,15 @@ export interface components {
         };
         /** @description Response body for the health endpoint. */
         HealthResponse: {
+            /**
+             * @description The git commit this binary was built from, when the build knew it.
+             *
+             *     `None` means *this build did not record one* — a local `cargo build`, a
+             *     `cargo install`, any build outside a Vercel deploy. It never means "unknown
+             *     commit": absence is reported as absence rather than as a placeholder, so a
+             *     reader can never mistake "we cannot tell" for "we checked".
+             */
+            commit?: string | null;
             status: string;
             version: string;
         };

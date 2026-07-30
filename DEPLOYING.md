@@ -58,11 +58,19 @@ a silent `main` auto-deploy.
 
 ### A function's return type is a wire contract with the binary
 
-`CREATE OR REPLACE FUNCTION` reads like an additive edit — nothing is dropped, no
-table changes, and every caller in the repo is updated in the same commit. It is
-not additive. The binary decodes that function's result by type, so **the running
-binary is a caller you did not update**, and the invariant's second clause — *old
-code against the new schema* — is what breaks.
+A function signature change reads like an ordinary edit: every caller in the repo is
+updated in the same commit, and the non-additive examples beside this one — a rename,
+a destructive collapse, a search-path flip — are all table-shaped, so it matches none
+of them. It is not additive. The binary decodes that function's result **by type**, so
+**the running binary is a caller you did not update**, and the invariant's second
+clause — *old code against the new schema* — is what breaks.
+
+**The tell is a `DROP FUNCTION`, not the absence of one.** Postgres refuses to change a
+function's return type via `CREATE OR REPLACE` (`ERROR: cannot change return type of
+existing function`), so a return-type change **must** be written as `DROP FUNCTION` +
+`CREATE FUNCTION`. All 18 return-type changes in this repo's migrations are written that
+way; none is a `CREATE OR REPLACE`. Grep the migration for `DROP FUNCTION`, then grep the
+callers of what it drops.
 
 Worked example, 2026-07-30 (`20260730000010`, PR #576): `facet_set` and
 `property_set` went from `RETURNS uuid` to `RETURNS uuid[]` so one assert could
