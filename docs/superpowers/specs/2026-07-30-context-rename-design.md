@@ -54,15 +54,16 @@ the cost of the single-field surface and it is accepted, not mitigated — see *
 
 `ScopedAuthority` is the repo's scoped-authorization layer
 (`docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`). Its refusal seam is a
-**static, argument-free** method (`crates/temper-services/src/authz/mod.rs:103`):
+**static, argument-free** method (`crates/temper-services/src/authz/mod.rs:104`):
 
 ```rust
 fn denial() -> ApiError;
 ```
 
-One dialect per gate. Every one of the six existing authorities renders a single `ApiError`, and
+One dialect per gate. Every one of the **nine** existing authorities renders a single `ApiError`, and
 `AuditAuthority` carries a test asserting both its denial arms are byte-identical `NotFound`
-(`audit_gate.rs:914`) precisely so the write cannot become an existence oracle.
+(`every_denial_renders_not_found`, `audit_gate.rs:897`) precisely so the write cannot become an
+existence oracle.
 
 Rename needs two dialects from one gate: `403` to a principal who can read the context but not
 administer it, `404` to one who cannot see it at all.
@@ -79,7 +80,14 @@ Add a defaulted method to `ScopedAuthority`, and have `authorize` call it:
 fn denial_for(&self) -> ApiError { Self::denial() }
 ```
 
-All six existing impls are untouched — the default delegates to what they already declare.
+All nine existing impls are untouched — the default delegates to what they already declare.
+
+**Nine, and the count is load-bearing.** `rg -n "impl ScopedAuthority for" crates/temper-services/src/authz/`
+returns `GrantAuthority`, `ConnectionControlAuthority`, `ConnectionAuthority`, `MachineAuthority`,
+`TwoSidedAuthority`, `AuditAuthority`, `AuditorJobAuthority`, `TeamReadAuthority`,
+`ActorHistoryAuthority` — five refusing `Forbidden`, four refusing `NotFound`. An earlier draft of
+this spec said six. `no-other-refusal-changes-its-voice` is a boundary over **all** of them, so a
+regression suite written to "six" would leave three unguarded with no principle saying which three.
 
 The property `read_gates.rs:68-70` leans on survives intact: *"`denial` is static and argument-free, so
 it has no access to the slug it is refusing. The ambiguity is a property of the signature, not of
@@ -136,12 +144,30 @@ team-owned ⇒ `team_service::can_manage(role)`, i.e. Owner or Maintainer. It is
 currently reached only through `TwoSidedAuthority`; rename becomes its second consumer.
 
 **CONFORM, deliberately: team administration is by DIRECT membership.** `caller_administers_context`
-uses `team_service::role_on_team`, while readability uses `profile_effective_teams` +
-`team_ancestors`. A maintainer of a *parent* team can therefore **read** a child team's context but
-not **rename** it — they resolve to `ReadOnly` and get `403`. That asymmetry is the incumbent
-(`two_sided.rs:127-132` states it: *"`can_manage` … by DIRECT membership … it is `can_manage` and
-not `owner` on purpose"*). Rename inherits it. Changing it is a separate decision about the whole
-authorization model, not a rename detail.
+uses `team_service::role_on_team` (`context_service.rs:430-437`), while readability uses
+`profile_effective_teams` + `team_ancestors`. A member of a team **beneath** the owning team can
+therefore **read** a context but not **rename** it — they resolve to `ReadOnly` and get `403`.
+Rename inherits that asymmetry. Changing it is a separate decision about the whole authorization
+model, not a rename detail.
+
+**The direction is the trap, and an earlier draft of this spec got it backwards.** Reads inherit
+**down** the team tree, not up: `contexts_readable_by` expands the caller's teams *upward* to their
+ancestors, so a thing attached to an ancestor is reachable by everyone beneath it. Probed live in a
+rolled-back transaction:
+
+```
+                  probe                  | visible
+-----------------------------------------+---------
+ parent-maintainer reads CHILD-owned ctx | f
+ child-member reads PARENT-owned ctx     | t
+```
+
+So a maintainer of an *enclosing* team holds **no standing at all** over a child team's context —
+they resolve to `Invisible` and get `404`, not `ReadOnly` and `403`. This matters more than a
+documentation nit: a test written to the wrong direction fails, and the obvious way to make it pass
+is to widen the gate so a parent-maintainer resolves `ReadOnly` — **an authorization widening
+shipped to turn a test green.** The register's *Closure* names this as route 2 of its four-route
+equivalence class for exactly this reason.
 
 ### The `404` is the incumbent refusal
 
@@ -297,14 +323,41 @@ MCP is included for parity: `contexts.rs` already exposes `create_context`, `get
 `list_contexts`, `share_context`, `unshare_context` and `transfer_context`. A rename absent from
 that set would be the only context act an agent cannot perform.
 
-Writes route surface → `DbBackend` → `writes::rename_context_with`, per the repo rule that surfaces
-dispatch one operations command per inbound call and never call write persistence directly.
+**Rename is service-direct, like every other context mutation.** An earlier draft of this spec said
+writes route *surface → `DbBackend` → `writes::rename_context_with`*, citing the repo rule that
+surfaces dispatch one operations command per inbound call. Disk contradicts it: the `Backend` trait
+(`temper-workflow/src/operations/backend.rs`) has **zero** context commands, and `create`, `share`,
+`unshare` and `reassign` are all service-direct on both surfaces — temper-mcp's own tool comments say
+`SERVICE-DIRECT` in as many words.
+
+Taking the rule literally here would make rename the **only** context command on the trait,
+obligating a `CloudBackend` impl and `#[act_span]`/`ActInput` treatment that its three siblings do
+not have — a structural divergence bought for nothing. The mechanism this spec actually requires
+(`writes::rename_context_with`, called from the service, with the event appended and projected in
+one transaction) is satisfied service-direct.
+
+The both-surfaces obligation is discharged structurally rather than by discipline: the gate lives in
+temper-services, so temper-api and temper-mcp cannot drift on *who is admitted*. What they **can**
+still drift on is how a refusal is **rendered** — see the MCP note under *Surfaces* in the
+implementation plan.
 
 The outcome type carries `context_id`, `name`, `slug`, `owner_ref`, `renamed: bool` — mirroring
-`ReassignContextOutcome` — **and the composed new ref**. `owner_ref` + `slug` are the two halves a
-caller would otherwise have to assemble themselves, and `format_context_ref` (`context_ref.rs:75-83`)
-already composes exactly that pair. The caller has just had their address changed out from under
-them; making them reconstruct the new one from parts is the wrong place to save a field.
+`ReassignContextOutcome` — **and the composed new ref**. The caller has just had their address
+changed out from under them; making them reconstruct the new one from parts is the wrong place to
+save a field.
+
+**The composing helper is `decorated_context_ref` (`context_ref.rs:77-84`), and it has a trap.** Its
+signature is `(owner_table, owner_addressable, context_slug)` and it prepends the sigil itself:
+
+```rust
+let sigil = if owner_table == "kb_teams" { '+' } else { '@' };
+format!("{sigil}{owner_addressable}/{context_slug}")
+```
+
+`ContextRow.owner_ref` is **already** sigil-decorated — the SQL `CASE` at `context_service.rs:357-360`
+emits `'+' || slug` / `'@' || handle`. Passing `owner_ref` as `owner_addressable` yields
+`@@handle/slug`. Pass the undecorated handle or team slug. (An earlier draft of this spec named a
+`format_context_ref` that does not exist.)
 
 ## Stated exclusion: client-side caches of the old slug
 
@@ -355,7 +408,7 @@ discharge which clause. It is **not** a coverage claim — every clause in that 
 ### Two obligations the build inherits, and they are the risky ones
 
 **The trait change is the highest-risk edit in this design, and this spec discharges its clause only
-by construction.** `denial_for(&self)` defaults to `Self::denial()`, so the six existing authorities
+by construction.** `denial_for(&self)` defaults to `Self::denial()`, so the nine existing authorities
 "cannot" change behavior. That argument is sound and it is still only an argument — the failure
 shape is an impl that overrides the default without meaning to, or an `authorize` that calls one
 method on one path and the other on another. `no-other-refusal-changes-its-voice` is a standing
