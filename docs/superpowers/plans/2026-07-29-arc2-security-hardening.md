@@ -984,16 +984,33 @@ Substitute the `dtolnay/rust-toolchain@stable` step at `:71` with a `run:` step 
 
 Resolve each to its current commit SHA and pin with the version in a trailing comment:
 
+> **The obvious loop is WRONG and was corrected here after it produced a bad pin.** For an
+> **annotated** tag, `git/ref/tags/<v>` **succeeds** and returns the *tag object's* SHA — so a
+> `|| gh api …/commits/<v>` fallback never fires, and you pin a non-commit that Actions rejects at
+> runtime, on the release path. **Two of the four actions here are annotated tags.** Always branch on
+> `.object.type`:
+
 ```bash
-for a in actions/checkout:v6 actions/attest-build-provenance:v4 actions/upload-artifact:v7 Swatinem/rust-cache:v2; do
+for a in actions/checkout:v6 actions/attest-build-provenance:v4 actions/upload-artifact:v7; do
   repo="${a%%:*}"; ver="${a##*:}"
-  sha=$(gh api "repos/$repo/git/ref/tags/$ver" --jq '.object.sha' 2>/dev/null \
-     || gh api "repos/$repo/commits/$ver" --jq '.sha')
+  read -r type sha < <(gh api "repos/$repo/git/ref/tags/$ver" --jq '.object.type + " " + .object.sha')
+  if [ "$type" = "tag" ]; then
+    sha=$(gh api "repos/$repo/git/tags/$sha" --jq '.object.sha')   # dereference to the commit
+  fi
+  # Confirm it really is a commit before trusting it.
+  gh api "repos/$repo/commits/$sha" --jq '.sha' >/dev/null || { echo "NOT A COMMIT: $repo@$sha"; continue; }
   echo "$repo@$sha # $ver"
 done
 ```
 
-If a tag resolves to an annotated tag object, dereference it to the commit (`gh api repos/$repo/git/tags/$sha --jq '.object.sha'`). Apply each as `uses: owner/repo@<sha> # <version>`.
+Apply each as `uses: owner/repo@<40-char-commit-sha> # <version>`. **Never hand-write a SHA** — a
+fabricated pin is worse than no pin, because it fails only at release time.
+
+> **Pinning breaks Task 11's harness, and that is the harness working.**
+> `test-audit-attest-subject-path.sh` derives its "attest step removed" fixture with a `sed` matching
+> the literal `actions/attest-build-provenance@v4`. After pinning, that pattern stops matching and the
+> harness's own fixture-differs-from-real guard goes red rather than silently testing nothing. Make
+> the pattern ref-agnostic (`@[^[:space:]]+`) as part of this task — it is the change that surfaced it.
 
 - [ ] **Step 3: Decide the cache question explicitly**
 

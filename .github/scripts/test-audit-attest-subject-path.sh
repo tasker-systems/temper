@@ -131,7 +131,11 @@ if make_fixture renamed-both "s|\.manifest\.json\$|.manifest.txt|"; then
 fi
 
 # --- (g) the attest step removed entirely: fails ---
-if make_fixture no-attest-step "s|actions/attest-build-provenance@v4|actions/upload-artifact@v7|"; then
+# The ref is matched as `@<anything>` rather than a literal `@v4`: the workflow SHA-pins its actions
+# (`@<40-hex> # v4`), so a literal version here would stop matching on the next pin bump and the
+# fixture would silently equal the real workflow. `make_fixture`'s cmp guard catches that — this
+# pattern is what keeps it from firing every time the pin moves.
+if make_fixture no-attest-step "s|actions/attest-build-provenance@[^[:space:]]+.*\$|actions/upload-artifact@v7|"; then
     run_test "attest-build-provenance step gone: fails" "$FIXTURE" 1 \
         "no \`subject-path\` entries found"
 fi

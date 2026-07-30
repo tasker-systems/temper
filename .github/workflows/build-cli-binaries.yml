@@ -65,7 +65,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        # SHA-pinned, not tag-pinned: this job holds `id-token: write` and
+        # `attestations: write`, so anything it runs can get a genuine Sigstore
+        # signature over its output. A mutable major-version tag is a repo the
+        # signing key trusts and that someone else can move. Pinning is scoped
+        # to THIS workflow on purpose — repo-wide pinning generates ~20
+        # rubber-stamped bump PRs a year, which is net-negative for security.
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # The release archive ships the embedding model, which is an LFS blob. Without this the
           # job gets a 130-byte pointer file instead — which is exactly how the CLI ended up
@@ -73,16 +79,54 @@ jobs:
           # the quantized one, silently filling the index with vectors from two models.
           lfs: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target.triple }}
+      # NOTE: this job deliberately does NOT use `.github/actions/setup-rust`.
+      # That composite is the right thing for the PR path, but it wraps
+      # `dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` — both of
+      # which are exactly what the two blocks below exist to avoid inside the
+      # signing job. Pointing this job at the composite would silently reinstate
+      # both. If the composite is ever reworked, it does not follow that this job
+      # should adopt it; re-derive the two decisions below first.
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          # rustup is preinstalled on all three runner images (macos-14,
+          # ubuntu-22.04, windows-2022). Used directly rather than
+          # `dtolnay/rust-toolchain@stable` because that action resolves a
+          # MUTABLE BRANCH ref inside the job that holds `id-token: write` — and
+          # unlike the other actions here it cannot simply be SHA-pinned: a
+          # branch has no release cadence, so a pin would have to be bumped
+          # blind, forever, with no changelog to read. Replacing it is the only
+          # way to close it. There is no rust-toolchain.toml in this repo, so
+          # `rustup default stable` is what makes the `cargo build` below use
+          # stable.
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add "${{ matrix.target.triple }}"
+          rustc --version --verbose
 
-      - name: Setup Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-${{ matrix.target.triple }}
-
+      # NO BUILD CACHE HERE — this is deliberate, do not "restore" it.
+      #
+      # `Swatinem/rust-cache@v2` keys its cache into the repository's Actions
+      # cache scope, and GitHub's cache scoping lets a job on `main` (or on any
+      # branch whose cache the default branch's scope covers) WRITE entries that
+      # a job on a release tag can then READ. That means a compromised PR/`main`
+      # job could seed a poisoned `target/` — and this job would compile against
+      # it, produce a backdoored binary, and then TRUTHFULLY attest it. The
+      # attestation would be genuine; the artifact would not be. Every
+      # downstream verdict (`temper version --verify --online`, `temper update`)
+      # would read `verified` over it, which is the worst possible failure shape
+      # for this repo: a signature-backed lie rather than an honest
+      # `unverifiable`.
+      #
+      # THE TRADEOFF, stated so nobody has to re-derive it: dropping the cache
+      # costs a cold `cargo build --release` per matrix target on every release
+      # (roughly the job's 30-minute timeout budget is sized for this). We pay
+      # it because release builds are infrequent — tags only, not PRs — and this
+      # is the one build path whose output is signed. The alternative considered
+      # and rejected was keeping the cache with a release-scoped `key`; a
+      # distinct key narrows the namespace but does NOT change who can write
+      # into the scope, so it mitigates collision, not poisoning. Build time is
+      # the cheaper thing to spend.
       - name: Build temper CLI (${{ matrix.target.triple }})
         shell: bash
         run: |
@@ -242,7 +286,11 @@ jobs:
           cat "${ARCHIVE}.sha256"
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        # SHA-pinned (see the checkout step). `v4` is an ANNOTATED tag, so the
+        # tag ref resolves to a tag OBJECT, not a commit — this is the
+        # dereferenced commit. Pinning the tag-object sha instead is rejected by
+        # Actions at runtime, and it would fail on the release path only.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
         with:
           # Each matrix target produces exactly one of .tar.gz/.zip (per its
           # archive_ext above), never both. subject-path tolerates a
@@ -257,7 +305,8 @@ jobs:
             temper-v${{ inputs.version }}-${{ matrix.target.triple }}.manifest.json
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        # SHA-pinned (see the checkout step).
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cli-v${{ inputs.version }}-${{ matrix.target.name }}
           path: |
