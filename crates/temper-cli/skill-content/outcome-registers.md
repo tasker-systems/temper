@@ -14,6 +14,47 @@ A register exists to give confidence about four things, and nothing else:
 two `open_meta` keys. It needs no schema change, no query, and no server feature. Where a richer
 mechanism would help, this file says so and tells you what to do without it.
 
+## Altitude — scale the register to a goal's blast radius, not its effort
+
+The `mode × effort` workflows scale **process to job size**. This discipline answers a different
+question — *what the outcome is* — and is explicitly **not** a seventh `mode × effort` cell (see the
+end of *The loop*). That leaves a gap worth naming out loud: nothing scales **register depth to a
+goal's consequence**, and the result is mis-scaling in *both* directions.
+
+- **Over-armor.** A full eight-element register authored reflexively on a goal whose blast radius does
+  not warrant it. The *"padding reads as coverage"* guardrail catches padding *within* a register; it
+  does not catch a complete register on a throwaway goal — that is not padding, it is the wrong
+  instrument, and no guardrail below names it.
+- **Under-armor, the more dangerous one.** A consequential goal gets a thin register because the
+  author did not *feel* the weight. Nothing signals *"this one earns the full treatment."*
+
+**The decisive signal is blast radius, not effort**: how many downstream readers inherit this register
+as ground truth — an implementing agent, a sibling session, a downstream API consumer — and how
+reversible acting on it is. That is orthogonal to how much *work* the goal is. A high-radius goal
+earns the full eight elements even if it is little work; a low-radius one earns a thin register even
+if it is a lot of work.
+
+**This names the signal; it does not set the threshold.** Where to draw the line is the frame owner's
+call, exactly as cost and worth are — see *Enclosure of responsibility*. The discipline detects that a
+goal is high-radius; it does not decide that a given goal clears the bar for the full treatment.
+
+## Using this under fan-out — inject the discipline verbatim
+
+This file is written to survive **propagation to a reader who does not have the surrounding
+conversation** — which is the whole reason it is *principles, not checklists*, and why *"the worked
+example is evidence for the principle, never the scope of it"* is stated so insistently. Those choices
+are load-bearing the moment a controller runs a **fan-out**: dispatch several subagents to author or
+amend registers, hand each the relevant sections **verbatim**, and they come back coherent with each
+other and with the discipline rather than as several divergent interpretations.
+
+**The contract: inject verbatim, never paraphrased.** A paraphrase propagates the paraphraser's lossy
+compression — the same loss [`implementation-grounding.md`](implementation-grounding.md) names for
+plans (*"paraphrase is the very loss this guidance exists to prevent"*), and the reason
+[`subagent-guidance.md`](subagent-guidance.md) opens by telling a dispatcher to include principles in
+full. So when a controller fans out register authoring, the intended move is to inject these sections
+whole; paraphrasing them defeats the property that makes the fan-out hold together. The three
+compose — read them as one contract, not three re-derivations of it.
+
 ## Read the guardrails first, because they cut against everything below
 
 These are not caveats. A file that teaches only *how to write a register* produces exactly the
@@ -238,6 +279,44 @@ from — the provenance matters more than the clause did.
 
 **This is not a seventh `mode × effort` workflow.** Those answer *how much process for how big a
 job*. The register answers *what the outcome is*. They compose; neither replaces the other.
+
+## The pre-land check — four questions before a register lands
+
+**The crown-jewel rule — `no-witness-precedes-its-mechanism`, with its siblings `no-clause-names-a-
+mechanism` and `no-clause-is-uncovered-silently` — aspires to structural enforcement, and this file is
+self-aware that prose alone will not hold it** (*"the constraint has to be structural, because an
+instruction not to decompose was given once and did not hold"*). But the one structural hook that
+ships is the `witnesses`-vs-`enables` split at **task-create time** — which is *downstream* of
+authoring. At the moment that matters most — a drafter writing the register — enforcement is otherwise
+pure prose: the author reads the rule and internalizes it. In a fan-out dogfood it held only because
+the controller re-read every draft hunting for mechanism-in-clauses and premature witnesses. **That is
+diligence, not structure.**
+
+So before a freshly drafted or amended register **lands**, run these four questions against it. They do
+not replace the principles above — they are the pre-land gate that turns *"be diligent"* into *"answer
+these four,"* the way [`plan-verification.md`](plan-verification.md) gates a plan before dispatch:
+
+1. **Does any clause name a mechanism?** A clause states what must be true; the *how* belongs to the
+   build. A `--flag`, a function name, a table, an envelope field appearing in a clause *body* is the
+   slip. (→ `no-clause-names-a-mechanism`)
+2. **Does the register contain witness definitions at all?** Witnesses are authored *inside the build*.
+   A register that already carries `W1`/`W2` has decomposed in the preamble — the exact slip this file
+   records happening once. (→ `no-witness-precedes-its-mechanism`)
+3. **Is every EXTEND / AMEND-shaped claim spec-cited?** A register that claims to *extend* or *change*
+   an existing thing carries the citation that authorizes it, per
+   [`implementation-grounding.md`](implementation-grounding.md) GD-3 — otherwise it is invention
+   laundered as grounding.
+4. **Is every uncovered clause declared uncovered — not silently absent?** Coverage is never inferred
+   from absence; a clause with no witness says so, and a retired witness leaves a named remainder. (→
+   `no-clause-is-uncovered-silently`)
+
+**This is the shape check, not the meaning check.** It catches a clause that *reads* like mechanism and
+a register that *contains* witnesses — most of what has slipped historically — and it cannot judge
+whether a mechanism-free clause is the *right* invariant; that judgment stays with the reader. Where a
+mechanical form of these checks earns its keep, it belongs in a `temper goal lint`-shaped verb filed to
+the code repo — flagging clause bodies with imperative/mechanism language, witness-shaped content in a
+goal body, and EXTEND/AMEND without a citation. The doc names the check; the owner decides whether to
+mechanize it (enclosure of responsibility again).
 
 ## Doing it with the CLI you have
 
