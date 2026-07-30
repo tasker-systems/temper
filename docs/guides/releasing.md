@@ -127,6 +127,17 @@ than left implicit:
   a stale pinned root is the one path with no attestation over it. It is still
   the right hatch — a hatch that depended on the thing that broke would be no
   hatch — but it is a hatch, not a chain link.
+- **The signing job's action pins do not move on their own.** The three actions
+  the signing job runs (`attest-build-provenance`, `checkout`,
+  `upload-artifact`) are pinned by full commit SHA, because a moving tag on a
+  job holding `attestations: write` is a signing oracle waiting to be
+  repointed. The cost is that a pin can rot arbitrarily far behind upstream,
+  including past security fixes. Dependabot **alerts** and **security
+  updates** — the org-level toggles —
+  do not cover workflow `uses:` pins; only **version updates** with the
+  `github-actions` ecosystem do, and those run solely from a committed config.
+  That config is `.github/dependabot.yml`, and it is the whole bump path: delete
+  it and the pins go stale silently.
 - **The pinned trust root is a hand-committed blob.** `crates/temper-cli/trust/sigstore-public-good-trusted-root.json`
   reaches the binary through `include_str!` and nothing else. There is no
   `build.rs` in `temper-cli`, no digest pin over it, and no freshness check —

@@ -225,6 +225,15 @@ jobs:
       - name: Guard test — create-github-release (manifest presence)
         run: bash .github/scripts/test-create-github-release.sh
 
+      # The SHELL half of the containment-parity check. The Rust half rides the
+      # `--workspace` selection in test-rust.yml's unit job
+      # (`manifest.rs::containment_corpus_matches_the_shell`) — both read
+      # `scripts/install/containment-corpus.txt`, so agreement with the corpus is
+      # agreement between the two languages. One-sided edits to either predicate
+      # now fail on the side that was edited; they used to drift in silence.
+      - name: Guard test — containment parity (sh vs Rust)
+        run: bash .github/scripts/test-containment-parity.sh
+
       - name: Guard test — audit-attest-subject-path
         run: bash .github/scripts/test-audit-attest-subject-path.sh
 

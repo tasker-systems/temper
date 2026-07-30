@@ -326,6 +326,61 @@ manifest_declared_count() {
 # Checks every file the manifest lists against $1 (a directory). Runs the
 # whole list before returning, so a single invocation reports every mismatch
 # rather than just the first. Returns non-zero if anything failed.
+# Whether a manifest entry's path names a file strictly INSIDE the install root.
+# Returns 0 to accept, 1 to refuse, and sets CONTAIN_WHY to the reason on refusal.
+#
+# Without this, "../decoy" reads a file outside the staging/install root: point
+# one entry at a file an attacker placed there and state its REAL sha256, and
+# that entry verifies while the extracted `temper` is never hashed at all — a
+# verdict forged by editing a `path` string, never a hash. Reproduced end-to-end
+# in test-install.sh, where the unfixed installer printed "✓ Installed" and
+# exited 0.
+#
+# THIS FUNCTION HAS A RUST TWIN: `manifest.rs::is_contained_relative`. Both are
+# run against ONE shared corpus (`containment-corpus.txt`) — by
+# `test-containment-parity.sh` here and by `containment_corpus_matches_the_shell`
+# there — because two independent implementations of the same security predicate
+# in two languages is precisely the shape that drifts silently. It had already
+# drifted: Rust rejected a `.` component and this side accepted it. Harmless in
+# itself (nothing legitimate emits `./x`, and it resolves to the same file), but
+# the divergence was invisible, and the next one might not be harmless.
+#
+# An absolute path does not escape here the way it does in Rust's `Path::join` —
+# "$CHECK_DIR/$REL" concatenates to "$CHECK_DIR//etc/…", which stays inside — so
+# that arm is defense in depth: refuse it by path, loudly, rather than by the
+# accident of a missing file. The `..` arm is the one closing a live hole.
+is_contained_relative_sh() {
+    CONTAIN_REL="$1"
+    CONTAIN_WHY=""
+    # An empty string is not a path. Checked here rather than relied upon
+    # elsewhere so the predicate is total over its corpus.
+    if [ -z "$CONTAIN_REL" ]; then
+        CONTAIN_WHY="empty path"
+        return 1
+    fi
+    case "$CONTAIN_REL" in
+        /*)
+            CONTAIN_WHY="absolute path"
+            return 1
+            ;;
+    esac
+    # Wrapped in SLASHES so these test for whole COMPONENTS. An ordinary
+    # filename that merely CONTAINS dots (foo..bar) or BEGINS with one
+    # (.hidden) is still accepted — do not simplify either arm to *..* or *.*,
+    # which would refuse legitimate shipped files.
+    case "/$CONTAIN_REL/" in
+        *"/../"*)
+            CONTAIN_WHY="escapes the install root via a '..' component"
+            return 1
+            ;;
+        *"/./"*)
+            CONTAIN_WHY="contains a '.' component"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 verify_manifest_against_dir() {
     CHECK_DIR="$1"
     CHECK_FAILED=0
@@ -333,43 +388,38 @@ verify_manifest_against_dir() {
     while IFS="$(printf '\t')" read -r REL EXPECTED_SHA; do
         [ -n "$REL" ] || continue
         PAIR_COUNT=$((PAIR_COUNT + 1))
-        # A manifest entry may only name a file strictly INSIDE $CHECK_DIR.
-        # Without this, "../decoy" reads a file outside the staging/install
-        # root: point one entry at a file an attacker placed there and state
-        # its REAL sha256, and that entry verifies while the extracted `temper`
-        # is never hashed at all — a verdict forged by editing a `path` string,
-        # never a hash. Reproduced end-to-end in test-install.sh, where the
-        # unfixed installer printed "✓ Installed" and exited 0.
+        # The checks below run AFTER the PAIR_COUNT increment on purpose: a
+        # rejected entry still counts as parsed, so the parsed-vs-declared
+        # cross-check further down stays meaningful and the failure is reported
+        # through CHECK_FAILED.
         #
-        # An absolute $REL does not escape here the way it does in Rust's
-        # `Path::join` — "$CHECK_DIR/$REL" concatenates to "$CHECK_DIR//etc/…",
-        # which stays inside — so that arm is defense in depth: refuse it by
-        # path, loudly, rather than by the accident of a missing file. The `..`
-        # arm is the one closing a live hole.
+        # A parsed pair with an EMPTY sha256 is malformed, and refusing it here
+        # is what makes a manifest entry with `"path": ""` safe by DESIGN rather
+        # than by accident.
         #
-        # These run AFTER the PAIR_COUNT increment on purpose: a rejected entry
-        # still counts as parsed, so the parsed-vs-declared cross-check below
-        # stays meaningful and the failure is reported by CHECK_FAILED.
+        # Tab is IFS *whitespace*, so `read` strips it when leading: the line
+        # "\t<sha>" splits to REL=<sha> and EXPECTED_SHA="" — the sha shifts one
+        # field left. So $REL is NOT empty, the skip above does not fire, and
+        # PAIR_COUNT increments, which means the parsed-vs-declared cross-check
+        # sees 1 == 1 and PASSES. The comment that used to sit here claimed that
+        # cross-check caught this case; it does not. Refusal came only further
+        # down, as a missing file or as a mismatch against an empty expected
+        # hash — safe, but incidentally, and safe-by-accident survives only
+        # until someone edits the accident.
         #
-        # `case` on the path wrapped in SLASHES tests for a `..` COMPONENT, so
-        # an ordinary filename that merely contains dots (foo..bar) is still
-        # accepted. Do not simplify it to *..*, which would refuse a
-        # legitimate shipped file. (An empty $REL never reaches here — the
-        # line above skips it, and the count cross-check catches the gap.)
-        case "$REL" in
-            /*)
-                echo "error: manifest entry has an absolute path: $REL" >&2
-                CHECK_FAILED=1
-                continue
-                ;;
-        esac
-        case "/$REL/" in
-            *"/../"*)
-                echo "error: manifest entry escapes the install root: $REL" >&2
-                CHECK_FAILED=1
-                continue
-                ;;
-        esac
+        # The cross-check DOES catch the variant where the sha is also empty:
+        # the line is then a bare tab, $REL is empty, and the entry is skipped
+        # without counting, so parsed < declared.
+        if [ -z "$EXPECTED_SHA" ]; then
+            echo "error: manifest entry has no sha256 (path parsed as '$REL') — malformed entry" >&2
+            CHECK_FAILED=1
+            continue
+        fi
+        if ! is_contained_relative_sh "$REL"; then
+            echo "error: manifest entry is not inside the install root ($CONTAIN_WHY): $REL" >&2
+            CHECK_FAILED=1
+            continue
+        fi
         if [ ! -f "$CHECK_DIR/$REL" ]; then
             echo "error: manifest lists $REL but it is missing from $CHECK_DIR" >&2
             CHECK_FAILED=1

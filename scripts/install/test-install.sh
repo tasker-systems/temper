@@ -192,10 +192,19 @@ echo "PASS: a manifest entry resolving outside the install root is refused"
 # these name targets that do not exist, so they are ALREADY refused today (as
 # "missing file") and would prove nothing on their own. They are asserted so
 # the containment arm keeps refusing them BY PATH rather than by the accident
-# of the target's absence. The empty path is included because it never reaches
-# containment at all: it parses to a pair the loop skips, and is caught by the
-# parsed-vs-declared cross-check instead.
-for BAD_PATH in "/etc/hosts" "../escape" "a/../../escape" ""; do
+# of the target's absence.
+#
+# The empty path is NOT in this list — it does not travel the containment arm at
+# all, and the comment that used to claim it here was wrong about which arm
+# refuses it. It gets its own isolated witness below.
+#
+# The exhaustive per-path accept/reject rule for BOTH this predicate and its
+# Rust twin lives in `containment-corpus.txt`, checked by
+# `.github/scripts/test-containment-parity.sh` and
+# `manifest.rs::containment_corpus_matches_the_shell`. These cases stay here
+# because they assert the END-TO-END refusal (install aborts, nothing left
+# behind), which the predicate-level corpus cannot see.
+for BAD_PATH in "/etc/hosts" "../escape" "a/../../escape" "./escape"; do
   jq --arg p "$BAD_PATH" '.files[0].path = $p' \
     < "$TMP/containment.manifest.json" > "$TMP/bad-path.manifest.json"
   if TEMPER_INSTALL_DIR="$TMP/install-badpath" XDG_BIN_HOME="$TMP/bin-badpath" \
@@ -341,3 +350,61 @@ grep -q "file manifest verification failed" "$NETBAD_LOG" \
     || fail "the disagreement was not refused by the manifest gate: $(cat "$NETBAD_LOG")"
 
 echo "PASS: a published manifest that disagrees with the archive is still fatal"
+
+# --- An empty `path` is refused by the malformed-entry arm, by name ----------
+# Finding C. The comment this replaces claimed an empty `path` was caught by the
+# parsed-vs-declared cross-check. It is not, and the mechanism is worth pinning
+# because it is not obvious:
+#
+#   Tab is IFS *whitespace*, so `read` strips it when LEADING. A manifest entry
+#   with `"path": ""` produces the line "\t<sha>", which splits to REL=<sha> and
+#   EXPECTED_SHA="" — the sha shifts one field left. So $REL is NOT empty, the
+#   `[ -n "$REL" ]` skip never fires, PAIR_COUNT increments, and the cross-check
+#   sees 1 == 1 and PASSES.
+#
+# Before install.sh grew an explicit malformed-entry arm, refusal came only
+# incidentally (missing file, or a mismatch against an empty expected hash).
+# This asserts the refusal now comes from the arm that NAMES the problem — the
+# isolated-witness rule: not "is it refused?" but "is it refused by the arm
+# added for it?"
+EMPTY_PATH_DIR="$TMP/install-empty-path"
+EMPTY_PATH_LOG="$TMP/empty-path.log"
+build_archive
+build_manifest "$TMP/stage" "$TMP/empty-path-base.manifest.json"
+jq '(.files[] | select(.path == "temper")).path = ""' \
+    < "$TMP/empty-path-base.manifest.json" > "$TMP/empty-path.manifest.json"
+if TEMPER_INSTALL_DIR="$EMPTY_PATH_DIR" XDG_BIN_HOME="$TMP/bin-empty-path" \
+     sh "$INSTALL" --archive "$TMP/archive.tar.gz" \
+        --manifest "$TMP/empty-path.manifest.json" \
+        --version v0.3.0 >"$EMPTY_PATH_LOG" 2>&1; then
+    fail "a manifest entry with an empty path installed successfully"
+fi
+[ ! -e "$EMPTY_PATH_DIR" ] || fail "a refused install left files behind"
+grep -q "has no sha256" "$EMPTY_PATH_LOG" \
+    || fail "the empty path was not refused by the malformed-entry arm: $(cat "$EMPTY_PATH_LOG")"
+# And prove the OLD claim is still false, so nobody restores it: the
+# parsed-vs-declared cross-check must NOT be what fired.
+grep -q "manifest entries — refusing to install on a partial parse" "$EMPTY_PATH_LOG" \
+    && fail "the cross-check fired after all — the comment removed in this change was right"
+
+echo "PASS: an empty manifest path is refused by the malformed-entry arm specifically"
+
+# --- The sha-also-empty variant IS the cross-check's case --------------------
+# The one sub-case where the old comment was correct: with BOTH path and sha256
+# empty the line is a bare tab, $REL is empty, the entry is skipped WITHOUT
+# counting, and parsed < declared. Asserted so the two mechanisms stay
+# distinguishable rather than collapsing into "something refused it".
+BOTH_EMPTY_DIR="$TMP/install-both-empty"
+BOTH_EMPTY_LOG="$TMP/both-empty.log"
+jq '(.files[] | select(.path == "temper")) |= (.path = "" | .sha256 = "")' \
+    < "$TMP/empty-path-base.manifest.json" > "$TMP/both-empty.manifest.json"
+if TEMPER_INSTALL_DIR="$BOTH_EMPTY_DIR" XDG_BIN_HOME="$TMP/bin-both-empty" \
+     sh "$INSTALL" --archive "$TMP/archive.tar.gz" \
+        --manifest "$TMP/both-empty.manifest.json" \
+        --version v0.3.0 >"$BOTH_EMPTY_LOG" 2>&1; then
+    fail "a manifest entry with an empty path AND sha installed successfully"
+fi
+grep -q "refusing to install on a partial parse" "$BOTH_EMPTY_LOG" \
+    || fail "the both-empty case was not refused by the cross-check: $(cat "$BOTH_EMPTY_LOG")"
+
+echo "PASS: an entry with both path and sha empty is refused by the parsed-vs-declared cross-check"

@@ -1,0 +1,45 @@
+# Dependabot configuration.
+#
+# WHY THIS FILE EXISTS: the release signing job pins three actions by full
+# commit SHA (`attest-build-provenance`, `checkout`, `upload-artifact` in
+# `build-cli-binaries.yml`), because a moving tag on a job that holds
+# `attestations: write` is a signing oracle waiting to be repointed. A SHA pin
+# is the right posture and it has a cost — the pin never moves on its own, so a
+# pinned action can silently rot years behind its upstream, including past
+# security fixes.
+#
+# Dependabot ALERTS and SECURITY UPDATES — the org-level toggles in the GitHub
+# UI — do not close that gap. They act on dependency manifests, not on workflow
+# `uses:` pins. Bumping a pinned action requires Dependabot VERSION UPDATES with
+# the `github-actions` ecosystem, and version updates only run from a committed
+# config file. So without this file, an org with "Dependabot" switched on still
+# has no bump path for those three SHAs at all.
+#
+# Deliberately scoped to `github-actions` only. Adding `cargo` or `npm` here is a
+# separate operational decision with a very different PR volume across a
+# workspace this size, and nothing about the pinned-action gap requires it.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    # `/` is the required value for this ecosystem — it means "this repository's
+    # workflows", not "the root directory". It covers `.github/workflows/*.yml`
+    # plus the composite actions under `.github/actions/*/action.yml`, which pin
+    # by tag rather than SHA and so are the likelier source of routine churn.
+    directory: "/"
+    schedule:
+      interval: weekly
+    # One grouped PR rather than one per action. The SHA pins move together in
+    # review — the question a reviewer asks is "do I trust this set of upstream
+    # revisions", and splitting that across three PRs makes each one look
+    # individually trivial while the aggregate posture goes unexamined.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    # A SHA-pinned `uses:` carries a `# v4` trailer that names the tag the pin
+    # was taken from. Dependabot rewrites both the SHA and that comment, so the
+    # trailer stays honest across bumps rather than drifting into a lie about
+    # which version is pinned.
+    commit-message:
+      prefix: "chore(ci)"

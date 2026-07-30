@@ -147,10 +147,36 @@ pub fn load_from_dir(dir: &Path) -> LocalManifest {
 ///
 /// This is a check on *components*, not on substrings: `foo..bar` is an
 /// ordinary filename that merely contains dots and is accepted.
+///
+/// # This predicate has a shell twin
+///
+/// `is_contained_relative_sh` in `scripts/install/install.sh` decides the same
+/// question for the installer, which must refuse before the atomic swap and
+/// cannot call into Rust to do it. Neither copy is removable, so both are held
+/// to one shared statement of the rule —
+/// `scripts/install/containment-corpus.txt` — by
+/// `tests::containment_corpus_matches_the_shell` here (a plain reference, not an
+/// intra-doc link — the item is behind `#[cfg(test)]` and so is out of scope
+/// when rustdoc runs) and `test-containment-parity.sh` there. The corpus found a divergence
+/// on its first run, in BOTH directions: the shell side accepted a leading
+/// `./x` that this side refused, and this side accepted an interior `a/./b` that
+/// the shell side refused. Neither is dangerous — both resolve inside the root —
+/// which is precisely why both went unnoticed. The shared rule is now the
+/// stricter and simpler one: no `.` component anywhere.
 fn is_contained_relative(rel: &str) -> bool {
     // `Path::new("").components()` yields nothing, and `all` over an empty
     // iterator is `true` — so the emptiness check cannot be folded away.
     !rel.is_empty()
+        // `Path::components()` NORMALIZES `.` away unless it leads the path:
+        // `a/./b` yields [Normal("a"), Normal("b")], so the component scan
+        // below cannot see an interior CurDir at all and `matches!(.., CurDir)`
+        // is unreachable for it. This raw-segment scan is what makes the rule
+        // "no `.` component ANYWHERE" — the rule the shell twin enforces via
+        // `*"/./"*` and the one the shared corpus states. Refusing an odd-but-
+        // harmless path is deliberate: the producer emits neither form, so
+        // nothing legitimate is excluded, and refusing beats normalizing in a
+        // predicate whose whole job is to decide rather than to repair.
+        && !rel.split('/').any(|segment| segment == ".")
         && Path::new(rel)
             .components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
@@ -433,6 +459,67 @@ mod tests {
         ] {
             assert!(is_contained_relative(good), "{good:?} must be contained");
         }
+    }
+
+    /// The RUST half of the containment-parity check (F6). Its twin is
+    /// `.github/scripts/test-containment-parity.sh`, which runs the same corpus
+    /// through the real `is_contained_relative_sh` extracted from `install.sh`.
+    ///
+    /// Neither harness inspects the other. Both are held to
+    /// `scripts/install/containment-corpus.txt`, so agreement with the corpus is
+    /// agreement with each other — and a one-sided edit to either predicate now
+    /// fails on the side that was edited, instead of drifting silently the way
+    /// the `.`-component divergence did.
+    ///
+    /// The corpus is compiled in with `include_str!` rather than read at
+    /// runtime: a path lookup would make this test's outcome depend on the
+    /// working directory, and "the file wasn't found so nothing was checked" is
+    /// the fail-open this is supposed to prevent.
+    #[test]
+    fn containment_corpus_matches_the_shell() {
+        const CORPUS: &str = include_str!("../../../scripts/install/containment-corpus.txt");
+
+        let mut checked = 0usize;
+        let mut disagreements = Vec::new();
+
+        for line in CORPUS.lines() {
+            // Blank and comment lines only — emptiness is judged BEFORE the
+            // colon split, because `reject:` (the empty path) is a real case.
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (verdict, path) = line
+                .split_once(':')
+                .unwrap_or_else(|| panic!("corpus line has no verdict separator: {line:?}"));
+
+            let expected = match verdict {
+                "accept" => true,
+                "reject" => false,
+                other => panic!("corpus line has an unknown verdict {other:?}: {line:?}"),
+            };
+
+            checked += 1;
+            let actual = is_contained_relative(path);
+            if actual != expected {
+                disagreements.push(format!(
+                    "  expected {verdict}, got {} for path {path:?}",
+                    if actual { "accept" } else { "reject" }
+                ));
+            }
+        }
+
+        // The same vacuity floor the shell harness carries, for the same reason:
+        // a corpus that parsed to nothing would run zero comparisons and pass.
+        assert!(
+            checked > 0,
+            "corpus parsed to zero cases — refusing to pass on an empty check"
+        );
+        assert!(
+            disagreements.is_empty(),
+            "{} of {checked} corpus cases disagree with the Rust predicate:\n{}",
+            disagreements.len(),
+            disagreements.join("\n")
+        );
     }
 
     /// No manifest in the directory (the `cargo install` shape) is `Absent`,
