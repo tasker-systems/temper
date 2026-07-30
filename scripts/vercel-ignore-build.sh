@@ -15,10 +15,42 @@
 #
 # THIS RUNS IN VERCEL'S BUILD CONTAINER, SPAWNED VIA `sh -c` — POSIX sh, not bash.
 #
-# CHANGED_PATHS is injected by the guard test and is never set in a real build; there
-# the changeset is derived from VERCEL_GIT_PREVIOUS_SHA, which Vercel sets in the build
-# environment.
+# WHY THE BASE IS THE MERGE BASE WITH main, AND NOT VERCEL_GIT_PREVIOUS_SHA
+#   The obvious base is VERCEL_GIT_PREVIOUS_SHA, and it is the wrong one twice over.
+#
+#   It is "the SHA of the last SUCCESSFUL deployment for this project and branch", so on
+#   a project whose previews have never built it is simply UNSET — the very condition
+#   this script exists to fix is what withholds its own input. Measured, not reasoned:
+#   the first deployment through this script logged `no VERCEL_GIT_PREVIOUS_SHA` and
+#   built, and it only became set once that build succeeded.
+#
+#   Worse, where it IS set it answers the wrong question. It asks "did the last PUSH add
+#   a migration", which flickers across pushes; the question that decides whether this
+#   deployment is worth rehearsing is "does this PR carry a migration", which is stable.
+#   A PR that adds a migration in its first commit and changes the Rust that calls it in
+#   its second would skip exactly the push where the PAIRING changed — the one failure
+#   this whole design exists to catch.
+#
+#   The merge base with the default branch answers the stable question, and is available
+#   on the first push to a brand-new branch.
+#
+# WHAT THE BUILD CONTAINER ACTUALLY PROVIDES (measured 2026-07-30, real preview build)
+#   git binary present; .git present; the clone is SHALLOW (10 commits) and does NOT
+#   carry an origin/main ref, so the base must be fetched before it can be resolved.
+#   `git fetch --no-tags --depth origin main` succeeds — network and credentials are
+#   both available — and the merge base then resolves.
+#
+# CHANGED_PATHS is injected by the guard test and is never set in a real build.
 set -u
+
+# The branch every PR is cut from and merged back into. Not derivable from the Vercel
+# environment — no VERCEL_GIT_* variable carries the repo's default branch.
+DEFAULT_BRANCH="main"
+
+# How much history to fetch when resolving the merge base. A branch that diverged
+# further back than this resolves no merge base and therefore builds, which is the safe
+# direction: too much rehearsal, never too little.
+FETCH_DEPTH=200
 
 # Production is never skipped. A cost optimisation must not be able to stop a deploy.
 if [ "${VERCEL_ENV:-}" = "production" ]; then
@@ -32,69 +64,35 @@ if [ "${VERCEL_ENV:-}" != "preview" ]; then
   exit 1
 fi
 
-# ---------------------------------------------------------------------------------
-# TEMPORARY DIAGNOSTIC — remove once the changeset source is settled.
-#
-# The first real deployment through this script hit the `no VERCEL_GIT_PREVIOUS_SHA`
-# branch and built. That variable is "the SHA of the last SUCCESSFUL deployment for this
-# project and branch", and previews on this project have never built successfully — so
-# the condition this script exists to fix is what makes its own input unavailable.
-#
-# This block measures what a changeset could actually be derived from, rather than
-# guessing. It prints NAMES and yes/no facts only, never a variable's value.
-# It does not affect the decision below: exit codes are unchanged, so the guard test
-# still passes and CI stays green.
-# ---------------------------------------------------------------------------------
-diag() { echo "diag: $*"; }
-diag "VERCEL_GIT_* variables SET (names only):"
-env | sed -n 's/^\(VERCEL_GIT_[A-Z_]*\)=.*/  \1/p' | sort || true
-for v in VERCEL_GIT_PREVIOUS_SHA VERCEL_GIT_COMMIT_SHA VERCEL_GIT_COMMIT_REF VERCEL_ENV; do
-  eval "val=\${$v+set}"
-  diag "$v: ${val:-UNSET}"
-done
-if command -v git >/dev/null 2>&1; then
-  diag "git binary: present"
-  if [ -d .git ]; then
-    diag ".git directory: present"
-    diag "is-shallow: $(git rev-parse --is-shallow-repository 2>/dev/null || echo '?')"
-    diag "commits reachable from HEAD: $(git rev-list --count HEAD 2>/dev/null || echo '?')"
-    diag "remotes configured (names only): $(git remote 2>/dev/null | tr '\n' ' ' || echo none)"
-    if git rev-parse --verify origin/main >/dev/null 2>&1; then
-      diag "origin/main ref: already present locally"
-    else
-      diag "origin/main ref: absent locally"
-    fi
-    if git fetch --no-tags --depth=50 origin main >/dev/null 2>&1; then
-      diag "fetch origin main: SUCCEEDED"
-      diag "merge-base with FETCH_HEAD: $(git merge-base FETCH_HEAD HEAD >/dev/null 2>&1 && echo resolvable || echo unresolvable)"
-    else
-      diag "fetch origin main: FAILED (no network, no credentials, or no remote)"
-    fi
-  else
-    diag ".git directory: ABSENT — no git history in the build container"
-  fi
-else
-  diag "git binary: ABSENT"
-fi
-# --------------------------- end temporary diagnostic ---------------------------
-
 # `+x` rather than `-n`, deliberately: CHANGED_PATHS set-but-empty means "the changeset
 # is empty", while CHANGED_PATHS absent means "we have no changeset signal". Those are
-# different questions with different safe answers — skip the first, build the second —
-# and `-n` would collapse them into one, sending an empty changeset down the
-# cannot-determine path and building every time the test harness asserts a skip.
+# different questions with different safe answers — skip the first, derive the second —
+# and `-n` would collapse them into one, sending an empty changeset down the derivation
+# path and building every time the test harness asserts a skip.
 if [ -n "${CHANGED_PATHS+x}" ]; then
   changed="${CHANGED_PATHS}"
-elif [ -n "${VERCEL_GIT_PREVIOUS_SHA:-}" ]; then
-  changed="$(git diff --name-only "${VERCEL_GIT_PREVIOUS_SHA}" HEAD 2>/dev/null || echo "__UNKNOWN__")"
 else
-  # No previous SHA (first deployment on a branch): we cannot tell, so build.
-  echo "build: no VERCEL_GIT_PREVIOUS_SHA — cannot determine the changeset"
-  exit 1
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    echo "build: no git checkout in the build container — cannot determine the changeset"
+    exit 1
+  fi
+
+  if ! git fetch --no-tags --depth="${FETCH_DEPTH}" origin "${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+    echo "build: could not fetch ${DEFAULT_BRANCH} — cannot determine the changeset"
+    exit 1
+  fi
+
+  base="$(git merge-base FETCH_HEAD HEAD 2>/dev/null || true)"
+  if [ -z "${base}" ]; then
+    echo "build: no merge base with ${DEFAULT_BRANCH} within ${FETCH_DEPTH} commits"
+    exit 1
+  fi
+
+  changed="$(git diff --name-only "${base}" HEAD 2>/dev/null || echo "__UNKNOWN__")"
 fi
 
 if [ "${changed}" = "__UNKNOWN__" ]; then
-  echo "build: could not diff against VERCEL_GIT_PREVIOUS_SHA"
+  echo "build: could not diff the changeset"
   exit 1
 fi
 

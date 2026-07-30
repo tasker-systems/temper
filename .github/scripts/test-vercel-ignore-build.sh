@@ -44,11 +44,60 @@ expect "docs mentioning migrations do not trigger" 0 VERCEL_ENV=preview CHANGED_
 # Fail SAFE: an unknown environment builds rather than silently skipping.
 expect "unknown VERCEL_ENV builds" 1 VERCEL_ENV= CHANGED_PATHS="README.md"
 
-# A preview that cannot determine its changeset at all builds rather than guessing.
-# This is the case the assertion above it does NOT cover: CHANGED_PATHS set-but-empty
-# means "the changeset is empty", while CHANGED_PATHS absent means "we do not know".
-# Those are different questions and the script must not collapse them.
-expect "preview with no changeset signal at all builds" 1 VERCEL_ENV=preview
+# ---------------------------------------------------------------------------------
+# The DERIVATION path — no CHANGED_PATHS, so the script must work out the changeset
+# from git itself. This is the half that runs in a real build, and leaving it uncovered
+# is how the first version shipped depending on VERCEL_GIT_PREVIOUS_SHA, a variable that
+# is unset precisely when previews have never built.
+#
+# Everything below is hermetic: a throwaway origin plus clone under mktemp, never the
+# repo this script lives in.
+# ---------------------------------------------------------------------------------
+expect_in() { # expect_in <dir> <desc> <expected-exit> <env assignments...>
+  local dir="$1" desc="$2" want="$3"; shift 3
+  local got=0
+  ( cd "$dir" && env -u VERCEL_GIT_PREVIOUS_SHA -u CHANGED_PATHS "$@" sh "$SCRIPT" ) >/dev/null 2>&1 || got=$?
+  if [ "$got" -eq "$want" ]; then
+    echo "  ok   — $desc (exit $got)"
+  else
+    echo "  FAIL — $desc: expected exit $want, got $got"; fails=$((fails+1))
+  fi
+}
+
+FIXTURE="$(mktemp -d)"
+trap 'rm -rf "$FIXTURE"' EXIT
+git init -q --bare "$FIXTURE/origin.git"
+git -c init.defaultBranch=main clone -q "file://$FIXTURE/origin.git" "$FIXTURE/work" 2>/dev/null
+(
+  cd "$FIXTURE/work"
+  git config user.email t@example.com; git config user.name t
+  git checkout -q -b main 2>/dev/null || true
+  echo hello > README.md && git add README.md && git commit -qm base
+  git push -q origin main
+  # A branch whose diff against main carries a migration.
+  git checkout -q -b with-migration
+  mkdir -p migrations && echo "SELECT 1;" > migrations/20260730_x.sql
+  git add migrations && git commit -qm "add migration"
+  # A branch whose diff against main carries no migration.
+  git checkout -q main && git checkout -q -b without-migration
+  echo more >> README.md && git add README.md && git commit -qm "docs only"
+)
+
+( cd "$FIXTURE/work" && git checkout -q with-migration )
+expect_in "$FIXTURE/work" "derived: branch adding a migration builds" 1 VERCEL_ENV=preview
+
+( cd "$FIXTURE/work" && git checkout -q without-migration )
+expect_in "$FIXTURE/work" "derived: branch with no migration skips" 0 VERCEL_ENV=preview
+
+# No git checkout at all: build rather than guess. This is the case CHANGED_PATHS
+# set-but-empty does NOT cover — empty means "the changeset is empty", absent means
+# "we have no signal", and the script must not collapse them.
+mkdir -p "$FIXTURE/nogit"
+expect_in "$FIXTURE/nogit" "no git checkout builds" 1 VERCEL_ENV=preview
+
+# Production still wins over everything, even where a changeset could be derived.
+( cd "$FIXTURE/work" && git checkout -q without-migration )
+expect_in "$FIXTURE/work" "production builds even where derivation would skip" 1 VERCEL_ENV=production
 
 if [ "$fails" -gt 0 ]; then echo "FAILED: $fails assertion(s)"; exit 1; fi
 echo "all assertions passed"
