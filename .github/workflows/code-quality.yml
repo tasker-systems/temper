@@ -217,6 +217,14 @@ jobs:
       - name: Guard test — install.sh
         run: bash scripts/install/test-install.sh
 
+      # The producer half of the manifest contract. install.sh deliberately
+      # installs when no manifest is published (`unverifiable`, not `mismatch` —
+      # pre-v0.2.7 releases have none and must stay installable), which means a
+      # release that silently loses its manifest looks identical to one that
+      # never had it. This is the only place that can refuse.
+      - name: Guard test — create-github-release (manifest presence)
+        run: bash .github/scripts/test-create-github-release.sh
+
       - name: Guard test — audit-attest-subject-path
         run: bash .github/scripts/test-audit-attest-subject-path.sh
 

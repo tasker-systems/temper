@@ -207,3 +207,137 @@ for BAD_PATH in "/etc/hosts" "../escape" "a/../../escape" ""; do
 done
 
 echo "PASS: absolute, ancestor-relative and empty manifest paths are all refused"
+
+# =============================================================================
+# The NETWORK path: a missing published manifest is `unverifiable`, not fatal
+# =============================================================================
+# Everything above drives install.sh through --archive/--manifest, so the
+# download branch — where the manifest is FETCHED and can be absent — had no
+# coverage at all. That is the branch that decides whether `curl | sh` works
+# against a release published before manifests existed.
+#
+# Driven by a stub `curl` prepended to PATH rather than a live server or an
+# override inside install.sh. A `TEMPER_RELEASE_BASE_URL`-style env hook would
+# have meant adding an env-controlled download origin to a `curl | sh`
+# installer purely for testability; shadowing `curl` tests the real code path
+# and adds nothing to the shipped script.
+STUB_DIR="$TMP/stub-bin"
+mkdir -p "$STUB_DIR"
+cat > "$STUB_DIR/curl" <<'STUB'
+#!/bin/sh
+# Stub curl. Serves the archive and its .sha256 from local files; the manifest
+# response is controlled by STUB_MANIFEST_MODE. Only the manifest call passes
+# -w '%{http_code}', and only that call reads our stdout, so the archive/sha
+# branches must print nothing.
+URL=""; OUT=""; PREV=""
+for A in "$@"; do
+    case "$A" in https://*) URL="$A" ;; esac
+    [ "$PREV" = "-o" ] && OUT="$A"
+    PREV="$A"
+done
+case "$URL" in
+    *.manifest.json)
+        case "${STUB_MANIFEST_MODE:-200}" in
+            200)      cp "$STUB_MANIFEST_FILE" "$OUT"; printf '200'; exit 0 ;;
+            tampered) cp "$STUB_MANIFEST_FILE" "$OUT"; printf '200'; exit 0 ;;
+            404)      printf 'Not Found' > "$OUT"; printf '404'; exit 0 ;;
+            000)      exit 7 ;;
+            *)        printf '500'; exit 0 ;;
+        esac ;;
+    *.sha256)
+        ARCHIVE_NAME="$(basename "${OUT%.sha256}")"
+        printf '%s  %s\n' "$(shasum -a 256 "$STUB_ARCHIVE" | awk '{print $1}')" \
+            "$ARCHIVE_NAME" > "$OUT"
+        exit 0 ;;
+    *)
+        cp "$STUB_ARCHIVE" "$OUT"; exit 0 ;;
+esac
+STUB
+chmod +x "$STUB_DIR/curl"
+
+# Rebuild a known-good pair; earlier tests leave $TMP/stage tampered.
+build_archive
+build_manifest "$TMP/stage" "$TMP/net.manifest.json"
+
+# --- 404: install proceeds, plants no baseline, and says so ------------------
+NET404_DIR="$TMP/install-net-404"
+NET404_LOG="$TMP/net-404.log"
+if ! PATH="$STUB_DIR:$PATH" STUB_MANIFEST_MODE=404 \
+     STUB_ARCHIVE="$TMP/archive.tar.gz" STUB_MANIFEST_FILE="$TMP/net.manifest.json" \
+     TEMPER_INSTALL_DIR="$NET404_DIR" XDG_BIN_HOME="$TMP/bin-net-404" \
+     sh "$INSTALL" --version v0.3.0 >"$NET404_LOG" 2>&1; then
+    fail "a release with no published manifest failed to install: $(cat "$NET404_LOG")"
+fi
+[ -x "$NET404_DIR/temper" ] || fail "404-manifest install did not install the binary"
+[ ! -f "$NET404_DIR/.temper-manifest.json" ] \
+    || fail "a 404 manifest still planted a baseline — nothing was verified to plant"
+grep -q "publishes no per-file manifest" "$NET404_LOG" \
+    || fail "the 404 arm did not name the absent manifest: $(cat "$NET404_LOG")"
+grep -q "temper version --verify --online" "$NET404_LOG" \
+    || fail "the 404 warning names no recovery: $(cat "$NET404_LOG")"
+
+echo "PASS: a release with no published manifest installs as unverifiable, plants no baseline"
+
+# --- Transport failure: same verdict, DIFFERENT message ----------------------
+# The two must stay distinguishable. "This release predates manifests" and "we
+# could not reach GitHub" warrant the same action and different explanations;
+# collapsing them would tell users a permanent fact about a transient failure.
+NET000_DIR="$TMP/install-net-000"
+NET000_LOG="$TMP/net-000.log"
+if ! PATH="$STUB_DIR:$PATH" STUB_MANIFEST_MODE=000 \
+     STUB_ARCHIVE="$TMP/archive.tar.gz" STUB_MANIFEST_FILE="$TMP/net.manifest.json" \
+     TEMPER_INSTALL_DIR="$NET000_DIR" XDG_BIN_HOME="$TMP/bin-net-000" \
+     sh "$INSTALL" --version v0.3.0 >"$NET000_LOG" 2>&1; then
+    fail "a manifest fetch failure aborted the install: $(cat "$NET000_LOG")"
+fi
+[ -x "$NET000_DIR/temper" ] || fail "fetch-failure install did not install the binary"
+[ ! -f "$NET000_DIR/.temper-manifest.json" ] \
+    || fail "a failed manifest fetch still planted a baseline"
+grep -q "could not fetch the per-file manifest" "$NET000_LOG" \
+    || fail "the fetch-failure arm did not name the failure: $(cat "$NET000_LOG")"
+grep -q "publishes no per-file manifest" "$NET000_LOG" \
+    && fail "a transport failure was reported as 'this release publishes none'"
+
+echo "PASS: a manifest fetch failure is distinguished from an absent manifest"
+
+# --- 200: the positive network witness — baseline IS planted -----------------
+# Without this, every assertion above is satisfied by an installer that simply
+# never fetches or plants a manifest on the network path.
+NET200_DIR="$TMP/install-net-200"
+NET200_LOG="$TMP/net-200.log"
+if ! PATH="$STUB_DIR:$PATH" STUB_MANIFEST_MODE=200 \
+     STUB_ARCHIVE="$TMP/archive.tar.gz" STUB_MANIFEST_FILE="$TMP/net.manifest.json" \
+     TEMPER_INSTALL_DIR="$NET200_DIR" XDG_BIN_HOME="$TMP/bin-net-200" \
+     sh "$INSTALL" --version v0.3.0 >"$NET200_LOG" 2>&1; then
+    fail "a manifest-bearing release failed to install: $(cat "$NET200_LOG")"
+fi
+[ -f "$NET200_DIR/.temper-manifest.json" ] \
+    || fail "a published manifest was fetched but no baseline was planted"
+cmp -s "$NET200_DIR/.temper-manifest.json" "$TMP/net.manifest.json" \
+    || fail "the planted baseline is not the manifest that was fetched"
+grep -q "Verifying file manifest" "$NET200_LOG" \
+    || fail "per-file verification was skipped on a manifest-bearing release"
+
+echo "PASS: a published manifest is fetched, verified, and planted as the baseline"
+
+# --- A manifest that IS present and DISAGREES is still fatal -----------------
+# The bite for the whole change: degrading ABSENCE must not have degraded
+# DISAGREEMENT. Same network path, manifest served with a 200, contents do not
+# describe the archive.
+NETBAD_DIR="$TMP/install-net-bad"
+NETBAD_LOG="$TMP/net-bad.log"
+build_manifest "$TMP/stage" "$TMP/net-bad.manifest.json"
+jq '(.files[] | select(.path == "temper")).sha256 = "0000000000000000000000000000000000000000000000000000000000000000"' \
+    < "$TMP/net-bad.manifest.json" > "$TMP/net-bad-served.manifest.json"
+if PATH="$STUB_DIR:$PATH" STUB_MANIFEST_MODE=tampered \
+     STUB_ARCHIVE="$TMP/archive.tar.gz" \
+     STUB_MANIFEST_FILE="$TMP/net-bad-served.manifest.json" \
+     TEMPER_INSTALL_DIR="$NETBAD_DIR" XDG_BIN_HOME="$TMP/bin-net-bad" \
+     sh "$INSTALL" --version v0.3.0 >"$NETBAD_LOG" 2>&1; then
+    fail "a published manifest that disagrees with the archive still installed"
+fi
+[ ! -e "$NETBAD_DIR" ] || fail "a refused install left files behind"
+grep -q "file manifest verification failed" "$NETBAD_LOG" \
+    || fail "the disagreement was not refused by the manifest gate: $(cat "$NETBAD_LOG")"
+
+echo "PASS: a published manifest that disagrees with the archive is still fatal"

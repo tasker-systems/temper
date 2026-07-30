@@ -170,6 +170,35 @@ fi
 # published manifest alongside the archive; --archive with no --manifest has
 # no other source to draw one from, so it is a hard error rather than a
 # silent skip of per-file verification.
+#
+# ON THE NETWORK PATH, AN ABSENT MANIFEST IS `unverifiable`, NOT `mismatch`.
+# This script is fetched from `main` (unversioned — see the curl line at the top
+# of this file), but it installs *versioned* release artifacts. Those two move
+# independently, so this script is routinely newer than the release it is asked
+# to install: every release up to and including v0.2.6 published only
+# `.tar.gz`/`.zip` + `.sha256`, and `--version v0.2.6` must keep working
+# forever. A hard failure here would mean "the manifest asset is missing"
+# renders as "refusing to install", which is the one thing the verdict
+# trichotomy exists to prevent — the same reason `attest.rs` reports
+# `Unverifiable` for a `cargo install` build instead of `Mismatch`.
+#
+# It is also a hole that buys nothing to close. This script never verifies the
+# release ATTESTATION — that lives in Rust (`temper update`, which supplies
+# `--manifest` explicitly and stays hard-fail below). The manifest fetched here
+# is uploaded by the same credential as the archive AND its `.sha256`, so an
+# actor who can delete the manifest asset to force this arm can equally upload
+# one that matches a tampered archive and collect a pass. Failing closed on
+# absence does not raise that bar; it only breaks every pre-manifest release.
+#
+# What per-file verification still buys on this path is the DURABLE BASELINE
+# planted into INSTALL_DIR below, which later offline `temper version --verify`
+# runs read. The archive `.sha256` — verified unconditionally above, and never
+# skipped — is what gates these bytes. So a missing manifest degrades exactly
+# one thing: this install plants no baseline, and says so.
+#
+# A manifest that IS present and does NOT verify remains a hard failure. That
+# is a disagreement, not an absence.
+MANIFEST_AVAILABLE=1
 if [ -n "$LOCAL_MANIFEST" ]; then
     [ -f "$LOCAL_MANIFEST" ] || { echo "error: --manifest file not found: $LOCAL_MANIFEST" >&2; exit 1; }
     cp "$LOCAL_MANIFEST" "$TMPDIR/$MANIFEST"
@@ -179,8 +208,37 @@ elif [ -n "$LOCAL_ARCHIVE" ]; then
     exit 1
 else
     echo "  Downloading manifest..."
-    curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-connrefused \
-        "$MANIFEST_URL" -o "$TMPDIR/$MANIFEST"
+    # `-f` is deliberately dropped here (unlike every other curl in this file):
+    # with it, a 404 and a black-holed connection both surface as exit 22/28 and
+    # the two become indistinguishable. The HTTP status is the whole point —
+    # "this release predates manifests" and "we could not reach GitHub" warrant
+    # different messages even though they warrant the same verdict. Dropping -f
+    # means a 404 BODY lands in the output file, so every non-200 must delete it
+    # (a stray error page would otherwise be parsed as a manifest below).
+    MANIFEST_HTTP=$(curl -sSL --connect-timeout 10 --max-time 60 \
+        --retry 2 --retry-connrefused -w '%{http_code}' \
+        -o "$TMPDIR/$MANIFEST" "$MANIFEST_URL" 2>/dev/null) || MANIFEST_HTTP="000"
+    if [ "$MANIFEST_HTTP" != "200" ]; then
+        rm -f "$TMPDIR/$MANIFEST"
+        MANIFEST_AVAILABLE=0
+        echo "" >&2
+        if [ "$MANIFEST_HTTP" = "404" ]; then
+            echo "warning: ${VERSION} publishes no per-file manifest." >&2
+            echo "         Releases before per-file manifests shipped do not carry one, so there is" >&2
+            echo "         nothing to verify this install against file-by-file." >&2
+        else
+            echo "warning: could not fetch the per-file manifest for ${VERSION} (HTTP ${MANIFEST_HTTP})." >&2
+            echo "         This says nothing about whether the archive is genuine — only that this" >&2
+            echo "         check could not run." >&2
+        fi
+        echo "" >&2
+        echo "         The archive checksum WAS verified against the published .sha256, so the" >&2
+        echo "         bytes being installed are the bytes GitHub serves for ${VERSION}." >&2
+        echo "         What is skipped is per-file verification and the offline baseline:" >&2
+        echo "         \`temper version --verify\` will report \`unverifiable\` on this install." >&2
+        echo "         To reach a verified state, run: temper version --verify --online" >&2
+        echo "" >&2
+    fi
 fi
 
 # INSTALL_DIR is overridable via TEMPER_INSTALL_DIR so `temper update` can aim
@@ -347,10 +405,14 @@ EOF
     [ "$CHECK_FAILED" -eq 0 ]
 }
 
-echo "  Verifying file manifest..."
-if ! verify_manifest_against_dir "$STAGING"; then
-    echo "error: file manifest verification failed; your existing install was left untouched." >&2
-    exit 1
+if [ "$MANIFEST_AVAILABLE" -eq 1 ]; then
+    echo "  Verifying file manifest..."
+    if ! verify_manifest_against_dir "$STAGING"; then
+        echo "error: file manifest verification failed; your existing install was left untouched." >&2
+        exit 1
+    fi
+else
+    echo "  Skipping file manifest verification (no manifest published for ${VERSION})."
 fi
 
 # --- Verification gate -------------------------------------------------------
@@ -403,9 +465,26 @@ fi
 # install that is no longer there. If either check fails, roll all the way
 # back to the preserved backup through the same machinery as the run-gate
 # failure above — no second rollback path.
+#
+# The run-gate is unconditional; the manifest gate runs only when a manifest was
+# acquired. Written as a function rather than an `a && b` condition because the
+# manifest half is now conditional, and `[ "$MANIFEST_AVAILABLE" -eq 1 ] && cp …`
+# as a bare statement would ABORT the script under `set -eu` whenever the test is
+# false: an AND-list's status is its short-circuiting member's, and a top-level
+# non-zero status is exactly what `set -e` acts on.
+post_install_ok() {
+    "$INSTALL_DIR/temper" --version >/dev/null 2>&1 || return 1
+    if [ "$MANIFEST_AVAILABLE" -eq 1 ]; then
+        verify_manifest_against_dir "$INSTALL_DIR" || return 1
+    fi
+    return 0
+}
+
 ln -sf "$INSTALL_DIR/temper" "$BIN_DIR/temper"
-if "$INSTALL_DIR/temper" --version >/dev/null 2>&1 && verify_manifest_against_dir "$INSTALL_DIR"; then
-    cp "$TMPDIR/$MANIFEST" "$INSTALL_DIR/$MANIFEST_FILENAME"
+if post_install_ok; then
+    if [ "$MANIFEST_AVAILABLE" -eq 1 ]; then
+        cp "$TMPDIR/$MANIFEST" "$INSTALL_DIR/$MANIFEST_FILENAME"
+    fi
     rm -rf "$OLD"
 else
     echo "error: the installed binary failed its post-install check; rolling back..." >&2

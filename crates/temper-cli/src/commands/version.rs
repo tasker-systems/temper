@@ -160,6 +160,11 @@ pub struct VerifyReport {
     verdict: Verdict,
     #[serde(skip_serializing_if = "Option::is_none")]
     checksum: Option<BinaryChecksum>,
+    /// Present only on the `--online` path, and only when that path reached a
+    /// point where planting the offline baseline was warranted. The offline
+    /// path has nothing to plant from, so it always omits this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline: Option<BaselineReport>,
     note: &'static str,
 }
 
@@ -177,12 +182,122 @@ fn resolve_install_dir() -> Result<PathBuf> {
         .ok_or_else(|| TemperError::Config("running binary has no parent directory".into()))
 }
 
+/// The reason rendered offline when no manifest sits beside the binary. A
+/// constant so the one property that matters about it stays assertable: it must
+/// not claim to know WHY the manifest is absent.
+///
+/// It used to assert "this is not a manifest-bearing release install", which is
+/// **false for an entire cohort of installs**. A binary at v0.2.6 or earlier
+/// self-updates by piping its OWN `include_str!`-embedded `install.sh`
+/// (`update.rs`), and that older script writes no manifest — so updating from
+/// v0.2.6 to a manifest-bearing release lands that release's genuine bytes in a
+/// directory with no baseline beside them. The install really is
+/// manifest-bearing; only the baseline is missing, and telling that user their
+/// install "is not a release install" is simply wrong.
+///
+/// Absence has at least four causes now — a `cargo install` build, a Windows
+/// install, a release published before manifests shipped, and that update hop —
+/// and this code can distinguish none of them. So it enumerates rather than
+/// concludes, and names the recovery, which is the same in every case.
+const NO_LOCAL_MANIFEST_REASON: &str =
+    "no release manifest beside this binary, so an offline check has nothing to compare against. \
+     This is not a finding about your install — several ordinary shapes land here: a \
+     `cargo install` build (not a release artifact at all), a Windows install, a release \
+     published before per-file manifests shipped, or a self-update performed by a pre-manifest \
+     binary (which installs a manifest-bearing release using its own older installer, leaving no \
+     baseline behind). Run `temper version --verify --online` to check the published manifest and \
+     its attestation; on success that also plants the baseline, after which this offline check \
+     works on its own.";
+
+/// Outcome of the baseline plant attempted by `--verify --online`. Reported so
+/// the write is never silent: it happens inside a command whose name reads
+/// read-only, and a user who is told their install is `verified` deserves to
+/// know whether the offline check will work next time.
+///
+/// Deliberately a plain struct with a boolean rather than an internally-tagged
+/// enum. An internally-tagged enum with a newtype variant compiles here and
+/// then fails at runtime on the render path — that exact defect shipped once in
+/// this module's `Verdict` and was caught only by serializing. There is no
+/// reason to re-open the shape that caused it for a two-state report.
+#[derive(Debug, Serialize)]
+pub struct BaselineReport {
+    planted: bool,
+    path: String,
+    /// Present only when `planted` is false, naming what stopped the write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    note: &'static str,
+}
+
+const BASELINE_PLANTED_NOTE: &str =
+    "The published manifest was persisted beside the binary as the offline baseline. It was \
+     written only because the per-file comparison agreed AND the build-provenance attestation \
+     over those exact bytes verified — so this is a manifest whose provenance was checked, not a \
+     record of trust in the local install. `temper version --verify` now works offline.";
+
+const BASELINE_NOT_WRITTEN_NOTE: &str =
+    "The verdict above stands on its own — it did not depend on writing anything. Only the \
+     offline baseline was not established, so `temper version --verify` will keep reporting \
+     `unverifiable` until an online check can write it.";
+
+/// Persist an attestation-verified published manifest beside the binary as the
+/// offline baseline, but only if no baseline is there already.
+///
+/// **Why this is not the retro-fit it resembles.** Minting a manifest for an
+/// archive that was never attested would manufacture provenance. This does the
+/// opposite: the caller has already fetched the published manifest, matched it
+/// file-by-file against this directory, and verified GitHub's build-provenance
+/// attestation over the sha256 of these exact bytes. Every fact the baseline
+/// will later assert offline has been checked against a signature at the moment
+/// it is written. What is being persisted is a verified result, not an
+/// assumption.
+///
+/// **Never overwrites.** An existing baseline that disagrees with the attested
+/// one is a different situation — offline `--verify` renders it `Mismatch`,
+/// which is loud, actionable, and points here. Silently replacing it would
+/// convert that signal into a repair the user never saw. Absence is the case
+/// this closes.
+///
+/// **Best-effort by construction.** A read-only or root-owned install directory
+/// must never turn a `Verified` verdict into an error: the verdict was earned
+/// by checks that had nothing to do with writing a file. Failure is reported,
+/// not raised.
+fn plant_baseline(dir: &Path, manifest_bytes: &[u8]) -> BaselineReport {
+    let path = dir.join(manifest::MANIFEST_FILENAME);
+    let path_str = path.display().to_string();
+
+    if path.exists() {
+        return BaselineReport {
+            planted: false,
+            path: path_str,
+            reason: Some(
+                "a baseline is already present beside this binary; left untouched".to_string(),
+            ),
+            note: BASELINE_NOT_WRITTEN_NOTE,
+        };
+    }
+
+    match std::fs::write(&path, manifest_bytes) {
+        Ok(()) => BaselineReport {
+            planted: true,
+            path: path_str,
+            reason: None,
+            note: BASELINE_PLANTED_NOTE,
+        },
+        Err(e) => BaselineReport {
+            planted: false,
+            path: path_str,
+            reason: Some(format!("could not write the baseline: {e}")),
+            note: BASELINE_NOT_WRITTEN_NOTE,
+        },
+    }
+}
+
 /// Build the offline verdict for an install directory. Absent manifest =>
 /// [`Verdict::Unverifiable`], never [`Verdict::Mismatch`] — "we cannot tell"
 /// is not "it is wrong", the same distinction `CARGO_REFUSAL` draws at
-/// `update.rs:58`. The reason names both manifest-less shapes that exist
-/// today — a `cargo install` build and a Windows script install — so the
-/// message stays accurate rather than implying only one of them.
+/// `update.rs:58`. See [`NO_LOCAL_MANIFEST_REASON`] for why that reason
+/// enumerates causes rather than naming one.
 ///
 /// `include_checksum` folds in the running binary's self-attestation
 /// ([`BinaryChecksum`], via [`compute_self_checksum`]) when the caller also
@@ -192,13 +307,10 @@ fn build_verify_report(dir: &Path, include_checksum: bool) -> Result<VerifyRepor
     let verdict = match manifest::load_from_dir(dir) {
         Some(m) => manifest::verify_dir(&m, dir),
         None => Verdict::Unverifiable {
-            reason: "no release manifest beside this binary — this is not a manifest-bearing \
-                     release install (e.g. a `cargo install` build, or a Windows install, which \
-                     ships no manifest today), so there is nothing to verify against"
-                .to_string(),
+            reason: NO_LOCAL_MANIFEST_REASON.to_string(),
         },
     };
-    finish_verify_report(dir, verdict, include_checksum, OFFLINE_VERIFY_NOTE)
+    finish_verify_report(dir, verdict, include_checksum, OFFLINE_VERIFY_NOTE, None)
 }
 
 /// `temper version --verify --online`'s report builder. Mirrors
@@ -207,8 +319,74 @@ fn build_verify_report(dir: &Path, include_checksum: bool) -> Result<VerifyRepor
 /// of [`manifest::load_from_dir`] (the local copy beside the binary), and it
 /// carries [`ONLINE_VERIFY_NOTE`] rather than [`OFFLINE_VERIFY_NOTE`].
 fn build_verify_report_online(dir: &Path, include_checksum: bool) -> Result<VerifyReport> {
-    let verdict = online_verdict(dir);
-    finish_verify_report(dir, verdict, include_checksum, ONLINE_VERIFY_NOTE)
+    let outcome = online_verdict(dir);
+    // Plant only from bytes the outcome certifies — see `OnlineOutcome`, whose
+    // whole job is that `verified_manifest_bytes` cannot be `Some` unless the
+    // final verdict was `Verified`. This call site never re-derives that
+    // condition, so the two cannot drift apart.
+    let baseline = outcome
+        .verified_manifest_bytes
+        .as_deref()
+        .map(|bytes| plant_baseline(dir, bytes));
+    finish_verify_report(
+        dir,
+        outcome.verdict,
+        include_checksum,
+        ONLINE_VERIFY_NOTE,
+        baseline,
+    )
+}
+
+/// What [`online_verdict`] returns: the verdict, plus — and **only** when that
+/// verdict is [`Verdict::Verified`] — the exact published manifest bytes that
+/// earned it.
+///
+/// The pairing is the point. [`plant_baseline`] must never be handed bytes that
+/// did not clear both the per-file comparison and the attestation check, or it
+/// would persist an unverified manifest as a permanent record of verification —
+/// which is precisely the false provenance this whole surface exists to avoid.
+/// Rather than restate that condition at the call site (where it could drift
+/// from the condition [`finish_online_verdict`] actually applies),
+/// [`OnlineOutcome::verified_with`] derives it from the finished verdict, and
+/// every other constructor cannot produce bytes at all.
+struct OnlineOutcome {
+    verdict: Verdict,
+    verified_manifest_bytes: Option<Vec<u8>>,
+}
+
+impl OnlineOutcome {
+    /// An `Unverifiable` outcome from a reason string. Carries no bytes — there
+    /// is nothing verified to carry.
+    fn unverifiable(reason: String) -> Self {
+        Self {
+            verdict: Verdict::Unverifiable { reason },
+            verified_manifest_bytes: None,
+        }
+    }
+
+    /// Wrap an already-settled verdict that was reached WITHOUT a completed
+    /// attestation check (an unmapped host, a fetch failure, or a manifest
+    /// mismatch). Never carries bytes, even if some were fetched: a mismatching
+    /// manifest is exactly the thing that must not become a baseline.
+    fn from_verdict(verdict: Verdict) -> Self {
+        Self {
+            verdict,
+            verified_manifest_bytes: None,
+        }
+    }
+
+    /// The only constructor that can carry bytes, and it still refuses unless
+    /// the FINAL verdict is `Verified` — `finish_online_verdict` downgrades a
+    /// matching manifest to `Unverifiable` when its attestation fails, and that
+    /// downgrade must take the bytes with it.
+    fn verified_with(verdict: Verdict, manifest_bytes: Vec<u8>) -> Self {
+        let verified_manifest_bytes =
+            matches!(verdict, Verdict::Verified).then_some(manifest_bytes);
+        Self {
+            verdict,
+            verified_manifest_bytes,
+        }
+    }
 }
 
 /// Assemble the final [`VerifyReport`] from an already-computed `verdict`,
@@ -222,6 +400,7 @@ fn finish_verify_report(
     verdict: Verdict,
     include_checksum: bool,
     note: &'static str,
+    baseline: Option<BaselineReport>,
 ) -> Result<VerifyReport> {
     let checksum = if include_checksum {
         let (binary_sha256, binary_path) = compute_self_checksum()?;
@@ -239,6 +418,7 @@ fn finish_verify_report(
         install_dir: dir.display().to_string(),
         verdict,
         checksum,
+        baseline,
         note,
     })
 }
@@ -453,19 +633,20 @@ fn finish_online_verdict(
 /// attestation lookup on top of that would just blur one honest verdict
 /// with another (and would waste a network round-trip on a verdict that's
 /// already decided).
-fn online_verdict(dir: &Path) -> Verdict {
+fn online_verdict(dir: &Path) -> OnlineOutcome {
     let Some(target) = shipped_target_triple() else {
-        return Verdict::Unverifiable {
-            reason: unmapped_host_reason(std::env::consts::OS, std::env::consts::ARCH),
-        };
+        return OnlineOutcome::unverifiable(unmapped_host_reason(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ));
     };
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return Verdict::Unverifiable {
-                reason: format!("could not start a runtime for online verification: {e}"),
-            };
+            return OnlineOutcome::unverifiable(format!(
+                "could not start a runtime for online verification: {e}"
+            ));
         }
     };
 
@@ -473,15 +654,20 @@ fn online_verdict(dir: &Path) -> Verdict {
         let client = match attestation_fetch::release_http_client_builder(VERSION).build() {
             Ok(c) => c,
             Err(e) => {
-                return Verdict::Unverifiable {
-                    reason: format!("building HTTP client: {e}"),
-                };
+                return OnlineOutcome::unverifiable(format!("building HTTP client: {e}"));
             }
         };
 
         let manifest_bytes = match fetch_published_manifest_bytes(&client, VERSION, target).await {
             Ok(bytes) => bytes,
-            Err(e) => return verdict_from_manifest_result(VERSION, target, Err(e), dir),
+            Err(e) => {
+                return OnlineOutcome::from_verdict(verdict_from_manifest_result(
+                    VERSION,
+                    target,
+                    Err(e),
+                    dir,
+                ));
+            }
         };
 
         let manifest_verdict = verdict_from_manifest_result(
@@ -495,11 +681,14 @@ fn online_verdict(dir: &Path) -> Verdict {
         // already disagrees — attestation cannot rescue a bad comparison,
         // and there is nothing to bind it to that would change the verdict.
         if !matches!(manifest_verdict, Verdict::Verified) {
-            return manifest_verdict;
+            return OnlineOutcome::from_verdict(manifest_verdict);
         }
 
         let attestation_result = verify_manifest_attestation(&client, &manifest_bytes).await;
-        finish_online_verdict(manifest_verdict, attestation_result)
+        OnlineOutcome::verified_with(
+            finish_online_verdict(manifest_verdict, attestation_result),
+            manifest_bytes,
+        )
     })
 }
 
@@ -670,6 +859,7 @@ mod tests {
             install_dir: "/opt/temper".to_string(),
             verdict,
             checksum: None,
+            baseline: None,
             note: OFFLINE_VERIFY_NOTE,
         };
 
@@ -880,6 +1070,264 @@ mod tests {
         }
     }
 
+    /// Manifest bytes shaped like a real published manifest, for the baseline
+    /// tests below. Serialized rather than hand-written so a plant is provable
+    /// to round-trip through `manifest::load_from_dir` — the consumer the
+    /// baseline exists for.
+    fn published_manifest_bytes() -> Vec<u8> {
+        serde_json::to_vec_pretty(&manifest::ReleaseManifest {
+            version: "0.3.0".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            files: vec![manifest::ManifestEntry {
+                path: "temper".to_string(),
+                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                size: 12,
+            }],
+        })
+        .unwrap()
+    }
+
+    /// The transition case this whole mechanism exists for: an install dir with
+    /// the right bytes and NO baseline beside them (what a pre-manifest binary's
+    /// self-update leaves behind). Planting must write the manifest verbatim and
+    /// leave it readable by the offline path.
+    ///
+    /// Byte-equality is asserted, not just parseability: the attestation was
+    /// verified over the sha256 of these EXACT bytes, so a baseline that merely
+    /// re-serializes to something equivalent would no longer be the object whose
+    /// provenance was checked.
+    #[test]
+    fn plant_baseline_writes_verbatim_when_absent_and_offline_verify_then_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("temper"), b"binary-bytes").unwrap();
+        let bytes = published_manifest_bytes();
+
+        let report = plant_baseline(tmp.path(), &bytes);
+        assert!(report.planted, "expected a plant, got {report:?}");
+        assert!(report.reason.is_none());
+
+        let on_disk = std::fs::read(tmp.path().join(manifest::MANIFEST_FILENAME)).unwrap();
+        assert_eq!(
+            on_disk, bytes,
+            "the planted baseline must be byte-identical to the attested bytes"
+        );
+
+        // The point of planting: the offline path now reaches a verdict on its
+        // own instead of `Unverifiable`.
+        let offline = build_verify_report(tmp.path(), false).unwrap();
+        assert!(
+            matches!(offline.verdict, Verdict::Verified),
+            "offline verify should now be Verified, got {:?}",
+            offline.verdict
+        );
+    }
+
+    /// Planting must never overwrite. A baseline that disagrees with the
+    /// attested manifest is a signal the user should SEE (offline `--verify`
+    /// renders `Mismatch`); silently replacing it would erase that signal and
+    /// perform a repair nobody was told about.
+    ///
+    /// The bite: the pre-existing bytes are distinguishable, and the assertion
+    /// is that they SURVIVE — not merely that `planted` is false, which would
+    /// also pass if the write happened and the flag were misreported.
+    #[test]
+    fn plant_baseline_never_overwrites_an_existing_baseline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let existing = b"{\"version\":\"already-here\"}";
+        std::fs::write(tmp.path().join(manifest::MANIFEST_FILENAME), existing).unwrap();
+
+        let report = plant_baseline(tmp.path(), &published_manifest_bytes());
+
+        assert!(!report.planted);
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("already present"),
+            "reason should say why: {:?}",
+            report.reason
+        );
+        let on_disk = std::fs::read(tmp.path().join(manifest::MANIFEST_FILENAME)).unwrap();
+        assert_eq!(on_disk, existing, "the existing baseline was overwritten");
+    }
+
+    /// A read-only install dir must not turn a `Verified` verdict into an
+    /// error. The verdict was earned by a per-file comparison and a signature
+    /// check; neither depended on writing a file, so a failed write reports
+    /// itself and nothing more.
+    #[test]
+    #[cfg(unix)]
+    fn plant_baseline_failure_is_reported_not_raised() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("readonly");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let report = plant_baseline(&dir, &published_manifest_bytes());
+
+        // Restore before the tempdir's own cleanup runs.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(!report.planted);
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("could not write the baseline"),
+            "reason should name the write failure: {:?}",
+            report.reason
+        );
+    }
+
+    /// **The load-bearing test of the plant path.** An attestation failure
+    /// downgrades a matching manifest to `Unverifiable`, and that downgrade must
+    /// take the bytes with it — otherwise a manifest that matched the install
+    /// but whose signature did NOT verify would be persisted as the permanent
+    /// offline record of "verified", manufacturing exactly the provenance this
+    /// surface refuses to manufacture.
+    ///
+    /// This runs `finish_online_verdict` for real rather than constructing the
+    /// downgraded verdict by hand, so it pins the actual composition
+    /// `online_verdict` performs.
+    #[test]
+    fn attestation_failure_takes_the_bytes_with_it() {
+        let bytes = published_manifest_bytes();
+
+        let downgraded = finish_online_verdict(
+            Verdict::Verified,
+            Err(AttestationVerifyError::NotOurs(
+                "signed for another repo".into(),
+            )),
+        );
+        let outcome = OnlineOutcome::verified_with(downgraded, bytes.clone());
+
+        assert!(
+            matches!(outcome.verdict, Verdict::Unverifiable { .. }),
+            "attestation failure must downgrade the verdict"
+        );
+        assert!(
+            outcome.verified_manifest_bytes.is_none(),
+            "an unattested manifest must never be available to plant"
+        );
+
+        // Control: the same bytes DO survive when the attestation verifies, so
+        // the assertion above is about the attestation result and not about
+        // `verified_with` simply never carrying bytes.
+        let passed = finish_online_verdict(Verdict::Verified, Ok(()));
+        let ok = OnlineOutcome::verified_with(passed, bytes);
+        assert!(
+            ok.verified_manifest_bytes.is_some(),
+            "a verified, attested manifest must be plantable"
+        );
+    }
+
+    /// A verdict settled before any attestation check ran — a mismatch, a fetch
+    /// failure, an unmapped host — can never carry bytes. Constructed through
+    /// the only constructor those paths use.
+    #[test]
+    fn verdicts_settled_without_attestation_carry_no_bytes() {
+        let mismatch = OnlineOutcome::from_verdict(Verdict::Mismatch {
+            mismatches: vec![manifest::Mismatch {
+                path: "temper".to_string(),
+                expected: "a".to_string(),
+                actual: Some("b".to_string()),
+            }],
+        });
+        assert!(mismatch.verified_manifest_bytes.is_none());
+
+        let unreachable = OnlineOutcome::unverifiable("network down".to_string());
+        assert!(unreachable.verified_manifest_bytes.is_none());
+        assert!(matches!(unreachable.verdict, Verdict::Unverifiable { .. }));
+    }
+
+    /// `BaselineReport` must survive the render path, for the same reason
+    /// `verify_report_serializes_for_every_verdict` exists: a shape that
+    /// compiles and then fails at `serde_json::to_string` already shipped once
+    /// in this module. Both states are serialized inside a full report.
+    #[test]
+    fn baseline_report_serializes_in_both_states() {
+        let with_baseline = |baseline: BaselineReport| VerifyReport {
+            version: VERSION,
+            install_dir: "/opt/temper".to_string(),
+            verdict: Verdict::Verified,
+            checksum: None,
+            baseline: Some(baseline),
+            note: ONLINE_VERIFY_NOTE,
+        };
+
+        let planted = serde_json::to_string(&with_baseline(BaselineReport {
+            planted: true,
+            path: "/opt/temper/.temper-manifest.json".to_string(),
+            reason: None,
+            note: BASELINE_PLANTED_NOTE,
+        }))
+        .expect("planted baseline serializes");
+        assert!(planted.contains("\"planted\":true"));
+        assert!(
+            !planted.contains("\"reason\""),
+            "reason must be omitted when the plant succeeded: {planted}"
+        );
+
+        let refused = serde_json::to_string(&with_baseline(BaselineReport {
+            planted: false,
+            path: "/opt/temper/.temper-manifest.json".to_string(),
+            reason: Some("could not write the baseline: permission denied".to_string()),
+            note: BASELINE_NOT_WRITTEN_NOTE,
+        }))
+        .expect("refused baseline serializes");
+        assert!(refused.contains("\"planted\":false"));
+        assert!(refused.contains("permission denied"));
+    }
+
+    /// The offline path has nothing to plant from, so it must never report a
+    /// baseline block at all — an absent key, not `"baseline":null`.
+    #[test]
+    fn offline_verify_reports_no_baseline_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let report = build_verify_report(tmp.path(), false).unwrap();
+        assert!(report.baseline.is_none());
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(
+            !json.contains("baseline\":"),
+            "offline report should carry no baseline key: {json}"
+        );
+    }
+
+    /// F3: the absent-manifest reason must not assert a cause it cannot know.
+    /// A pre-manifest binary self-updating to a manifest-bearing release lands
+    /// here, and the old wording told that user their install "is not a
+    /// manifest-bearing release install" — false, and it named no recovery.
+    ///
+    /// The bite is the negative assertion: the previous string would fail it.
+    #[test]
+    fn absent_manifest_reason_claims_no_cause_and_names_the_recovery() {
+        assert!(
+            !NO_LOCAL_MANIFEST_REASON.contains("this is not a manifest-bearing release install"),
+            "the reason must not assert a cause it cannot distinguish"
+        );
+        assert!(
+            NO_LOCAL_MANIFEST_REASON.contains("temper version --verify --online"),
+            "the reason must name the recovery"
+        );
+        // The four shapes that land here, so a future edit that drops one is
+        // visible rather than silently narrowing the enumeration back down.
+        for shape in [
+            "cargo install",
+            "Windows install",
+            "before per-file manifests shipped",
+            "self-update performed by a pre-manifest binary",
+        ] {
+            assert!(
+                NO_LOCAL_MANIFEST_REASON.contains(shape),
+                "reason should still enumerate {shape:?}"
+            );
+        }
+    }
+
     // `--online` without `--verify` is a usage error, not a silent no-op —
     // enforced declaratively via clap's `requires = "verify"` on the `online`
     // arg. Actually exercised (not just documented) in
@@ -900,7 +1348,7 @@ mod tests {
         let verdict = Verdict::Unverifiable {
             reason: "test".to_string(),
         };
-        let report = finish_verify_report(tmp.path(), verdict, true, ONLINE_VERIFY_NOTE)
+        let report = finish_verify_report(tmp.path(), verdict, true, ONLINE_VERIFY_NOTE, None)
             .expect("checksum of test binary");
         assert!(report.checksum.is_some());
         assert_eq!(report.note, ONLINE_VERIFY_NOTE);
