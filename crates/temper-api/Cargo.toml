@@ -3,6 +3,10 @@ name = "temper-api"
 version = "0.1.0"
 edition = "2021"
 description = "Axum HTTP server implementing the temper cloud API"
+# Cargo auto-detects build.rs in the package root, so this is not required — it is here
+# so the build script is visible to someone reading the manifest rather than only to
+# someone listing the directory.
+build = "build.rs"
 
 [[bin]]
 name = "temper-api"
