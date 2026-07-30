@@ -72,6 +72,74 @@ Archive contents (flat layout — no versioned top-level directory):
 
 The installer scripts in [scripts/install/](../../scripts/install/) fetch the latest release via the GitHub API, download the matching archive plus checksum, verify, extract into `~/.local/share/temper/` (mac/linux) or `%LOCALAPPDATA%\Programs\temper\` (Windows), and symlink or PATH-update as appropriate.
 
+## What the attestation does and does not prove
+
+A successful attestation check establishes something precise, and it is worth
+stating plainly before stating its boundary. The artifact in hand is
+byte-for-byte the one `build-cli-binaries.yml` produced, running in GitHub
+Actions, at the **exact** tag requested: signed by a Fulcio certificate whose
+SAN is
+`https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/tags/<tag>`
+(`attest.rs`'s `expected_identity` — that string *is* the property), issued
+under GitHub Actions' OIDC issuer, chained to the pinned public-good Sigstore
+root, and present in Rekor's transparency log (`skip_tlog()` is never called).
+Both online paths check that signature over the digest of the **exact object
+each one just compared** — the manifest's for `--verify --online`, the
+archive's for `temper update`. That is a real property, correctly enforced.
+
+**The attestation binds the builder and the tag. It never binds the source.**
+Anyone with write access to this repo can push a `v*` tag whose workflow builds
+a backdoor, and it will verify perfectly on every path `temper` offers —
+correct signature, correct identity, correct Rekor inclusion proof, correct
+digest. This is inherent to build provenance, not a defect in this
+implementation: SLSA provenance attests *the build*, and a build is only ever
+as trustworthy as the commit it ran against. No verification code closes this;
+what closes it is process — who holds repo write, and what review the release
+PR gets on its way to `main`.
+
+Two things bound how bad this is in practice:
+
+- **The claim is falsifiable by anyone, not just by us.** The attestation names
+  the workflow file and the tag, so a reader can go read exactly what that
+  workflow did at that tag, and confirm the tag's commit is one that went
+  through review. The provenance makes the build *auditable*; it does not make
+  the audit unnecessary.
+- **The boundary is the same for the out-of-band check.** `gh attestation
+  verify` (see [install.md](install.md#out-of-band-audit--verify-without-trusting-tempers-own-code))
+  removes any dependence on `temper`'s own verification code and on our pinned
+  root — a genuinely stronger position — but it verifies the same predicate
+  over the same subject, so it inherits the same limit. Nothing in the
+  ecosystem upgrades "this build" into "this source."
+
+Two residual trusts sit outside the signature chain, and are named here rather
+than left implicit:
+
+- **The bootstrap installer is unsigned.** The
+  `curl -fsSL …/main/scripts/install/install.sh | sh` line in
+  [install.md](install.md#quick-install) fetches over HTTPS from
+  `raw.githubusercontent.com` and is authenticated by TLS and GitHub's control
+  of that host — nothing more. That matters more than it first looks, because
+  it is the recovery path every trust-root failure names: both
+  `AttestError::TrustRootUnusable` and
+  `AttestationVerifyError::TrustRootUnusable` render *"cut a new release or
+  re-run install.sh to get a binary with a current one"*, and a test in each
+  module asserts that the message names `install.sh`. So the escape hatch from
+  a stale pinned root is the one path with no attestation over it. It is still
+  the right hatch — a hatch that depended on the thing that broke would be no
+  hatch — but it is a hatch, not a chain link.
+- **The pinned trust root is a hand-committed blob.** `crates/temper-cli/trust/sigstore-public-good-trusted-root.json`
+  reaches the binary through `include_str!` and nothing else. There is no
+  `build.rs` in `temper-cli`, no digest pin over it, and no freshness check —
+  unlike the ONNX Runtime archive and the embedding model, both of which *are*
+  digest-pinned. Its integrity rests on the same review that gates any other
+  committed file, and on the maintainer step below fetching it from
+  `gh attestation trusted-root` rather than anywhere else.
+
+**Maintainer action:** none recurring — this section is a statement of scope,
+not an obligation. Treat it as the thing to keep true: if a future change makes
+a verification path sound stronger than "builder and tag," amend this section
+in the same commit rather than letting the docs drift ahead of the mechanism.
+
 ## Standing obligation: Sigstore root rotation
 
 `temper` verifies release attestations against a Sigstore trust root **pinned
@@ -111,7 +179,13 @@ Three things bound how bad this is in practice:
 fresh archive and verifies it against the archive-level SHA256 sidecar (hash
 verification does not depend on the pinned attestation root at all), so a
 user stuck behind a stale pinned root can always recover a working install
-without waiting for `temper update`'s attestation path to catch up.
+without waiting for `temper update`'s attestation path to catch up. Note what
+that hatch does and does not carry: the sidecar is an integrity check fetched
+from the same release URL base as the archive, and the bootstrap script itself
+is unsigned — so this path recovers a working install, it does not
+independently establish provenance. That is deliberate (a hatch that depended
+on the thing that broke would be no hatch) and is recorded in
+[What the attestation does and does not prove](#what-the-attestation-does-and-does-not-prove).
 
 **Maintainer action:** when you learn Sigstore has rotated (or is scheduled
 to), treat it the same as any other change that forces a release — update

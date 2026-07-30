@@ -121,17 +121,25 @@ object being installed. They are deliberately different checks over different
 objects, not two views of the same one.)
 
 This is the audit that answers *"is the temper on my machine byte-identical to
-what was published, and can I prove it without taking your word for it?"* — a
-compromised manifest sitting beside a compromised binary can no longer hide
-behind a same-directory comparison, because the comparison object is now
-fetched fresh and independently checked against a signature GitHub's release
-workflow produced, not anything on your disk.
+what the release workflow published?"* — a compromised manifest sitting beside
+a compromised binary can no longer hide behind a same-directory comparison,
+because the comparison object is now fetched fresh and independently checked
+against a signature GitHub's release workflow produced, not anything on your
+disk.
+
+**What it does not answer is what that workflow built from.** The attestation
+binds the builder and the tag, never the source — a genuine signature over a
+genuinely-built artifact says nothing about whether the commit behind the tag
+is one you'd approve of. That limit is inherent to build provenance rather than
+specific to `temper`, and it is stated in full, with the two other trusts that
+sit outside the signature chain, in
+[What the attestation does and does not prove](releasing.md#what-the-attestation-does-and-does-not-prove).
 
 A failure anywhere in this chain — network, an unusable pinned trust root, or
 a bundle that simply doesn't vouch for this artifact — renders
 `unverifiable`, never a false `verified`.
 
-### Out-of-band audit — verify without trusting us at all
+### Out-of-band audit — verify without trusting temper's own code
 
 Every release archive's build-provenance attestation is independently
 checkable with GitHub's own `gh` CLI, with no dependency on `temper` or its
@@ -145,7 +153,13 @@ Download the archive for your platform from
 [the releases page](https://github.com/tasker-systems/temper/releases), then
 run the command above against it. This is the check to reach for if you don't
 want to trust `temper`'s own verification code at all — it goes straight to
-GitHub's attestation service.
+GitHub's attestation service, and it removes our pinned trust root from the
+picture too.
+
+It does not, however, prove anything `temper`'s own check doesn't: `gh` is
+verifying the same build-provenance predicate over the same subject, so it
+carries the same boundary — the builder and the tag, never the source. See
+[What the attestation does and does not prove](releasing.md#what-the-attestation-does-and-does-not-prove).
 
 ### Windows: hash-verified only
 
