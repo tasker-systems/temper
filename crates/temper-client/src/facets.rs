@@ -5,7 +5,7 @@ use reqwest::Method;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::facet_requests::{
-    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetSetRequest,
+    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetSetRequest, ResourceFacetsResponse,
 };
 use uuid::Uuid;
 
@@ -57,6 +57,19 @@ impl<'a> FacetClient<'a> {
     pub async fn list_for_edge(&self, edge_handle: Uuid) -> Result<EdgeFacetsResponse> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/relationships/{edge_handle}/facets");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/facets — the resource's live facets, one row per assert.
+    ///
+    /// Returns every live row rather than the collapsed single value `resource show` carries in
+    /// `open_meta` — including each row's weight, which that collapse discards.
+    pub async fn list_for_resource(&self, resource: Uuid) -> Result<ResourceFacetsResponse> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{resource}/facets");
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))

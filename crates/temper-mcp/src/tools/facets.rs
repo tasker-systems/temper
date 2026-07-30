@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
-use temper_core::types::facet_requests::{EdgeFacetsResponse, FacetAck};
+use temper_core::types::facet_requests::{EdgeFacetsResponse, FacetAck, ResourceFacetsResponse};
 use temper_core::types::ids::{EdgeId, ProfileId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
@@ -124,6 +124,13 @@ pub struct EdgeFacetsInput {
     pub edge_handle: Uuid,
 }
 
+/// MCP input for `resource_facets` (read).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResourceFacetsInput {
+    /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub resource: String,
+}
+
 /// Set a facet whose owner is an **edge** — a qualifier on a relationship rather than on a thing.
 ///
 /// Mirrors `POST /api/relationships/{edge_handle}/facets`. The edge is addressed by its handle, not
@@ -183,6 +190,38 @@ pub async fn edge_facets(
 
     let out = EdgeFacetsResponse {
         edge_handle: input.edge_handle,
+        facets,
+    };
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&out),
+    )]))
+}
+
+/// Read the live facets of one resource. Service-direct, like every other read.
+///
+/// The faithful view: one entry per live row, each with its weight and its author. `get_resource`
+/// carries a facet inside `open_meta` collapsed to a single newest-wins value with the weight
+/// discarded, so it cannot answer *"did my assert land"* when a key was asserted more than once.
+///
+/// CLI equivalent: `temper resource facets <ref>`.
+pub async fn resource_facets(
+    svc: &TemperMcpService,
+    input: ResourceFacetsInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let resource = temper_workflow::operations::parse_ref(&input.resource)
+        .map_err(|e| map_err(e, "resource_facets"))?;
+
+    let facets = temper_services::services::facet_service::list_resource_facets(
+        &svc.api_state.pool,
+        ProfileId::from(profile.id),
+        resource,
+    )
+    .await
+    .map_err(|e| map_err(TemperError::from(e), "resource_facets"))?;
+
+    let out = ResourceFacetsResponse {
+        resource: Uuid::from(resource),
         facets,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(

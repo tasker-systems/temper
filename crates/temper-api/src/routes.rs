@@ -73,6 +73,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::edges::reweight))
         .routes(routes!(handlers::edges::fold))
         .routes(routes!(handlers::facets::set_facet))
+        .routes(routes!(handlers::facets::list_resource_facets))
         .routes(routes!(
             handlers::facets::set_edge_facet,
             handlers::facets::list_edge_facets
