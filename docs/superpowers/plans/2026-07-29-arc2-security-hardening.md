@@ -20,7 +20,7 @@ stop/resume cycles more than once.
 
 | Actor | Runs |
 |---|---|
-| **Implementer subagent** | Writes code and tests. Runs *non-cargo* verification only: `bash`/`sh` harnesses, `sh -n`, `shellcheck`, `python3 -c yaml.safe_load`, `rg`, `git diff`. Reports what it wrote. |
+| **Implementer subagent** | Writes code and tests. Runs *non-cargo* verification only: `bash`/`sh` harnesses, `sh -n`, `shellcheck`, `yq -e '.'` for YAML, `rg`, `git diff`. Reports what it wrote. |
 | **Controller (main loop)** | Every `cargo` invocation — `nextest`, `check`, `clippy`, **`fmt`** — and **every `git commit`**. |
 
 Two corollaries the controller must hold:
@@ -53,6 +53,16 @@ The adjudication is the spec, but three of its claims do not survive contact wit
 2. **T2.1's blast radius is narrower than stated, and the chain runs through a different scope.** The adjudication says "no workflow in the repo declares a top-level `permissions:` block ⇒ every job runs with `contents: write`." The first half is true; the second is false. Verified per-workflow at every indentation level:
    - **Already correctly scoped:** `build-cli-binaries.yml:25-28` (`contents: read` + `id-token: write` + `attestations: write`), `release.yml:47-50` and `:61-62`, `release-tag.yml:19-20` and `:60-61`.
    - **Unscoped (the actual seven):** `ci.yml`, `code-quality.yml`, `coverage.yml`, `test-agents-ts.yml`, `test-ruby.yml`, `test-rust.yml`, `test-typescript.yml`.
+
+   > **Correction to this correction, found during Task 6 and verified:** `release.yml` has **three**
+   > jobs, not two, and `determine-version` (`release.yml:25`) declares **no `permissions:` block** —
+   > so it runs with the org default of write on *every* scope. That is the job containing the
+   > `${{ github.ref_name }}` shell interpolation Task 7 fixes, which means the injection currently
+   > executes holding `contents: write` **and** `actions: write` — exactly the pair that completes the
+   > signing-oracle chain described above. Scoping it is folded into **Task 7**, since it is the same
+   > file, the same job, and the same narrative (the repo's "bundle fixes into the PR that surfaced
+   > them" convention). `release-tag.yml`'s `tag` job legitimately needs `contents: write` — it
+   > creates the tag — so its scope is correct and is not a finding.
 
    The signing job itself is **not** unscoped. The real chain is: a compromised action or `build.rs` in one of the seven → `default_workflow_permissions: write` grants **all** scopes including `actions: write` and `contents: write` → create a tag at an attacker commit → **`workflow_dispatch` `release.yml`** with that tag → signed backdoor. Note the dispatch step is required: a tag pushed with `GITHUB_TOKEN` does **not** trigger `release.yml`, because GitHub suppresses workflow runs from `GITHUB_TOKEN`-authored events. Scoping to `contents: read` removes `actions: write` too, since declaring any `permissions:` block zeroes every unlisted scope.
 
@@ -746,7 +756,7 @@ Expected: every file reports `scoped`.
 - [ ] **Step 3: Validate the YAML parses**
 
 ```bash
-for f in .github/workflows/*.yml; do python3 -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$f" || echo "BAD: $f"; done
+for f in .github/workflows/*.yml; do yq -e '.' "$f" >/dev/null || echo "BAD: $f"; done
 ```
 
 Expected: no `BAD:` lines.
@@ -762,10 +772,39 @@ git commit -m "fix(ci): scope the seven unscoped workflows to contents: read (T2
 
 ---
 
-## Task 7: Pass the tag through `env:` instead of interpolating into bash
+## Task 7: Pass the tag through `env:` — and scope the job it runs in
 
 **Files:**
-- Modify: `.github/workflows/release.yml:38`
+- Modify: `.github/workflows/release.yml:38` (the interpolation) and `:25` (the unscoped job)
+
+**Why these are one task, not two:** the interpolation at `:38` lives in the `determine-version` job,
+and that job declares **no `permissions:` block** (`release.yml:25`), so it holds the org default of
+write on every scope. Fixing the injection without scoping the job leaves the more dangerous half in
+place; scoping the job without fixing the injection leaves the entry point. Task 6 deliberately did
+not touch this file. See "Adjudication corrections" #2.
+
+- [ ] **Step 0: Scope `determine-version`**
+
+Add to the `determine-version` job at `.github/workflows/release.yml:25`, matching the block style the
+two sibling jobs already use (`:47-50`, `:61-62`):
+
+```yaml
+    # This job only reads the repo to derive a version string. It needs no write
+    # scope — and with the org default at `default_workflow_permissions: write`,
+    # saying nothing grants it EVERY scope, including `contents: write` and
+    # `actions: write`. That is the pair that completes the signing-oracle chain,
+    # and it is the job the tag interpolation below executes in.
+    permissions:
+      contents: read
+```
+
+Verify it did not already have one, and that the two sibling jobs are unchanged:
+
+```bash
+yq -e '.jobs | to_entries | map({job: .key, permissions: .value.permissions})' .github/workflows/release.yml
+```
+
+Expected: all three jobs report a non-null `permissions`.
 
 **Grounding (CONFORM):** `release.yml:38` reads `TAG="${{ github.ref_name }}"` inside a `run:` block. GitHub expands `${{ }}` into the script text *before* bash sees it, so a crafted ref name executes. Verified in the review that `git check-ref-format` accepts `v1.0.0";id;#`, `` v1.0.0`id` ``, and `v1.0.0$(id)`. The job this lands in holds `id-token: write` and `attestations: write`.
 
@@ -793,7 +832,7 @@ Expected: no matches. If any remain, convert them the same way.
 - [ ] **Step 3: Validate YAML and commit**
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
+yq -e '.' .github/workflows/release.yml >/dev/null
 git add .github/workflows/release.yml
 git commit -m "fix(ci): pass the tag through env rather than interpolating into bash (T2.2)"
 ```
@@ -868,7 +907,7 @@ Pinning creates a maintenance obligation exactly like the Sigstore root rotation
 - [ ] **Step 5: Validate YAML and commit**
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/build-cli-binaries.yml'))"
+yq -e '.' .github/workflows/build-cli-binaries.yml >/dev/null
 git add .github/workflows/build-cli-binaries.yml docs/guides/releasing.md
 git commit -m "fix(ci): pin the ONNX Runtime download's sha256 before signing it (T3.1)"
 ```
@@ -928,7 +967,7 @@ Prefer dropping it unless the measured build-time cost is unacceptable; a releas
 - [ ] **Step 4: Validate YAML and commit**
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/build-cli-binaries.yml'))"
+yq -e '.' .github/workflows/build-cli-binaries.yml >/dev/null
 git add .github/workflows/build-cli-binaries.yml
 git commit -m "fix(ci): pin the signing job's actions and drop the mutable toolchain ref (T3.2, T3.3)"
 ```

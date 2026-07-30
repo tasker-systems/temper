@@ -3,6 +3,23 @@ name: Code Quality
 on:
   workflow_call:
 
+# Least privilege. The org default is `default_workflow_permissions: write`,
+# which grants EVERY scope — including `actions: write` and `contents: write` —
+# to any job that does not say otherwise. This repo now publishes SIGNED
+# release artifacts, so a compromised action or build.rs in a test job would
+# reach a signing oracle: create a tag at an attacker commit, then
+# workflow_dispatch release.yml against it, and the backdoor is attested.
+# (A tag pushed with GITHUB_TOKEN does not itself trigger release.yml — GitHub
+# suppresses workflow runs from GITHUB_TOKEN-authored events — which is why the
+# dispatch step matters and why `actions: write` is the scope that completes
+# the chain.) Declaring any permissions block zeroes every unlisted scope.
+#
+# Declared here and not only in ci.yml: a workflow_call'd workflow inherits the
+# CALLER's permissions when it declares none, so a second caller — or a direct
+# dispatch — would silently reopen this. Each file states its own floor.
+permissions:
+  contents: read
+
 jobs:
   rust-quality:
     name: Rust Quality
