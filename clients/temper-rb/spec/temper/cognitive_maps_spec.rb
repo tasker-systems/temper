@@ -90,11 +90,12 @@ RSpec.describe Temper::CognitiveMaps do
     expect(a_request(:post, 'https://api.test/api/relationships')).to have_been_made.once
   end
 
-  # POST /api/facets -- NOT /api/facets/set. `values` is plural.
+  # POST /api/facets -- NOT /api/facets/set. `values` is plural, and so is the ack:
+  # a facet is stored one row per inner key, so the write names every row it wrote.
   it 'sets a facet against /api/facets' do
     stub_request(:post, 'https://api.test/api/facets')
       .with { |req| JSON.parse(req.body)['values'] == { 'tier' => 'core' } }
-      .to_return(json(JSON.generate(id: other, property_id: cogmap_id)))
+      .to_return(json(JSON.generate(property_ids: [cogmap_id])))
 
     client.cognitive_maps.set_facet(resource: cogmap_id, values: { 'tier' => 'core' })
     expect(a_request(:post, 'https://api.test/api/facets')).to have_been_made.once
