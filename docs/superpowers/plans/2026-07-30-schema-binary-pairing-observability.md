@@ -131,7 +131,24 @@ commit `e917a058` produced **no deployment record of any kind** — not producti
 preview, not cancelled. The earlier figure of ~85 seconds was wrong.
 ```
 
-Then write it back:
+**While in the same file, close the negative-face item that this work resolved.** Under
+*Negative face*, `a-target-is-never-assumed-to-resemble-another-target` currently reads
+`**This one is already live as a defect** … temperkb.io is temper-ui proxying to
+API_BASE_URL, plausibly wrapbook's temper-api, which is SAML-blocked and unreadable.`
+The speculation is settled and was wrong. Replace that sentence with:
+
+```markdown
+  **This one was live as a defect and is now closed.** `[observed — 2026-07-30]`
+  `temperkb.io` is the **`temper-ui`** Vercel project (`prj_UFUosi5qWyG7Vz830I0pOUkXyynK`,
+  domains include `temperkb.io`), reverse-proxying `/api`, `/mcp`, `/oauth` and
+  `/.well-known` to `API_BASE_URL`. It is **not** wrapbook-scoped — both projects sit in
+  `jcoletaylors-projects`. The Vercel project named `temper-cloud`
+  (`prj_ra0MmQYksfePnXvHiTiOGoKigQvY`) builds the root `vercel.json` Rust functions and is
+  a different thing again from the TypeScript *package* of the same name; that conflation
+  is what produced the original wrong assertion.
+```
+
+Then write it back — one resource per call, stdin explicit, never inside a redirected loop:
 
 ```bash
 cat /tmp/reg.md | temper resource update 019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7
