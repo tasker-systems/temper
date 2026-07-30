@@ -181,6 +181,28 @@ enumerate that owner's contexts.
 `UNIQUE (owner_table, owner_id, slug)` remains the backstop against the check-then-act race, exactly
 as it already is for `reassign` (`context_service.rs:561-562`).
 
+**The race path must render the same refusal as the pre-check, and today's mapper would not.**
+`map_reassign_write_err` (`context_service.rs:661-668`) maps `42501` to `Forbidden` and lets
+everything else fall through to `ApiError::Internal`:
+
+```rust
+fn map_reassign_write_err(e: anyhow::Error) -> ApiError {
+    if let Some(sqlx::Error::Database(db)) = e.downcast_ref::<sqlx::Error>() {
+        if db.code().as_deref() == Some("42501") { return ApiError::Forbidden; }
+    }
+    ApiError::Internal(e.to_string())
+}
+```
+
+A `23505` unique violation therefore surfaces as a **500**. Rename's mapper must carry a `23505` arm
+rendering the same `409` the pre-check renders, or the caller's experience depends on how quickly
+they lost the race.
+
+`reassign` has this same hole today — its 409 pre-check has the identical race. Whether to fix it in
+the same change or leave it is a decision for the implementation plan, not something to resolve
+silently here: the argument for bundling is that rename's tests are what surfaced it; the argument
+against is that it is a distinct narrative.
+
 **No-op idempotency** mirrors `reassign`'s (`context_service.rs:551-559`): a rename that computes
 the slug already in place returns `renamed: false` and emits nothing.
 
@@ -233,6 +255,17 @@ Rust side: `writes::rename_context_with`, `EventKind::ContextRenamed`
 needs only the `to_*` fields; the `from_*` fields exist for the trail. `context_reassigned` carries
 its `to_owner_*` fields the same way.
 
+### What a rename does not touch
+
+The write is two columns of one row. Nothing else in the system is keyed by a context's slug:
+resources are homed through `kb_resource_homes` on `(anchor_table, anchor_id)` where `anchor_id` is
+a **UUID**, shares live in `kb_team_contexts` on `context_id`, and access grants key on
+`subject_id`. So a rename cannot detach, re-home or hide any resource, cannot alter reach, and
+cannot change who administers the context — not as a policy the implementation must uphold, but
+because no code path relates any of those to the slug. It is stated here because it is the property
+a reader will most want reassurance on, and "obvious from the schema" is not the same as written
+down.
+
 ## Surfaces
 
 | Surface | Addition |
@@ -252,8 +285,11 @@ that set would be the only context act an agent cannot perform.
 Writes route surface → `DbBackend` → `writes::rename_context_with`, per the repo rule that surfaces
 dispatch one operations command per inbound call and never call write persistence directly.
 
-The outcome type carries `context_id`, `name`, `slug`, `owner_ref`, and `renamed: bool` — mirroring
-`ReassignContextOutcome`.
+The outcome type carries `context_id`, `name`, `slug`, `owner_ref`, `renamed: bool` — mirroring
+`ReassignContextOutcome` — **and the composed new ref**. `owner_ref` + `slug` are the two halves a
+caller would otherwise have to assemble themselves, and `format_context_ref` (`context_ref.rs:75-83`)
+already composes exactly that pair. The caller has just had their address changed out from under
+them; making them reconstruct the new one from parts is the wrong place to save a field.
 
 ## Stated exclusion: client-side caches of the old slug
 
@@ -278,6 +314,46 @@ The residue is real and is named rather than hidden: **after a rename, the vault
 old and the new context directory, and nothing says so.** The old directory's files still parse and
 still carry the old context in frontmatter, which is a live trap for an agent grepping the vault.
 This is a named remainder, not a filed task.
+
+## Reconciliation with the outcome register
+
+This spec is the *how* for goal `019fb4db-7732-78d2-9ad4-73d44b053c03`, whose clauses name no
+mechanism. The mapping below is the reconciliation: which section of this spec is claimed to
+discharge which clause. It is **not** a coverage claim — every clause in that register is currently
+**declared-uncovered**, because witnesses are authored during the build, not before it.
+
+| Clause | Discharged by |
+|---|---|
+| `rename-requires-administration` | *The gate* — `Administers` and `SystemAdmin` arms |
+| `refusal-discloses-no-more-than-the-caller-already-holds` | *The `404` is the incumbent refusal* |
+| `a-rename-lands-where-it-was-asked-or-nowhere` | *Refusals* — the empty-slug 400 and the collision 409, both divergences from `create` |
+| `one-owner-never-holds-two-of-the-same-address` | The `UNIQUE` backstop **plus** the `23505` mapper arm |
+| `every-completed-rename-is-attributable` | *The write is event-sourced* — the `from_*` payload fields |
+| `authority-is-decided-no-earlier-than-the-change` | `context_rename`'s in-transaction RBAC invariant |
+| `replayed-history-is-not-re-adjudicated` | `_project_context_renamed` never authorizes |
+| `system-authority-never-becomes-ownership` | *What a rename does not touch* |
+| `no-other-refusal-changes-its-voice` | *EXTEND: `denial_for(&self)`* — **see the obligation below** |
+| `a-refusal-never-names-what-it-withholds` | *EXTEND: `denial_for(&self)`* — `&self` exposes the arm enum, never the subject |
+| `a-context-never-loses-its-contents-to-a-rename` | *What a rename does not touch* |
+| `a-reader-is-never-told-a-readable-context-is-absent` | *The gate* — the `ReadOnly` arm |
+
+### Two obligations the build inherits, and they are the risky ones
+
+**The trait change is the highest-risk edit in this design, and this spec discharges its clause only
+by construction.** `denial_for(&self)` defaults to `Self::denial()`, so the six existing authorities
+"cannot" change behavior. That argument is sound and it is still only an argument — the failure
+shape is an impl that overrides the default without meaning to, or an `authorize` that calls one
+method on one path and the other on another. `no-other-refusal-changes-its-voice` is a standing
+regression boundary on shared authorization machinery; the build owes it something that would fail
+if the boundary moved, not a paragraph asserting it cannot.
+
+**The register's first equivalence class is the one most likely to be wrong.** It claims all four
+routes to read-without-administration — lower team role, enclosing-team membership, share to a
+reachable team, explicit read grant — collapse to a single `ReadOnly` outcome. They arrive through
+genuinely different machinery: three are `UNION` arms of `contexts_readable_by` and one is
+`kb_access_grants`. The claim holds structurally, since `caller_administers_context` consults
+neither, but a class claimed across four mechanisms is exactly the shape that hides an unexamined
+cell. The build owes each route separately, not one representative.
 
 ## Out of scope
 
