@@ -193,6 +193,13 @@ jobs:
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
 
+      # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
+      # sign error there stops production deploying while every check stays green. This
+      # harness asserts both directions, and that a path merely CONTAINING "migrations"
+      # does not trigger a build.
+      - name: Guard test — vercel-ignore-build (polarity + migration scoping)
+        run: bash .github/scripts/test-vercel-ignore-build.sh
+
       # The gate itself needs cargo, so it runs in rust-quality; this harness stubs the generator
       # and therefore stays pure bash, which is what lets it live in this job at all.
       - name: Guard test — check-ts-rs-drift
