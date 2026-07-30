@@ -199,7 +199,7 @@ A `23505` unique violation therefore surfaces as a **500**. Rename's mapper must
 rendering the same `409` the pre-check renders, or the caller's experience depends on how quickly
 they lost the race.
 
-### OPEN DECISION for the implementation plan — does `reassign`'s identical hole ride along?
+### DECIDED — `reassign`'s identical hole rides along in the same change
 
 `reassign` has this same defect today. Its 409 collision pre-check (`context_service.rs:563-576`) is
 followed by the same `UNIQUE` backstop and the same mapper, so a lost race there also renders 500
@@ -213,7 +213,10 @@ which is a worse artifact than either alternative.
 **The argument for extracting:** it is a distinct narrative and an independently revertable fix, and
 mixed-narrative PRs are harder to review.
 
-This is not resolved here. The implementation plan must decide it explicitly and say which it chose.
+**Decided 2026-07-30: bundle.** The convention applies directly, and the decisive point is the
+artifact — extracting would land a correct mapper beside an incorrect one in the same file, which is
+worse than either alternative. The implementation plan must therefore treat `reassign`'s `23505`
+mapping as in scope, and its commit must say that rename's tests are what surfaced it.
 
 **No-op idempotency** mirrors `reassign`'s (`context_service.rs:551-559`): a rename that computes
 the slug already in place returns `renamed: false` and emits nothing.
