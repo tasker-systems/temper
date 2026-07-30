@@ -96,9 +96,16 @@ pub async fn list_resource_edges(
 /// the incumbent predicate rather than being a rule for facets, which is why it is not special-cased
 /// here.
 ///
-/// Runtime query rather than `query_as!` for the reason documented on [`list_resource_edges`]:
-/// the visibility helpers are SQL functions that reference other helpers unqualified, which
-/// sqlx's compile-time describe cannot resolve.
+/// **The two queries here take different forms, and the reason is per-query, not per-function.**
+/// The visibility gate stays runtime for the reason documented on [`list_resource_edges`]: it calls
+/// `edges_visible_to`, a SQL function whose body sqlx's compile-time describe inlines, and which
+/// references other helpers unqualified. The facet SELECT below calls **no** SQL function — it is a
+/// plain join over base tables — so that exemption never applied to it, and it is a
+/// compile-time-checked `query_as!`.
+///
+/// It was runtime until 2026-07-29, having inherited the exemption from its sibling above. Recorded
+/// rather than quietly corrected because the shape is worth recognising: an exemption stated once at
+/// function scope silently covers every query added to that function afterwards.
 pub async fn list_edge_facets(
     pool: &PgPool,
     profile_id: Uuid,
@@ -126,54 +133,35 @@ pub async fn list_edge_facets(
     // answer "what happened to this edge" is structurally blind to its facets. Until that is
     // reconciled, this read is the only place an author is recoverable, which is why it is not
     // optional here.
-    let rows = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            serde_json::Value,
-            f64,
-            Uuid,
-            Option<Uuid>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        "SELECT p.id, p.property_key, p.property_value, p.weight,
-                p.asserted_by_event_id, pr.id, pr.handle, pr.display_name
-           FROM kb_properties p
-           JOIN kb_events ev ON ev.id = p.asserted_by_event_id
-           LEFT JOIN kb_entities en ON en.id = ev.emitter_entity_id
-           LEFT JOIN kb_profiles pr ON pr.id = en.profile_id
-          WHERE p.owner_table = 'kb_edges' AND p.owner_id = $1 AND NOT p.is_folded
-          ORDER BY p.property_key, p.created",
+    // Selected straight into the wire type: the aliases ARE the mapping, so there is no positional
+    // hand-off between an eight-slot tuple and an eight-field struct to get wrong. The three author
+    // columns take `?` because they arrive through a LEFT JOIN, and sqlx infers nullability from the
+    // column definition — `kb_profiles.handle` is NOT NULL, so without the annotation the macro would
+    // type an absent author as a non-optional String.
+    //
+    // ORDER BY is unchanged from the runtime version. This is a form change, not a behaviour change.
+    let rows = sqlx::query_as!(
+        EdgeFacetRow,
+        r#"
+        SELECT p.id                    AS property_id,
+               p.property_key          AS property_key,
+               p.property_value        AS value,
+               p.weight                AS weight,
+               p.asserted_by_event_id  AS authored_by_event_id,
+               pr.id                   AS "authored_by_profile_id?",
+               pr.handle               AS "authored_by_handle?",
+               pr.display_name         AS "authored_by_display_name?"
+          FROM kb_properties p
+          JOIN kb_events ev ON ev.id = p.asserted_by_event_id
+          LEFT JOIN kb_entities en ON en.id = ev.emitter_entity_id
+          LEFT JOIN kb_profiles pr ON pr.id = en.profile_id
+         WHERE p.owner_table = 'kb_edges' AND p.owner_id = $1 AND NOT p.is_folded
+         ORDER BY p.property_key, p.created
+        "#,
+        edge_id,
     )
-    .bind(edge_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                property_id,
-                property_key,
-                value,
-                weight,
-                authored_by_event_id,
-                authored_by_profile_id,
-                authored_by_handle,
-                authored_by_display_name,
-            )| EdgeFacetRow {
-                property_id,
-                property_key,
-                value,
-                weight,
-                authored_by_event_id,
-                authored_by_profile_id,
-                authored_by_handle,
-                authored_by_display_name,
-            },
-        )
-        .collect())
+    Ok(rows)
 }

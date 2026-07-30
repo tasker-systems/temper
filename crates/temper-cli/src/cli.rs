@@ -833,6 +833,19 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// List the live facets of a resource — one row per assert, with weights.
+    ///
+    /// Sends `GET /api/resources/{id}/facets`. This is the faithful view: `resource show` carries a
+    /// facet inside `open_meta` collapsed to a single value, newest-wins, with the weight dropped and
+    /// any sibling row hidden. `facet_set` appends rather than upserts, so a resource can legitimately
+    /// carry several live facet rows — this is where you see all of them.
+    ///
+    /// Not to be confused with the `facets` key in `resource list`'s response envelope, which is
+    /// search-style aggregate counts over the listed set, not properties of a resource.
+    Facets {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
 }
 
 #[derive(Subcommand)]

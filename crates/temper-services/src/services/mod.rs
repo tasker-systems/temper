@@ -10,6 +10,7 @@ pub mod edge_service;
 pub mod embed_service;
 pub mod event_service;
 pub mod evidential_standing_service;
+pub mod facet_service;
 pub mod grant_crypto;
 pub mod graph_service;
 pub mod invitation_service;
