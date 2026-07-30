@@ -1074,7 +1074,7 @@ and `TeamReadAuthority::Subject = Uuid` both use the bare `Uuid` at this seam.
 
 ---
 
-## Task 6 — `context_service::rename`, and the bundled `reassign` `23505` fix
+## Task 6 — name canonicalization, `context_service::rename`, and the bundled `reassign` `23505` fix
 
 **Tag: AMEND** — adds a service function and **changes an existing one's error mapper**
 (`context_service.rs:661-668`, G8). Authorized by spec §"DECIDED — `reassign`'s identical hole rides
@@ -1082,8 +1082,9 @@ along in the same change".
 
 **Clauses:** `a-rename-lands-where-it-was-asked-or-nowhere`,
 `one-owner-never-holds-two-of-the-same-address`, `every-completed-rename-is-attributable`,
-`authority-is-decided-no-earlier-than-the-change`, `a-context-never-loses-its-contents-to-a-rename`.
-**`enables`.**
+`authority-is-decided-no-earlier-than-the-change`, `a-context-never-loses-its-contents-to-a-rename`,
+`a-stored-name-has-one-spelling`,
+`a-request-that-would-change-stored-state-is-never-declined-as-a-no-op`. **`enables`.**
 
 **Test tier:** `test-db`.
 
@@ -1097,9 +1098,9 @@ divergence paragraphs), "The race path must render the same refusal as the pre-c
 
 | Condition | Response |
 |---|---|
-| `sluggify(name)` is empty | `400 BadRequest` |
-| derived slug equals current slug | `200`, `renamed: false`, **no event** |
-| derived slug taken under the same owner | `409 Conflict`, naming the colliding context |
+| derived slug is empty | `400 BadRequest` |
+| **canonical name** equals the stored name | `200`, `renamed: false`, **no event** |
+| derived slug taken by **another** context under the same owner | `409 Conflict`, naming the colliding context |
 | caller lacks authority | `403` / `404` per `ContextAdminAuthority` |
 
 **Auth before writes** puts the gate first in code even though it is last in the table: `authorize::<
@@ -1123,13 +1124,24 @@ behaviours). It calls `sluggify` directly.
 means the caller administers this context, so they are the owner or manage the owning team, and can
 already enumerate that owner's contexts."* Model the message on `context_service.rs:572-575` (G8).
 
-**No-op idempotency** mirrors `reassign`'s (`:551-559`, G8): return `renamed: false` and emit nothing.
-Compare on the **derived slug**, not the name — a name change that sluggifies identically
-(`"Temper KB"` → `"Temper  KB"`) still re-addresses nothing, and the register's clause is about the
-*address*. Whether such a call should still update `name` is a judgment the spec does not settle;
-**default to "no event, no write, `renamed: false`"** — it is the reading that matches
-`reassign`'s precedent and the register's *"A rename that would change nothing. Declined as an act —
-not an error, but not an event either."* Flag it in the PR body rather than deciding it silently.
+**No-op idempotency** mirrors `reassign`'s (`:551-559`, G8) in shape, but **not** in what it
+compares. **Settled 2026-07-30 — compare the canonical NAME, never the derived slug.** An earlier
+draft of this plan said slug; the spec §"Refusals" now records why that is wrong twice over (a
+pre-canonicalization name sluggifies identically to its own repaired form, so slug-comparison would
+permanently decline the one rename that fixes it; and two different names can share a slug, so it
+would swallow a real display-name change and report success).
+
+So **a rename whose slug does not move is still a rename** — it writes `name`, emits, and returns
+`renamed: true`, with `from_slug == to_slug` in the payload. Only a canonical name identical to the
+stored one is a no-op. The register's
+`a-request-that-would-change-stored-state-is-never-declined-as-a-no-op` is this boundary.
+
+**⚠️ The collision check MUST exclude the context being renamed.** `reassign`'s query
+(`context_service.rs:563-576`, G8) has no self-exclusion and correctly does not need one — it
+changes the *owner*, so the row cannot match itself. Rename keeps the owner fixed. Copied verbatim,
+a name-only rename reaches the collision check (it is no longer swallowed by the no-op arm) and
+**409s against its own slug**, breaking exactly the legacy-repair case the no-op rule exists to
+enable. Add `AND id <> <context_id>`.
 
 **The bundled fix, verbatim from the spec:**
 
@@ -1146,6 +1158,16 @@ the shared one and rename it. Do not leave two functions that differ only in the
 that is the "correct mapper beside an incorrect one" artifact the spec's DECIDED section exists to
 prevent, reintroduced one level down.
 
+- [ ] **Step 0 — the shared name canonicalizer, called by BOTH write paths.** Add one helper that
+      trims and collapses internal whitespace runs to a single space. **It must not ASCII-fold** —
+      a slug is an address and may be lossy, a name is a display label and may not (`Café` stays
+      `Café`), so do **not** reuse `sluggify`'s fold (G13 shows what it does). Call it from `rename`
+      **and from `create` (`context_service.rs:337-372`)**. Spec §"Names are canonicalized before
+      they are stored — on both write paths": *"A canonical-form invariant honoured by one of two
+      write paths is not an invariant — rename would be a repair affordance for a hole `create`
+      keeps digging."* This is the plan's only change to already-shipped `create` behavior; call it
+      out in that commit body. **AMEND**, authorized by that spec section and by the register's
+      `a-stored-name-has-one-spelling`.
 - [ ] **Step 1** — Extract/extend the write-error mapper to carry both a `42501` arm and a `23505`
       arm. Its doc comment must state that the `23505` arm exists because the pre-check and the
       race path must render the same refusal, and that `reassign` had the same hole.
@@ -1153,17 +1175,25 @@ prevent, reintroduced one level down.
       `reassign`.**
 - [ ] **Step 3** — `pub async fn rename(pool, caller: ProfileId, context_id: Uuid, name: &str) ->
       ApiResult<RenameContextOutcome>`: authorize → read current `(owner_table, owner_id, slug,
-      name)` → derive slug → empty-slug `400` → no-op `200` → collision `409` → `resolve_emitter(pool,
-      caller, "web")` → `writes::rename_context_with(...)` mapped through the shared mapper →
-      compose the outcome.
+      name)` → **canonicalize the incoming name (Step 0)** → derive slug from the canonical name →
+      empty-slug `400` → **no-op if canonical name == stored name** `200` → collision `409`
+      (**self-excluded**) → `resolve_emitter(pool, caller, "web")` →
+      `writes::rename_context_with(...)` mapped through the shared mapper → compose the outcome.
 - [ ] **Step 4** — Compose `owner_ref` the way `reassign` does. **`team_owner_ref`
       (`context_service.rs:671-676`) is team-only** and will `fetch_one`-panic on a
       profile-owned context; rename must serve both owner kinds. The `CASE owner_table WHEN
       'kb_teams' THEN '+' || ... ELSE '@' || ...` expression at `context_service.rs:42-46` is the
       incumbent both-kinds spelling — reuse that shape rather than extending `team_owner_ref`.
 - [ ] **Step 5** — Tests in the existing `#[cfg(all(test, feature = "test-db"))]` module. At minimum:
-      empty-slug `400`; no-op `renamed: false` **and zero new `kb_events` rows**; collision `409`
-      with the colliding slug in the message; a successful rename changing **both** columns; the
+      empty-slug `400` for **both** `"   "` and `"!!!"`; no-op `renamed: false` **and zero new
+      `kb_events` rows**; collision `409` with the colliding slug in the message; a successful rename
+      changing **both** columns; plus the three the canonicalization decision adds —
+      (a) a **name-only rename** (canonical name differs, slug identical) returns `renamed: true`,
+      writes `name`, emits, and does **not** 409 against itself — the self-exclusion regression test;
+      (b) a context whose stored name is non-canonical can be renamed to its own canonical form,
+      which is the legacy-repair case and would fail under slug-comparison; and
+      (c) `create` stores a canonical name — the Step 0 helper's second caller, untested otherwise;
+      the
       SQL-guard test calling `context_rename` **directly** with an unauthorized emitter and asserting
       `42501` + unchanged row (model on `sql_guard_rejects_unauthorized_emitter_directly`,
       `context_service.rs:1063-1104`, which shows the `emitter_of` helper at `:1046`); and the
@@ -1176,6 +1206,11 @@ prevent, reintroduced one level down.
 **Acceptance criteria:**
 - `rg -n "next_unique_context_slug" crates/temper-services/src/services/context_service.rs` shows it
   called from `create` only.
+- Exactly **one** name-canonicalizing helper, called from both `create` and `rename`, and it does not
+  call `sluggify`.
+- The no-op arm compares the canonical **name**. `rg` the function body: no comparison of a derived
+  slug against `cur.slug` gates the no-op return.
+- The collision query excludes the context being renamed.
 - Exactly **one** write-error mapper function in the file, with both `42501` and `23505` arms, called
   by both `rename` and `reassign`.
 - `rename` calls `authorize::<ContextAdminAuthority>` before every read and every write.
@@ -1573,7 +1608,8 @@ oversight.**
 | 3 | `feat(substrate): context_renamed event, payload, write and replay arm` |
 | 4 | `feat(core): RenameContextRequest / RenameContextOutcome wire types` |
 | 5 | `feat(authz): ContextAdminAuthority — administers / system-admin / read-only / invisible` |
-| 6 | `feat(contexts): context_service::rename, and fix reassign's 23505 race rendering as 500` |
+| 6a | `fix(contexts): canonicalize context names on create and rename` |
+| 6b | `feat(contexts): context_service::rename, and fix reassign's 23505 race rendering as 500` |
 | 7 | `feat(api): POST /api/contexts/{id}/rename` |
 | 8 | `feat(cli): temper context rename` |
 | 9 | `feat(mcp): rename_context, and render Conflict/BadRequest as actionable params` |
@@ -1625,6 +1661,8 @@ clause remains **declared-uncovered** until the controller files coverage agains
 | `no-other-refusal-changes-its-voice` | EXTEND: `denial_for(&self)` | 1 · **10** | enables · **witnesses** |
 | `a-refusal-never-names-what-it-withholds` | EXTEND: `denial_for(&self)` | 1, 5 · **10** | enables · **witnesses** |
 | `a-context-never-loses-its-contents-to-a-rename` | What a rename does not touch | 6 | enables |
+| `a-stored-name-has-one-spelling` | Names are canonicalized … on both write paths | 6 (Step 0) | enables |
+| `a-request-that-would-change-stored-state-is-never-declined-as-a-no-op` | Refusals — the no-op test | 6 (Steps 3, 5a–b) | enables |
 | `a-reader-is-never-told-a-readable-context-is-absent` | The gate — `ReadOnly` | 5 · **11** | enables · **witnesses** |
 | Closure class 1 (four routes) | Two obligations the build inherits | **11** | **witnesses** |
 | Closure class 2 (personal vs team) | The gate | 5, 6 | enables |

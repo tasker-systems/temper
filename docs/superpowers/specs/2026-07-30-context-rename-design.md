@@ -177,16 +177,56 @@ literal per site. Rename's refusal is therefore byte-identical to `get_visible`'
 `resolve_context_ref`'s, and is covered by the same
 `the_three_handle_slug_refusals_are_indistinguishable` reasoning.
 
+## Names are canonicalized before they are stored — on **both** write paths
+
+**AMEND**, and the only part of this design that changes an already-shipped surface's behavior. A
+context name is persisted in canonical form: leading and trailing whitespace trimmed, and internal
+runs of whitespace collapsed to a single space. One shared helper does it, and **both** `create` and
+`rename` call it.
+
+**`create` is in scope deliberately.** A canonical-form invariant honoured by one of two write paths
+is not an invariant — rename would be a repair affordance for a hole `create` keeps digging. That is
+a frame-owner decision (2026-07-30) recorded against the register's
+`a-stored-name-has-one-spelling`, not something this spec concluded on its own.
+
+**It normalizes whitespace and nothing else.** It must **not** reuse `sluggify`'s ASCII fold: a slug
+is an address and may be lossy, a name is a display label and may not. `Café` stays `Café`.
+
+**`sluggify` was never the problem here.** It already collapses whitespace — it splits on runs of
+non-alphanumerics and rejoins with a single `-` (`refs.rs:55-62`), so `"Temper  KB"` and
+`"Temper KB"` both yield `temper-kb`. The defect this closes is entirely in the stored `name`.
+
 ## Refusals
 
 In order:
 
 | Condition | Response |
 |---|---|
-| `sluggify(name)` is empty | `400 BadRequest` |
-| derived slug equals current slug | `200`, `renamed: false`, **no event** |
-| derived slug taken under the same owner | `409 Conflict`, naming the colliding context |
+| derived slug is empty | `400 BadRequest` |
+| **canonical name** equals the stored name | `200`, `renamed: false`, **no event** |
+| derived slug taken by **another** context under the same owner | `409 Conflict`, naming the colliding context |
 | caller lacks authority | `403` / `404` per the gate above |
+
+**The no-op test compares the canonical NAME, never the derived slug.** Slug-comparison is the
+natural thing to write and it is wrong twice over. A stored name that predates canonicalization —
+`"Temper  KB"` — sluggifies identically to its own repaired form, so slug-comparison would decline
+the one rename that fixes it, permanently. And two genuinely different names can share a slug
+(`"Temper KB"` and `"Temper-KB"` both yield `temper-kb`), so it would silently swallow a real
+display-name change and report success. The register's
+`a-request-that-would-change-stored-state-is-never-declined-as-a-no-op` is exactly this boundary.
+
+Consequently **a rename whose slug does not move is still a rename**: it writes `name`, emits, and
+returns `renamed: true`, with `from_slug == to_slug` in the payload recording that the address
+stayed put. Only a canonical name identical to the stored one is a no-op.
+
+**One `400` check, not two.** An all-whitespace name canonicalizes to empty and an empty name
+sluggifies to empty, so `"   "` and `"!!!"` both fall out of the single derived-slug-is-empty test.
+
+**The collision check must exclude the context being renamed.** This is a real trap, not a
+formality: `reassign`'s query (`context_service.rs:563-576`) has no self-exclusion and does not need
+one, because reassign changes the *owner*, so the row can never match itself. Rename keeps the owner
+fixed. Copied verbatim, a name-only rename would find its own row and **409 against its own slug** —
+which is precisely the legacy-repair case the no-op rule above exists to enable.
 
 **The empty-slug `400` is a deliberate divergence from `create`.** `next_unique_context_slug` falls
 back to the literal `"context"` when `sluggify` yields nothing (`context_service.rs:259-266`). That
