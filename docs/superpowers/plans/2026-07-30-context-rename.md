@@ -1403,14 +1403,40 @@ in particular:
 same `Display` string. Comparing only the discriminant would let a `NotFound` message change
 silently, and the messages are exactly what `a-refusal-never-names-what-it-withholds` is about.
 
-Two further assertions, each guarding a distinct failure shape the spec names:
+**The suite asserts a conjunction, and the three parts do not behave alike.** Taking them separately
+is what the bite requirement demands — one isolated probe per independently-violable conjunct — and
+doing so shows that only one of the three needs anything new.
 
-- **The count.** Assert that the suite covers nine authorities, with a comment saying that a tenth
-  `impl ScopedAuthority` must be added here in the same PR that introduces it. A boundary that
-  silently ignores new members is not standing.
-- **The exception is declared, not discovered.** `ContextAdminAuthority` is the **only** authority
-  whose `denial_for` diverges from `denial`. Assert that too — positively, by name — so the suite
-  states *"exactly one authority speaks two dialects"* rather than *"these nine do not"*.
+- **(a) The nine voices are unchanged.** Independently violable, and Step 3's bite probe is its
+  probe. This is the conjunct the suite exists for.
+- **(b) A tenth authority cannot appear uncovered.** Independently violable, caught nowhere else,
+  and **the obvious assertion does not work.** `assert_eq!(covered.len(), 9)` fires when someone
+  *removes* an entry from the suite; it cannot fire when someone *adds* an impl and never touches
+  the suite — which is the entire failure mode. Rust cannot enumerate trait impls at runtime, so a
+  suite cannot close this from the inside. **Do not write a count assertion that only appears to.**
+  See the note below.
+- **(c) `ContextAdminAuthority` is the only divergent authority.** Independently violable — someone
+  "simplifies" `ReadOnly` back to `NotFound` — but **already covered by Task 11**, whose four route
+  tests all assert `403` and fail immediately if that happens. It needs a **cross-reference here,
+  not a probe**: assert the two dialects positively (Step 4) and note in a comment that the
+  behavioural guarantee is Task 11's. Coverage that a reader cannot see is the defect this plan has
+  already fixed once at the Part 5 level; do not reintroduce it here.
+
+**On (b) — where the guard belongs, if it is wanted.** Not in the type system: a required associated
+const on `ScopedAuthority` would make it a compile error, and that is real closure, but it adds a
+trait member solely to serve a test against a decay that has not happened — nine impls, none of
+which has ever overridden anything. Not in a Rust source scan either: `include_str!` cannot take a
+dynamic path, so the file list becomes hand-maintained and a new `authz/foo.rs` is invisible — the
+decay relocates somewhere *less* visible than where it started.
+
+The right home is the repo's existing tripwire layer, `.github/scripts/audit-*.sh` with its paired
+`test-audit-*.sh`. `audit-handler-authz-drift.sh` is the direct precedent and its header states the
+shape: *"It PINS the current set against a reviewed baseline, so a NEW handler-side authz call fails
+CI until a reviewer answers."* Pinning a **set** rather than a count is what catches the addition
+direction, and because it is shell it `rg`s the directory, so a new file is caught for free. **This
+plan does not build it** — see Part 5's declaration of (b) as an uncovered remainder. It is recorded
+here so that whoever wants the guard knows the pattern already exists and does not reach for the
+trait.
 
 - [ ] **Step 1** — Copy `crates/temper-services/src/authz/mod.rs` aside before probing
       (`cp .../mod.rs /tmp/…`). **Never `git checkout` to undo a probe edit.**
@@ -1434,8 +1460,12 @@ Two further assertions, each guarding a distinct failure shape the spec names:
       editing; if it does, the trait change moved something it should not have.
 
 **Acceptance criteria:**
-- Nine authorities covered; the count is asserted, not implied by the list's length.
+- All nine authorities covered, each named explicitly rather than reached through a helper that
+  could silently cover eight.
+- **No count assertion.** It would guard the direction that is not the risk; (b) is declared
+  uncovered in Part 5 instead.
 - Every comparison checks discriminant **and** rendered string.
+- Step 4 carries a comment pointing at Task 11 as the behavioural guarantee for (c).
 - The bite probe's FAIL output and the restored PASS output are pasted into the PR body.
 - `every_denial_renders_not_found` is untouched.
 
@@ -1487,6 +1517,14 @@ widening. G4's probe is the fixture shape to reproduce.
 **One representative is not four tests.** Parameterizing over a `Vec` of seeded profiles is fine;
 collapsing to a single seeded actor is not — the whole point is that four mechanisms are being
 checked, and a loop over four fixtures is four checks.
+
+**These tests bite by construction, and the proof is already on the record — no separate probe is
+owed.** A witness must fail against the state its clause claims to change, and normally that has to
+be demonstrated. Here it already was: route 2 was written the wrong way round in the spec, and a
+test built to that wording asserts `403` against an actor who resolves `Invisible` and **fails**
+(G3). That is this suite failing against a genuinely wrong world, observed before the suite existed.
+Record that sentence in the test module's doc comment. Do **not** manufacture an artificial probe on
+top of it — and do not let its absence read as an oversight, which is why it is written down here.
 
 - [ ] **Step 1** — Gate-level: four `#[sqlx::test(migrations = "../../migrations")]` tests in
       `context_admin.rs`, each seeding exactly one route and asserting `resolve` → `ReadOnly` and
@@ -1712,7 +1750,7 @@ of the clause has evidence, another does not — the uncovered half is named) ·
 | `authority-is-decided-no-earlier-than-the-change` | 2, 6 | enables | covered | T6 Step 5 SQL-guard: `context_rename` called directly with an unauthorized emitter → `42501`, row unchanged |
 | `replayed-history-is-not-re-adjudicated` | 2, 3 | enables | **see below** | The only clause whose evidence is a whole test tier — treated separately |
 | `system-authority-never-becomes-ownership` | 5 · 11 | enables · witnesses | covered | T11 Step 3 asserts the **absence** of residue rows |
-| `no-other-refusal-changes-its-voice` | 1 · **10** | enables · **witnesses** | covered | T10, with a recorded bite probe |
+| `no-other-refusal-changes-its-voice` | 1 · **10** | enables · **witnesses** | **partial** | Voices-unchanged: T10 + recorded bite probe. Only-`ContextAdminAuthority`-diverges: T11's route tests. **A tenth authority appearing uncovered is NOT guarded** — see below |
 | `a-refusal-never-names-what-it-withholds` | 1, 5 · **10** | enables · **witnesses** | **partial** | Message-identity: T10 Step 4. **The clause says "structurally impossible"** — that half is a type-level property (`denial_for(&self)` cannot reach `Self::Subject`) held by the compiler and **argued, not tested**. Accepted: a compile-fail test to assert it would cost more than it protects |
 | `a-context-never-loses-its-contents-to-a-rename` | 6 | enables | covered | T6 Step 6 — home a resource, rename, assert home + readability unchanged |
 | `a-stored-name-has-one-spelling` | 6 (Step 0) | enables | covered | T6 Step 5b (legacy repair) + 5c (`create` stores canonical) |
@@ -1721,6 +1759,24 @@ of the clause has evidence, another does not — the uncovered half is named) ·
 | Closure class 1 (four routes) | **11** | **witnesses** | covered | Four separately-named tests, one per mechanism |
 | Closure class 2 (personal vs team) | 5, 6 | enables | covered | T5 gate tests cover both owner kinds; T6 Step 4 covers both in `owner_ref` composition |
 | Closure class 3 (surface immaterial) | 7, 8, 9 · 11 | enables · witnesses | covered | T11 Step 4 — same two callers over HTTP, CLI and MCP |
+
+## The uncovered remainder inside `no-other-refusal-changes-its-voice`
+
+The clause is a boundary over **every** `ScopedAuthority`, present and future. Task 10 covers the
+nine that exist. **Nothing covers a tenth** added later by someone who never reads this PR, and that
+is declared here rather than left to be inferred from a suite that looks complete.
+
+It is not for want of trying a cheap fix. A count assertion guards removal, not addition — the wrong
+direction. A Rust source scan cannot walk the directory (`include_str!` takes no dynamic path), so
+its file list decays somewhere less visible than the thing it replaces. Real closure inside Rust
+means a required associated const on the trait, which is a trait member existing to serve a test
+against a decay that has never happened here.
+
+**Decided 2026-07-30: leave it uncovered, and say so.** If the guard is later wanted, it belongs in
+`.github/scripts/audit-*.sh` — the layer that already pins reviewed baselines and fails CI on a new
+member, and whose shell `rg` catches a new file for free. Deliberately **not** filed as a task:
+speculative work against a decay nobody has observed is the thing this discipline declines to
+manufacture. The remainder is named; naming it is the obligation.
 
 ## `replayed-history-is-not-re-adjudicated` — the one clause with no evidence at all
 
