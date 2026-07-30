@@ -1193,6 +1193,12 @@ prevent, reintroduced one level down.
       (b) a context whose stored name is non-canonical can be renamed to its own canonical form,
       which is the legacy-repair case and would fail under slug-comparison; and
       (c) `create` stores a canonical name — the Step 0 helper's second caller, untested otherwise;
+      and (d) **the mapper, directly**: hand it a synthetic `sqlx` database error with SQLSTATE
+      `23505` and assert `ApiError::Conflict`, and a `42501` and assert `Forbidden`. This is a plain
+      unit test needing no race and no database, and it is the **only** evidence on this branch for
+      the concurrent half of `one-owner-never-holds-two-of-the-same-address` — the clause says
+      *"under concurrency"*, and nothing here provokes a real interleaving (Part 5 declares that
+      remainder). Without 5d the concurrent half has nothing at all;
       the
       SQL-guard test calling `context_rename` **directly** with an unauthorized emitter and asserting
       `42501` + unchanged row (model on `sql_guard_rejects_unauthorized_emitter_directly`,
@@ -1580,6 +1586,10 @@ oversight.**
 - **A replay-roundtrip scenario for `context_renamed`.** `context_reassigned` has none (G10);
   adding one only for rename would be an asymmetry. Task 3 Step 5 wires the replay arm; proving
   roundtrip byte-identity is not owed here.
+  **⚠️ This bullet is not the record.** Excluding it leaves `replayed-history-is-not-re-adjudicated`
+  as the only clause on this branch with no evidence of any kind, so the decision belongs against
+  the clause, not in a list of things nobody is doing. **See Part 5 → "the one clause with no
+  evidence at all", which is where it must be resolved.** Do not treat this bullet as settling it.
 
 ---
 
@@ -1641,32 +1651,101 @@ Order matters twice: the `.sqlx` ritual is workspace-first and per-crate-last (G
 gate reads `git status --porcelain`, so its output must be **committed** before `cargo make check`
 goes green.
 
+## Closing the register — a controller step, and it is not optional
+
+The goal discipline's loop ends in *Close — update exercise status*, and nothing else in this plan
+does it. Register `019fb4db-7732-78d2-9ad4-73d44b053c03` currently reads:
+
+> **Exercise status. Both axes: zero.**
+> *Has the trigger fired?* There is no trigger. No surface, no route, no command, no tool accepts a
+> rename request today, so nothing has ever been asked for.
+> *Has the work executed?* No context has ever been renamed.
+
+Both sentences become false the moment this merges, and a register that still claims zero after the
+feature ships is worse than one that never claimed anything — it is a confident wrong answer to the
+question the element exists to ask. **Report both axes separately**; that separation is the whole
+point of the element, and collapsing them is the documented failure it was written to prevent.
+
+After the branch is green and merged, the controller:
+
+- [ ] Updates **Exercise status** to report each axis on its own. *Trigger:* the surfaces now exist
+      (name them). *Execution:* whether any context has actually been renamed **outside a test
+      fixture** — and if the honest answer is "only in tests", say exactly that. A suite passing is
+      not the feature having been used, and reporting one as the other is the precise mistake the
+      element records.
+- [ ] Updates **Declared coverage state** from the blanket *"every clause is declared-uncovered"* to
+      Part 5's per-clause table, carrying the two **partial** rows and whatever
+      `replayed-history-is-not-re-adjudicated` resolves to **with their reasons intact**. A partial
+      that lands as "covered" is the drift this whole exercise exists to prevent.
+- [ ] Leaves the closing note's follow-through explicit: **hard follow** / **accepted** / **for the
+      record** / **nothing**.
+
 ---
 
 # Part 5 — Spec ↔ task reconciliation
 
-The spec's own reconciliation table maps clauses to spec sections. This maps them to tasks. Every
-clause remains **declared-uncovered** until the controller files coverage against Tasks 10 and 11.
+The spec's own reconciliation table maps clauses to spec sections. This maps them to tasks **and
+declares each clause's coverage state**, because *coverage is never inferred from absence*: a clause
+with no evidence must say so and say why, and a reader must never have to deduce it from a blank
+cell.
 
-| Clause | Spec section | Task(s) | enables / witnesses |
-|---|---|---|---|
-| `rename-requires-administration` | The gate | 5, 6 · 11 | enables · witnesses |
-| `refusal-discloses-no-more-than-the-caller-already-holds` | The `404` is the incumbent refusal | 1, 5, 9 · 11 | enables · witnesses |
-| `a-rename-lands-where-it-was-asked-or-nowhere` | Refusals | 6 | enables |
-| `one-owner-never-holds-two-of-the-same-address` | UNIQUE backstop + `23505` mapper | 2, 6 | enables |
-| `every-completed-rename-is-attributable` | The write is event-sourced | 2, 3, 6 · 11 | enables · witnesses |
-| `authority-is-decided-no-earlier-than-the-change` | in-transaction RBAC invariant | 2, 6 | enables |
-| `replayed-history-is-not-re-adjudicated` | `_project_context_renamed` never authorizes | 2, 3 | enables |
-| `system-authority-never-becomes-ownership` | What a rename does not touch | 5 · 11 | enables · witnesses |
-| `no-other-refusal-changes-its-voice` | EXTEND: `denial_for(&self)` | 1 · **10** | enables · **witnesses** |
-| `a-refusal-never-names-what-it-withholds` | EXTEND: `denial_for(&self)` | 1, 5 · **10** | enables · **witnesses** |
-| `a-context-never-loses-its-contents-to-a-rename` | What a rename does not touch | 6 | enables |
-| `a-stored-name-has-one-spelling` | Names are canonicalized … on both write paths | 6 (Step 0) | enables |
-| `a-request-that-would-change-stored-state-is-never-declined-as-a-no-op` | Refusals — the no-op test | 6 (Steps 3, 5a–b) | enables |
-| `a-reader-is-never-told-a-readable-context-is-absent` | The gate — `ReadOnly` | 5 · **11** | enables · **witnesses** |
-| Closure class 1 (four routes) | Two obligations the build inherits | **11** | **witnesses** |
-| Closure class 2 (personal vs team) | The gate | 5, 6 | enables |
-| Closure class 3 (surface immaterial) | Surfaces | 7, 8, 9 · 11 | enables · witnesses |
+**A note on the word "witness".** An earlier draft of this table implied every clause needed a
+separately-tasked witness, and that over-reads the discipline. The `enables`/`witnesses` split is a
+property of a **task**, not a gate on where evidence may live. A task that lands mechanism together
+with the tests that exercise it is `enables`, and those tests are perfectly good evidence — the rule
+"no witness precedes its mechanism" forbids authoring evidence in a **preamble**, before anything
+exists, not authoring it alongside the code. Tasks 10 and 11 are `witnesses` for a narrower reason:
+their clauses are boundaries over code that other tasks own, so their evidence cannot be written
+until every consumer is final.
+
+**Coverage** is therefore: **covered** (named, biting evidence exists) · **partial** (one conjunct
+of the clause has evidence, another does not — the uncovered half is named) · **declared-uncovered**
+(no evidence, with a reason).
+
+| Clause | Task(s) | enables / witnesses | Coverage | Evidence, or why not |
+|---|---|---|---|---|
+| `rename-requires-administration` | 5, 6 · 11 | enables · witnesses | covered | T11 gate tests + e2e |
+| `refusal-discloses-no-more-than-the-caller-already-holds` | 1, 5, 9 · 11 | enables · witnesses | covered | T11 Step 2 stranger pole; T10 Step 4 byte-identity |
+| `a-rename-lands-where-it-was-asked-or-nowhere` | 6 | enables | covered | T6 Step 5 — empty `400`, collision `409`, successful rename writes both columns |
+| `one-owner-never-holds-two-of-the-same-address` | 2, 6 | enables | **partial** | Sequential half: T6 Step 5 collision `409`. **Concurrent half** — the clause says *"under concurrency"* — covered only via T6 Step 5d, the direct mapper unit test; **no test provokes a real interleaved race**, and none is planned |
+| `every-completed-rename-is-attributable` | 2, 3, 6 · 11 | enables · witnesses | covered | T11 Step 6 asserts `from_*` **by value** |
+| `authority-is-decided-no-earlier-than-the-change` | 2, 6 | enables | covered | T6 Step 5 SQL-guard: `context_rename` called directly with an unauthorized emitter → `42501`, row unchanged |
+| `replayed-history-is-not-re-adjudicated` | 2, 3 | enables | **see below** | The only clause whose evidence is a whole test tier — treated separately |
+| `system-authority-never-becomes-ownership` | 5 · 11 | enables · witnesses | covered | T11 Step 3 asserts the **absence** of residue rows |
+| `no-other-refusal-changes-its-voice` | 1 · **10** | enables · **witnesses** | covered | T10, with a recorded bite probe |
+| `a-refusal-never-names-what-it-withholds` | 1, 5 · **10** | enables · **witnesses** | **partial** | Message-identity: T10 Step 4. **The clause says "structurally impossible"** — that half is a type-level property (`denial_for(&self)` cannot reach `Self::Subject`) held by the compiler and **argued, not tested**. Accepted: a compile-fail test to assert it would cost more than it protects |
+| `a-context-never-loses-its-contents-to-a-rename` | 6 | enables | covered | T6 Step 6 — home a resource, rename, assert home + readability unchanged |
+| `a-stored-name-has-one-spelling` | 6 (Step 0) | enables | covered | T6 Step 5b (legacy repair) + 5c (`create` stores canonical) |
+| `a-request-that-would-change-stored-state-is-never-declined-as-a-no-op` | 6 (Steps 3, 5a–b) | enables | covered | T6 Step 5a — name-only rename returns `renamed: true` and does not self-`409` |
+| `a-reader-is-never-told-a-readable-context-is-absent` | 5 · **11** | enables · **witnesses** | covered | T11, all four routes |
+| Closure class 1 (four routes) | **11** | **witnesses** | covered | Four separately-named tests, one per mechanism |
+| Closure class 2 (personal vs team) | 5, 6 | enables | covered | T5 gate tests cover both owner kinds; T6 Step 4 covers both in `owner_ref` composition |
+| Closure class 3 (surface immaterial) | 7, 8, 9 · 11 | enables · witnesses | covered | T11 Step 4 — same two callers over HTTP, CLI and MCP |
+
+## `replayed-history-is-not-re-adjudicated` — the one clause with no evidence at all
+
+Every other clause above ends this branch with a named, biting test. This one ends it with an
+**argument**: the projector contains no authorization call, which is a fact about the source, not a
+fact any test asserts. Part 3 excludes a replay-roundtrip scenario on a symmetry ground —
+*"`context_reassigned` has none; adding one only for rename would be an asymmetry."*
+
+**That reasoning is filed in the wrong place and is weaker than it looks.** Symmetry with an
+untested sibling is a reason to doubt the sibling, not a reason to skip a clause this register named
+deliberately. And the exclusion currently lives in Part 3, where someone tracing this clause through
+this table would never encounter it — which is the failure the closure discipline calls out by name:
+a reader scanning *"excluded, reason given"* moves on.
+
+The clause **is** witnessable, and not expensively: replay a `context_renamed` event whose original
+emitter has since lost authority, and assert the projection still applies. That bites — it fails if
+the projector ever grows an authorization check — and it is the whole content of the clause. Tier is
+`test-artifacts` (`crates/temper-substrate/tests/`), which CI already runs as its own job.
+
+**This is a live decision, not a settled exclusion.** It is the register's *examined-and-inexpressible*
+vs *examined-and-deliberately-excluded* fork, and the discipline is explicit that the register may
+**surface** that fork and may not **take** it. Two honest options: add the replay test (small, and
+this clause is the only thing on the branch with zero evidence), or declare the clause uncovered
+**here, against the clause**, with the symmetry reason stated as the deliberate choice it is.
+Whichever is chosen, Part 3's bullet must point here rather than standing as the only record.
 
 ---
 
