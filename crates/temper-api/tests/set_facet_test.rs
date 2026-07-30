@@ -274,3 +274,117 @@ async fn a_double_encoded_facet_value_is_refused_at_the_door(pool: PgPool) {
     .expect("row count");
     assert_eq!(rows, 0, "the refusal must not have written anything");
 }
+
+/// The backfill rebuilds pre-grain rows from their events — the statement that runs against
+/// production, exercised against real old-grain data.
+///
+/// The migration's inline block ran once, on a database with no facet rows, so it proved nothing.
+/// Here the projector's own output is collapsed back into the **pre-grain shape** — one row holding
+/// the whole multi-key object, which is exactly what all 443 production rows look like — and the
+/// repair is asked to recover from it.
+///
+/// It asserts the rebuild against the projector's semantics rather than against a hand-written
+/// expectation, because that is the property the migration actually needs: the backfill must land
+/// the state a replay would produce, not merely *a* plausible state.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_backfill_rebuilds_old_grain_rows_from_their_events(pool: PgPool) {
+    let (owner_backend, resource) = facet_fixture(&pool).await;
+    let owner_uuid = uuid::Uuid::from(resource);
+
+    owner_backend
+        .set_facet(SetFacet {
+            owner: PropertyOwner::resource(resource),
+            values: serde_json::json!({"node_label": "fact", "status": "open"}),
+            weight: 0.9,
+            act: ActContext::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("assert");
+
+    let after_write: Vec<(serde_json::Value, f64)> = sqlx::query_as(
+        "SELECT property_value, weight FROM kb_properties \
+          WHERE property_key='facet' AND NOT is_folded AND owner_id=$1 \
+          ORDER BY property_value::text",
+    )
+    .bind(owner_uuid)
+    .fetch_all(&pool)
+    .await
+    .expect("rows after write");
+    assert_eq!(after_write.len(), 2, "two marks to begin with");
+
+    // Collapse to the PRE-GRAIN shape: delete the split rows and put back the single whole-object
+    // row the old projector would have written, keeping the same asserting event so the rebuild has
+    // real history to work from.
+    let event_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT asserted_by_event_id FROM kb_properties \
+          WHERE property_key='facet' AND owner_id=$1 LIMIT 1",
+    )
+    .bind(owner_uuid)
+    .fetch_one(&pool)
+    .await
+    .expect("event id");
+
+    sqlx::query("DELETE FROM kb_properties WHERE property_key='facet' AND owner_id=$1")
+        .bind(owner_uuid)
+        .execute(&pool)
+        .await
+        .expect("collapse");
+    sqlx::query(
+        "INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, \
+                                    asserted_by_event_id, last_event_id) \
+         VALUES ('kb_resources', $1, 'facet', $2, 0.9, $3, $3)",
+    )
+    .bind(owner_uuid)
+    .bind(serde_json::json!({"node_label": "fact", "status": "open"}))
+    .bind(event_id)
+    .execute(&pool)
+    .await
+    .expect("insert pre-grain row");
+
+    let pre_grain: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties WHERE property_key='facet' AND owner_id=$1",
+    )
+    .bind(owner_uuid)
+    .fetch_one(&pool)
+    .await
+    .expect("pre-grain count");
+    assert_eq!(pre_grain, 1, "one whole-object row, as production carries");
+
+    // The repair.
+    let (before, live, folded): (i64, i64, i64) =
+        sqlx::query_as("SELECT * FROM _facet_regrain_from_events($1)")
+            .bind(owner_uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("regrain");
+    assert_eq!(before, 1, "it saw the one pre-grain row");
+    assert_eq!(live, 2, "and rebuilt it into one row per inner key");
+    assert_eq!(
+        folded, 0,
+        "nothing to fold — a single assert supersedes nothing"
+    );
+
+    let after_rebuild: Vec<(serde_json::Value, f64)> = sqlx::query_as(
+        "SELECT property_value, weight FROM kb_properties \
+          WHERE property_key='facet' AND NOT is_folded AND owner_id=$1 \
+          ORDER BY property_value::text",
+    )
+    .bind(owner_uuid)
+    .fetch_all(&pool)
+    .await
+    .expect("rows after rebuild");
+    assert_eq!(
+        after_rebuild, after_write,
+        "the rebuild must land exactly what the projector wrote — same marks, same weights"
+    );
+
+    // Idempotence: the operator primitive is safe to re-run, because it derives from the ledger.
+    let (before2, live2, _): (i64, i64, i64) =
+        sqlx::query_as("SELECT * FROM _facet_regrain_from_events($1)")
+            .bind(owner_uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("second regrain");
+    assert_eq!((before2, live2), (2, 2), "re-running changes nothing");
+}

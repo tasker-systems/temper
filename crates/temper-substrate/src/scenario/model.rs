@@ -206,9 +206,10 @@ pub struct ResourceDef {
     pub facets: Option<FacetDef>,
 }
 
-/// One `property_key='facet'` row per resource. `values` is the coherent multi-key JSONB object
-/// (scalar or array values); `weight` applies to every `(path,value)` pair it expands to. A bare map
-/// is sugar: `facets: { phase: x }` == `{ values: { phase: x }, weight: 1.0 }`.
+/// The resource's `property_key='facet'` marks — **one row per inner key** of `values` since
+/// migration `20260730000010`, not one row per definition. `values` is the coherent multi-key JSONB
+/// object (scalar or array values); `weight` applies to every `(path,value)` pair it expands to. A
+/// bare map is sugar: `facets: { phase: x }` == `{ values: { phase: x }, weight: 1.0 }`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]

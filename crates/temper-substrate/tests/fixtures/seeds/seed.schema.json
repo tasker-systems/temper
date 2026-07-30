@@ -119,7 +119,7 @@
       ]
     },
     "FacetDef": {
-      "description": "One `property_key='facet'` row per resource. `values` is the coherent multi-key JSONB object\n(scalar or array values); `weight` applies to every `(path,value)` pair it expands to. A bare map\nis sugar: `facets: { phase: x }` == `{ values: { phase: x }, weight: 1.0 }`.",
+      "description": "The resource's `property_key='facet'` marks — **one row per inner key** of `values` since\nmigration `20260730000010`, not one row per definition. `values` is the coherent multi-key JSONB\nobject (scalar or array values); `weight` applies to every `(path,value)` pair it expands to. A\nbare map is sugar: `facets: { phase: x }` == `{ values: { phase: x }, weight: 1.0 }`.",
       "anyOf": [
         {
           "type": "object",

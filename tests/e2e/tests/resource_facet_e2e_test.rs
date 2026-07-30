@@ -122,14 +122,14 @@ async fn set_facet(
         .expect("set a facet on the resource");
 }
 
-/// The whole arc through the deployed surface: empty before, both asserts visible after, each with
-/// its own weight and its author.
+/// The whole arc through the deployed surface: empty before, every live mark visible after, each
+/// with its weight and its author.
 ///
 /// The empty read is asserted **first and as a success**, because that is the half a collection
 /// surface usually gets wrong: `readable but nothing asserted` must be `200 []`, distinguishable
 /// from the `404` an unreadable resource gets. The register left that shape question to the build.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn two_asserts_are_both_readable_through_the_deployed_surface(pool: sqlx::PgPool) {
+async fn every_live_mark_is_readable_through_the_deployed_surface(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
     app.client
         .profile()
@@ -158,7 +158,8 @@ async fn two_asserts_are_both_readable_through_the_deployed_surface(pool: sqlx::
         before.facets
     );
 
-    // Two asserts of one logical facet — `facet_set` appends, so both stay live.
+    // Two asserts of one logical facet. Since `019f6d08` the second SUPERSEDES the first per inner
+    // key, so what crosses the wire is one live mark per key — not one row per assert.
     set_facet(
         &app.client,
         resource,
@@ -184,16 +185,23 @@ async fn two_asserts_are_both_readable_through_the_deployed_surface(pool: sqlx::
     assert_eq!(
         read.facets.len(),
         2,
-        "both live rows must cross the wire, not the collapsed one: {:?}",
+        "one live row per inner key must cross the wire, not a collapsed object: {:?}",
         read.facets
     );
-    assert_eq!(read.facets[0].value["status"], "open");
-    assert_eq!(read.facets[1].value["status"], "resolved");
+    let mark = |key: &str| {
+        read.facets
+            .iter()
+            .find(|f| f.value.get(key).is_some())
+            .unwrap_or_else(|| panic!("no live mark for {key}: {:?}", read.facets))
+    };
+    assert_eq!(mark("status").value["status"], "resolved");
+    assert_eq!(mark("node_label").value["node_label"], "concern");
 
     // Weight is what the region producer clusters on, and what `open_meta` drops entirely. If it
     // were lost in serialization the read would answer the wrong question while looking right.
-    assert_eq!(read.facets[0].weight, 0.85);
-    assert_eq!(read.facets[1].weight, 1.0);
+    // Both marks carry the SECOND assert's weight, because it named both keys.
+    assert_eq!(mark("status").weight, 1.0);
+    assert_eq!(mark("node_label").weight, 1.0);
 
     let me = app.client.profile().get().await.expect("whoami");
     assert_eq!(
@@ -422,10 +430,17 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
     let parsed: serde_json::Value = serde_json::from_str(&text).expect("tool output is JSON");
     let facets = parsed["facets"].as_array().expect("facets array");
 
-    assert_eq!(facets.len(), 1, "the human's one facet: {parsed:#}");
-    assert_eq!(facets[0]["weight"], 0.9, "weight survives the MCP door too");
+    // The human asserted ONE facet with three inner keys, which is three rows at the stored grain
+    // (`019f6d08`). The machine sees every one of them — a read-only principal is not shown a
+    // summarized subset.
+    assert_eq!(facets.len(), 3, "the human's three marks: {parsed:#}");
+    let severity = facets
+        .iter()
+        .find(|f| f["value"].get("severity").is_some())
+        .unwrap_or_else(|| panic!("no severity mark: {parsed:#}"));
+    assert_eq!(severity["weight"], 0.9, "weight survives the MCP door too");
     assert_eq!(
-        facets[0]["value"]["severity"], "high",
+        severity["value"]["severity"], "high",
         "the value arrives whole, not summarized"
     );
     assert_eq!(
@@ -466,8 +481,9 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
     .await
     .expect("count live facets");
     assert_eq!(
-        live, 1,
-        "the denied assert wrote nothing — auth before writes, on the MCP surface too"
+        live, 3,
+        "the denied assert wrote nothing — the human's three marks are all that remain, and \
+         auth-before-writes holds on the MCP surface too"
     );
 }
 
@@ -546,15 +562,21 @@ async fn the_cli_prints_every_live_facet_with_its_weight(pool: sqlx::PgPool) {
     assert_eq!(
         facets.len(),
         2,
-        "the CLI must print both live rows, not the collapsed one: {parsed:#}"
+        "the CLI must print every live mark, not a collapsed object: {parsed:#}"
     );
-    assert_eq!(facets[0]["value"]["status"], "open");
-    assert_eq!(facets[1]["value"]["status"], "resolved");
+    let cli_mark = |key: &str| {
+        facets
+            .iter()
+            .find(|f| f["value"].get(key).is_some())
+            .unwrap_or_else(|| panic!("no live mark for {key}: {parsed:#}"))
+    };
+    assert_eq!(cli_mark("status")["value"]["status"], "resolved");
+    assert_eq!(cli_mark("node_label")["value"]["node_label"], "concern");
     assert_eq!(
-        facets[0]["weight"], 0.85,
+        cli_mark("status")["weight"],
+        1.0,
         "weight must survive the CLI's own rendering path: {parsed:#}"
     );
-    assert_eq!(facets[1]["weight"], 1.0);
     assert!(
         facets[0]["created"].is_string(),
         "`created` is what makes the double-assert legible to a human reading the output: {parsed:#}"

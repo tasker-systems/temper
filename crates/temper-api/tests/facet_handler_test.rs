@@ -84,13 +84,13 @@ async fn set_facet_returns_ack(pool: PgPool) {
     let ack: Value = resp.json().await.expect("expected JSON ack");
     assert_eq!(status, 200, "set_facet should return 200; body: {ack}");
 
-    assert!(
-        ack["property_id"].is_string(),
-        "FacetAck must contain property_id string; got {ack}"
-    );
-
-    // Verify the property_id parses as a valid UUID.
-    let pid_str = ack["property_id"].as_str().expect("property_id is string");
+    // The ack names every row the assert wrote — a facet is stored one row per inner key, so a
+    // singular id could only report one of N (task `019f6d08`).
+    let ids = ack["property_ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("FacetAck must contain property_ids; got {ack}"));
+    assert_eq!(ids.len(), 1, "a one-key facet writes one row; got {ack}");
+    let pid_str = ids[0].as_str().expect("property_ids entries are strings");
     Uuid::parse_str(pid_str).expect("property_id should be a valid UUID");
 
     // Verify the property row was written into kb_properties (owner_table/owner_id
@@ -108,9 +108,17 @@ async fn set_facet_returns_ack(pool: PgPool) {
     );
 }
 
-// ─── Test 1b: setting the same facet key twice → 409 Conflict (not 500) ──────
+// ─── Test 1b: setting the same facet key twice SUPERSEDES — it is an upsert, not a conflict ──
+//
+// This test previously asserted 409. That was the old append-only projector's crude refusal: with
+// no supersession, a repeat assert collided with `uq_kb_properties_active` and the handler turned
+// the unique violation into a Conflict. Re-asserting a facet is the ordinary way a facet CHANGES,
+// so refusing it was the defect, not the contract — `019f6d08` replaced it with a fold-then-insert.
+//
+// What survives from the original is the assertion that actually mattered: a repeat assert must not
+// be a 500. It is now a 200 that leaves exactly one live row for the key.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn set_facet_duplicate_key_returns_409(pool: PgPool) {
+async fn set_facet_twice_supersedes_rather_than_conflicting(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
     let email = format!("fh-dup-{}@example.com", Uuid::new_v4());
@@ -141,7 +149,7 @@ async fn set_facet_duplicate_key_returns_409(pool: PgPool) {
         "first facet set should succeed"
     );
 
-    // Second set of the same active facet key hits uq_kb_properties_active → 409, not 500.
+    // Second set of the same key supersedes the first.
     let second = app
         .client
         .post(app.url("/api/facets"))
@@ -152,8 +160,24 @@ async fn set_facet_duplicate_key_returns_409(pool: PgPool) {
         .expect("request failed");
     assert_eq!(
         second.status().as_u16(),
-        409,
-        "re-setting an active facet key must be a 409 Conflict, not a 500"
+        200,
+        "re-asserting a facet is how a facet changes — it must not be refused"
+    );
+
+    // And the supersession is real: one live row for the key, with the older one folded rather
+    // than deleted. Asserting BOTH numbers is what distinguishes an upsert from a no-op write.
+    let (live, folded): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE NOT is_folded), count(*) FILTER (WHERE is_folded) \
+           FROM kb_properties WHERE property_key = 'facet' AND owner_id = $1",
+    )
+    .bind(resource)
+    .fetch_one(&pool)
+    .await
+    .expect("row counts");
+    assert_eq!(
+        (live, folded),
+        (1, 1),
+        "one live mark for the key, and the superseded one kept as history"
     );
 }
 

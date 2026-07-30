@@ -294,15 +294,27 @@ $$;
 -- (414 property_asserted + 29 property_set), zero folded, zero edge-owned. Those 443 values carry
 -- 1053 marks over 1011 distinct (owner, inner key) — so this is expected to leave 1011 live rows
 -- and 42 folded ones, the 42 being marks a later assert superseded.
-DO $$
+-- It is a FUNCTION rather than an inline `DO` block for two reasons, and the first is the one that
+-- matters: an inline block runs exactly once, on a database whose facet rows nobody can see from a
+-- test, so the riskiest statement in this migration would ship with no witness at all. As a function
+-- it is exercised against real old-grain rows by
+-- `set_facet_test::the_backfill_rebuilds_old_grain_rows_from_their_events`.
+--
+-- Second, it survives as an operator repair primitive. It is idempotent and self-correcting by
+-- construction — it derives everything from `kb_events`, which nothing here writes — so re-running
+-- it can only ever restore the projection to what the ledger says it should be. Scoped to one owner
+-- for targeted repair; NULL means every owner.
+CREATE FUNCTION _facet_regrain_from_events(p_owner uuid DEFAULT NULL)
+RETURNS TABLE (rows_before bigint, rows_live bigint, rows_folded bigint)
+LANGUAGE plpgsql AS $$
 DECLARE v_ev record;
-        v_before int;
-        v_live int;
-        v_folded int;
 BEGIN
-    SELECT count(*) INTO v_before FROM kb_properties WHERE property_key = 'facet';
+    SELECT count(*) INTO rows_before
+      FROM kb_properties
+     WHERE property_key = 'facet' AND (p_owner IS NULL OR owner_id = p_owner);
 
-    DELETE FROM kb_properties WHERE property_key = 'facet';
+    DELETE FROM kb_properties
+     WHERE property_key = 'facet' AND (p_owner IS NULL OR owner_id = p_owner);
 
     FOR v_ev IN
         SELECT e.id, e.payload, t.name AS event_type
@@ -310,8 +322,11 @@ BEGIN
           JOIN kb_event_types t ON t.id = e.event_type_id
          WHERE e.payload->>'property_key' = 'facet'
            AND t.name IN ('property_asserted', 'property_set')
+           AND (p_owner IS NULL OR (e.payload#>>'{owner,id}')::uuid = p_owner)
          ORDER BY e.occurred_at, e.id
     LOOP
+        -- Dispatch per event type: the two projectors mean different things (assert patches one
+        -- key; set replaces the whole facet set), and collapsing them would rewrite history.
         IF v_ev.event_type = 'property_asserted' THEN
             PERFORM _project_property_asserted(v_ev.id, v_ev.payload);
         ELSE
@@ -320,15 +335,30 @@ BEGIN
     END LOOP;
 
     SELECT count(*) FILTER (WHERE NOT is_folded), count(*) FILTER (WHERE is_folded)
-      INTO v_live, v_folded
-      FROM kb_properties WHERE property_key = 'facet';
+      INTO rows_live, rows_folded
+      FROM kb_properties
+     WHERE property_key = 'facet' AND (p_owner IS NULL OR owner_id = p_owner);
 
-    RAISE NOTICE 'facet regrain: % rows before → % live + % folded after', v_before, v_live, v_folded;
-
-    -- A rebuild that produced no rows from a non-empty starting set means the event dispatch above
-    -- matched nothing — fail loudly rather than leave every facet silently deleted.
-    IF v_before > 0 AND v_live = 0 THEN
-        RAISE EXCEPTION 'facet regrain deleted % rows and rebuilt none', v_before;
+    -- A rebuild that produced nothing from a non-empty starting set means the event dispatch above
+    -- matched no events — fail loudly rather than leave every facet silently deleted.
+    IF rows_before > 0 AND rows_live = 0 THEN
+        RAISE EXCEPTION 'facet regrain deleted % rows and rebuilt none', rows_before;
     END IF;
+
+    RETURN NEXT;
+END;
+$$;
+
+COMMENT ON FUNCTION _facet_regrain_from_events(uuid) IS
+'Rebuild facet property rows from their events at the current grain, for one owner or (NULL) all. '
+'Idempotent and derived entirely from kb_events, so re-running only ever restores the projection to '
+'what the ledger says. The repair primitive behind migration 20260730000010''s backfill.';
+
+DO $$
+DECLARE v record;
+BEGIN
+    SELECT * INTO v FROM _facet_regrain_from_events(NULL);
+    RAISE NOTICE 'facet regrain: % rows before → % live + % folded after',
+        v.rows_before, v.rows_live, v.rows_folded;
 END;
 $$;
