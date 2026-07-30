@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::facet_requests::{
-    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetSetRequest,
+    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetSetRequest, ResourceFacetsResponse,
 };
 use temper_core::types::ids::{EdgeId, ProfileId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
@@ -138,6 +138,60 @@ pub async fn list_edge_facets(
     .await?;
     Ok(Json(EdgeFacetsResponse {
         edge_handle,
+        facets,
+    }))
+}
+
+/// Read the live facets of one resource — the confirming read for a write that steers region
+/// formation and Atlas grouping.
+///
+/// Read-side gate is `resources_visible_to`, asked via `readback::is_resource_visible` — see
+/// `facet_service::list_resource_facets` for why it is asked separately and first. Reads stay
+/// service-direct on both surfaces by design, so this does not route through the backend.
+///
+/// **`200` with an empty list is not the same answer as `404`, and that is deliberate.** Empty means
+/// *readable, nothing asserted*; `404` means *unreadable or absent*, indistinguishably. The empty
+/// list is only reachable after the readability gate has passed, so it is not an existence oracle —
+/// the same argument `GET /api/resources/{id}/citation-audits` makes, and the same denial dialect.
+///
+/// **Path is `/api/resources/{id}/facets`, not a mode of `/api/facets`.** The write posts to
+/// `/api/facets` with the resource in the body because a facet-set is an act on a payload; a read
+/// addresses a resource, so the resource belongs in the path alongside its siblings
+/// (`/citation-audits`, `/evidence`).
+#[utoipa::path(
+    get,
+    operation_id = "list_resource_facets",
+    path = "/api/resources/{id}/facets",
+    tag = "Facets",
+    params(("id" = Uuid, Path, description = "Resource ID whose facets are read")),
+    security(("bearer_auth" = [])),
+    responses(
+        (
+            status = 200,
+            description = "The resource's live facets, one row per assert, oldest-first. Empty when the resource is readable but carries no facets.",
+            body = ResourceFacetsResponse
+        ),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (
+            status = 404,
+            description = "Not found — the resource is unreadable or does not exist (deliberately indistinguishable)",
+            body = ErrorBody
+        ),
+    )
+)]
+pub async fn list_resource_facets(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<ResourceFacetsResponse>> {
+    let facets = temper_services::services::facet_service::list_resource_facets(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        ResourceId::from(id),
+    )
+    .await?;
+    Ok(Json(ResourceFacetsResponse {
+        resource: id,
         facets,
     }))
 }

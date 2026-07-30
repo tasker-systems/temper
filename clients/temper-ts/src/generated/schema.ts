@@ -1214,6 +1214,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/{id}/facets": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the live facets of one resource — the confirming read for a write that steers region
+         *     formation and Atlas grouping.
+         * @description Read-side gate is `resources_visible_to`, asked via `readback::is_resource_visible` — see
+         *     `facet_service::list_resource_facets` for why it is asked separately and first. Reads stay
+         *     service-direct on both surfaces by design, so this does not route through the backend.
+         *
+         *     **`200` with an empty list is not the same answer as `404`, and that is deliberate.** Empty means
+         *     *readable, nothing asserted*; `404` means *unreadable or absent*, indistinguishably. The empty
+         *     list is only reachable after the readability gate has passed, so it is not an existence oracle —
+         *     the same argument `GET /api/resources/{id}/citation-audits` makes, and the same denial dialect.
+         *
+         *     **Path is `/api/resources/{id}/facets`, not a mode of `/api/facets`.** The write posts to
+         *     `/api/facets` with the resource in the body because a facet-set is an act on a payload; a read
+         *     addresses a resource, so the resource belongs in the path alongside its siblings
+         *     (`/citation-audits`, `/evidence`).
+         */
+        get: operations["list_resource_facets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/finalize": {
         parameters: {
             query?: never;
@@ -4028,11 +4064,94 @@ export interface components {
              */
             open_meta?: unknown;
         };
+        /**
+         * @description One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.
+         *
+         *     **Deliberately not [`EdgeFacetRow`], and not an alias of it.** The two look alike and are not
+         *     interchangeable: the gates differ (`resources_visible_to` vs `edges_visible_to`), an edge's facets
+         *     fold *with the edge* while a resource's do not, and a resource's `kb_properties` rows are shared
+         *     with the frontmatter tiers where an edge's are not. Two types that must be able to diverge beat
+         *     one type that makes divergence a breaking change.
+         *
+         *     **Why this carries `created` where [`EdgeFacetRow`] does not.** `facet_set` appends rather than
+         *     upserts, so one logical facet asserted twice leaves two live rows (task
+         *     `019f6d08-2b55-7ee0-b9ac-1959cf4d736b`; 30 resources in production carry 2 or 3). The whole point
+         *     of this read is that a caller can tell that case from a genuinely multi-valued facet, and a
+         *     timestamp per row is what makes the supersession legible without the read taking a position on
+         *     how supersession *should* work — a fork this read deliberately does not settle.
+         *
+         *     **`property_key` rides on the row even though the read is scoped to `"facet"`.** It costs one
+         *     field now and makes widening the read to another property key additive later, rather than a wire
+         *     break. The read is scoped rather than general because a resource's other property rows *are* its
+         *     frontmatter — `get_meta` already serves them — so returning them all would be a second,
+         *     divergent copy of an existing surface.
+         */
+        ResourceFacetRow: {
+            authored_by_display_name?: string | null;
+            /**
+             * Format: uuid
+             * @description `kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's
+             *     replay-stable identity.
+             */
+            authored_by_event_id: string;
+            authored_by_handle?: string | null;
+            /**
+             * Format: uuid
+             * @description The profile behind that act's emitter entity. `None` only if the emitter has no profile,
+             *     which no live write path produces — carried as an `Option` rather than fabricating an id,
+             *     matching [`EdgeFacetRow`].
+             */
+            authored_by_profile_id?: string | null;
+            /**
+             * Format: date-time
+             * @description When the facet was asserted. What lets a caller order two live rows for one logical facet.
+             */
+            created: string;
+            /**
+             * Format: uuid
+             * @description `kb_properties.id`. A **masked surrogate** — a replay re-mints it, so the replay-stable
+             *     identity is `authored_by_event_id`, exactly as for an edge facet or a citation audit.
+             */
+            property_id: string;
+            /**
+             * @description `kb_properties.property_key` — always `"facet"` for rows this read returns. Carried so the
+             *     row shape survives widening the read past that one key.
+             */
+            property_key: string;
+            /**
+             * @description The facet's value payload, verbatim. An object, not a scalar, in every production row
+             *     observed: `{"node_label": "concern", "status": "open", "severity": "high"}`.
+             */
+            value: unknown;
+            /**
+             * Format: double
+             * @description `kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**:
+             *     the region producer clusters on it (`temper-substrate/src/substrate.rs:110-122` →
+             *     `expand_facets`), and 128 production rows carry a non-default value.
+             */
+            weight: number;
+        };
         /** @description Aggregated doc-type facet counts for the current filter set. */
         ResourceFacets: {
             doc_type: {
                 [key: string]: number;
             };
+        };
+        /**
+         * @description The live facets of one resource, oldest-first within each key.
+         *
+         *     **No server-side collapse.** One element per live `kb_properties` row. `get_meta` already offers
+         *     the collapsed view (`open_meta.facet`, newest-wins, weight discarded); duplicating that here would
+         *     reproduce the very concealment this read exists to end.
+         *
+         *     An empty `facets` list means *readable, and nothing asserted* — distinct from the `404` a caller
+         *     who may not read the resource receives. See `facet_service::list_resource_facets` for why that
+         *     distinction is safe rather than an existence oracle.
+         */
+        ResourceFacetsResponse: {
+            facets: components["schemas"]["ResourceFacetRow"][];
+            /** Format: uuid */
+            resource: string;
         };
         /**
          * @description Mint/update a `kb_access_grants` row on a resource. Principal `{kb_teams,kb_profiles}`.
@@ -8059,6 +8178,50 @@ export interface operations {
                 };
             };
             /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_resource_facets: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID whose facets are read */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resource's live facets, one row per assert, oldest-first. Empty when the resource is readable but carries no facets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceFacetsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found — the resource is unreadable or does not exist (deliberately indistinguishable) */
             404: {
                 headers: {
                     [name: string]: unknown;

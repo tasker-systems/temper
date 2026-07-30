@@ -176,7 +176,9 @@ lib/temper/generated/models/residual_owned_reach.rb
 lib/temper/generated/models/resource_annotate_request.rb
 lib/temper/generated/models/resource_create_request.rb
 lib/temper/generated/models/resource_detail.rb
+lib/temper/generated/models/resource_facet_row.rb
 lib/temper/generated/models/resource_facets.rb
+lib/temper/generated/models/resource_facets_response.rb
 lib/temper/generated/models/resource_grant_body.rb
 lib/temper/generated/models/resource_lineage.rb
 lib/temper/generated/models/resource_list_response.rb

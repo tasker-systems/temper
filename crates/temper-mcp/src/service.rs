@@ -308,6 +308,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Read the live facets of one resource — one entry per assert, each with its weight and author. Use this to confirm a facet_set landed: get_resource collapses facets into a single newest-wins value in open_meta and drops the weight."
+    )]
+    async fn resource_facets(
+        &self,
+        Parameters(input): Parameters<tools::facets::ResourceFacetsInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::resource_facets(self, input).await
+    }
+
+    #[tool(
         description = "Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
     )]
     async fn steward_ingest_delta(

@@ -39,6 +39,27 @@ pub fn run(
     })
 }
 
+/// Run `temper resource facets <ref>` — the resource's live facets, one row per assert.
+///
+/// Renders the response verbatim through `format::render` rather than summarizing it, matching
+/// `edge facets`. A summary here would be a second collapse, which is the thing this read exists to
+/// stop doing.
+pub fn list(r#ref: String, fmt: OutputFormat) -> Result<()> {
+    let resource = temper_workflow::operations::parse_ref(&r#ref)?;
+    crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            let out = client
+                .facets()
+                .list_for_resource(resource.0)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let rendered = crate::format::render(&out, fmt)?;
+            output::plain(rendered);
+            Ok(())
+        })
+    })
+}
+
 fn print_ack(ack: &FacetAck, fmt: OutputFormat) -> Result<()> {
     match fmt {
         OutputFormat::Json => {
@@ -108,5 +129,47 @@ mod tests {
             }
             _ => panic!("expected Commands::Resource / ResourceAction::Facet"),
         }
+    }
+
+    /// `facets` takes a ref and nothing else — no `--type`/`--context` scoping, matching every other
+    /// by-ref command, and no flags that would let a caller narrow what is disclosed. A read that
+    /// required naming a key in advance could not answer the question the goal exists for.
+    #[test]
+    fn resource_facets_parses_a_bare_ref() {
+        let cli = Cli::try_parse_from([
+            "temper",
+            "resource",
+            "facets",
+            "some-title-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+        ])
+        .expect("parse should succeed");
+
+        match cli.command {
+            Commands::Resource {
+                action: ResourceAction::Facets { r#ref },
+            } => assert_eq!(r#ref, "some-title-019e84ab-26ba-7560-9d34-c60d74a9fbe2"),
+            _ => panic!("expected Commands::Resource / ResourceAction::Facets"),
+        }
+    }
+
+    /// The singular `facet` (write) and plural `facets` (read) are distinct subcommands, and clap
+    /// must not treat one as a prefix of the other. Pinned because the write requires `--values` and
+    /// a mis-resolution would surface as a confusing "missing required argument" on a read.
+    #[test]
+    fn facets_is_not_parsed_as_the_facet_write() {
+        // `Cli` is not `Debug`, so `expect_err` is unavailable — match instead of unwrapping.
+        let err = match Cli::try_parse_from([
+            "temper",
+            "resource",
+            "facet",
+            "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+        ]) {
+            Ok(_) => panic!("the facet write must require --values"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("--values"),
+            "the write's own error, not a read misfire: {err}"
+        );
     }
 }

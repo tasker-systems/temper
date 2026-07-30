@@ -89,6 +89,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read the live facets of one resource — the confirming read for a write that steers region formation and Atlas grouping.
+    # Read-side gate is `resources_visible_to`, asked via `readback::is_resource_visible` — see `facet_service::list_resource_facets` for why it is asked separately and first. Reads stay service-direct on both surfaces by design, so this does not route through the backend.  **`200` with an empty list is not the same answer as `404`, and that is deliberate.** Empty means *readable, nothing asserted*; `404` means *unreadable or absent*, indistinguishably. The empty list is only reachable after the readability gate has passed, so it is not an existence oracle — the same argument `GET /api/resources/{id}/citation-audits` makes, and the same denial dialect.  **Path is `/api/resources/{id}/facets`, not a mode of `/api/facets`.** The write posts to `/api/facets` with the resource in the body because a facet-set is an act on a payload; a read addresses a resource, so the resource belongs in the path alongside its siblings (`/citation-audits`, `/evidence`).
+    # @param id [String] Resource ID whose facets are read
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ResourceFacetsResponse]
+    def list_resource_facets(id, opts = {})
+      data, _status_code, _headers = list_resource_facets_with_http_info(id, opts)
+      data
+    end
+
+    # Read the live facets of one resource — the confirming read for a write that steers region formation and Atlas grouping.
+    # Read-side gate is &#x60;resources_visible_to&#x60;, asked via &#x60;readback::is_resource_visible&#x60; — see &#x60;facet_service::list_resource_facets&#x60; for why it is asked separately and first. Reads stay service-direct on both surfaces by design, so this does not route through the backend.  **&#x60;200&#x60; with an empty list is not the same answer as &#x60;404&#x60;, and that is deliberate.** Empty means *readable, nothing asserted*; &#x60;404&#x60; means *unreadable or absent*, indistinguishably. The empty list is only reachable after the readability gate has passed, so it is not an existence oracle — the same argument &#x60;GET /api/resources/{id}/citation-audits&#x60; makes, and the same denial dialect.  **Path is &#x60;/api/resources/{id}/facets&#x60;, not a mode of &#x60;/api/facets&#x60;.** The write posts to &#x60;/api/facets&#x60; with the resource in the body because a facet-set is an act on a payload; a read addresses a resource, so the resource belongs in the path alongside its siblings (&#x60;/citation-audits&#x60;, &#x60;/evidence&#x60;).
+    # @param id [String] Resource ID whose facets are read
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ResourceFacetsResponse, Integer, Hash)>] ResourceFacetsResponse data, response status code and response headers
+    def list_resource_facets_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: FacetsApi.list_resource_facets ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling FacetsApi.list_resource_facets"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/resources/{id}/facets'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ResourceFacetsResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"FacetsApi.list_resource_facets",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: FacetsApi#list_resource_facets\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Set a facet whose owner is an **edge** rather than a resource.
     # A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about the owner not being a payload choice: the edge is addressed in the path (matching every other edge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization gate is a different question. `DbBackend::set_facet` dispatches on the typed owner to `check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.  **Both statuses are reachable, and they mean different things.** `404` for an edge that does not exist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather than `Forbidden` on purpose, so the write never confirms the existence of a resource the caller has no standing to see. `403` for an edge the caller can legitimately see but may not author into: it fails source-write or container-write on the edge's home.  An earlier version of this comment claimed the endpoint returns \"404 rather than 403\" outright, twelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row lookup and clause 3.
     # @param edge_handle [String] Relationship edge handle
