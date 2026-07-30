@@ -127,6 +127,15 @@ jobs:
       - name: Security tripwire — credential types deriving Debug
         run: bash .github/scripts/audit-credential-debug.sh
 
+      # Not a baseline tripwire either: it reads build-cli-binaries.yml directly. Deleting the
+      # `.manifest.json` line from the attestation's `subject-path` is a silent one-line edit —
+      # the signing job still succeeds, the archive is still attested — that defeats both
+      # `temper version --verify --online` and `temper update`'s manifest attestation, which key
+      # on the MANIFEST's own digest. The first symptom would otherwise be a real release failing
+      # in a user's terminal.
+      - name: Security tripwire — attestation covers archive AND manifest
+        run: bash .github/scripts/audit-attest-subject-path.sh
+
       - name: Check documentation builds
         run: cargo doc --workspace --no-deps --document-private-items
         env:
@@ -198,6 +207,9 @@ jobs:
 
       - name: Guard test — install.sh
         run: bash scripts/install/test-install.sh
+
+      - name: Guard test — audit-attest-subject-path
+        run: bash .github/scripts/test-audit-attest-subject-path.sh
 
   typescript-quality:
     name: TypeScript Quality
