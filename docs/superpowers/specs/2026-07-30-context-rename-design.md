@@ -181,7 +181,8 @@ enumerate that owner's contexts.
 `UNIQUE (owner_table, owner_id, slug)` remains the backstop against the check-then-act race, exactly
 as it already is for `reassign` (`context_service.rs:561-562`).
 
-**The race path must render the same refusal as the pre-check, and today's mapper would not.**
+### The race path must render the same refusal as the pre-check, and today's mapper would not
+
 `map_reassign_write_err` (`context_service.rs:661-668`) maps `42501` to `Forbidden` and lets
 everything else fall through to `ApiError::Internal`:
 
@@ -198,10 +199,21 @@ A `23505` unique violation therefore surfaces as a **500**. Rename's mapper must
 rendering the same `409` the pre-check renders, or the caller's experience depends on how quickly
 they lost the race.
 
-`reassign` has this same hole today — its 409 pre-check has the identical race. Whether to fix it in
-the same change or leave it is a decision for the implementation plan, not something to resolve
-silently here: the argument for bundling is that rename's tests are what surfaced it; the argument
-against is that it is a distinct narrative.
+### OPEN DECISION for the implementation plan — does `reassign`'s identical hole ride along?
+
+`reassign` has this same defect today. Its 409 collision pre-check (`context_service.rs:563-576`) is
+followed by the same `UNIQUE` backstop and the same mapper, so a lost race there also renders 500
+where the pre-check renders 409. Rename does not introduce it; rename's tests are what surface it.
+
+**The argument for bundling:** the repo's own convention is that a fix whose story is *"this PR's
+tests surfaced a pre-existing bug"* belongs in the PR that surfaced it, so the narrative stays
+cohesive. Rename would otherwise ship a correct mapper next to an incorrect one in the same file,
+which is a worse artifact than either alternative.
+
+**The argument for extracting:** it is a distinct narrative and an independently revertable fix, and
+mixed-narrative PRs are harder to review.
+
+This is not resolved here. The implementation plan must decide it explicitly and say which it chose.
 
 **No-op idempotency** mirrors `reassign`'s (`context_service.rs:551-559`): a rename that computes
 the slug already in place returns `renamed: false` and emits nothing.
