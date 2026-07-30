@@ -777,10 +777,15 @@ pub async fn set_charter_in_tx(
     .charter()
 }
 
-/// Set the **clustering** facet on an owner — one `kb_properties` row with `property_key='facet'`
-/// holding the whole `values` object (e.g. `{layer: concept}`). This is what materialization/affinity
-/// read. NOT interchangeable with [`set_property`] (Decision #6): `provenance` is per-key, not a
-/// clustering facet.
+/// Set the **clustering** facet on an owner — **one `kb_properties` row per inner key** of `values`
+/// (`{layer: concept, status: open}` → two rows). This is what materialization/affinity read, and the
+/// grain matches what `expand_facets` consumes. NOT interchangeable with [`set_property`]
+/// (Decision #6): `provenance` is per-key, not a clustering facet.
+///
+/// **Patch, not replace.** Asserting a key folds the prior live row for *that key* and leaves every
+/// unnamed mark untouched, so a one-key assert never silently drops a resource's other facets. Returns
+/// one id per row written — plural because one assert can mint many
+/// (task `019f6d08-2b55-7ee0-b9ac-1959cf4d736b`).
 ///
 /// The owner is a [`PropertyOwner`], so a facet may hang off an **edge** as well as a resource. The
 /// event still anchors on a context or cogmap either way — `_property_owner_anchor` resolves it from
@@ -791,7 +796,7 @@ pub async fn set_facet(
     values: &serde_json::Value,
     weight: f64,
     emitter: EntityId,
-) -> Result<PropertyId> {
+) -> Result<Vec<PropertyId>> {
     set_facet_with(
         pool,
         owner,
@@ -805,7 +810,7 @@ pub async fn set_facet(
 
 /// [`set_facet`] under an explicit [`EventContext`] — the `facet_set` act is correlated to the
 /// caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`. Returns the
-/// `kb_properties.id` the fire produced (surfaced from `Fired::Facet`).
+/// `kb_properties.id`s the fire produced (surfaced from `Fired::Facet`).
 pub async fn set_facet_with(
     pool: &PgPool,
     owner: PropertyOwner,
@@ -813,16 +818,16 @@ pub async fn set_facet_with(
     weight: f64,
     emitter: EntityId,
     ctx: EventContext,
-) -> Result<PropertyId> {
+) -> Result<Vec<PropertyId>> {
     let mut tx = begin_scoped(pool).await?;
-    let property_id = set_facet_in_tx(&mut tx, owner, values, weight, emitter, ctx).await?;
+    let property_ids = set_facet_in_tx(&mut tx, owner, values, weight, emitter, ctx).await?;
     tx.commit().await?;
-    Ok(property_id)
+    Ok(property_ids)
 }
 
 /// In-transaction variant of [`set_facet`] — fires on a caller-supplied connection (no begin/commit).
 /// `ctx` correlates the `facet_set` act (`EventContext::default()` for an un-attributed facet). Returns
-/// the `kb_properties.id` the fire produced.
+/// the `kb_properties.id`s the fire produced.
 pub async fn set_facet_in_tx(
     conn: &mut sqlx::PgConnection,
     owner: PropertyOwner,
@@ -830,7 +835,7 @@ pub async fn set_facet_in_tx(
     weight: f64,
     emitter: EntityId,
     ctx: EventContext,
-) -> Result<PropertyId> {
+) -> Result<Vec<PropertyId>> {
     fire_with(
         conn,
         SeedAction::FacetSet {

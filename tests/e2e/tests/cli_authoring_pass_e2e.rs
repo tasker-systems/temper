@@ -188,9 +188,17 @@ async fn the_whole_authoring_pass_runs_through_the_cli_alone(pool: sqlx::PgPool)
         ],
     )
     .await;
-    assert_eq!(
-        facet["property_id"], facet["id"],
-        "the generic id must alias property_id: {facet}"
+    // The ack is plural — a facet is stored one row per inner key, so the write reports every row
+    // it wrote rather than aliasing a single id (task `019f6d08`). This assert names one key, so
+    // exactly one id comes back; the point of asserting the ARRAY rather than its first element is
+    // that a regression back to a singular ack fails here instead of reading as one-of-N.
+    let ids = facet["property_ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ack must carry property_ids: {facet}"));
+    assert_eq!(ids.len(), 1, "a one-key facet writes one row: {facet}");
+    assert!(
+        ids[0].as_str().is_some_and(|s| !s.is_empty()),
+        "the row is named by a real id: {facet}"
     );
 
     // 4b. Assert an explicit `near`/`forward` edge from node A to node B — `temper edge assert`,

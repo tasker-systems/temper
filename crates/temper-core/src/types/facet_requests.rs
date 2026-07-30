@@ -166,14 +166,23 @@ pub struct ResourceFacetsResponse {
     pub facets: Vec<ResourceFacetRow>,
 }
 
-/// Acknowledgement returned by the facet write endpoint.
+/// Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.
 ///
-/// `id` duplicates `property_id` — see `InvocationAck::id`.
+/// A facet is stored one row per inner key (migration `20260730000010`), so `{status: open,
+/// as_of: X}` is two rows and a singular ack could only name one of them. Which one it named would
+/// be arbitrary, and a caller reading a single id back from a two-mark write would have a value
+/// that *reads as complete* — precisely the defect `GET /api/resources/{id}/facets` shipped to end
+/// (goal `019fafd9-a978-7860-ae39-23958b4471b8`). So the ack is plural at the type level: there is
+/// no shape in which it can under-report.
+///
+/// Ordered as written — one entry per inner key of the asserted object, in the order the projector
+/// walked them. A non-facet property write yields exactly one entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct FacetAck {
-    pub id: Uuid,
-    pub property_id: Uuid,
+    /// The rows written. Never empty: an assert that names no mark is refused upstream rather than
+    /// acknowledged with nothing (`facet_object_has_keys` in `db_backend`).
+    pub property_ids: Vec<Uuid>,
 }
 
 #[cfg(test)]
@@ -239,23 +248,31 @@ mod tests {
     #[test]
     fn facet_ack_round_trips() {
         let ack = FacetAck {
-            id: Uuid::nil(),
-            property_id: Uuid::nil(),
+            property_ids: vec![Uuid::nil()],
         };
         let v = serde_json::to_value(&ack).unwrap();
         let back: FacetAck = serde_json::from_value(v).unwrap();
-        assert_eq!(back.property_id, ack.property_id);
+        assert_eq!(back.property_ids, ack.property_ids);
     }
 
+    /// The reason this type is plural. A two-key assert writes two rows, and the ack has to be able
+    /// to say so — under the old singular shape this information had nowhere to go, so the caller
+    /// received one id and no indication that a second row existed.
     #[test]
-    fn facet_ack_carries_both_id_and_property_id() {
-        let pid = uuid::Uuid::nil();
+    fn facet_ack_reports_every_row_a_multi_key_assert_wrote() {
         let ack = FacetAck {
-            id: pid,
-            property_id: pid,
+            property_ids: vec![
+                Uuid::from_u128(1), // {"status": "open"}
+                Uuid::from_u128(2), // {"as_of": "X"}
+            ],
         };
         let v = serde_json::to_value(&ack).expect("serialize");
-        assert_eq!(v["id"], v["property_id"], "id must alias property_id");
-        assert!(v.get("id").is_some(), "generic `id` key present: {v}");
+        assert_eq!(
+            v["property_ids"].as_array().map(Vec::len),
+            Some(2),
+            "both rows must be named on the wire: {v}"
+        );
+        let back: FacetAck = serde_json::from_value(v).unwrap();
+        assert_eq!(back.property_ids, ack.property_ids, "order is as written");
     }
 }

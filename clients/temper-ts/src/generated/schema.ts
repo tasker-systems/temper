@@ -2874,15 +2874,24 @@ export interface components {
             events: components["schemas"]["ElementEvent"][];
         };
         /**
-         * @description Acknowledgement returned by the facet write endpoint.
+         * @description Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.
          *
-         *     `id` duplicates `property_id` — see `InvocationAck::id`.
+         *     A facet is stored one row per inner key (migration `20260730000010`), so `{status: open,
+         *     as_of: X}` is two rows and a singular ack could only name one of them. Which one it named would
+         *     be arbitrary, and a caller reading a single id back from a two-mark write would have a value
+         *     that *reads as complete* — precisely the defect `GET /api/resources/{id}/facets` shipped to end
+         *     (goal `019fafd9-a978-7860-ae39-23958b4471b8`). So the ack is plural at the type level: there is
+         *     no shape in which it can under-report.
+         *
+         *     Ordered as written — one entry per inner key of the asserted object, in the order the projector
+         *     walked them. A non-facet property write yields exactly one entry.
          */
         FacetAck: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            property_id: string;
+            /**
+             * @description The rows written. Never empty: an assert that names no mark is refused upstream rather than
+             *     acknowledged with nothing (`facet_object_has_keys` in `db_backend`).
+             */
+            property_ids: string[];
         };
         /** @description Request body for `POST /api/facets`. */
         FacetSetRequest: components["schemas"]["ActInput"] & {

@@ -252,7 +252,7 @@ mod embed_impl {
         async fn set_facet(
             &self,
             _cmd: temper_workflow::operations::SetFacet,
-        ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
+        ) -> Result<CommandOutput<Vec<temper_core::types::ids::PropertyId>>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::set_facet not wired until cutover".to_string(),
             ))
@@ -660,7 +660,7 @@ mod non_embed_impl {
         async fn set_facet(
             &self,
             _cmd: temper_workflow::operations::SetFacet,
-        ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
+        ) -> Result<CommandOutput<Vec<temper_core::types::ids::PropertyId>>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

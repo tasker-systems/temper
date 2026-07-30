@@ -479,7 +479,10 @@ pub enum Fired {
     Resource(ResourceId),
     Context(ContextId),
     Relationship(EdgeId),
-    Facet(PropertyId),
+    /// The property rows a facet/property fire produced. **Plural:** a `facet` assert writes one
+    /// row per inner key, so one act can mint many rows and a scalar here could only name one of
+    /// them arbitrarily. A non-facet key yields exactly one element.
+    Facet(Vec<PropertyId>),
     Lens(LensId),
     Materialize(EventId),
     Block(BlockId),
@@ -546,9 +549,9 @@ impl Fired {
     }
 
     /// Extract the property id a `FacetSet` fire produced.
-    pub fn facet(self) -> Result<PropertyId> {
+    pub fn facet(self) -> Result<Vec<PropertyId>> {
         match self {
-            Fired::Facet(id) => Ok(id),
+            Fired::Facet(ids) => Ok(ids),
             other => anyhow::bail!("expected Fired::Facet, got {other:?}"),
         }
     }
@@ -751,7 +754,7 @@ pub async fn fire_with(
                 value: values.clone(),
                 weight,
             };
-            let id = sqlx::query_scalar!(
+            let ids = sqlx::query_scalar!(
                 "SELECT facet_set($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
@@ -762,7 +765,9 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("facet_set returned null")?;
-            Ok(Fired::Facet(PropertyId::from(id)))
+            Ok(Fired::Facet(
+                ids.into_iter().map(PropertyId::from).collect(),
+            ))
         }
 
         SeedAction::PropertyAssert {
@@ -780,7 +785,7 @@ pub async fn fire_with(
                 weight,
             };
             // Reuses the same key-agnostic `facet_set` query as `FacetSet` — no new SQL function.
-            let id = sqlx::query_scalar!(
+            let ids = sqlx::query_scalar!(
                 "SELECT facet_set($1,$2)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
@@ -788,7 +793,9 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("facet_set returned null")?;
-            Ok(Fired::Facet(PropertyId::from(id)))
+            Ok(Fired::Facet(
+                ids.into_iter().map(PropertyId::from).collect(),
+            ))
         }
 
         SeedAction::PropertySet {
@@ -805,7 +812,7 @@ pub async fn fire_with(
                 value: value.clone(),
                 weight,
             };
-            let id = sqlx::query_scalar!(
+            let ids = sqlx::query_scalar!(
                 "SELECT property_set($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
@@ -816,7 +823,9 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("property_set returned null")?;
-            Ok(Fired::Facet(PropertyId::from(id)))
+            Ok(Fired::Facet(
+                ids.into_iter().map(PropertyId::from).collect(),
+            ))
         }
 
         SeedAction::LensCreate {

@@ -94,8 +94,7 @@ pub async fn facet_set(
         .map_err(|e| map_err(e, "facet_set"))?;
 
     let ack = FacetAck {
-        id: Uuid::from(out.value),
-        property_id: Uuid::from(out.value),
+        property_ids: out.value.into_iter().map(Uuid::from).collect(),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -166,8 +165,7 @@ pub async fn edge_facet_set(
         .map_err(|e| map_err(e, "edge_facet_set"))?;
 
     let ack = FacetAck {
-        id: Uuid::from(out.value),
-        property_id: Uuid::from(out.value),
+        property_ids: out.value.into_iter().map(Uuid::from).collect(),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),

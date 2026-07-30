@@ -417,7 +417,10 @@ async fn projecting_a_property_does_not_require_its_owner_to_exist(pool: sqlx::P
             .await
             .unwrap();
 
-    sqlx::query_scalar::<_, Uuid>("SELECT _project_property_asserted($1,$2)")
+    // `uuid[]`, not `uuid`: a facet assert writes one row per inner key, so the projector returns
+    // every id it wrote (migration 20260730000010). This payload's key is `clause`, not `facet`, so
+    // it still takes the append arm and the array holds exactly one id.
+    sqlx::query_scalar::<_, Vec<Uuid>>("SELECT _project_property_asserted($1,$2)")
         .bind(event_id)
         .bind(&payload)
         .fetch_one(&pool)
