@@ -286,6 +286,44 @@ deploy identity, behind a comment claiming it "can never drift from the crate's 
 (true, and precisely why it is useless). Prior art for baking a build-time value and refusing on
 mismatch is `crates/temper-ingest/build.rs`.
 
+### 6. The macro is the rule; exceptions are an allow-list, not a habit
+
+`[decided — 2026-07-30, Pete]`
+
+Everything above depends on the `.sqlx` cache being a *faithful* record of the binary↔schema wire
+contract. It is faithful only for `query!`-family macros. A runtime `sqlx::query(...)` call leaves no
+cache entry, so it is invisible to the change detector — and a mechanism that is invisible exactly
+where it matters is worse than one that is absent, because it reads as coverage.
+
+The rule already exists and is unenforced, which is the same defect class as the outage itself:
+
+> `docs/development/code-quality-best-practices.md:165` — *"Runtime `query_as` is acceptable only
+> where a `::vector` cast or dynamic column/ORDER BY defeats the macro."*
+
+So: a check fails on any non-macro `sqlx::query*` call in a **production code path** unless that call
+site is on an allow-list, and each allow-list entry carries its **reason** — `vector-cast`,
+`dynamic-columns`, `dynamic-table`. A reason turns an exception into a declaration; a bare exemption
+list decays into a place to put things.
+
+Scoped to production code paths deliberately: the wire contract that can break a deploy is the
+running binary's. `#[cfg(...test...)]` modules and `tests/` directories are excluded.
+
+Measured, so the ceremony is known rather than feared:
+
+| | count |
+|---|---|
+| macro calls, production source | 435 |
+| **non-macro calls, production code paths** | **102** |
+| — `temper-substrate/src/replay.rs` | 36, and it already documents itself as the dynamic-table exception class |
+| — `temper-substrate/src/embed.rs` | 6, confirmed `::vector` (`SET embedding = $1::vector`) |
+| — residual across ~13 files | ~60, to be classified during implementation |
+| non-macro calls inside test modules (excluded) | 217 |
+
+Classifying the residual is the work. Any call site that turns out to have no reason should become a
+macro rather than an allow-list entry — that is the point of doing this at all.
+
+This belongs with the `.sqlx` change detector (step 3) and gates nothing on its own.
+
 ---
 
 ## Rejected, and why
@@ -326,8 +364,10 @@ Named, not silently absent.
 
 - **No witness may be authored until its mechanism exists.** With nothing built, "fails against
   current state" is satisfied vacuously by anything.
-- **Non-macro `sqlx::query()` calls produce no cache entry**, so their wire contracts are invisible
-  to the diff.
+- **An allow-listed non-macro query can still break the wire contract silently.** Section 6 makes
+  the blind spot *enumerated and reviewable*; it does not make it *covered*. The difference matters
+  and should not be blurred: after section 6 the answer to "what can this mechanism not see?" is a
+  list with reasons, rather than "we don't know."
 - **A function body change that alters semantics without changing its signature** is invisible to
   every part of this design. 45 of the 109 additive migrations redefine a function in place with an
   unchanged signature; they are classified additive here and that may be wrong in specific cases.
@@ -357,8 +397,9 @@ Each step is independently landable and independently useful.
    detector propagating.
 2. **Preview builds for migration-carrying PRs.** One `ignoreCommand` in `vercel.json`. Buys the
    canary immediately, before any of the machinery below exists.
-3. **The declaration + the CI cross-check.** Classification stated, wire-diff computed, contradiction
-   and silence both fail.
+3. **The declaration + the CI cross-check + the macro allow-list** (sections 2 and 6 together).
+   Classification stated, wire-diff computed, contradiction and silence both fail — and the diff is
+   made faithful by enumerating every production query it cannot see.
 4. **Build-phase application of additive migrations**, routed by the declaration.
 5. **The running commit on `/api/health`**, from `VERCEL_GIT_COMMIT_SHA`.
 
