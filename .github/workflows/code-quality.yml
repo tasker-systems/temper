@@ -202,6 +202,15 @@ jobs:
       # test-install drives install.sh with a locally-built archive. Both are pure bash and belong
       # here for the same reason as the rest: a manifest generator that silently emitted constant
       # hashes, or an installer that stopped verifying, would leave every other check green.
+      #
+      # The CROSS-LANGUAGE half of the manifest contract is deliberately NOT a step here. The step
+      # below and the golden fixture each prove the wire format from one side only — a rename applied
+      # consistently across both bash sides passes both while the Rust deserializer silently stops
+      # parsing. Closing that needs real producer bytes in the real deserializer, which needs cargo:
+      # `manifest.rs::producer_bytes_deserialize_and_verify_through_this_module` shells out to
+      # emit-manifest.sh, and `a_renamed_producer_field_breaks_the_round_trip` is its bite. It rides
+      # the `--workspace` selection in test-rust.yml's unit job rather than getting a named step —
+      # naming individual tests in CI is the hand-written-list antipattern that job's header forbids.
       - name: Guard test — emit-manifest
         run: bash .github/scripts/test-emit-manifest.sh
 
