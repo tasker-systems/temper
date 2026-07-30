@@ -308,19 +308,29 @@ list decays into a place to put things.
 Scoped to production code paths deliberately: the wire contract that can break a deploy is the
 running binary's. `#[cfg(...test...)]` modules and `tests/` directories are excluded.
 
-Measured, so the ceremony is known rather than feared:
+Measured, so the ceremony is known rather than feared. **The classification is now done** — see
+[docs/development/sqlx-macro-exception-classification.md](../../development/sqlx-macro-exception-classification.md),
+and reproduce any count with `python3 scripts/classify-sqlx-calls.py`.
 
-| | count |
-|---|---|
-| macro calls, production source | 435 |
-| **non-macro calls, production code paths** | **102** |
-| — `temper-substrate/src/replay.rs` | 36, and it already documents itself as the dynamic-table exception class |
-| — `temper-substrate/src/embed.rs` | 6, confirmed `::vector` (`SET embedding = $1::vector`) |
-| — residual across ~13 files | ~60, to be classified during implementation |
-| non-macro calls inside test modules (excluded) | 217 |
+| | count | `[observed — 2026-07-30]` |
+|---|---|---|
+| macro calls, production source | ~~435~~ **311** | 435 counted test-module macros as production (311 + 119 = 430 total) |
+| **non-macro calls, production code paths** | **102** | ✅ confirmed exactly |
+| — `temper-substrate/src/replay.rs` | 36 | ✅ dynamic-table, self-documented at `replay.rs:13` |
+| — `temper-substrate/src/embed.rs` | ~~6 confirmed `::vector`~~ **2** | only `:41` and `:224` cast; `:159`/`:253` are dynamic `&sql`; `:16` and `:184` are plain static literals |
+| — residual across ~13 files | 60 | ✅ classified |
+| non-macro calls inside test modules (excluded) | 217 | ✅ confirmed exactly |
 
 Classifying the residual is the work. Any call site that turns out to have no reason should become a
 macro rather than an allow-list entry — that is the point of doing this at all.
+
+**It found that most exemptions have no reason.** Of the 102, **56 have no technical obstacle** and
+should be converted; only 46 have one (36 `dynamic-table`, 7 `vector-cast`, 3 `dynamic-sql`). The
+largest single cluster — 16 calls in `readback/mod.rs` — is exempt by its own header's admission
+that *"the rest follow for consistency"*, with only 3 of that module's 19 actually carrying a
+`::vector`. **So the allow-list must be seeded at 46, never by transcribing today's 102**: a baseline
+built from the current state would bless the habit this section exists to end, and conversion must
+therefore precede enforcement.
 
 This belongs with the `.sqlx` change detector (step 3) and gates nothing on its own.
 
