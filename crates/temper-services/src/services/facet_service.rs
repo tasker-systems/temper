@@ -72,58 +72,39 @@ pub async fn list_resource_facets(
         return Err(ApiError::NotFound(FACET_REFUSAL.to_string()));
     }
 
-    let rows = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            serde_json::Value,
-            f64,
-            chrono::DateTime<chrono::Utc>,
-            Uuid,
-            Option<Uuid>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        "SELECT p.id, p.property_key, p.property_value, p.weight, p.created,
-                p.asserted_by_event_id, pr.id, pr.handle, pr.display_name
-           FROM kb_properties p
-           JOIN kb_events ev ON ev.id = p.asserted_by_event_id
-           LEFT JOIN kb_entities en ON en.id = ev.emitter_entity_id
-           LEFT JOIN kb_profiles pr ON pr.id = en.profile_id
-          WHERE p.owner_table = 'kb_resources' AND p.owner_id = $1
-            AND p.property_key = 'facet' AND NOT p.is_folded
-          ORDER BY p.property_key, p.created, p.id",
+    // `query_as!`, not runtime `query_as`: the column list and the ORDER BY are both static, so
+    // nothing here defeats the macro, and the runtime form would forfeit compile-time verification
+    // for no gain. The `::vector`/dynamic-ORDER-BY exception belongs to `unified_search`.
+    //
+    // Selected straight into the wire type rather than into a tuple destructured field-by-field —
+    // the aliases below ARE the mapping, so there is no positional hand-off to get wrong. The three
+    // author columns take `?` because they arrive through a LEFT JOIN: sqlx infers nullability from
+    // the column definition, where `kb_profiles.handle` is NOT NULL, so without the annotation the
+    // macro would type an absent author as a non-optional String.
+    let rows = sqlx::query_as!(
+        ResourceFacetRow,
+        r#"
+        SELECT p.id                    AS property_id,
+               p.property_key          AS property_key,
+               p.property_value        AS value,
+               p.weight                AS weight,
+               p.created               AS created,
+               p.asserted_by_event_id  AS authored_by_event_id,
+               pr.id                   AS "authored_by_profile_id?",
+               pr.handle               AS "authored_by_handle?",
+               pr.display_name         AS "authored_by_display_name?"
+          FROM kb_properties p
+          JOIN kb_events ev ON ev.id = p.asserted_by_event_id
+          LEFT JOIN kb_entities en ON en.id = ev.emitter_entity_id
+          LEFT JOIN kb_profiles pr ON pr.id = en.profile_id
+         WHERE p.owner_table = 'kb_resources' AND p.owner_id = $1
+           AND p.property_key = 'facet' AND NOT p.is_folded
+         ORDER BY p.property_key, p.created, p.id
+        "#,
+        Uuid::from(resource),
     )
-    .bind(Uuid::from(resource))
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                property_id,
-                property_key,
-                value,
-                weight,
-                created,
-                authored_by_event_id,
-                authored_by_profile_id,
-                authored_by_handle,
-                authored_by_display_name,
-            )| ResourceFacetRow {
-                property_id,
-                property_key,
-                value,
-                weight,
-                created,
-                authored_by_event_id,
-                authored_by_profile_id,
-                authored_by_handle,
-                authored_by_display_name,
-            },
-        )
-        .collect())
+    Ok(rows)
 }
