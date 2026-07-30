@@ -30,11 +30,21 @@ pub struct ApplyStandingParams {
 
 /// Load a principal's current standing. `Ok(None)` means no row — which denies (spec §7).
 pub async fn load(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Option<Standing>> {
+    let mut conn = pool.acquire().await?;
+    load_conn(&mut conn, profile_id).await
+}
+
+/// Connection-taking twin of [`load`], so a caller already inside a transaction reads the
+/// standing its own uncommitted writes would have produced rather than the pre-transaction row.
+pub(crate) async fn load_conn(
+    conn: &mut sqlx::PgConnection,
+    profile_id: ProfileId,
+) -> ApiResult<Option<Standing>> {
     let raw: Option<String> = sqlx::query_scalar!(
         "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
         *profile_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     // A row whose value this binary does not recognize is NOT `None` — that would silently
@@ -170,22 +180,64 @@ fn refusal_to_api_error(refusal: Refusal) -> ApiError {
     }
 }
 
+/// Connection-taking twin of [`provision`], so a mint door can birth standing **inside the same
+/// transaction that creates the profile it belongs to**.
+///
+/// [`provision`] takes `&PgPool` and therefore writes on a *different* connection. Called from
+/// inside a transaction it commits independently of that transaction, so a rollback leaves the
+/// standing row behind — and, in the failure that matters, lets the profile commit while the work
+/// that was supposed to accompany it does not. `machine_registration_service::provision` hit this
+/// first and worked around it with a raw `principal_standing_apply` call carrying a hardcoded
+/// `'denied'` (see its comment at the D11 write); this keeps the decision in [`transition`], where
+/// changing what a door births stays a one-place change.
+///
+/// Deliberately narrower than [`apply`]: `Provision` is the only act it serves, and that act needs
+/// neither the `Reactivate` pre-read (the machine's only data-dependent target) nor the
+/// `Revoke`/`Deactivate` governance demotion. Both are unreachable here, so carrying them would be
+/// dead code implying a coupling that does not exist.
+pub(crate) async fn provision_conn(
+    conn: &mut sqlx::PgConnection,
+    subject: ProfileId,
+    path: Provisioner,
+) -> ApiResult<Standing> {
+    let current = load_conn(&mut *conn, subject).await?;
+
+    // Decide, then commit — the same non-negotiable order [`apply`] states.
+    let act = Act::Provision { path };
+    let resulting =
+        transition(current, &act, ActorAuthority::Credential).map_err(refusal_to_api_error)?;
+
+    let committed: Option<String> = sqlx::query_scalar!(
+        "SELECT principal_standing_apply($1,$2,$3,$4,$5)",
+        *subject,
+        act_name(&act),
+        resulting.as_str(),
+        None::<uuid::Uuid>,
+        None::<String>,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+
+    // The committer echoes back what it wrote. A disagreement means the SQL grew an opinion.
+    debug_assert_eq!(committed.as_deref(), Some(resulting.as_str()));
+
+    Ok(resulting)
+}
+
 /// Convenience for the four mint doors (D11): every one births `Denied`, except genesis.
+///
+/// Delegates to the crate-private `provision_conn` rather than calling [`apply`] directly, so the
+/// two provision paths cannot drift. They were briefly identical-by-coincidence — `apply`'s
+/// `Reactivate` pre-read and its `Revoke`/`Deactivate` demotion are both unreachable for
+/// `Provision`, and its `actor` and `reason` are both `None` here — and "identical by coincidence"
+/// is what a shared implementation is for.
 pub async fn provision(
     pool: &PgPool,
     subject: ProfileId,
     path: Provisioner,
 ) -> ApiResult<Standing> {
-    apply(
-        pool,
-        ApplyStandingParams {
-            subject,
-            act: Act::Provision { path },
-            actor: None,
-            authority: ActorAuthority::Credential,
-        },
-    )
-    .await
+    let mut conn = pool.acquire().await?;
+    provision_conn(&mut conn, subject, path).await
 }
 
 #[cfg(all(test, feature = "test-db"))]
