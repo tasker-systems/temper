@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id                    AS property_id,\n               p.property_key          AS property_key,\n               p.property_value        AS value,\n               p.weight                AS weight,\n               p.created               AS created,\n               p.asserted_by_event_id  AS authored_by_event_id,\n               pr.id                   AS \"authored_by_profile_id?\",\n               pr.handle               AS \"authored_by_handle?\",\n               pr.display_name         AS \"authored_by_display_name?\"\n          FROM kb_properties p\n          JOIN kb_events ev ON ev.id = p.asserted_by_event_id\n          LEFT JOIN kb_entities en ON en.id = ev.emitter_entity_id\n          LEFT JOIN kb_profiles pr ON pr.id = en.profile_id\n         WHERE p.owner_table = 'kb_resources' AND p.owner_id = $1\n           AND p.property_key = 'facet' AND NOT p.is_folded\n         ORDER BY p.property_key, p.created, p.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "property_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "property_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "weight",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "authored_by_event_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "authored_by_profile_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "authored_by_handle?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "authored_by_display_name?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "49988dd0b36f9a3e440fbb34a3fb94046d2c0c0508f89940d31a91a285a10ea0"
+}
