@@ -44,7 +44,7 @@ Three artifacts assert things that measurement disproved. This task costs almost
 - Consumes: nothing
 - Produces: nothing consumed by later tasks. Independently landable.
 
-- [ ] **Step 1: Establish the claim empirically before editing the doc that gets it wrong**
+- [x] **Step 1: Establish the claim empirically before editing the doc that gets it wrong**
 
 ```bash
 psql "postgresql://temper:temper@localhost:5437/temper_development" \
@@ -60,7 +60,7 @@ ERROR:  cannot change return type of existing function
 HINT:  Use DROP FUNCTION zz_probe(integer) first.
 ```
 
-- [ ] **Step 2: Confirm the corpus agrees — every return-type change is DROP+CREATE**
+- [x] **Step 2: Confirm the corpus agrees — every return-type change is DROP+CREATE**
 
 ```bash
 rg -c 'DROP FUNCTION' migrations/*.sql | wc -l          # expect 31
@@ -70,7 +70,7 @@ sed -n '232,236p' migrations/20260730000010_facet_inner_key_grain.sql
 
 Expected: the outage migration shows `DROP FUNCTION facet_set(...)` followed by `CREATE FUNCTION ... RETURNS uuid[]` — not a `CREATE OR REPLACE`.
 
-- [ ] **Step 3: Rewrite the DEPLOYING.md paragraph**
+- [x] **Step 3: Rewrite the DEPLOYING.md paragraph**
 
 Replace the first paragraph of `### A function's return type is a wire contract with the binary` (currently `DEPLOYING.md:61-66`) with:
 
@@ -90,7 +90,7 @@ way; none is a `CREATE OR REPLACE`. Grep the migration for `DROP FUNCTION`, then
 callers of what it drops.
 ```
 
-- [ ] **Step 4: Correct the topology claim in `docs/upload-lifecycle.md:7`**
+- [x] **Step 4: Correct the topology claim in `docs/upload-lifecycle.md:7`**
 
 The line currently reads:
 
@@ -109,7 +109,7 @@ and `/.well-known` to `API_BASE_URL`. Note also that the Vercel *project* named
 `temper-cloud` is a different thing from the TypeScript *package* of the same name:
 ```
 
-- [ ] **Step 5: Correct both occurrences of the 85-second figure in the goal register**
+- [x] **Step 5: Correct both occurrences of the 85-second figure in the goal register**
 
 The register lives in temper, not in the repo, so this is a CLI edit. There are **two**
 occurrences, in different sections. Use the show-edit-cat idiom, one resource per call,
@@ -154,7 +154,7 @@ Then write it back — one resource per call, stdin explicit, never inside a red
 cat /tmp/reg.md | temper resource update 019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7
 ```
 
-- [ ] **Step 6: Verify the corrections landed**
+- [x] **Step 6: Verify the corrections landed**
 
 ```bash
 rg -n 'DROP FUNCTION, not the absence' DEPLOYING.md
@@ -165,7 +165,7 @@ temper resource show 019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7 \
 
 Expected: both greps hit; the register reports `85 seconds: 0 | 47 seconds: 2`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cargo make check
@@ -200,7 +200,7 @@ Today **every** preview deployment is cancelled in 9–13s by an Ignored Build S
 - Consumes: nothing
 - Produces: `scripts/vercel-ignore-build.sh`, whose contract is **exit 1 = build, exit 0 = skip** (Vercel's inversion, not ours). Later tasks do not depend on it.
 
-- [ ] **Step 1: Write the failing guard test**
+- [x] **Step 1: Write the failing guard test**
 
 Create `.github/scripts/test-vercel-ignore-build.sh`:
 
@@ -250,7 +250,7 @@ if [ "$fails" -gt 0 ]; then echo "FAILED: $fails assertion(s)"; exit 1; fi
 echo "all assertions passed"
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 ```bash
 bash .github/scripts/test-vercel-ignore-build.sh
@@ -258,7 +258,7 @@ bash .github/scripts/test-vercel-ignore-build.sh
 
 Expected: FAIL — every assertion errors because `scripts/vercel-ignore-build.sh` does not exist.
 
-- [ ] **Step 3: Write the script**
+- [x] **Step 3: Write the script**
 
 Create `scripts/vercel-ignore-build.sh`:
 
@@ -319,7 +319,7 @@ echo "skip: preview with no migration change"
 exit 0
 ```
 
-- [ ] **Step 4: Run the guard test to verify it passes**
+- [x] **Step 4: Run the guard test to verify it passes**
 
 ```bash
 chmod +x scripts/vercel-ignore-build.sh
@@ -328,7 +328,7 @@ bash .github/scripts/test-vercel-ignore-build.sh
 
 Expected: `all assertions passed` — 8 `ok` lines, exit 0.
 
-- [ ] **Step 5: Wire the guard test into CI**
+- [x] **Step 5: Wire the guard test into CI**
 
 In `.github/workflows/code-quality.yml`, in the `guard-tests` job, after the
 `Guard test — audit-grant-sinks (SQL half)` step, add:
@@ -338,7 +338,7 @@ In `.github/workflows/code-quality.yml`, in the `guard-tests` job, after the
         run: bash .github/scripts/test-vercel-ignore-build.sh
 ```
 
-- [ ] **Step 6: Point vercel.json at the script**
+- [x] **Step 6: Point vercel.json at the script**
 
 In `vercel.json`, add `ignoreCommand` immediately after `installCommand`:
 
@@ -350,7 +350,7 @@ This **overrides** the dashboard Ignored Build Step for every deployment of this
 which is the point: which PRs get a preview build becomes a versioned, reviewable
 decision rather than an invisible toggle.
 
-- [ ] **Step 7: Verify the whole thing, then commit**
+- [x] **Step 7: Verify the whole thing, then commit**
 
 ```bash
 bash .github/scripts/test-vercel-ignore-build.sh
@@ -402,7 +402,7 @@ this task's benefit is claimed rather than demonstrated.
 > `openapi-check`, `openapi-rb-drift` and `openapi-ts-drift`. Read the `generated-artifacts`
 > skill before Step 5.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `crates/temper-api/src/handlers/health.rs`, at the end of the file:
 
@@ -434,7 +434,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 ```bash
 cargo nextest run -p temper-api --lib health_reports_a_commit_slot_that_never_lies
@@ -442,7 +442,7 @@ cargo nextest run -p temper-api --lib health_reports_a_commit_slot_that_never_li
 
 Expected: FAIL to compile — `no field 'commit' on type 'HealthResponse'`.
 
-- [ ] **Step 3: Add the field to the shared type**
+- [x] **Step 3: Add the field to the shared type**
 
 In `crates/temper-core/src/types/api.rs`, replace the `HealthResponse` struct
 (currently lines 12-15) with:
@@ -461,7 +461,7 @@ pub struct HealthResponse {
 }
 ```
 
-- [ ] **Step 4: Write the build script**
+- [x] **Step 4: Write the build script**
 
 Create `crates/temper-api/build.rs`, modelled on `crates/temper-ingest/build.rs:42`
 which already bakes a compile-time value this way:
@@ -493,7 +493,7 @@ fn main() {
 }
 ```
 
-- [ ] **Step 5: Declare the build script explicitly**
+- [x] **Step 5: Declare the build script explicitly**
 
 In `crates/temper-api/Cargo.toml`, in the `[package]` section (it currently has no `build`
 key, and two `[[bin]]` targets: `temper-api` and `emit-openapi`), add:
@@ -506,7 +506,7 @@ Cargo auto-detects a `build.rs` in the package root, so this line is **not requi
 is here so the build script is visible to someone reading the manifest rather than only to
 someone listing the directory. Do not treat its absence as a bug if you see it elsewhere.
 
-- [ ] **Step 6: Read the baked value in the handler**
+- [x] **Step 6: Read the baked value in the handler**
 
 In `crates/temper-api/src/handlers/health.rs`, replace the body of `health_check`
 (currently lines 15-22) with:
@@ -526,7 +526,7 @@ pub async fn health_check() -> ApiResult<Json<HealthResponse>> {
 }
 ```
 
-- [ ] **Step 7: Run the test to verify it passes**
+- [x] **Step 7: Run the test to verify it passes**
 
 ```bash
 cargo nextest run -p temper-api --lib health_reports_a_commit_slot_that_never_lies
@@ -535,7 +535,7 @@ cargo nextest run -p temper-api --lib health_reports_a_commit_slot_that_never_li
 Expected: PASS. Locally `commit` is `None` (no `VERCEL_GIT_COMMIT_SHA`), which the test
 accepts as the honest answer.
 
-- [ ] **Step 8: Prove the baking actually works**
+- [x] **Step 8: Prove the baking actually works**
 
 A test that passes with `None` would pass just as well if the plumbing were dead. Force
 the variable and confirm the value lands.
@@ -553,7 +553,7 @@ sleep 8 && curl -s localhost:3000/api/health | python3 -m json.tool ; kill %1
 Expected: `"commit": "<the sha you passed>"`. If it is `null`, the build script did not
 re-run — `touch crates/temper-api/build.rs` and retry.
 
-- [ ] **Step 9: Regenerate the router-derived artifacts**
+- [x] **Step 9: Regenerate the router-derived artifacts**
 
 ```bash
 cargo make openapi
@@ -563,7 +563,7 @@ git status --porcelain openapi.json clients/temper-rb clients/temper-ts
 Expected: `openapi.json` gains the `commit` property on the `HealthResponse` schema, and
 the gem plus `schema.ts` regenerate to match. All three are committed artifacts.
 
-- [ ] **Step 10: Verify the gates, then commit**
+- [x] **Step 10: Verify the gates, then commit**
 
 ```bash
 cargo make check
@@ -590,6 +590,43 @@ consumers (the temper-rb gem, temper-ts's schema.ts) are regenerated here."
 ```
 
 ---
+
+## Execution notes — 2026-07-30
+
+All three tasks landed on PR #584. Four things this plan asserted did not survive execution;
+each is recorded here rather than silently fixed, because the plan was wrong in the specific
+way its own source guidance warns about — **expected output was authored, not observed**.
+
+1. **Task 2's script would have failed Task 2's own test.** The changeset branch tested
+   `[ -n "${CHANGED_PATHS:-}" ]`, which cannot distinguish *set-but-empty* ("the changeset is
+   empty" → skip) from *unset* ("no changeset signal" → build). The assertion
+   `preview with an empty changeset skips` expects exit 0; the sketched script exits 1 on it.
+   Demonstrated by running the sketched version, not by reading it. Fixed with `${CHANGED_PATHS+x}`,
+   and a ninth assertion now pins the distinction. **Step 4's expected output — "all assertions
+   passed — 8 ok lines" — was never run.**
+2. **Task 1 Step 6's verification grep false-negatives on a correct edit.** The pattern
+   `'DROP FUNCTION, not the absence'` omits the backticks in the text Step 3 instructs writing
+   (`` `DROP FUNCTION`, not the absence ``), so it returns nothing against a landed change.
+3. **Task 1 Step 6 expects `85 seconds: 0`, contradicting Step 5**, which instructs adding the
+   sentence *"The earlier figure of ~85 seconds was wrong."* Step 5's intent wins: naming and
+   retracting the number beats erasing it, so the register reads `85 seconds: 1 | 47 seconds: 2`.
+4. **Task 3 Step 8 was replaced by a stronger, permanent check.** The plan proposed booting the
+   server and curling `/api/health` — a one-time manual observation that also needs `ApiConfig`
+   env and a live database. Since `option_env!` resolves at compile time, the same proof is
+   available as a test: `a_build_told_its_commit_reports_that_commit` correlates the baked value
+   against `VERCEL_GIT_COMMIT_SHA` whenever the binary is compiled and run in one environment.
+   Verified by mutation — renaming the emitted env in `build.rs` turns it red while the
+   `None`-accepting test stays green, which is exactly the gap Step 8 identified.
+
+**Still claimed rather than demonstrated:** Task 2's canary. This PR touches no migration, so its
+own preview is *correctly* skipped by the script it adds. The first chirp needs a migration-carrying
+PR reaching `● Ready` rather than `Canceled`.
+
+**Named as unverifiable, not as safe:** `.vercel/repo.json` shows `temper-cloud` is the only project
+in `jcoletaylors-projects` rooted at `.`, so `ignoreCommand` governs it. Whether the wrapbook-scoped
+projects deploying from this repo also root at `.` cannot be checked from here — that scope is
+SAML-enforced and `vercel teams ls` lists only `jcoletaylors-projects`. Production is protected for
+all of them regardless: the script's first branch exits 1 unconditionally on `VERCEL_ENV=production`.
 
 ## Self-Review
 
