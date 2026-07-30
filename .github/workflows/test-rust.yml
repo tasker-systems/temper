@@ -107,7 +107,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Fetches `models/bge-base-en-v1.5/model_quantized.onnx` (105 MB), which
           # `TEMPER_ONNX_MODEL_PATH` below points ORT at. Cheaper than the ~400 MB HuggingFace
@@ -197,7 +197,7 @@ jobs:
           df -h /
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Now MEANINGFUL: it fetches the model `TEMPER_ONNX_MODEL_PATH` points ORT at. Until this
           # commit it fetched 105 MB this job never read, while the job separately downloaded ~400 MB
@@ -257,7 +257,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -295,7 +295,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # No `lfs`: the proof compiles, it never embeds, so the bundled model is not needed.
 
       - uses: ./.github/actions/setup-rust
