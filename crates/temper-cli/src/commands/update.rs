@@ -109,7 +109,16 @@ cargo install --path crates/temper-cli --locked --features embed,extract\n\
 /// reports `unverifiable`, never `verified`. Per the project goal "no door
 /// offers less than another without saying so," that asymmetry must be stated
 /// here, not left implicit.
-#[cfg(windows)]
+///
+/// Compiled under `test` as well as under `windows` so the assertions on its
+/// text run on **every** host. A bare `#[cfg(windows)]` here would have made
+/// `windows_refusal_is_actionable_and_not_the_cargo_hint` compile nowhere: no
+/// CI job uses a Windows runner for tests, so a `cfg(windows)` test is a test
+/// no job runs. `any(windows, test)` — rather than dropping the gate entirely
+/// — is what keeps this suppression-free: the constant exists in exactly the
+/// two configurations that reference it (the Windows refusal arm below, and
+/// its test), so `dead_code` never fires and nothing needs an `expect`.
+#[cfg(any(windows, test))]
 const WINDOWS_REFUSAL: &str = "`temper update` does not yet support self-update on Windows \
 (a running .exe is file-locked). Windows installs are hash-verified only (the archive \
 checksum) — there is no attestation-verified update path yet, and `temper version --verify` \
@@ -855,8 +864,9 @@ mod tests {
 
     /// The Windows refusal points at the installer, not at `cargo install` —
     /// the whole point of the fix is that a script install stops being told to
-    /// rebuild with cargo. Windows-only, since the constant is `#[cfg(windows)]`.
-    #[cfg(windows)]
+    /// rebuild with cargo. Runs on every host: the constant is compiled under
+    /// `any(windows, test)`, so this assertion is no longer a `cfg(windows)`
+    /// test that no CI job ever executes.
     #[test]
     fn windows_refusal_is_actionable_and_not_the_cargo_hint() {
         assert!(WINDOWS_REFUSAL.contains("install.ps1"));
