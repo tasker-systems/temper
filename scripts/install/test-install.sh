@@ -156,3 +156,54 @@ if TEMPER_INSTALL_DIR="$TMP/install-compact" XDG_BIN_HOME="$TMP/bin-compact" \
 fi
 
 echo "PASS: a manifest the parser cannot read is refused, not silently accepted"
+
+# --- A manifest entry may not name a file outside the install root -----------
+# The bite, reproduced end-to-end before the fix: point ONE entry at a real
+# file sitting OUTSIDE the staging dir and state its real sha256. Every check
+# then passes, install.sh prints "✓ Installed" and exits 0 — while the `temper`
+# that was actually extracted is never hashed at all. Nothing but a `path`
+# string was edited; no hash was forged.
+#
+# STAGING is "${INSTALL_DIR}.new-$$" (install.sh:198), so its parent is
+# dirname(INSTALL_DIR) — with INSTALL_DIR under $TMP, "../decoy" resolves to
+# $TMP/decoy, which this harness can place.
+build_archive
+build_manifest "$TMP/stage" "$TMP/containment.manifest.json"
+
+printf 'DECOY-PAYLOAD' > "$TMP/decoy"
+if command -v sha256sum >/dev/null 2>&1; then
+  DECOY_SHA=$(sha256sum "$TMP/decoy" | awk '{print $1}')
+else
+  DECOY_SHA=$(shasum -a 256 "$TMP/decoy" | awk '{print $1}')
+fi
+jq --arg p "../decoy" --arg s "$DECOY_SHA" \
+   '(.files[] | select(.path == "temper")) |= (.path = $p | .sha256 = $s)' \
+   < "$TMP/containment.manifest.json" > "$TMP/decoy.manifest.json"
+if TEMPER_INSTALL_DIR="$TMP/install-decoy" XDG_BIN_HOME="$TMP/bin-decoy" \
+     sh "$INSTALL" --archive "$TMP/archive.tar.gz" --manifest "$TMP/decoy.manifest.json" \
+        --version v0.3.0 >/dev/null 2>&1; then
+  fail "installer accepted an entry resolving to a decoy outside the staging dir — the extracted temper was never hashed"
+fi
+rm -rf "$TMP/install-decoy"
+
+echo "PASS: a manifest entry resolving outside the install root is refused"
+
+# Defense in depth for the remaining escaping shapes. Unlike the decoy above,
+# these name targets that do not exist, so they are ALREADY refused today (as
+# "missing file") and would prove nothing on their own. They are asserted so
+# the containment arm keeps refusing them BY PATH rather than by the accident
+# of the target's absence. The empty path is included because it never reaches
+# containment at all: it parses to a pair the loop skips, and is caught by the
+# parsed-vs-declared cross-check instead.
+for BAD_PATH in "/etc/hosts" "../escape" "a/../../escape" ""; do
+  jq --arg p "$BAD_PATH" '.files[0].path = $p' \
+    < "$TMP/containment.manifest.json" > "$TMP/bad-path.manifest.json"
+  if TEMPER_INSTALL_DIR="$TMP/install-badpath" XDG_BIN_HOME="$TMP/bin-badpath" \
+       sh "$INSTALL" --archive "$TMP/archive.tar.gz" --manifest "$TMP/bad-path.manifest.json" \
+          --version v0.3.0 >/dev/null 2>&1; then
+    fail "installer accepted a manifest entry with an escaping path: $BAD_PATH"
+  fi
+  rm -rf "$TMP/install-badpath"
+done
+
+echo "PASS: absolute, ancestor-relative and empty manifest paths are all refused"

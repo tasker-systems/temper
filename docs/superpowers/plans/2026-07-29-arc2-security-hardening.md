@@ -555,6 +555,35 @@ git commit -m "fix(cli): attest the manifest update persists as the offline base
 - Consumes: the vacuity floors from Tasks 2 and 3 (rebase on them).
 - Produces: any manifest entry whose `path` is absolute, contains a `..` component, or is empty is rejected as a hard failure in both consumers.
 
+> ## ⚠️ CORRECTION — this task's tests as originally written were VACUOUS
+>
+> Found during implementation and verified. **Every test sketched below passes identically before
+> and after the fix**, so committing them as-written would have produced a guard that never bit.
+>
+> - **sh half:** `/etc/hosts`, `../escape`, `a/../../escape` all name targets that do not exist, so
+>   the pre-existing `[ ! -f "$CHECK_DIR/$REL" ]` arm already refused them as *"manifest lists X but
+>   it is missing"*. The assertion was satisfied by the wrong mechanism.
+> - **Rust half:** the plan claimed *"at minimum the `""` and `/etc/passwd` cases verify today."*
+>   Neither does. `/etc/passwd` hashes to something ≠ the expected sha → `Mismatch`; `dir.join("")`
+>   is the directory itself → `read` returns `EISDIR` → `Mismatch`. So `!matches!(…, Verified)`
+>   already held for all four cases.
+> - **And the sh premise was wrong.** The plan says an absolute `$REL` "yields `//etc/passwd`, which
+>   still resolves." It does not — `CHECK_DIR` is non-empty, so it concatenates to
+>   `$STAGING//etc/passwd`, still *inside* staging. On the sh side the absolute-path arm is
+>   **defense-in-depth only; `..` is the sole live hole.** In Rust the absolute case IS live, because
+>   `Path::join` genuinely discards the base. The two consumers differ here and must not be described
+>   as equivalent.
+>
+> **What was implemented instead:** a decoy-based bite on both sides — a real file placed outside the
+> install root, with its **real** sha256, referenced as `../decoy`. Unfixed, the installer printed
+> `✓ Installed` at exit 0 while the extracted `temper` was never hashed, and it survived the
+> post-swap re-check too. The plan's original cases are retained beneath it, explicitly labelled as
+> already-passing. The plain rejections moved to a direct unit test of the predicate, where they are
+> non-vacuous.
+>
+> **The lesson, which generalizes:** a bite test must falsify the invariant it asserts. "Does the bad
+> input get refused?" is not the question — "does it get refused *by the arm I just added*?" is.
+
 **Grounding (CONFORM):** `manifest.rs:87` calls `dir.join(&entry.path)`. Rust's `Path::join` **discards the base when the argument is absolute** — so an entry of `/etc/passwd` reads that file, and `temper` itself is never hashed. Equally, `../outside/decoy` escapes the install root. The offline verdict can then be forged by editing only `path` strings. `install.sh:258` has the same shape (`"$CHECK_DIR/$REL"`), where an absolute `$REL` yields `//etc/passwd` — which still resolves.
 
 - [ ] **Step 1: Write the failing Rust test**

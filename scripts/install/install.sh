@@ -275,6 +275,43 @@ verify_manifest_against_dir() {
     while IFS="$(printf '\t')" read -r REL EXPECTED_SHA; do
         [ -n "$REL" ] || continue
         PAIR_COUNT=$((PAIR_COUNT + 1))
+        # A manifest entry may only name a file strictly INSIDE $CHECK_DIR.
+        # Without this, "../decoy" reads a file outside the staging/install
+        # root: point one entry at a file an attacker placed there and state
+        # its REAL sha256, and that entry verifies while the extracted `temper`
+        # is never hashed at all — a verdict forged by editing a `path` string,
+        # never a hash. Reproduced end-to-end in test-install.sh, where the
+        # unfixed installer printed "✓ Installed" and exited 0.
+        #
+        # An absolute $REL does not escape here the way it does in Rust's
+        # `Path::join` — "$CHECK_DIR/$REL" concatenates to "$CHECK_DIR//etc/…",
+        # which stays inside — so that arm is defense in depth: refuse it by
+        # path, loudly, rather than by the accident of a missing file. The `..`
+        # arm is the one closing a live hole.
+        #
+        # These run AFTER the PAIR_COUNT increment on purpose: a rejected entry
+        # still counts as parsed, so the parsed-vs-declared cross-check below
+        # stays meaningful and the failure is reported by CHECK_FAILED.
+        #
+        # `case` on the path wrapped in SLASHES tests for a `..` COMPONENT, so
+        # an ordinary filename that merely contains dots (foo..bar) is still
+        # accepted. Do not simplify it to *..*, which would refuse a
+        # legitimate shipped file. (An empty $REL never reaches here — the
+        # line above skips it, and the count cross-check catches the gap.)
+        case "$REL" in
+            /*)
+                echo "error: manifest entry has an absolute path: $REL" >&2
+                CHECK_FAILED=1
+                continue
+                ;;
+        esac
+        case "/$REL/" in
+            *"/../"*)
+                echo "error: manifest entry escapes the install root: $REL" >&2
+                CHECK_FAILED=1
+                continue
+                ;;
+        esac
         if [ ! -f "$CHECK_DIR/$REL" ]; then
             echo "error: manifest lists $REL but it is missing from $CHECK_DIR" >&2
             CHECK_FAILED=1

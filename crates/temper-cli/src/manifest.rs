@@ -83,6 +83,25 @@ pub fn load_from_dir(dir: &Path) -> Option<ReleaseManifest> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Whether a manifest entry's `path` names something strictly inside the
+/// install dir. Only ordinary path components are allowed: `RootDir` means an
+/// absolute path (which [`Path::join`] honors by *discarding the base*),
+/// `ParentDir` escapes upward, `Prefix` is a Windows drive or UNC root, and
+/// `CurDir` is noise no producer emits. `emit-manifest.sh:38` only ever writes
+/// paths relative to `STAGING` (`REL="${f#"$STAGING"/}"`), so nothing
+/// legitimate is excluded.
+///
+/// This is a check on *components*, not on substrings: `foo..bar` is an
+/// ordinary filename that merely contains dots and is accepted.
+fn is_contained_relative(rel: &str) -> bool {
+    // `Path::new("").components()` yields nothing, and `all` over an empty
+    // iterator is `true` — so the emptiness check cannot be folded away.
+    !rel.is_empty()
+        && Path::new(rel)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Hash every file the manifest lists and compare. Files present in `dir` but
 /// absent from the manifest are ignored — the manifest states what we shipped,
 /// not what the user may not add beside it.
@@ -90,6 +109,11 @@ pub fn load_from_dir(dir: &Path) -> Option<ReleaseManifest> {
 /// A manifest listing no files is [`Verdict::Unverifiable`], never
 /// [`Verdict::Verified`]: it asserts nothing, so there is nothing it could
 /// have verified.
+///
+/// Every entry must also name a path *contained* by `dir` — no absolute path,
+/// no `..` component, not empty; see `is_contained_relative`. An entry that
+/// escapes is a [`Verdict::Mismatch`] with no `actual` hash, reported on its
+/// path alone and never read.
 pub fn verify_dir(manifest: &ReleaseManifest, dir: &Path) -> Verdict {
     // A manifest with no entries asserts nothing about this install, so the
     // loop below cannot fail and the function would return `Verified` over
@@ -106,6 +130,28 @@ pub fn verify_dir(manifest: &ReleaseManifest, dir: &Path) -> Verdict {
 
     let mut mismatches = Vec::new();
     for entry in &manifest.files {
+        // Refuse the entry on its path alone, before anything is read. An
+        // absolute path makes `dir.join` discard `dir` entirely and an
+        // ancestor-relative one walks out of it, so an attacker who can edit
+        // only `path` strings — never a hash — can point an entry at a real
+        // file whose real hash the manifest already states. That entry then
+        // verifies clean while the install's own `temper` is never hashed at
+        // all, and the whole dir reports `Verified`.
+        //
+        // Reported through the existing `Mismatch` channel with `actual:
+        // None`, the same shape an absent file already uses, so no caller's
+        // rendering changes. It is a `Mismatch` and not `Unverifiable`
+        // because this is not "we cannot tell": the manifest is making a claim
+        // it is not permitted to make, which is a definite disagreement with
+        // the shape a published manifest is allowed to have.
+        if !is_contained_relative(&entry.path) {
+            mismatches.push(Mismatch {
+                path: entry.path.clone(),
+                expected: entry.sha256.clone(),
+                actual: None,
+            });
+            continue;
+        }
         match std::fs::read(dir.join(&entry.path)) {
             Ok(bytes) => {
                 let actual = format!("{:x}", Sha256::digest(&bytes));
@@ -243,6 +289,95 @@ mod tests {
                 "reason should name the vacuity, got: {reason}"
             ),
             other => panic!("empty manifest must be unverifiable, got {other:?}"),
+        }
+    }
+
+    /// The bite for path containment. Each entry below names a REAL file whose
+    /// REAL hash the manifest states, so without a containment check the entry
+    /// verifies clean and the whole dir reports `Verified` — while the
+    /// install's own `temper` is never hashed at all. Forging the offline
+    /// verdict then costs only an edit to a `path` string, never to a hash.
+    ///
+    /// Deliberately NOT written against non-existent targets (`../escape`):
+    /// those already fail as "missing file" today, so a test built on them
+    /// would pass before the fix and prove nothing.
+    #[test]
+    fn an_entry_pointing_outside_the_dir_is_a_mismatch_not_a_verification() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("install");
+        write(&install, "temper", b"real-binary-bytes");
+        write(root.path(), "outside/decoy", b"decoy-bytes");
+        let decoy_sha = sha_of(b"decoy-bytes");
+
+        // Absolute: `Path::join` discards `install` outright.
+        // Ancestor-relative: it walks out of `install` a level at a time.
+        let absolute = root
+            .path()
+            .join("outside/decoy")
+            .to_string_lossy()
+            .into_owned();
+        for bad in [absolute.as_str(), "../outside/decoy"] {
+            let m = ReleaseManifest {
+                version: "0.3.0".into(),
+                target: "x86_64-unknown-linux-gnu".into(),
+                files: vec![ManifestEntry {
+                    path: bad.to_string(),
+                    sha256: decoy_sha.clone(),
+                    size: 11,
+                }],
+            };
+            match verify_dir(&m, &install) {
+                Verdict::Mismatch { mismatches: ms } => {
+                    assert_eq!(ms.len(), 1, "path {bad:?}");
+                    assert_eq!(ms[0].path, bad, "the offending path is named");
+                    assert!(
+                        ms[0].actual.is_none(),
+                        "path {bad:?} is refused unread, so there is no actual hash"
+                    );
+                }
+                other => panic!("path {bad:?} must not verify, got {other:?}"),
+            }
+        }
+    }
+
+    /// `is_contained_relative` rejects every shape that can leave the install
+    /// dir, plus the empty path — which `Path::components()` reports as *no*
+    /// components, so an `all(...)` over it alone would vacuously succeed.
+    #[test]
+    fn contained_relative_rejects_escaping_and_empty_paths() {
+        for bad in [
+            "",
+            "/etc/passwd",
+            "/",
+            "..",
+            "../outside/decoy",
+            "a/../../escape",
+            "lib/../../../etc/passwd",
+            // Rejected even though it would resolve back inside: containment is
+            // decided on components without resolving, so there is no
+            // resolution step for a symlink to disagree with afterwards.
+            "foo/../bar",
+        ] {
+            assert!(!is_contained_relative(bad), "{bad:?} must not be contained");
+        }
+    }
+
+    /// Dots inside a *filename* are ordinary. `foo..bar` is a legal file to
+    /// ship, and a containment check written as a substring test would reject
+    /// it — refusing a legitimate release rather than an escape. The check is
+    /// on path COMPONENTS, so every name below is accepted.
+    #[test]
+    fn contained_relative_accepts_ordinary_paths_including_dotted_filenames() {
+        for good in [
+            "temper",
+            "lib/libonnxruntime.so",
+            "foo..bar",
+            "..foo",
+            "foo..",
+            "a/foo..bar/b",
+            "model/bge-base-en-v1.5/model.onnx",
+        ] {
+            assert!(is_contained_relative(good), "{good:?} must be contained");
         }
     }
 
