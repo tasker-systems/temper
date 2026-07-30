@@ -47,8 +47,7 @@ pub async fn set_facet(
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.set_facet(cmd).await.map_err(ApiError::from)?;
     Ok(Json(FacetAck {
-        id: Uuid::from(out.value),
-        property_id: Uuid::from(out.value),
+        property_ids: out.value.into_iter().map(Uuid::from).collect(),
     }))
 }
 
@@ -103,8 +102,7 @@ pub async fn set_edge_facet(
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.set_facet(cmd).await.map_err(ApiError::from)?;
     Ok(Json(FacetAck {
-        id: Uuid::from(out.value),
-        property_id: Uuid::from(out.value),
+        property_ids: out.value.into_iter().map(Uuid::from).collect(),
     }))
 }
 

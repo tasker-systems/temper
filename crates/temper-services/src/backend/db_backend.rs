@@ -2437,11 +2437,15 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(audit))
     }
 
-    /// Upserts the clustering `facet` property (`kb_properties`) on a resource — one row holding the
-    /// whole `values` object. Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter
-    /// resolution, gated on the TARGET resource directly (facets have no source/target split).
+    /// Upserts the clustering `facet` property (`kb_properties`) on a resource — **one row per inner
+    /// key** of `values`, folding the prior row for each key named and leaving unnamed marks untouched.
+    /// Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter resolution, gated on
+    /// the TARGET resource directly (facets have no source/target split).
     #[act_span]
-    async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError> {
+    async fn set_facet(
+        &self,
+        cmd: SetFacet,
+    ) -> Result<CommandOutput<Vec<PropertyId>>, TemperError> {
         // Auth before any write (WS2), dispatched on the owner kind — the two are NOT the same
         // question, and neither gate subsumes the other.
         //
@@ -2467,7 +2471,7 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        let property_id = writes::set_facet_with(
+        let property_ids = writes::set_facet_with(
             &self.pool,
             cmd.owner,
             &cmd.values,
@@ -2477,7 +2481,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(map_facet_write_err)?;
-        Ok(CommandOutput::new(property_id))
+        Ok(CommandOutput::new(property_ids))
     }
 
     /// One idempotent desired-state reconcile run as a SINGLE `SERIALIZABLE` transaction: the

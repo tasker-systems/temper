@@ -82,14 +82,22 @@ async fn assert_facet(
 /// Clause `the-read-does-not-conceal-whether-a-key-was-asserted-twice`, and with it
 /// `an-asserted-facet-is-discoverable-by-anyone-who-may-read-its-owner`.
 ///
-/// `facet_set` appends (task `019f6d08-2b55-7ee0-b9ac-1959cf4d736b`), so two asserts of one logical
-/// facet leave two live rows. This asserts **both halves of the disagreement**: the new read
-/// discloses both rows with both weights, and `get_meta` — the surface that shipped before it —
-/// still discloses exactly one. The second assertion is not redundant decoration: it is what pins
-/// *why* this read exists, and it fails if someone later "fixes" the collapse by widening
-/// `open_meta` into arrays, which would be a silent wire change to every existing reader.
+/// Re-asserting one logical facet supersedes it **per inner key**, and both surfaces agree.
+///
+/// This test previously asserted the opposite — that two asserts leave two live rows for the same
+/// key, and that `get_meta` disclosed only one of them. Both halves changed under
+/// `019f6d08`'s inner-key grain, and deliberately:
+///
+/// - the write now folds the prior mark for each key it names, so one logical facet is one live row
+///   (the accumulation this task existed to end);
+/// - `get_meta` now MERGES the marks rather than surfacing the newest row, so it reports the whole
+///   set instead of an arbitrary member of it.
+///
+/// What survives verbatim is the property that made the original test worth writing: the two
+/// surfaces are checked **against each other**, so a change to one that silently diverges from the
+/// other fails here rather than in production.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn both_asserts_of_one_logical_facet_are_visible_with_their_weights(pool: PgPool) {
+async fn re_asserting_a_facet_supersedes_per_key_and_both_surfaces_agree(pool: PgPool) {
     let (backend, owner, context) = owner_with_context(&pool, "facet-read-owner@example.com").await;
     let resource = backend
         .create_resource(create_cmd(context, "twice-asserted"))
@@ -117,46 +125,66 @@ async fn both_asserts_of_one_logical_facet_are_visible_with_their_weights(pool: 
         .await
         .expect("facet read");
 
+    // Two marks, not four and not two-of-one-key: `node_label` and `status` were each asserted
+    // twice, and each supersedes in place.
     assert_eq!(
         facets.len(),
         2,
-        "both live rows must be disclosed, not collapsed: {facets:#?}"
+        "one live row per inner key, not one per assert: {facets:#?}"
     );
     assert!(
         facets.iter().all(|f| f.property_key == "facet"),
         "the read is scoped to the facet key: {facets:#?}"
     );
 
-    // Ordered by `created`, so the older assert comes first and the caller can see which superseded
-    // which. Position is load-bearing here, which is why `created` also rides on the row.
-    assert_eq!(facets[0].value["status"], "open");
-    assert_eq!(facets[1].value["status"], "resolved");
-    assert!(
-        facets[0].created <= facets[1].created,
-        "rows arrive oldest-first: {facets:#?}"
+    let mark = |key: &str| {
+        facets
+            .iter()
+            .find(|f| f.value.get(key).is_some())
+            .unwrap_or_else(|| panic!("no live mark for {key}: {facets:#?}"))
+    };
+    assert_eq!(
+        mark("status").value["status"],
+        "resolved",
+        "the superseding value wins: {facets:#?}"
     );
+    assert_eq!(mark("node_label").value["node_label"], "concern");
 
-    // Weight is what the region producer clusters on (`substrate.rs:110-122` → `expand_facets`), and
-    // it is exactly what `open_meta` drops. 128 rows in production carry a non-default weight.
-    assert_eq!(facets[0].weight, 0.85);
-    assert_eq!(facets[1].weight, 1.0);
+    // Weight is what the region producer clusters on (`substrate.rs:110-122` → `expand_facets`),
+    // and it is exactly what `open_meta` drops. Both marks carry the SECOND assert's weight,
+    // because both keys were named by it.
+    assert_eq!(mark("status").weight, 1.0);
+    assert_eq!(mark("node_label").weight, 1.0);
 
     // Attribution: the author is recoverable without a second round trip.
     assert_eq!(facets[0].authored_by_profile_id, Some(*owner));
     assert!(facets[0].authored_by_handle.is_some());
 
-    // The other half of the differential — the surface that shipped first still collapses to one.
+    // The superseded mark is folded, not deleted — the trail survives the supersession.
+    let folded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties \
+          WHERE property_key = 'facet' AND is_folded AND owner_id = $1",
+    )
+    .bind(Uuid::from(resource))
+    .fetch_one(&pool)
+    .await
+    .expect("folded count");
+    assert_eq!(folded, 2, "both first-assert marks are folded, not dropped");
+
+    // The other half of the differential. `get_meta` now MERGES the marks, so it agrees with the
+    // facet read about the set — where it used to disclose one row and hide the rest.
     let meta = temper_services::backend::substrate_read::get_meta_select(&pool, owner, resource)
         .await
         .expect("get_meta");
     let open = meta.open_meta.expect("open_meta present");
     assert_eq!(
-        open["facet"]["status"], "resolved",
-        "get_meta discloses the newest row only — the collapse this read exists to answer: {open:#?}"
+        open["facet"],
+        serde_json::json!({"node_label": "concern", "status": "resolved"}),
+        "get_meta merges every live mark rather than surfacing one row: {open:#?}"
     );
     assert!(
         open["facet"].get("weight").is_none(),
-        "and it carries no weight at all: {open:#?}"
+        "it still carries no weight — the facet read remains the faithful door: {open:#?}"
     );
 }
 
@@ -284,15 +312,19 @@ async fn a_read_grant_reads_facets_and_still_cannot_assert_one(pool: PgPool) {
     let facets = facet_service::list_resource_facets(&pool, reader_id, resource)
         .await
         .expect("a read grant may read facets");
-    assert_eq!(facets.len(), 1, "{facets:#?}");
-    assert_eq!(
-        facets[0].weight, 0.7,
-        "weight survives the read: {facets:#?}"
+    // Two marks, because the two-key assert is two rows since the inner-key grain landed
+    // (`019f6d08`). This test's subject is REACH, not grain — it asserts on every row so it stays
+    // about access even if the fixture's key count changes again.
+    assert_eq!(facets.len(), 2, "{facets:#?}");
+    assert!(
+        facets.iter().all(|f| f.weight == 0.7),
+        "weight survives the read on every mark: {facets:#?}"
     );
-    assert_eq!(
-        facets[0].authored_by_profile_id,
-        Some(*owner),
-        "the row names its author, not its reader: {facets:#?}"
+    assert!(
+        facets
+            .iter()
+            .all(|f| f.authored_by_profile_id == Some(*owner)),
+        "every row names its author, not its reader: {facets:#?}"
     );
 
     // And insufficient for the write. The read did not become a licence.
@@ -327,7 +359,7 @@ async fn a_read_grant_reads_facets_and_still_cannot_assert_one(pool: PgPool) {
     .await
     .expect("count live facets");
     assert_eq!(
-        live, 1,
-        "the denied assert must have written nothing — the owner's one facet is all that remains"
+        live, 2,
+        "the denied assert must have written nothing — the owner's two marks are all that remain"
     );
 }

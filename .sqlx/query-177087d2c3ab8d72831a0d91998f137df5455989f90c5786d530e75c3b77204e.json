@@ -6,7 +6,7 @@
       {
         "ordinal": 0,
         "name": "facet_set",
-        "type_info": "Uuid"
+        "type_info": "UuidArray"
       }
     ],
     "parameters": {

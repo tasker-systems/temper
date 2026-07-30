@@ -67,8 +67,17 @@ fn print_ack(ack: &FacetAck, fmt: OutputFormat) -> Result<()> {
             output::plain(rendered);
         }
         OutputFormat::Toon => {
-            output::success("Facet set.".to_string());
-            output::dim(format!("  property_id: {}", ack.property_id));
+            // One line per row written. A facet is stored one row per inner key, so a two-key
+            // assert really did write two rows and saying "Facet set." over a single id would
+            // under-report what just happened.
+            let n = ack.property_ids.len();
+            output::success(format!(
+                "Facet set — {n} mark{} written.",
+                if n == 1 { "" } else { "s" }
+            ));
+            for id in &ack.property_ids {
+                output::dim(format!("  property_id: {id}"));
+            }
         }
     }
     Ok(())

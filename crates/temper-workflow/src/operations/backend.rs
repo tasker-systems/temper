@@ -134,9 +134,13 @@ pub trait Backend: Send + Sync {
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
 
     // ── facet writes (T1 Sequence B — facet_set vertical slice) ──
-    // Upserts a typed property row (`kb_properties`) on a resource. Returns the property id.
+    // Upserts typed property rows (`kb_properties`) on a resource — ONE ROW PER INNER KEY of the
+    // asserted object, folding the prior row for each key named and leaving unnamed marks live.
+    // Returns every property id written, because one assert can produce many and naming one of them
+    // would be an answer that reads as complete (task 019f6d08-2b55-7ee0-b9ac-1959cf4d736b).
 
-    async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError>;
+    async fn set_facet(&self, cmd: SetFacet)
+        -> Result<CommandOutput<Vec<PropertyId>>, TemperError>;
 
     // ── L0 cognitive-map content reconcile (L0 delivery & lifecycle, Task 4) ──
     // Idempotent, additive-only, provenance-scoped desired-state reconcile of a cognitive map's

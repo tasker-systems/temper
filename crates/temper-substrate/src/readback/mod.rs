@@ -277,14 +277,24 @@ pub async fn meta(
     let mut doc_type: Option<String> = None;
 
     // ORDER BY created, id + last-write-wins on the inserts below = newest wins.
-    // `facet_set` appends, so an updated facet leaves the superseded row live
-    // (13 resources in production). Without the ordering the planner serves this
-    // from `uq_kb_properties_active`, whose key order is (owner_table, owner_id,
-    // property_key, property_value) — so rows arrive sorted by VALUE and the
-    // jsonb-largest wins, which is only coincidentally the newest. `id` is a
-    // uuidv7 tiebreak for rows written in one transaction. Facet supersession
-    // itself is task 019f6d08-2b55-7ee0-b9ac-1959cf4d736b — this only makes the
-    // READ honest.
+    // Without the ordering the planner serves this from `uq_kb_properties_active`,
+    // whose key order is (owner_table, owner_id, property_key, property_value) — so
+    // rows arrive sorted by VALUE and the jsonb-largest wins, which is only
+    // coincidentally the newest. `id` is a uuidv7 tiebreak for rows written in one
+    // transaction.
+    //
+    // **`facet` MERGES rather than overwrites**, and it is the one key that does.
+    // Since 20260730000010 a facet is stored one row per inner key, so the plain
+    // last-row-wins below would disclose a single mark — `{"status": "resolved"}` —
+    // where the whole set is `{status, node_label, as_of}`. That would be a *reads-as-
+    // complete* answer, which is the defect the facet read
+    // (`GET /api/resources/{id}/facets`) shipped to end, reappearing one layer down.
+    // Merging is also strictly more disclosure than this read has ever given: before
+    // the grain change it surfaced one ROW of several, discarding the siblings.
+    //
+    // Per-mark weight still does not appear here — `open_meta` is a key→value map with
+    // nowhere to put it. The facet read remains the faithful door; this one is honest
+    // about the marks, not about their strength.
     for row in &rows {
         let key: String = row.get("property_key");
         let value: Value = row.get("property_value");
@@ -296,6 +306,21 @@ pub async fn meta(
             });
         } else if is_managed_property_key(&key) {
             managed.insert(key, value);
+        } else if key == "facet" {
+            // Newest-wins *per inner key*: rows arrive oldest-first, so a later mark for the
+            // same key overwrites the earlier one while leaving unrelated marks in place.
+            // A non-object mark (the pre-grain sentinel shape) has no inner key to merge on,
+            // so it takes the whole slot, exactly as it did before.
+            match (open.get_mut(&key), &value) {
+                (Some(Value::Object(acc)), Value::Object(incoming)) => {
+                    for (k, v) in incoming {
+                        acc.insert(k.clone(), v.clone());
+                    }
+                }
+                _ => {
+                    open.insert(key, value);
+                }
+            }
         } else {
             open.insert(key, value);
         }

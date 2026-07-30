@@ -14,17 +14,15 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Acknowledgement returned by the facet write endpoint.  `id` duplicates `property_id` — see `InvocationAck::id`.
+  # Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.  A facet is stored one row per inner key (migration `20260730000010`), so `{status: open, as_of: X}` is two rows and a singular ack could only name one of them. Which one it named would be arbitrary, and a caller reading a single id back from a two-mark write would have a value that *reads as complete* — precisely the defect `GET /api/resources/{id}/facets` shipped to end (goal `019fafd9-a978-7860-ae39-23958b4471b8`). So the ack is plural at the type level: there is no shape in which it can under-report.  Ordered as written — one entry per inner key of the asserted object, in the order the projector walked them. A non-facet property write yields exactly one entry.
   class FacetAck < ApiModelBase
-    attr_accessor :id
-
-    attr_accessor :property_id
+    # The rows written. Never empty: an assert that names no mark is refused upstream rather than acknowledged with nothing (`facet_object_has_keys` in `db_backend`).
+    attr_accessor :property_ids
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'id' => :'id',
-        :'property_id' => :'property_id'
+        :'property_ids' => :'property_ids'
       }
     end
 
@@ -41,8 +39,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'id' => :'String',
-        :'property_id' => :'String'
+        :'property_ids' => :'Array<String>'
       }
     end
 
@@ -68,16 +65,12 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'id')
-        self.id = attributes[:'id']
+      if attributes.key?(:'property_ids')
+        if (value = attributes[:'property_ids']).is_a?(Array)
+          self.property_ids = value
+        end
       else
-        self.id = nil
-      end
-
-      if attributes.key?(:'property_id')
-        self.property_id = attributes[:'property_id']
-      else
-        self.property_id = nil
+        self.property_ids = nil
       end
     end
 
@@ -86,12 +79,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @id.nil?
-        invalid_properties.push('invalid value for "id", id cannot be nil.')
-      end
-
-      if @property_id.nil?
-        invalid_properties.push('invalid value for "property_id", property_id cannot be nil.')
+      if @property_ids.nil?
+        invalid_properties.push('invalid value for "property_ids", property_ids cannot be nil.')
       end
 
       invalid_properties
@@ -101,29 +90,18 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @id.nil?
-      return false if @property_id.nil?
+      return false if @property_ids.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] id Value to be assigned
-    def id=(id)
-      if id.nil?
-        fail ArgumentError, 'id cannot be nil'
+    # @param [Object] property_ids Value to be assigned
+    def property_ids=(property_ids)
+      if property_ids.nil?
+        fail ArgumentError, 'property_ids cannot be nil'
       end
 
-      @id = id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] property_id Value to be assigned
-    def property_id=(property_id)
-      if property_id.nil?
-        fail ArgumentError, 'property_id cannot be nil'
-      end
-
-      @property_id = property_id
+      @property_ids = property_ids
     end
 
     # Checks equality by comparing each attribute.
@@ -131,8 +109,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          id == o.id &&
-          property_id == o.property_id
+          property_ids == o.property_ids
     end
 
     # @see the `==` method
@@ -144,7 +121,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [id, property_id].hash
+      [property_ids].hash
     end
 
     # Builds the object from hash
