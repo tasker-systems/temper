@@ -84,6 +84,41 @@ When a harness-managed background job kept getting reaped mid-run, detaching it 
 a new session) let it finish untouched — at the cost of polling for completion instead of
 receiving a signal. Choose per how long the job runs.
 
+## After a write error, reconcile — don't retry
+
+A `resource create` or `resource update` can print `network error: error sending request
+for url …/api/ingest` and exit non-zero **even though the write already committed on the
+server**. This is a *lost acknowledgment, not a lost write*: the request reaches the
+backend, the mutation is persisted, and the connection then drops before the response is
+returned. The client cannot tell "never committed" from "committed but un-acked" — it only
+sees the dropped connection. ([Issue #581](https://github.com/tasker-systems/temper/issues/581).)
+
+It is **not deterministically reproducible** — the trigger is a timing/infrastructure race
+that correlates with platform **deploy / rolling-restart windows and cold-start latency**,
+so it does not reproduce against a warm, non-deploying backend. Expect it during deploys,
+not at steady state. One session hit it three times out of three errored writes during a
+rollout window — every one confirmed committed afterward.
+
+The danger is the *reaction*. Because `create` mints a fresh identifier on each invocation
+and the write path carries no client-supplied idempotency key, a **blind retry creates a
+duplicate** rather than converging on the already-committed resource. So the correct
+recovery is **reconcile, then re-issue only if the write genuinely did not land**:
+
+- **create** — `temper resource list --title-contains "<title>"` reports whether the
+  resource is present.
+- **update** — `temper resource show <ref>` (add `--edges` for a `--goal`/link change)
+  reports whether the mutation applied.
+
+Detection is deterministic even though the fault is not: the reconcile check unambiguously
+tells you whether to re-issue, and it is what prevents the duplicate. The CLI itself prints
+this reconcile-don't-retry reminder to stderr whenever a `create`/`update` fails with a
+network error, so the hazard is visible at the moment it bites.
+
+A manifest-driven bulk run (above) already encodes this recovery: its exact-key skip-what-
+exists pass **is** the reconcile, so a re-run to a fixpoint adopts the committed-but-
+unrecorded write instead of duplicating it. Single, ad-hoc `create`/`update` calls have no
+such key — there the reconcile is manual, which is exactly why it is easy to forget.
+
 ## Attach identity at ingest
 
 Put the structured properties you will want to filter and facet by — source type,

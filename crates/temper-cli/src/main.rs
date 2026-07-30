@@ -54,6 +54,12 @@ fn main() {
     let output_format =
         OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());
 
+    // Classify the command before dispatch consumes `cli`: was this a
+    // lost-ack-prone write (`resource create`/`update`)? If it later fails with
+    // a transport error, the write may have committed anyway — see the hint in
+    // the error arm below (issue #581).
+    let was_lost_ack_write = temper_cli::reconcile_hint::is_lost_ack_prone_write(&cli.command);
+
     let outcome = run(cli, output_format);
 
     // Drain spans before the process goes away — on BOTH arms.
@@ -79,6 +85,12 @@ fn main() {
             _ => {
                 temper_cli::output::error(format!("temper: {e}"));
             }
+        }
+        // A network error on a `create`/`update` may be a lost acknowledgment,
+        // not a lost write: reconcile before retrying, or a blind retry mints a
+        // duplicate. Guidance goes to stderr, so it never touches the payload.
+        if let Some(hint) = temper_cli::reconcile_hint::reconcile_hint(was_lost_ack_write, e) {
+            temper_cli::output::hint(hint);
         }
         temper_telemetry::shutdown_telemetry();
         std::process::exit(1);
