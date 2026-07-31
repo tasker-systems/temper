@@ -87,7 +87,7 @@ pub async fn get_visible(
     )
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
 }
 
 /// **The one refusal every third-party context lookup renders.**

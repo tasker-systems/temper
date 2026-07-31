@@ -184,3 +184,175 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
     }
     Ok(Authorized { authority, subject })
 }
+
+/// The **voices-unchanged boundary** over this module's refusal dialects.
+///
+/// `denial_for` is defaulted to `denial`, so the only way an arm's refusal can diverge from its
+/// domain's is for someone to *override* `denial_for` on it — a behavioral change to a shipped gate,
+/// not a refactor. This suite is what fails when that happens. It needs no database: `denial` and
+/// `denial_for` take no pool, so the boundary runs in the cheapest, most-often-run tier rather than
+/// only under `test-db`, where most contributors would never trip it.
+///
+/// **Every comparison checks the `ApiError` variant AND the rendered message.** `ApiError` has no
+/// `PartialEq`, so the variant is compared through `std::mem::discriminant`; the message is compared
+/// through `Display`. Discriminant alone would let a `NotFound` sentence change silently, and the
+/// sentence is exactly what a refusal discloses.
+///
+/// # This suite is a conjunction of three claims, and it closes only two of them
+///
+/// * **(a) the nine voices are unchanged** — the nine tests below, one per `ScopedAuthority` impl,
+///   each authority named explicitly rather than reached through an enumeration that could silently
+///   cover eight. This is the conjunct the suite exists for, and it is the one that is probed: the
+///   bite probe temporarily overrides `denial_for` on `TeamReadAuthority` — whose `denial` is
+///   `NotFound` — to return `Forbidden`, which must red `team_read_authority_denies_in_one_voice`
+///   and must green again once the override is removed. A suite that passes only because a
+///   defaulted method cannot differ is not yet evidence of anything.
+/// * **(b) a tenth authority cannot appear uncovered** — **NOT guarded here, deliberately.** A
+///   `covered.len() == 9` assertion guards the *removal* direction; the failure mode is someone
+///   *adding* a tenth impl and never touching this file, which no assertion inside a Rust test can
+///   see (the language cannot enumerate trait impls at runtime, and `include_str!` takes no dynamic
+///   path, so a source scan's file list decays somewhere less visible than what it replaced). A
+///   count assertion here would only *look* like coverage. Declared an uncovered remainder in
+///   `docs/superpowers/plans/2026-07-30-context-rename.md` Part 5; if the guard is later wanted it
+///   belongs in `.github/scripts/audit-*.sh`, which pins a reviewed *set* and `rg`s the directory,
+///   so a new `authz/*.rs` is caught for free.
+/// * **(c) `ContextAdminAuthority` is the only divergent authority** — the tenth impl, and the
+///   deliberate two-dialect exception, so it is asserted *positively* in the last two tests instead
+///   of being asserted voice-unchanged. Its behavioral guarantee is Task 11's, not this suite's; see
+///   the comment on those tests.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::services::access_service::GrantAuthority;
+    use crate::services::context_service::CONTEXT_REFUSAL;
+    use crate::services::machine_authz::MachineAuthority;
+
+    /// One denial arm refuses in exactly the dialect its domain declares.
+    ///
+    /// Takes the authority's name as a string because the failure message has to say *which* gate
+    /// changed voice — a bare `assert_eq!` on two `ApiError`s names neither.
+    #[track_caller]
+    fn assert_one_voice<A: ScopedAuthority>(authority: &str, arm: A) {
+        assert!(
+            arm.is_denial(),
+            "{authority}: `{arm:?}` is asserted here as a denial arm, but `is_denial` says it is \
+             not — this suite is measuring an arm that never reaches a refusal at all"
+        );
+
+        let per_arm = arm.denial_for();
+        let declared = A::denial();
+
+        assert_eq!(
+            std::mem::discriminant(&per_arm),
+            std::mem::discriminant(&declared),
+            "{authority}: `{arm:?}.denial_for()` renders {per_arm:?}, but `{authority}::denial()` \
+             renders {declared:?}. This arm has been given its own refusal voice — a behavioral \
+             change to a shipped gate that someone else's tests are downstream of."
+        );
+        assert_eq!(
+            per_arm.to_string(),
+            declared.to_string(),
+            "{authority}: `{arm:?}.denial_for()` and `{authority}::denial()` are the same \
+             `ApiError` variant but render different messages. The message IS the disclosure."
+        );
+    }
+
+    // ── (a) the nine voices, each authority named explicitly ──────────────────
+
+    #[test]
+    fn grant_authority_denies_in_one_voice() {
+        assert_one_voice("GrantAuthority", GrantAuthority::None);
+    }
+
+    #[test]
+    fn connection_control_authority_denies_in_one_voice() {
+        assert_one_voice(
+            "ConnectionControlAuthority",
+            ConnectionControlAuthority::None,
+        );
+    }
+
+    #[test]
+    fn connection_authority_denies_in_one_voice() {
+        assert_one_voice("ConnectionAuthority", ConnectionAuthority::None);
+    }
+
+    #[test]
+    fn machine_authority_denies_in_one_voice() {
+        assert_one_voice("MachineAuthority", MachineAuthority::None);
+    }
+
+    #[test]
+    fn two_sided_authority_denies_in_one_voice() {
+        assert_one_voice("TwoSidedAuthority", TwoSidedAuthority::None);
+    }
+
+    /// Two denial arms, and both are asserted: `Author` is as much a refusal as `Unreadable`, and a
+    /// `Forbidden` distinguishable from the unreadable case would leak the authorship relation.
+    #[test]
+    fn audit_authority_denies_in_one_voice() {
+        assert_one_voice("AuditAuthority", AuditAuthority::Author);
+        assert_one_voice("AuditAuthority", AuditAuthority::Unreadable);
+    }
+
+    /// Two denial arms again — "not a registered machine" and "no such readable cogmap" must be
+    /// indistinguishable, or a guessed cogmap id becomes an existence oracle.
+    #[test]
+    fn auditor_job_authority_denies_in_one_voice() {
+        assert_one_voice("AuditorJobAuthority", AuditorJobAuthority::NotMachine);
+        assert_one_voice("AuditorJobAuthority", AuditorJobAuthority::Unreadable);
+    }
+
+    #[test]
+    fn team_read_authority_denies_in_one_voice() {
+        assert_one_voice("TeamReadAuthority", TeamReadAuthority::None);
+    }
+
+    #[test]
+    fn actor_history_authority_denies_in_one_voice() {
+        assert_one_voice("ActorHistoryAuthority", ActorHistoryAuthority::None);
+    }
+
+    // ── (c) the tenth authority: the deliberate two-dialect exception ─────────
+    //
+    // `ContextAdminAuthority` is NOT asserted voice-unchanged, because diverging is the point: one
+    // gate, two dialects. The two tests below assert each dialect positively, which is a claim about
+    // the MECHANISM only.
+    //
+    // **The behavioral guarantee is Task 11's, not this suite's.** Task 11's four route tests drive
+    // the four ways a principal lands on `ReadOnly` — the team-tree read direction, context shares,
+    // and explicit read-grants — through the live rename endpoint and assert `403` on every one. If
+    // someone "simplifies" `ReadOnly` back to the static `NotFound`, the test below and all four of
+    // those red together. Recorded here so a reader can see where (c)'s coverage lives rather than
+    // having to infer that it exists.
+
+    /// The `403` half: a caller who demonstrably reads the context is refused with `Forbidden`, not
+    /// with the domain's static, existence-hiding `NotFound`. Not an oracle — the caller already
+    /// read the subject, so the `403` discloses nothing a `GET` would not.
+    #[test]
+    fn context_admin_read_only_refuses_with_forbidden() {
+        assert!(ContextAdminAuthority::ReadOnly.is_denial());
+
+        let refusal = ContextAdminAuthority::ReadOnly.denial_for();
+        assert!(
+            matches!(refusal, ApiError::Forbidden),
+            "ReadOnly must render Forbidden, got {refusal:?}"
+        );
+        assert_eq!(refusal.to_string(), ApiError::Forbidden.to_string());
+    }
+
+    /// The `404` half: byte-identical to the incumbent read refusal, because it reads the same
+    /// `CONTEXT_REFUSAL` constant `resolve_context_ref` and `ensure_context_visible` render. The
+    /// constant is read here rather than the sentence re-typed — a second literal would pass this
+    /// test while drifting from the reads it is supposed to be indistinguishable from.
+    #[test]
+    fn context_admin_invisible_refuses_with_the_incumbent_context_refusal() {
+        assert!(ContextAdminAuthority::Invisible.is_denial());
+
+        match ContextAdminAuthority::Invisible.denial_for() {
+            ApiError::NotFound(message) => assert_eq!(message, CONTEXT_REFUSAL),
+            other => panic!("Invisible must render NotFound(CONTEXT_REFUSAL), got {other:?}"),
+        }
+    }
+}
