@@ -2,6 +2,11 @@
 -- Mirrors context_reassign (20260715000010); this moves the identity pair in place.
 -- Additive only: one event-type row + two functions. No table changes.
 --
+-- Renumbered from 20260730000020 while this branch was open: 20260731000010/20 landed on main
+-- first, and a migration must sit above main's high-water mark. Never applied anywhere but a dev
+-- database under the old number, so there is no applied file being edited — the rule that forbids
+-- that is intact.
+--
 -- kb_contexts is a replay INPUT table (restored verbatim), not a projection, so this
 -- projector is an idempotent re-apply on replay — the same property context_reassign states
 -- (20260715000010:5-8), and the same reason an evented context mutation is safe even though
@@ -123,3 +128,22 @@ BEGIN
     RETURN _project_context_renamed(v_ev, p_payload);
 END;
 $$;
+
+-- This migration declares itself, per 20260731000010. The class question is the lagging-binary
+-- test: does a binary that predates this migration keep working against the schema after it is
+-- applied? Yes. Two functions are CREATEd, not replaced, so no existing signature or return type
+-- moves — which is the specific failure 20260730000010 shipped, where `CREATE OR REPLACE` changed
+-- `facet_set` from `uuid` to `uuid[]` and the running binary decoded by type.
+--
+-- The one arm worth stating rather than waving past is the `kb_event_types` row. An older binary
+-- gains an event-type name it has no `EventKind` arm for, which would matter if it had to replay a
+-- `context_renamed` EVENT — `from_canonical_name` would not resolve it. But applying this migration
+-- creates no such event: only `context_rename` does, and only the paired binary calls it. So the
+-- exposure needs a NEW binary to write history and then a ROLLBACK to an old one, which is the
+-- ordinary shape-forward risk every event type carries, not a property of applying this schema
+-- ahead of its binary.
+SELECT declare_migration(
+    20260731000030,
+    'additive',
+    'Two new CREATE FUNCTIONs and one event-type row. Nothing pre-existing is altered or dropped, no signature or return type moves, and a binary that predates this migration calls none of it. The kb_event_types row is inert until the paired binary fires context_rename.'
+);
