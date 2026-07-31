@@ -100,7 +100,7 @@ its own binary has. Writing it from inside the migration means it propagates to 
 target automatically, with no second spelling to drift.
 
 The ledger is **append-only**, and it carries a second axis beside the claim: what
-happened to the apply. `cargo make db-migrate` runs `temper-substrate migrate`, which
+happened to the apply. `cargo make db-migrate` runs the `temper-migrate` binary, which
 brackets each apply with `pending` before and `success`/`failed` after — from outside
 the migration's own transaction, because sqlx wraps the body and its bookkeeping
 together and a failure rolls back anything that transaction wrote. A migration that
@@ -171,7 +171,7 @@ migration declared about itself, read straight out of the SQL the deploying bina
 
 - **Additive migration** — applied by the build, before any function is built, by the
   binary that contains it. Nothing to do. `scripts/vercel-build.sh` runs
-  `temper-substrate migrate --additive-only` against the target's own database, and the
+  `temper-migrate --additive-only` against the target's own database, and the
   ledger records `pending` → `success` with `recorded_by = 'runner'`.
 - **Shape-breaking migration** — an operator-gated cutover, exactly as before: durable
   backup, cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse

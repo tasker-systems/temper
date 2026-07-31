@@ -904,6 +904,28 @@ mod tests {
         // The strongest available check that the two parsers agree, and the one a fixture cannot
         // give: the Rust half, pointed at the REAL corpus the awk half passes in CI. A parser green
         // on fixtures and wrong about the repo is a shape this goal has already met twice.
+
+        // NON-VACUITY FIRST. Every assertion below is trivially true of an EMPTY migrator — no
+        // versions means no undeclared ones and no unrecognised tokens — so this test's green is
+        // worth nothing until the corpus is known to be present. This crate holds the single
+        // `sqlx::migrate!` declaration behind `temper_substrate::MIGRATOR`, `temper_api::MIGRATOR`
+        // and `temper_services::MIGRATOR`, so one silent miss would hollow out every
+        // `#[sqlx::test(migrator = …)]` in the repo at once, all still green.
+        //
+        // Which mis-paths are actually silent was measured, not assumed `[observed — 2026-07-31]`:
+        //   * a directory that does NOT exist            → sqlx fails the COMPILE. Not our problem.
+        //   * a path relative to the current file        → sqlx fails the compile.
+        //   * a directory that EXISTS and holds no `.sql` → compiles, embeds ZERO, every assertion
+        //     below passes. That is the one this guard is for, and removing the guard makes that
+        //     mutation green again.
+        let embedded = crate::MIGRATOR.iter().count();
+        assert!(
+            embedded >= 150,
+            "MIGRATOR embeds {embedded} migrations; `migrations/` held 150 when this guard was \
+             written, so the path has stopped resolving and every assertion below would pass \
+             vacuously"
+        );
+
         let classes = declared_classes(&crate::MIGRATOR);
 
         let undeclared: Vec<i64> = crate::MIGRATOR

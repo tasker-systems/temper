@@ -33,4 +33,6 @@ pub mod state;
 pub mod test_support;
 
 /// Embedded workspace migrations, for `#[sqlx::test(migrator = "temper_services::MIGRATOR")]`.
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+///
+/// Declared once, in temper-migrate; re-exported here so every existing call site keeps resolving.
+pub use temper_migrate::MIGRATOR;
