@@ -50,16 +50,58 @@ This is what lets temperkb.io (and any target) auto-deploy `main` without a CI
 migration gate: the steady state is additive, and additive is backward-compatible by
 construction.
 
-A **non-additive / big-bang** schema change (a rename, a destructive collapse, a
+A **shape-breaking** schema change (a rename, a destructive collapse, a
 search-path flip, **or a change to a SQL function's return type or signature**) is
 **not** an ordinary merge. It is operator-run against each target's database via an
 operator-gated cutover procedure, coordinated with that target's deploy. It is never
 a silent `main` auto-deploy.
 
+### Every migration declares which of the two it is
+
+There are exactly **two** classes, and they are the tokens the tooling speaks:
+
+| token | meaning |
+|---|---|
+| `additive` | Safe with any binary **in either direction** — the old binary against the new schema *and* the new binary against the old. |
+| `shape-breaking` | Anything else. Operator-gated cutover; never a silent `main` auto-deploy. |
+
+`additive` is a *definition*, not a vibe: if you cannot say both directions are fine,
+the migration is `shape-breaking`. Dropping something is shape-breaking — there is no
+separate `destructive` class, because every rule downstream only ever asks whether a
+class is additive.
+
+Every migration states its class **in the migration**, by calling `declare_migration`
+with its own version:
+
+```sql
+SELECT declare_migration(
+    20260731000010,
+    'additive',
+    'One new enum, one new table, one new function. Nothing pre-existing is altered.'
+);
+```
+
+Three things about that call are load-bearing:
+
+- **The version argument must equal the filename's timestamp.** CI checks it, so a
+  copy-pasted declaration naming the wrong migration is caught mechanically.
+- **The reason is required and must be non-empty.** A class token alone records a
+  verdict without its argument, and the 2026-07-30 misclassification was wrong in its
+  reasoning, not in its vocabulary.
+- **Saying nothing is not saying additive.** A migration with no declaration fails
+  CI. Silence is not a classification, and an absent statement is as loud as a wrong
+  one.
+
+It lives in the database (`kb_migration_classifications`) rather than only in a file
+header because the declaration has to be readable by a binary that does **not carry
+that migration** — `MIGRATOR` embeds only the migrations its own binary has. Writing
+it from inside the migration means it propagates to every target automatically, with
+no second spelling to drift.
+
 ### A function's return type is a wire contract with the binary
 
 A function signature change reads like an ordinary edit: every caller in the repo is
-updated in the same commit, and the non-additive examples beside this one — a rename,
+updated in the same commit, and the shape-breaking examples beside this one — a rename,
 a destructive collapse, a search-path flip — are all table-shaped, so it matches none
 of them. It is not additive. The binary decodes that function's result **by type**, so
 **the running binary is a caller you did not update**, and the invariant's second
@@ -111,13 +153,13 @@ Production migrations are **operator-run** against each target's Neon database
 - **Additive migration** — `sqlx migrate run` against that target's Neon with the
   canonical `search_path`. Order relative to deploy is flexible (additive is
   backward-compatible), but back up first.
-- **Big-bang / search-path flip** — an operator-gated cutover: durable backup,
+- **Shape-breaking migration** — an operator-gated cutover: durable backup,
   cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
   that established this pattern is in git history.)
 
 ### Cutover: evidential standing → the three-axis citation model (Set 5)
 
-`migrations/20260724000120_standing_citation_components.sql` is **non-additive**. It drops
+`migrations/20260724000120_standing_citation_components.sql` is **shape-breaking**. It drops
 three `kb_resource_standing` columns (`indep_breadth`, `adversarial_survival`,
 `challenge_count`) and four functions (`resource_independence_breadth`,
 `refresh_independence_pairs`, `resource_adversarial_survival`, `resource_bases`), and it
@@ -126,7 +168,7 @@ changes the return type of `resource_standing_shape` and the argument list of
 auto-deploy of `main`**. Cut each target over individually.
 
 `migrations/20260724000130_audit_drift_sweep.sql` rides the same cutover and is **also
-non-additive**, for a different reason: besides the auditor's sweep it DROP+CREATEs
+shape-breaking**, for a different reason: besides the auditor's sweep it DROP+CREATEs
 `workflow_job_claim` to add principal scoping. The new parameter is appended last with a
 `DEFAULT`, so the deployed 5-argument positional call keeps resolving through the
 migrate→deploy window (the mechanics `20260710000010` established) — but the DROP is still a
