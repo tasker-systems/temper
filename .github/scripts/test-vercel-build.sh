@@ -126,22 +126,46 @@ if [ "$rc" -ne 0 ] \
   ok "a failed apply fails the build and is distinguished from a refusal"
 else bad "a failed apply fails the build and is distinguished from a refusal" "exit=$rc" "$out"; fi
 
-# ── 7. The static-build phase gets an output directory ──────────────────────────────────────────
-# `[observed — 2026-07-31]` Setting a buildCommand at all makes Vercel run a static-build phase that
-# demands an output directory, even on a project whose only outputs are api/*.rs. The first real
-# build through this script migrated correctly and then died on "No Output Directory named public".
-# Asserted on the SKIP path too, because a deploy with no database configured must still deploy.
+# ── 7. The static-build phase gets a NON-EMPTY output directory ─────────────────────────────────
+# Setting a buildCommand at all makes Vercel run a static-build phase that demands an output
+# directory, even on a project whose only outputs are api/*.rs. Two real builds established the
+# requirement, because the first fix was still wrong:
+#
+#   `[observed — 2026-07-31, dpl_CrJj58WNjcWZfhuDfwHRHSr7DKwj]`
+#     Error: No Output Directory named "public" found after the Build completed.
+#   `[observed — 2026-07-31, dpl_6kUZW1iTyzDkt1KvDrX6uAHNAjK2]`  (with `mkdir -p public`)
+#     Error: The Output Directory "public" is empty.
+#
+# So EXISTS is not the assertion — NON-EMPTY is. A guard that only checked for the directory would
+# have passed the exact build that failed.
+#
+# Asserted on the SKIP path too: a target with no database configured must still deploy, and that
+# path returns early.
+assert_output_dir() {
+  local label="$1" rc="$2" out="$3"
+  if [ "$rc" -eq 0 ] && [ -n "$(ls -A "${WORK}/cwd/public" 2>/dev/null)" ]; then
+    ok "$label"
+  else bad "$label" "exit=$rc" "contents=$(ls -A "${WORK}/cwd/public" 2>/dev/null || echo '<no dir>')" "$out"; fi
+}
+
 reset_saw
 out="$(run_build DATABASE_URL=postgres://x)"; rc=$?
-if [ "$rc" -eq 0 ] && [ -d "${WORK}/cwd/public" ]; then
-  ok "an output directory exists after a successful run"
-else bad "an output directory exists after a successful run" "exit=$rc" "$out"; fi
+assert_output_dir "a non-empty output directory exists after a successful run" "$rc" "$out"
 
 reset_saw
 out="$(run_build)"; rc=$?
-if [ "$rc" -eq 0 ] && [ -d "${WORK}/cwd/public" ]; then
-  ok "an output directory exists even when the migration is skipped"
-else bad "an output directory exists even when the migration is skipped" "exit=$rc" "$out"; fi
+assert_output_dir "a non-empty output directory exists even when the migration is skipped" "$rc" "$out"
+
+# The output directory is SERVED — vercel.json's first route is `{ "handle": "filesystem" }`, so
+# anything here shadows the function routes at that exact path. These names must never appear.
+reset_saw
+out="$(run_build DATABASE_URL=postgres://x)" >/dev/null 2>&1
+for forbidden in index.html .well-known _vercel; do
+  if [ -e "${WORK}/cwd/public/${forbidden}" ]; then
+    bad "the output directory shadows a live route" "found public/${forbidden}"
+  fi
+done
+ok "the output directory shadows no route that must reach a function"
 
 # ── 8. vercel.json actually points at this script ───────────────────────────────────────────────
 # Every assertion above is about a script that only matters if the deploy runs it. A guard that
