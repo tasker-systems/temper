@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT anchor_table AS \"t!\", anchor_id AS \"i!\", owner_profile_id\n                 FROM kb_resource_homes WHERE resource_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "t!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "i!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "owner_profile_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f0cb85dd6d0d6d4b720a0447825f6649dc415ea5f463c1788d2a4809501a431e"
+}

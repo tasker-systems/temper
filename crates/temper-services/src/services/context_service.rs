@@ -12,7 +12,7 @@
 
 use sqlx::PgPool;
 
-use crate::authz::{TwoSidedAuthority, TwoSidedScope};
+use crate::authz::{ContextAdminAuthority, TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
@@ -21,8 +21,8 @@ use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
-    ReassignContextOutcome, ReassignContextRequest, ShareContextOutcome, ShareContextRequest,
-    UnshareContextOutcome,
+    ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
+    ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
@@ -105,7 +105,11 @@ pub async fn get_visible(
 ///
 /// The `@me` arm is deliberately **not** bound by this and still names the slug — that slug is the
 /// caller's own, so echoing it discloses nothing they did not supply.
-const CONTEXT_REFUSAL: &str = "context not found or not readable";
+///
+/// `pub(crate)` for its second consumer: `crate::authz::ContextAdminAuthority::denial_for` renders
+/// the `Invisible` arm with **this** constant, so an administration refusal is byte-identical to
+/// the read refusals above rather than a fourth copy of the same defence.
+pub(crate) const CONTEXT_REFUSAL: &str = "context not found or not readable";
 
 /// Resolve a context ref to a `ContextId`, gated to what `principal` may see.
 ///
@@ -224,12 +228,19 @@ async fn lookup_profile_context(
     Ok(ContextId::from(id))
 }
 
-/// Assert that `principal` may see `context_id` (owned or team-shared).
-async fn ensure_context_visible(
+/// May `principal` see `context_id` (owned or team-shared)? The predicate, not the assertion.
+///
+/// The one Rust spelling of the `context_visible_to(principal, context)` probe. Extracted from
+/// [`ensure_context_visible`], which keeps its own error rendering and now calls this, because
+/// `crate::authz::ContextAdminAuthority` must **distinguish** "visible but not administered"
+/// (`403`) from "not visible" (`404`) and so needs the boolean rather than the refusal. Inferring
+/// the arm by catching `ensure_context_visible`'s `ApiError` would be worse than the duplication it
+/// avoids; a second copy of the SQL would be the duplication itself. One name for the concept.
+pub(crate) async fn context_visible(
     pool: &PgPool,
     principal: uuid::Uuid,
     context_id: uuid::Uuid,
-) -> ApiResult<()> {
+) -> ApiResult<bool> {
     let visible = sqlx::query_scalar!(
         r#"SELECT context_visible_to($1, $2) AS "ok!""#,
         principal,
@@ -237,11 +248,45 @@ async fn ensure_context_visible(
     )
     .fetch_one(pool)
     .await?;
-    if visible {
+    Ok(visible)
+}
+
+/// Assert that `principal` may see `context_id` (owned or team-shared).
+async fn ensure_context_visible(
+    pool: &PgPool,
+    principal: uuid::Uuid,
+    context_id: uuid::Uuid,
+) -> ApiResult<()> {
+    if context_visible(pool, principal, context_id).await? {
         Ok(())
     } else {
         Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
     }
+}
+
+/// The one canonical spelling of a stored context name: leading/trailing whitespace trimmed,
+/// internal runs of whitespace collapsed to a single space.
+///
+/// **Whitespace and nothing else.** It deliberately does **not** reuse [`sluggify`]'s ASCII fold:
+/// a slug is an *address* and may be lossy, a name is a *display label* and may not — `Café` stays
+/// `Café`. Two normalizations answering two different questions; sharing an implementation would
+/// silently make the display label lossy too.
+///
+/// Called from **every** path that stores a context name: [`create`], [`rename`], and
+/// `connection_service`'s home-context insert. Spec §"Names are canonicalized before they are
+/// stored — on both write paths": *"A canonical-form invariant honoured by one of two write paths
+/// is not an invariant — rename would be a repair affordance for a hole `create` keeps digging."*
+/// `create`'s stored-name behavior therefore changes here, deliberately: a name that used to be
+/// persisted verbatim is now persisted canonical. The derived slug is unaffected — `sluggify`
+/// already splits on runs of non-alphanumerics, so `"Temper  KB"` and `"Temper KB"` always yielded
+/// the same slug; the defect this closes was entirely in the stored `name`.
+///
+/// **The spec says "both" because it knew of two; disk had three.** `connection_service` births a
+/// home context from a free-text `req.name`, and the spec's own argument applies to it verbatim —
+/// an invariant honoured by two of three write paths is no more an invariant than one of two. It
+/// is `pub(crate)` for that third caller.
+pub(crate) fn canonical_name(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Pick a slug for a new context, unique within `(owner_table, owner_id, slug)`.
@@ -334,6 +379,10 @@ pub async fn resolve_create_owner(
 /// (`(owner_table, owner_id, slug)`), not the name — `next_unique_context_slug`
 /// auto-suffixes on collision (scoped to this owner), so two contexts sharing a
 /// name coexist under distinct slugs rather than 409ing.
+///
+/// The name is stored in `canonical_name` form. This is the second of that helper's two callers
+/// and the reason it exists on this path at all: a canonical-form invariant honoured only by
+/// [`rename`] would make rename a repair affordance for a hole `create` keeps digging.
 pub async fn create(
     pool: &PgPool,
     owner_table: &str,
@@ -341,7 +390,8 @@ pub async fn create(
     name: &str,
 ) -> ApiResult<ContextRow> {
     let id = ContextId::new();
-    let slug = next_unique_context_slug(pool, owner_table, owner_id, name).await?;
+    let name = canonical_name(name);
+    let slug = next_unique_context_slug(pool, owner_table, owner_id, &name).await?;
 
     let row = sqlx::query_as!(
         ContextRow,
@@ -587,7 +637,7 @@ pub async fn reassign(
         temper_substrate::events::EventContext::default(),
     )
     .await
-    .map_err(map_reassign_write_err)?;
+    .map_err(map_context_write_err)?;
 
     Ok(ReassignContextOutcome {
         context_id,
@@ -652,19 +702,276 @@ async fn inherited_reach(
     Ok((shares, grants))
 }
 
-/// Map a substrate write error from `reassign_context_with` to an [`ApiError`].
+/// Rename a context — the one act that moves its `(name, slug)` identity pair in place.
 ///
-/// The `context_reassign` SQL function raises SQLSTATE `42501` (insufficient_privilege) when its
-/// atomic RBAC invariant rejects the write. The `can_share` pre-check returns a clean `Forbidden`
-/// on the common path, so this only fires on a TOCTOU change between check and write — but that
-/// race should still read as `403`, not `500`. Everything else is a genuine internal error.
-fn map_reassign_write_err(e: anyhow::Error) -> ApiError {
+/// **Rename takes a name; the slug is derived.** There is deliberately no independent slug
+/// parameter, and the consequence is stated rather than mitigated: a rename **re-addresses** the
+/// context. After renaming `@me/temper` to `"Temper KB"`, `@me/temper` no longer resolves and
+/// `@me/temper-kb` does, and every stored `@owner/slug` string held by anyone is stale. That is why
+/// the outcome carries the composed `context_ref`.
+///
+/// **Auth before writes**, and before every read: `ContextAdminAuthority` is last in the spec's
+/// refusal table but first in this body. It answers in two dialects — `403` to a caller who reads
+/// the context but does not administer it, `404` to one who cannot see it — which is the whole
+/// reason `ScopedAuthority::denial_for` exists. The `context_rename` SQL function re-runs the same
+/// admission rule as an in-transaction invariant, so this gate is the caller-facing refusal and
+/// that one is the atomic backstop (mapped through `map_context_write_err`).
+///
+/// The remaining refusals, **in order** (spec §"Refusals"):
+///
+/// 1. an empty derived slug → `400`, a deliberate divergence from [`create`], which falls back to
+///    the literal `"context"`. Tolerable at birth, wrong at rename: `--name "!!!"` must not silently
+///    re-address a context to `context`. One check covers both cases — an all-whitespace name
+///    canonicalizes to empty and an empty name sluggifies to empty.
+/// 2. the **canonical name** already equal to the stored one → `200`, `renamed: false`, no event.
+/// 3. the derived slug taken by **another** context under the same owner → `409`, a deliberate
+///    divergence from [`create`], which auto-suffixes (`notes`, `notes-2`). A rename is a deliberate
+///    re-address, and silently landing on `notes-2` gives the caller an address they did not ask for
+///    and were not told about. Hence this path calls [`sluggify`] directly and **never**
+///    `next_unique_context_slug`, whose two conveniences are exactly the two divergences above.
+///
+/// **What is compared for the no-op is the canonical NAME, never the derived slug.** Slug-comparison
+/// is the natural thing to write and is wrong twice over: a stored name predating canonicalization
+/// (`"Temper  KB"`) sluggifies identically to its own repaired form, so slug-comparison would
+/// permanently decline the one rename that fixes it; and two genuinely different names can share a
+/// slug (`"Temper KB"` / `"Temper-KB"`), so it would swallow a real display-name change and report
+/// success. Consequently **a rename whose slug does not move is still a rename**: it writes `name`,
+/// emits, and returns `renamed: true` with `from_slug == to_slug` recording that the address stayed
+/// put.
+pub async fn rename(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+    name: &str,
+) -> ApiResult<RenameContextOutcome> {
+    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+
+    // The current identity pair plus the already-sigil'd owner ref, in one read. A rename leaves
+    // `(owner_table, owner_id)` untouched, so the ref composed from this row is still correct after
+    // the write. The `CASE` is the incumbent both-kinds spelling (`:42-46`, `:77-80`, `:377-380`) —
+    // `team_owner_ref` is team-only and would `fetch_one`-panic on a profile-owned context.
+    //
+    // `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm admits without consulting the
+    // subject's existence (it probes the caller's governance grant), so a system admin naming a
+    // context id that does not exist reaches here. That is the read refusal, not a 500.
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+              CASE owner_table
+                WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+              END AS "owner_ref!"
+         FROM kb_contexts WHERE id = $1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    let to_name = canonical_name(name);
+    let to_slug = sluggify(&to_name);
+
+    // 1. Refuse rather than re-address: a name with no addressable content gets no address.
+    if to_slug.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "name '{name}' has no addressable content; \
+             use a name with at least one alphanumeric character"
+        )));
+    }
+
+    // 2. Idempotent no-op — the canonical NAME, never the slug (see the doc comment above).
+    if to_name == cur.name {
+        let context_ref = format!("{}/{}", cur.owner_ref, cur.slug);
+        return Ok(RenameContextOutcome {
+            context_id,
+            name: cur.name,
+            slug: cur.slug,
+            owner_ref: cur.owner_ref,
+            context_ref,
+            renamed: false,
+        });
+    }
+
+    // 3. The derived slug must be free under the (unchanged) owner.
+    //
+    // `AND id <> $4` is load-bearing and is the one line that must NOT be copied from `reassign`'s
+    // query (`:583-590`), which has no self-exclusion and correctly needs none — it changes the
+    // *owner*, so the row can never match itself. Rename keeps the owner fixed, so without this a
+    // name-only rename (canonical name moved, slug did not) reaches here and 409s against its own
+    // slug — breaking exactly the legacy-repair case the no-op rule above exists to enable.
+    let collision = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_contexts
+             WHERE owner_table = $1 AND owner_id = $2 AND slug = $3 AND id <> $4) AS "e!""#,
+        cur.owner_table,
+        cur.owner_id,
+        to_slug,
+        context_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if collision {
+        // Naming the colliding slug is not a leak: reaching the gate at all means the caller
+        // administers this context, so they own it or manage the owning team and can already
+        // enumerate that owner's contexts. Modelled on `reassign`'s message (`:591-596`).
+        return Err(ApiError::Conflict(format!(
+            "{} already owns a context with slug '{to_slug}'; pick another name",
+            cur.owner_ref
+        )));
+    }
+
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    temper_substrate::writes::rename_context_with(
+        pool,
+        temper_substrate::ids::ContextId::from(context_id),
+        (cur.name.as_str(), cur.slug.as_str()),
+        (to_name.as_str(), to_slug.as_str()),
+        emitter,
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .map_err(map_context_write_err)?;
+
+    // Composed once, here, from the already-decorated `owner_ref` — never through
+    // `decorated_context_ref`, whose `owner_addressable` parameter is the *bare* handle/team slug
+    // and would yield `@@handle/slug` from this value.
+    let context_ref = format!("{}/{to_slug}", cur.owner_ref);
+    Ok(RenameContextOutcome {
+        context_id,
+        name: to_name,
+        slug: to_slug,
+        owner_ref: cur.owner_ref,
+        context_ref,
+        renamed: true,
+    })
+}
+
+/// The `23505` refusal both context write paths render when they lose the collision race.
+///
+/// A constant rather than a literal, for the reason [`CONTEXT_REFUSAL`] gives: it is one defence
+/// shared by two call sites, and two copies would be two defences that drift. It deliberately names
+/// neither the owner nor the slug — unlike the pre-check messages, which have a row in hand, this
+/// one is reconstructed from a SQLSTATE and has nothing but the constraint that fired.
+const CONTEXT_SLUG_TAKEN: &str = "that owner already holds a context with this slug";
+
+/// Map a substrate write error from `reassign_context_with` / `rename_context_with` to an
+/// [`ApiError`]. **One mapper, two call sites** — the mapping is identical for both and would drift
+/// if written twice.
+///
+/// - `42501` (insufficient_privilege) — `context_reassign` and `context_rename` each carry their
+///   RBAC gate as an in-transaction invariant, not merely a caller pre-check. The Rust gate renders
+///   a clean refusal on the common path, so this arm only fires on a TOCTOU change between check and
+///   write; that lost race should still read as `403`, not `500`.
+/// - `23505` (unique_violation) — `UNIQUE (owner_table, owner_id, slug)` is the backstop behind both
+///   call sites' slug-collision pre-check. **The race path must render the same refusal as the
+///   pre-check**, or the caller's experience depends on how quickly they lost the race rather than
+///   on the state of the system: the caller who won gets `409` and the caller who lost gets `500`
+///   for the same conflict. `reassign` shipped with exactly this hole — a `42501`-only body — and
+///   rename's tests are what surfaced it; it is fixed here rather than left beside a correct copy.
+///
+/// Everything else is a genuine internal error.
+fn map_context_write_err(e: anyhow::Error) -> ApiError {
     if let Some(sqlx::Error::Database(db)) = e.downcast_ref::<sqlx::Error>() {
-        if db.code().as_deref() == Some("42501") {
-            return ApiError::Forbidden;
+        match db.code().as_deref() {
+            Some("42501") => return ApiError::Forbidden,
+            Some("23505") => return ApiError::Conflict(CONTEXT_SLUG_TAKEN.to_string()),
+            _ => {}
         }
     }
     ApiError::Internal(e.to_string())
+}
+
+/// The mapper and the canonicalizer, exercised directly — no database, no race.
+///
+/// This module is deliberately **not** `test-db`-gated. The `23505` arm exists for a path that only
+/// a real interleaving reaches, and nothing in this crate's suites provokes one; a synthetic
+/// `sqlx::Error::Database` carrying only a SQLSTATE is the only evidence available for the
+/// concurrent half of `one-owner-never-holds-two-of-the-same-address`, so it must at least run in
+/// the tier that needs no services.
+#[cfg(test)]
+mod write_err_mapper_tests {
+    use super::*;
+    use std::borrow::Cow;
+    use std::error::Error as StdError;
+    use std::fmt;
+
+    /// A [`sqlx::error::DatabaseError`] carrying nothing but a SQLSTATE — the one field
+    /// [`map_context_write_err`] reads. Everything else is the trait's minimum.
+    #[derive(Debug)]
+    struct SqlState(&'static str);
+
+    impl fmt::Display for SqlState {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "synthetic database error, SQLSTATE {}", self.0)
+        }
+    }
+
+    impl StdError for SqlState {}
+
+    impl sqlx::error::DatabaseError for SqlState {
+        fn message(&self) -> &str {
+            "synthetic database error"
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    /// The shape the substrate hands back: `fire_with`'s `?` converts `sqlx::Error` straight into
+    /// `anyhow::Error` with no wrapping, which is what makes the mapper's `downcast_ref` work.
+    fn substrate_err(sqlstate: &'static str) -> anyhow::Error {
+        anyhow::Error::new(sqlx::Error::Database(Box::new(SqlState(sqlstate))))
+    }
+
+    /// The bundled fix, asserted directly. Without this arm a lost collision race renders `500`
+    /// where the pre-check renders `409`, so the answer depends on timing rather than on state.
+    #[test]
+    fn unique_violation_renders_the_same_conflict_the_pre_check_renders() {
+        match map_context_write_err(substrate_err("23505")) {
+            ApiError::Conflict(msg) => assert_eq!(msg, CONTEXT_SLUG_TAKEN),
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+    }
+
+    /// The incumbent arm, unchanged: the in-transaction RBAC invariant's raise reads as `403`.
+    #[test]
+    fn insufficient_privilege_renders_forbidden() {
+        assert!(matches!(
+            map_context_write_err(substrate_err("42501")),
+            ApiError::Forbidden
+        ));
+    }
+
+    /// Everything else stays a genuine internal error — the arms are additive, not a catch-all.
+    #[test]
+    fn any_other_sqlstate_stays_internal() {
+        assert!(matches!(
+            map_context_write_err(substrate_err("23503")),
+            ApiError::Internal(_)
+        ));
+    }
+
+    /// Whitespace only. `Café` keeps its accent — the fold that a *slug* may apply, a *name* may
+    /// not.
+    #[test]
+    fn canonical_name_normalizes_whitespace_and_nothing_else() {
+        assert_eq!(canonical_name("  Temper   KB \n"), "Temper KB");
+        assert_eq!(canonical_name("Café  Notes"), "Café Notes");
+        assert_eq!(canonical_name("   "), "");
+        assert_eq!(canonical_name("!!!"), "!!!");
+    }
 }
 
 /// `+team-slug` decorated owner ref for a transfer outcome (mirrors `create`'s CASE).
@@ -1134,5 +1441,363 @@ mod tests {
             owner_of_context(&pool, *context_id).await,
             ("kb_teams".to_string(), acme)
         );
+    }
+
+    // ── Context rename ───────────────────────────────────────────────────────
+    //
+    // A rename moves the `(name, slug)` identity pair in place under an UNCHANGED owner. That is
+    // the difference from `reassign` that every trap below descends from: the row can match itself.
+
+    /// A personal context whose stored `name` differs from its `slug` — `mk_personal_context` sets
+    /// both to the same string, which cannot express the legacy-repair or name-only cases.
+    async fn mk_named_personal_context(
+        pool: &PgPool,
+        slug: &str,
+        name: &str,
+        owner: ProfileId,
+    ) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
+             VALUES ($1, $2, 'kb_profiles', $3) RETURNING id",
+        )
+        .bind(slug)
+        .bind(name)
+        .bind(*owner)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The stored identity pair, read straight from the row — the projection, not the outcome.
+    async fn name_slug_of(pool: &PgPool, ctx: Uuid) -> (String, String) {
+        let row = sqlx::query!("SELECT name, slug FROM kb_contexts WHERE id = $1", ctx)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (row.name, row.slug)
+    }
+
+    /// How many `context_renamed` events this context carries. The trail is the ONLY attributability
+    /// surface a rename has — `kb_contexts` keeps no before-image and no `updated` column.
+    async fn rename_events(pool: &PgPool, ctx: Uuid) -> i64 {
+        sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+             WHERE t.name = 'context_renamed' AND (e.payload->>'context_id')::uuid = $1",
+            ctx,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .unwrap()
+    }
+
+    async fn is_readable(pool: &PgPool, profile: ProfileId, resource: Uuid) -> bool {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM resources_visible_to($1) WHERE resource_id = $2) AS "e!""#,
+            *profile,
+            resource,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The empty-slug `400`, and **both** of the ways to reach it — the spec's "one `400` check, not
+    /// two": an all-whitespace name canonicalizes to empty, a punctuation-only name sluggifies to
+    /// empty. Neither may fall through to `create`'s `"context"` fallback, which would silently
+    /// re-address the context to a slug the caller never asked for.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_name_with_no_addressable_content_is_refused(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_named_personal_context(&pool, "notes", "Notes", alice).await;
+
+        for bad in ["   ", "!!!"] {
+            match rename(&pool, alice, ctx, bad).await {
+                Err(ApiError::BadRequest(_)) => {}
+                other => panic!("{bad:?} must be refused with 400, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            name_slug_of(&pool, ctx).await,
+            ("Notes".to_string(), "notes".to_string()),
+            "a refused rename writes nothing"
+        );
+        assert_eq!(rename_events(&pool, ctx).await, 0);
+    }
+
+    /// The no-op arm: the canonical name already equals the stored one, so nothing is written and
+    /// **no event is emitted**. The input differs from the stored name only in whitespace, which is
+    /// precisely what canonicalization erases.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_canonically_identical_name_is_a_no_op_and_emits_nothing(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_named_personal_context(&pool, "temper-kb", "Temper KB", alice).await;
+
+        let outcome = rename(&pool, alice, ctx, "  Temper   KB  ").await.unwrap();
+        assert!(!outcome.renamed);
+        assert_eq!(outcome.name, "Temper KB");
+        assert_eq!(outcome.slug, "temper-kb");
+        assert_eq!(outcome.context_ref, "@alice/temper-kb");
+        assert_eq!(rename_events(&pool, ctx).await, 0, "no-op emits no event");
+    }
+
+    /// The `409`, and the divergence from `create` it encodes: rename does not auto-suffix, so the
+    /// caller is told the address is taken rather than handed `notes-2` without being asked.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_slug_taken_by_another_context_under_the_same_owner_conflicts(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        mk_named_personal_context(&pool, "notes", "Notes", alice).await;
+        let scratch = mk_named_personal_context(&pool, "scratch", "Scratch", alice).await;
+
+        match rename(&pool, alice, scratch, "Notes").await.unwrap_err() {
+            ApiError::Conflict(msg) => assert!(
+                msg.contains("notes"),
+                "the refusal names the colliding slug: {msg}"
+            ),
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        assert_eq!(
+            name_slug_of(&pool, scratch).await,
+            ("Scratch".to_string(), "scratch".to_string()),
+            "a refused rename writes nothing"
+        );
+        assert_eq!(rename_events(&pool, scratch).await, 0);
+    }
+
+    /// The happy path: **both** columns move, the event lands, and the outcome carries the composed
+    /// new ref — the address the caller must use from now on, since the old one no longer resolves.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_rename_moves_both_name_and_slug_and_emits(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_named_personal_context(&pool, "proj", "Proj", alice).await;
+
+        let outcome = rename(&pool, alice, ctx, "  Temper   KB ").await.unwrap();
+        assert!(outcome.renamed);
+        assert_eq!(outcome.name, "Temper KB", "stored canonical, not verbatim");
+        assert_eq!(outcome.slug, "temper-kb");
+        assert_eq!(outcome.owner_ref, "@alice");
+        assert_eq!(
+            outcome.context_ref, "@alice/temper-kb",
+            "one sigil, not two — composed from the already-decorated owner_ref"
+        );
+        assert_eq!(
+            name_slug_of(&pool, ctx).await,
+            ("Temper KB".to_string(), "temper-kb".to_string())
+        );
+        assert_eq!(rename_events(&pool, ctx).await, 1);
+    }
+
+    /// **The self-exclusion regression test.** A rename whose slug does not move is still a rename.
+    /// `reassign`'s collision query has no `AND id <> …` and correctly needs none; copied verbatim
+    /// here it would find this context's own row and 409 against its own slug.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_name_only_rename_is_still_a_rename_and_does_not_collide_with_itself(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        // "Temper KB" and "Temper-KB" are different names that sluggify identically.
+        let ctx = mk_named_personal_context(&pool, "temper-kb", "Temper KB", alice).await;
+
+        let outcome = rename(&pool, alice, ctx, "Temper-KB").await.unwrap();
+        assert!(outcome.renamed, "a display-name change is not a no-op");
+        assert_eq!(outcome.slug, "temper-kb", "the address stayed put");
+        assert_eq!(
+            name_slug_of(&pool, ctx).await,
+            ("Temper-KB".to_string(), "temper-kb".to_string())
+        );
+        assert_eq!(
+            rename_events(&pool, ctx).await,
+            1,
+            "it emits like any rename"
+        );
+    }
+
+    /// **The legacy-repair case**, and the reason the no-op arm compares the NAME. This context's
+    /// stored name predates canonicalization; its own repaired form sluggifies identically, so a
+    /// slug-comparison no-op arm would decline the one rename that fixes it — permanently.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_non_canonical_stored_name_can_be_repaired_to_its_canonical_form(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_named_personal_context(&pool, "temper-kb", "Temper  KB", alice).await;
+
+        let outcome = rename(&pool, alice, ctx, "Temper KB").await.unwrap();
+        assert!(outcome.renamed, "the repair is a real state change");
+        assert_eq!(
+            name_slug_of(&pool, ctx).await,
+            ("Temper KB".to_string(), "temper-kb".to_string())
+        );
+    }
+
+    /// `canonical_name`'s **second** caller: a create stores the canonical name too. Without this
+    /// the invariant would be honoured by one of two write paths, which is not an invariant.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_stores_a_canonical_name(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+
+        let row = create(&pool, "kb_profiles", *alice, "  Temper   KB \n")
+            .await
+            .unwrap();
+        assert_eq!(row.name, "Temper KB");
+        assert_eq!(row.slug, "temper-kb");
+        assert_eq!(
+            name_slug_of(&pool, *row.id).await,
+            ("Temper KB".to_string(), "temper-kb".to_string())
+        );
+    }
+
+    /// The gate is wired, and it answers in **two** dialects: a plain member of the owning team can
+    /// read the context but does not `can_manage` it → `403`; a stranger cannot see it at all →
+    /// the incumbent `404`, byte-identical to `get_visible`'s refusal.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rename_refuses_a_reader_with_403_and_a_stranger_with_404(pool: PgPool) {
+        let member = mk_profile_ent(&pool, "member").await;
+        let stranger = mk_profile_ent(&pool, "stranger").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, member, "member").await;
+        let ctx = mk_team_context(&pool, "eng-notes", acme).await;
+
+        assert!(matches!(
+            rename(&pool, member, ctx, "Engineering Notes")
+                .await
+                .unwrap_err(),
+            ApiError::Forbidden
+        ));
+        match rename(&pool, stranger, ctx, "Engineering Notes")
+            .await
+            .unwrap_err()
+        {
+            ApiError::NotFound(msg) => assert_eq!(msg, CONTEXT_REFUSAL),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        assert_eq!(rename_events(&pool, ctx).await, 0);
+    }
+
+    /// The RBAC gate is an INVARIANT of `context_rename`, not merely a service pre-check — the
+    /// TOCTOU backstop. Calling the function DIRECTLY with an emitter belonging to a profile that
+    /// does not administer the context must still be rejected, atomically: `42501`, row untouched.
+    /// (Model: `sql_guard_rejects_unauthorized_emitter_directly` above.)
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sql_guard_rejects_unauthorized_rename_emitter_directly(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let mallory = mk_profile_ent(&pool, "mallory").await;
+        let ctx = mk_named_personal_context(&pool, "proj", "Proj", alice).await;
+
+        let payload = temper_substrate::payloads::ContextRenamed {
+            context_id: ContextId::from(ctx),
+            from_name: "Proj".to_string(),
+            from_slug: "proj".to_string(),
+            to_name: "Hijacked".to_string(),
+            to_slug: "hijacked".to_string(),
+        };
+        let payload_json = serde_json::to_value(&payload).unwrap();
+        let emitter = emitter_of(&pool, mallory, "mallory").await;
+
+        let res = sqlx::query_scalar::<_, Uuid>("SELECT context_rename($1,$2,$3,$4,$5)")
+            .bind(&payload_json)
+            .bind(emitter)
+            .bind(serde_json::json!({}))
+            .bind(None::<Uuid>)
+            .bind(None::<Uuid>)
+            .fetch_one(&pool)
+            .await;
+
+        match res.unwrap_err() {
+            sqlx::Error::Database(db) => assert_eq!(
+                db.code().as_deref(),
+                Some("42501"),
+                "authz raise must use insufficient_privilege"
+            ),
+            other => panic!("expected the SQL RBAC guard to raise, got {other:?}"),
+        }
+        assert_eq!(
+            name_slug_of(&pool, ctx).await,
+            ("Proj".to_string(), "proj".to_string()),
+            "identity pair unchanged when the SQL guard rejects"
+        );
+    }
+
+    /// The system-admin bypass holds at the SQL layer too. The subject is a context the admin
+    /// **does not own** — the arm that admits an actor who cannot even *read* the context, and the
+    /// reason the Rust gate probes `is_system_admin` above visibility. An admin-owned subject would
+    /// have passed through the ownership branch and proved nothing about the bypass.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sql_guard_allows_system_admin_rename_directly(pool: PgPool) {
+        let (admin, _member, _gating, _own_ctx) = seed_admin_team_context(&pool).await;
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_named_personal_context(&pool, "private", "Private", alice).await;
+        assert!(
+            !context_visible(&pool, *admin, ctx).await.unwrap(),
+            "fixture precondition: the admin must NOT be able to read this context"
+        );
+
+        let payload = temper_substrate::payloads::ContextRenamed {
+            context_id: ContextId::from(ctx),
+            from_name: "Private".to_string(),
+            from_slug: "private".to_string(),
+            to_name: "Renamed By Admin".to_string(),
+            to_slug: "renamed-by-admin".to_string(),
+        };
+        let payload_json = serde_json::to_value(&payload).unwrap();
+        let emitter = emitter_of(&pool, admin, "admin").await;
+
+        sqlx::query_scalar::<_, Uuid>("SELECT context_rename($1,$2,$3,$4,$5)")
+            .bind(&payload_json)
+            .bind(emitter)
+            .bind(serde_json::json!({}))
+            .bind(None::<Uuid>)
+            .bind(None::<Uuid>)
+            .fetch_one(&pool)
+            .await
+            .expect("system admin rename through the SQL function");
+
+        assert_eq!(
+            name_slug_of(&pool, ctx).await,
+            (
+                "Renamed By Admin".to_string(),
+                "renamed-by-admin".to_string()
+            )
+        );
+    }
+
+    /// `a-context-never-loses-its-contents-to-a-rename`. Spec §"What a rename does not touch" argues
+    /// this holds *because nothing is keyed by slug* — resources are homed on `(anchor_table,
+    /// anchor_id)` where `anchor_id` is a UUID. The argument is sound and it is still an argument;
+    /// this makes it falsifiable.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_rename_does_not_disturb_the_contexts_contents(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let stranger = mk_profile_ent(&pool, "stranger").await;
+        let ctx = mk_named_personal_context(&pool, "proj", "Proj", alice).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+
+        let before = sqlx::query!(
+            r#"SELECT anchor_table AS "t!", anchor_id AS "i!", owner_profile_id
+                 FROM kb_resource_homes WHERE resource_id = $1"#,
+            r,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(is_readable(&pool, alice, r).await);
+        assert!(!is_readable(&pool, stranger, r).await);
+
+        let outcome = rename(&pool, alice, ctx, "Temper KB").await.unwrap();
+        assert!(outcome.renamed);
+
+        let after = sqlx::query!(
+            r#"SELECT anchor_table AS "t!", anchor_id AS "i!", owner_profile_id
+                 FROM kb_resource_homes WHERE resource_id = $1"#,
+            r,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((after.t, after.i), (before.t, before.i), "home row unmoved");
+        assert_eq!(after.owner_profile_id, before.owner_profile_id);
+        assert!(is_readable(&pool, alice, r).await, "still readable");
+        assert!(
+            !is_readable(&pool, stranger, r).await,
+            "and still not readable by anyone new"
+        );
+        assert!(can_modify(&pool, alice, r).await, "authorship unchanged");
     }
 }

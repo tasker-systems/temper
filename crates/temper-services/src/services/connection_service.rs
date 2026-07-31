@@ -25,7 +25,7 @@ use crate::authz::{ConnectionAuthority, ConnectionScope};
 use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::InsertGrantParams;
-use crate::services::{access_service, machine_authz, profile_service};
+use crate::services::{access_service, context_service, machine_authz, profile_service};
 
 /// The emitter marker for a connection's entity (`<handle>@webhook`).
 ///
@@ -156,6 +156,11 @@ pub async fn provision(
         Some(team_id) => ("kb_teams", team_id),
         None => ("kb_profiles", profile_id),
     };
+    // The name is canonicalized on the way in, as `context_service::create` and `rename` do. This
+    // is the third path that stores a context name, and a canonical-form invariant honoured by two
+    // of three write paths is no more an invariant than one of two. The slug is unaffected —
+    // `sluggify` already collapses whitespace runs — so this changes the stored `name` only.
+    let home_context_name = context_service::canonical_name(&req.name);
     let home_context_id = sqlx::query_scalar!(
         r#"INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)
            VALUES ($1, $2, $3, $4, $5)
@@ -164,7 +169,7 @@ pub async fn provision(
         owner_table,
         owner_id,
         &slug,
-        &req.name,
+        &home_context_name,
     )
     .fetch_one(&mut *tx)
     .await?;

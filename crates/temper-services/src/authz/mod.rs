@@ -27,6 +27,7 @@
 
 mod audit_gate;
 mod connection;
+mod context_admin;
 mod grant;
 mod machine;
 mod read_gates;
@@ -51,6 +52,9 @@ pub(crate) use audit_gate::{
     AuditorJobAuthority, FINDING_REFUSAL,
 };
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
+// The first authority to declare two refusal dialects, and so the first (and only) consumer of
+// `ScopedAuthority::denial_for`. Wired by Task 6: `context_service::rename` is its single gate.
+pub(crate) use context_admin::ContextAdminAuthority;
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority, ACTOR_HISTORY_REFUSAL};
 pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};
