@@ -40,23 +40,33 @@ pub async fn context_panorama(
     container_types: &[String],
     depth: i32,
 ) -> ApiResult<ContextPanorama> {
-    let containers: Vec<Territory> = sqlx::query_as::<_, (Uuid, Option<String>, i32)>(
-        "SELECT id, label, member_count FROM graph_context_containers($1, $2, $3, $4)",
+    // `id!`: the body's `containers` CTE reads `c.id` out of `ctx`, which is
+    // `JOIN kb_resources r` — `kb_resources.id` is the PK. `member_count!`:
+    // `(SELECT count(DISTINCT rr.node_id)::int - 1 FROM reached rr WHERE rr.root = c.id)` — a
+    // scalar aggregate subquery, so always a row, and `count() - 1` of a non-null is non-null.
+    // `label` is `c.title`, which traces to the NOT NULL `kb_resources.title`, but it is left
+    // UNANNOTATED on purpose: `Territory.label` is `Option<String>` because its other producer
+    // (`graph_cogmap_territories`) genuinely returns NULL there, and passing this one straight
+    // through keeps both producers filling the field the same way. An absent `!` is never a
+    // decode hazard; only a wrong one is.
+    let containers: Vec<Territory> = sqlx::query!(
+        r#"SELECT id AS "id!", label, member_count AS "member_count!"
+             FROM graph_context_containers($1, $2, $3, $4)"#,
+        profile_id.as_uuid(),
+        *context_id,
+        container_types,
+        depth,
     )
-    .bind(profile_id.as_uuid())
-    .bind(*context_id)
-    .bind(container_types)
-    .bind(depth)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(id, label, member_count)| Territory {
-        id,
+    .map(|c| Territory {
+        id: c.id,
         // Tint encodes the AXIS, not container-ness (spec D6). A goal container sits on
         // the builder axis, so it is Context-tinted even though it is rooted at a goal.
         kind: TerritoryKind::Context,
-        label,
-        member_count,
+        label: c.label,
+        member_count: c.member_count,
         salience: None,
         coherence: None,
         anchor_id: *context_id,
@@ -205,13 +215,20 @@ pub async fn context_composition(
     let depth = depth.clamp(1, 3);
 
     // Edges of the induced cross-home subgraph reachable from the (bounded) seeds.
-    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
-        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
-         FROM graph_context_composition_edges($1, $2, $3)",
+    // EdgeKind/Polarity decode natively via their `sqlx::Type` derive
+    // (`type_name = "edge_kind"` / `"edge_polarity"`) — a type override, no `::text` cast
+    // round-trip. Every column but `label` is NOT NULL on `kb_edges`, and the body's final
+    // SELECT reads them straight off `FROM kb_edges e` through inner joins only; the overrides
+    // exist solely because a set-returning function types every column as nullable.
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_context_composition_edges($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        bounded,
+        depth,
     )
-    .bind(profile_id.as_uuid())
-    .bind(bounded)
-    .bind(depth)
     .fetch_all(pool)
     .await?;
 
@@ -222,7 +239,7 @@ pub async fn context_composition(
     for id in bounded
         .iter()
         .copied()
-        .chain(walked.iter().flat_map(|(_, s, t, ..)| [*s, *t]))
+        .chain(walked.iter().flat_map(|w| [w.source_id, w.target_id]))
     {
         if seen.insert(id) {
             node_ids.push(id);
@@ -236,18 +253,16 @@ pub async fn context_composition(
     let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
     let edges: Vec<AtlasEdge> = walked
         .into_iter()
-        .filter(|(_, s, t, ..)| present.contains(s) && present.contains(t))
-        .map(
-            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
-                id,
-                source,
-                target,
-                edge_kind,
-                polarity,
-                label,
-                weight,
-            },
-        )
+        .filter(|w| present.contains(&w.source_id) && present.contains(&w.target_id))
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label,
+            weight: w.weight,
+        })
         .collect();
 
     Ok(AtlasSubgraph { nodes, edges })

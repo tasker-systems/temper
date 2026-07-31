@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cogmap_id AS \"cogmap_id!\", name AS \"name!\", owner_ref AS \"owner_ref!\",\n                  team_ids AS \"team_ids!\", region_count AS \"region_count!\",\n                  facet_count AS \"facet_count!\"\n             FROM graph_home_cogmaps($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cogmap_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "team_ids!",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 4,
+        "name": "region_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "facet_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "1e8dcadcb996eda4c82e6ad40006f5c238b704c502f5b7e56e905569ebb46117"
+}

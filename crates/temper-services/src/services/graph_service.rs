@@ -3,7 +3,6 @@
 //! and the membership home. Each composes an SQL read (visibility-scoped in the
 //! function) and projects it into the Atlas wire shapes.
 
-use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -112,70 +111,74 @@ pub async fn cogmap_neighborhood_slice(
     // Walk: returns the edges of the induced subgraph. EdgeKind/Polarity decode
     // natively via their `sqlx::Type` derive, so req.edge_kinds binds directly as an
     // `edge_kind[]` array param — no `::text` cast round-trip.
-    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
-        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
-         FROM graph_traverse_cogmap_scoped($1, $2, $3, $4, $5)",
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_traverse_cogmap_scoped($1, $2, $3, $4, $5)"#,
+        profile_id.as_uuid(),
+        cogmap_id,
+        &req.seeds,
+        depth,
+        &req.edge_kinds as &[EdgeKind],
     )
-    .bind(profile_id.as_uuid())
-    .bind(cogmap_id)
-    .bind(&req.seeds)
-    .bind(depth)
-    .bind(&req.edge_kinds)
     .fetch_all(pool)
     .await?;
 
     let edges: Vec<AtlasEdge> = walked
         .iter()
-        .map(
-            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
-                id: *id,
-                source: *source,
-                target: *target,
-                edge_kind: *edge_kind,
-                polarity: *polarity,
-                label: label.clone(),
-                weight: *weight,
-            },
-        )
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label.clone(),
+            weight: w.weight,
+        })
         .collect();
 
     // Node id set = seeds ∪ all walked endpoints.
     let mut node_ids: Vec<Uuid> = req.seeds.clone();
-    for (_, s, t, ..) in &walked {
-        node_ids.push(*s);
-        node_ids.push(*t);
+    for w in &walked {
+        node_ids.push(w.source_id);
+        node_ids.push(w.target_id);
     }
 
-    let nodes: Vec<AtlasNode> = sqlx::query_as::<
-        _,
-        (Uuid, String, Option<String>, String, i32, Option<String>),
-    >(
-        "SELECT id, title, doc_type, home, degree, first_chunk FROM graph_atlas_nodes_cogmap($1, $2, $3)",
+    // Set-returning-function columns all read as nullable, so the non-null ones need an
+    // override. In `\sf graph_atlas_nodes_cogmap`: `id`/`title` come from
+    // `JOIN kb_resources r ON r.id = ids.id AND r.is_active` and both columns are NOT NULL;
+    // `degree` is `COALESCE(deg.degree, 0)`; `home` is a total `CASE … ELSE 'context' END`
+    // over `bool_or(...)` in an ungrouped-aggregate LATERAL, which always yields exactly one
+    // row and takes the ELSE when `bool_or` is NULL over an empty set. `doc_type` (LEFT JOIN
+    // `doc`) and `first_chunk` (a scalar subquery) stay genuinely optional.
+    let nodes: Vec<AtlasNode> = sqlx::query!(
+        r#"SELECT id AS "id!", title AS "title!", doc_type, home AS "home!",
+                  degree AS "degree!", first_chunk
+             FROM graph_atlas_nodes_cogmap($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        cogmap_id,
+        &node_ids,
     )
-    .bind(profile_id.as_uuid())
-    .bind(cogmap_id)
-    .bind(&node_ids)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(
-        |(id, title, doc_type, home, degree, first_chunk)| AtlasNode {
-            id,
-            title,
-            doc_type,
-            home: if home == "cogmap" {
-                NodeHome::Cogmap
-            } else {
-                NodeHome::Context
-            },
-            degree,
-            salience: None, // neighborhood-tier salience deferred (no per-node source yet)
-            excerpt: first_chunk.as_deref().and_then(compute_excerpt),
-            // graph_atlas_nodes_cogmap does not return a stage column (only the
-            // graph_atlas_nodes_visible read was widened for it, spec D8), so None here.
-            stage: None,
+    .map(|n| AtlasNode {
+        id: n.id,
+        title: n.title,
+        doc_type: n.doc_type,
+        home: if n.home == "cogmap" {
+            NodeHome::Cogmap
+        } else {
+            NodeHome::Context
         },
-    )
+        degree: n.degree,
+        salience: None, // neighborhood-tier salience deferred (no per-node source yet)
+        excerpt: n.first_chunk.as_deref().and_then(compute_excerpt),
+        // graph_atlas_nodes_cogmap does not return a stage column (only the
+        // graph_atlas_nodes_visible read was widened for it, spec D8), so None here.
+        stage: None,
+    })
     .collect();
 
     Ok(AtlasSubgraph { nodes, edges })
@@ -228,50 +231,65 @@ pub async fn cogmap_panorama(
         }
     };
 
-    let territories: Vec<Territory> =
-        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64, Option<f64>)>(
-            "SELECT region_id, cogmap_id, label, member_count, salience, coherence \
-                 FROM graph_cogmap_territories($1, $2, $3)",
-        )
-        .bind(profile_id.as_uuid())
-        .bind(cogmap_id)
-        .bind(lens)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(
-            |(region_id, cogmap_id, label, member_count, salience, coherence)| Territory {
-                id: region_id,
-                kind: TerritoryKind::Region,
-                label,
-                member_count,
-                salience: Some(salience),
-                coherence,
-                anchor_id: cogmap_id,
-            },
-        )
-        .collect();
+    // `region_id!`/`salience!`: `kb_cogmap_regions.id` is the PK and `.salience` is NOT NULL,
+    // both reached straight off `FROM kb_cogmap_regions reg`. `cogmap_id!` is the interesting
+    // one — that COLUMN is nullable, but the function body's `WHERE reg.cogmap_id = p_cogmap`
+    // can never be true for a NULL, so the projected value is non-null by the predicate rather
+    // than by the constraint. `member_count!` is `count(*)::int` in a CROSS JOIN LATERAL
+    // (ungrouped aggregate ⇒ always one row, 0 over an empty set). `label` is
+    // `COALESCE(reg.label, seen.rep_title)` where the fallback is `(array_agg(...))[1]` — NULL
+    // when no member survives visibility — and `coherence` is the nullable
+    // `reg.content_cohesion`; both stay optional.
+    let territories: Vec<Territory> = sqlx::query!(
+        r#"SELECT region_id AS "region_id!", cogmap_id AS "cogmap_id!", label,
+                  member_count AS "member_count!", salience AS "salience!", coherence
+             FROM graph_cogmap_territories($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        cogmap_id,
+        lens,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|t| Territory {
+        id: t.region_id,
+        kind: TerritoryKind::Region,
+        label: t.label,
+        member_count: t.member_count,
+        salience: Some(t.salience),
+        coherence: t.coherence,
+        anchor_id: t.cogmap_id,
+    })
+    .collect();
 
     const ORPHAN_LIMIT: usize = 50;
-    let orphan_nodes: Vec<OrphanNode> =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid, Option<String>)>(
-            "SELECT id, title, doc_type, degree, anchor_id, anchor_label FROM graph_cogmap_orphan_nodes($1, $2)",
-        )
-        .bind(profile_id.as_uuid())
-        .bind(cogmap_id)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .take(ORPHAN_LIMIT)
-        .map(|(id, title, doc_type, degree, anchor_id, anchor_label)| OrphanNode {
-            id,
-            title,
-            doc_type,
-            degree,
-            anchor_id,
-            anchor_label,
-        })
-        .collect();
+    // `id!`/`title!`: both NOT NULL on `kb_resources`, reached through
+    // `JOIN kb_resources r ON r.id = homed.resource_id AND r.is_active`. `degree!`: unlike its
+    // sibling reads this one is NOT wrapped in a COALESCE, but the LATERAL is an ungrouped
+    // `count(*)::int`, so it yields one row and 0 rather than no row. `anchor_id!`: the body
+    // projects the `p_cogmap` PARAMETER verbatim, and we bind it from a non-null `Uuid`.
+    // `doc_type` (LEFT JOIN `doc`) and `anchor_label` (a scalar subquery over `kb_cogmaps`)
+    // stay optional.
+    let orphan_nodes: Vec<OrphanNode> = sqlx::query!(
+        r#"SELECT id AS "id!", title AS "title!", doc_type, degree AS "degree!",
+                  anchor_id AS "anchor_id!", anchor_label
+             FROM graph_cogmap_orphan_nodes($1, $2)"#,
+        profile_id.as_uuid(),
+        cogmap_id,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .take(ORPHAN_LIMIT)
+    .map(|o| OrphanNode {
+        id: o.id,
+        title: o.title,
+        doc_type: o.doc_type,
+        degree: o.degree,
+        anchor_id: o.anchor_id,
+        anchor_label: o.anchor_label,
+    })
+    .collect();
 
     // A single cogmap panorama has no cross-cogmap bridges.
     Ok(TerritoryOverview {
@@ -296,38 +314,35 @@ pub(crate) async fn hydrate_atlas_nodes_visible(
     profile_id: ProfileId,
     node_ids: &[Uuid],
 ) -> ApiResult<Vec<AtlasNode>> {
-    Ok(sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            Option<String>,
-            String,
-            i32,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        "SELECT id, title, doc_type, home, degree, first_chunk, stage FROM graph_atlas_nodes_visible($1, $2)",
+    // Same override reasoning as `graph_atlas_nodes_cogmap` above — `\sf
+    // graph_atlas_nodes_visible` is the same projection with a `stage` column added:
+    // `id`/`title` are NOT NULL through `JOIN kb_resources r … AND r.is_active`, `degree` is
+    // `COALESCE(deg.degree, 0)`, and `home` is a total `CASE … ELSE 'context' END` in an
+    // ungrouped-aggregate LATERAL. `doc_type`, `first_chunk` and `stage` are genuinely
+    // optional (two LEFT JOINs onto `kb_properties` and a scalar subquery).
+    Ok(sqlx::query!(
+        r#"SELECT id AS "id!", title AS "title!", doc_type, home AS "home!",
+                  degree AS "degree!", first_chunk, stage
+             FROM graph_atlas_nodes_visible($1, $2)"#,
+        profile_id.as_uuid(),
+        node_ids,
     )
-    .bind(profile_id.as_uuid())
-    .bind(node_ids)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(id, title, doc_type, home, degree, first_chunk, stage)| AtlasNode {
-        id,
-        title,
-        doc_type,
-        home: if home == "cogmap" {
+    .map(|n| AtlasNode {
+        id: n.id,
+        title: n.title,
+        doc_type: n.doc_type,
+        home: if n.home == "cogmap" {
             NodeHome::Cogmap
         } else {
             NodeHome::Context
         },
-        degree,
+        degree: n.degree,
         salience: None,
-        excerpt: first_chunk.as_deref().and_then(compute_excerpt),
-        stage,
+        excerpt: n.first_chunk.as_deref().and_then(compute_excerpt),
+        stage: n.stage,
     })
     .collect())
 }
@@ -389,14 +404,21 @@ pub async fn region_composition_slice(
 
     let depth = depth.clamp(1, 3);
 
-    // Edges of the induced cross-home subgraph.
-    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
-        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
-         FROM graph_region_composition_edges($1, $2, $3)",
+    // Edges of the induced cross-home subgraph. EdgeKind/Polarity decode natively via their
+    // `sqlx::Type` derive (`type_name = "edge_kind"` / `"edge_polarity"`), so the columns need
+    // only a type override — no `::text` cast round-trip. Every column but `label` is NOT NULL
+    // on `kb_edges` and the body's final SELECT reads them straight off `FROM kb_edges e` with
+    // inner joins only, so the set-returning function's blanket nullability is the only reason
+    // an override is needed at all; `kb_edges.label` is genuinely nullable.
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_region_composition_edges($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        &regions,
+        depth,
     )
-    .bind(profile_id.as_uuid())
-    .bind(&regions)
-    .bind(depth)
     .fetch_all(pool)
     .await?;
 
@@ -413,7 +435,7 @@ pub async fn region_composition_slice(
     let mut node_ids: Vec<Uuid> = Vec::new();
     for id in seeds
         .into_iter()
-        .chain(walked.iter().flat_map(|(_, s, t, ..)| [*s, *t]))
+        .chain(walked.iter().flat_map(|w| [w.source_id, w.target_id]))
     {
         if seen.insert(id) {
             node_ids.push(id);
@@ -436,18 +458,16 @@ pub async fn region_composition_slice(
     let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
     let edges: Vec<AtlasEdge> = walked
         .into_iter()
-        .filter(|(_, s, t, ..)| present.contains(s) && present.contains(t))
-        .map(
-            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
-                id,
-                source,
-                target,
-                edge_kind,
-                polarity,
-                label,
-                weight,
-            },
-        )
+        .filter(|w| present.contains(&w.source_id) && present.contains(&w.target_id))
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label,
+            weight: w.weight,
+        })
         .collect();
 
     Ok(AtlasSubgraph { nodes, edges })
@@ -459,46 +479,56 @@ pub async fn region_composition_slice(
 pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<AtlasHome> {
     // build lens — the contexts the profile can build in (personal + team), each
     // sized + owner-scoped. Visibility-gated inside graph_home_contexts.
-    let build: Vec<HomeContext> = sqlx::query_as::<
-        _,
-        (Uuid, String, String, String, i32, Option<DateTime<Utc>>),
-    >(
-        "SELECT context_id, name, slug, owner_ref, resource_count, last_active_at FROM graph_home_contexts($1)",
+    // From `\sf graph_home_contexts`: `id`/`name`/`slug` are NOT NULL on `kb_contexts`, reached
+    // through `JOIN kb_contexts c ON c.id = cand.context_id`. `owner_ref` is a TOTAL `CASE` —
+    // every arm is a literal, a `IS NOT NULL`-guarded concat, or `COALESCE(…, 'shared')` — so
+    // it cannot be NULL. `resource_count` is `(SELECT count(*) …)::int`, a scalar aggregate
+    // subquery that always returns a row. `last_active_at` is `(SELECT max(rr.updated) …)`,
+    // which IS NULL for a context with no visible active resource — it stays optional.
+    let build: Vec<HomeContext> = sqlx::query!(
+        r#"SELECT context_id AS "context_id!", name AS "name!", slug AS "slug!",
+                  owner_ref AS "owner_ref!", resource_count AS "resource_count!",
+                  last_active_at
+             FROM graph_home_contexts($1)"#,
+        profile_id.as_uuid(),
     )
-    .bind(profile_id.as_uuid())
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(
-        |(id, name, slug, owner_ref, resource_count, last_active_at)| HomeContext {
-            id,
-            name,
-            slug,
-            owner_ref,
-            resource_count,
-            last_active_at,
-        },
-    )
+    .map(|c| HomeContext {
+        id: c.context_id,
+        name: c.name,
+        slug: c.slug,
+        owner_ref: c.owner_ref,
+        resource_count: c.resource_count,
+        last_active_at: c.last_active_at,
+    })
     .collect();
 
     // research lens — the cogmaps the profile can reach, with a derived held-by scope.
-    let research: Vec<HomeCogmap> = sqlx::query_as::<_, (Uuid, String, String, Vec<Uuid>, i32, i32)>(
-        "SELECT cogmap_id, name, owner_ref, team_ids, region_count, facet_count FROM graph_home_cogmaps($1)",
+    // From `\sf graph_home_cogmaps`: `id`/`name` are NOT NULL on `kb_cogmaps`, reached through
+    // `JOIN kb_cogmaps c ON c.id = v.cogmap_id`. `owner_ref` is `COALESCE('+' || min(mt.slug),
+    // 'temper')` and `team_ids` is `COALESCE(array_agg(…) FILTER (…), '{}')` — both COALESCE
+    // onto a non-null literal, which is exactly what makes the empty case `'{}'` rather than
+    // NULL. `region_count`/`facet_count` are `(SELECT count(*) …)::int` scalar subqueries.
+    let research: Vec<HomeCogmap> = sqlx::query!(
+        r#"SELECT cogmap_id AS "cogmap_id!", name AS "name!", owner_ref AS "owner_ref!",
+                  team_ids AS "team_ids!", region_count AS "region_count!",
+                  facet_count AS "facet_count!"
+             FROM graph_home_cogmaps($1)"#,
+        profile_id.as_uuid(),
     )
-    .bind(profile_id.as_uuid())
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(
-        |(id, name, owner_ref, team_ids, region_count, facet_count)| HomeCogmap {
-            id,
-            name,
-            owner_ref,
-            team_ids,
-            region_count,
-            facet_count,
-        },
-    )
+    .map(|m| HomeCogmap {
+        id: m.cogmap_id,
+        name: m.name,
+        owner_ref: m.owner_ref,
+        team_ids: m.team_ids,
+        region_count: m.region_count,
+        facet_count: m.facet_count,
+    })
     .collect();
 
     Ok(AtlasHome { build, research })
