@@ -165,17 +165,38 @@ anything, because the two directions conflict.
 
 ## Applying schema changes per target
 
-Production migrations are **operator-run** against each target's Neon database
-(boot-time `migrate!` was removed). Each target owns the order:
+**The deploy applies its own additive schema; everything else is operator-run.** Which of
+the two a migration is, is not a judgment call at deploy time — it is the class the
+migration declared about itself, read straight out of the SQL the deploying binary carries.
 
-**back up → migrate → verify → deploy**, against its own DB.
-
-- **Additive migration** — `sqlx migrate run` against that target's Neon with the
-  canonical `search_path`. Order relative to deploy is flexible (additive is
-  backward-compatible), but back up first.
-- **Shape-breaking migration** — an operator-gated cutover: durable backup,
-  cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
+- **Additive migration** — applied by the build, before any function is built, by the
+  binary that contains it. Nothing to do. `scripts/vercel-build.sh` runs
+  `temper-substrate migrate --additive-only` against the target's own database, and the
+  ledger records `pending` → `success` with `recorded_by = 'runner'`.
+- **Shape-breaking migration** — an operator-gated cutover, exactly as before: durable
+  backup, cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
   that established this pattern is in git history.)
+
+  **The build will refuse to deploy until you have taken it.** The pending set is applied
+  only while every member of it is additive; the run halts at the first shape-breaking
+  migration and exits non-zero, naming it. That is deliberate — a deploy that skipped past
+  it would ship a binary expecting schema it does not have, which is the 2026-07-30 outage
+  inverted. Apply the cutover, then redeploy: the next run finds it already applied and
+  continues past it. Until then, unrelated deploys are blocked too.
+
+The order every target still owns is **back up → migrate → verify → deploy**; what changed
+is that the middle step is automatic for the additive class and only for it.
+
+> **A halt is a refusal, not a failure.** If a build log says the runner *exited 3*, a
+> shape-breaking migration is waiting for an operator. Any other non-zero exit is a
+> migration that genuinely broke — read the trail, don't reach for the cutover runbook:
+>
+> ```sql
+> SELECT * FROM migration_current WHERE state IS DISTINCT FROM 'success' ORDER BY version;
+> ```
+>
+> A NULL `state` there is "no runner ever observed this", not "it did not happen" — every
+> migration applied by hand before this mechanism existed reads that way, permanently.
 
 ### Cutover: evidential standing → the three-axis citation model (Set 5)
 

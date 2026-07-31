@@ -1,0 +1,215 @@
+# Shared migration-declaration corpus — ONE list, TWO implementations.
+#
+# Reading a `declare_migration` / `reclassify_migration` call out of SQL happens
+# twice, in two languages:
+#   - awk:  `parse_declarations` in .github/scripts/audit-migration-declarations.sh
+#   - Rust: `parse_declarations`  in crates/temper-substrate/src/migrate_ledger.rs
+#
+# Neither can be deleted, and they answer the same question for DIFFERENT
+# consumers:
+#
+#   * The awk half runs in CI with no database and no toolchain, over the FILES
+#     in migrations/. It asks "does every migration declare something?" —
+#     spec §1's silence-is-a-failure half.
+#   * The Rust half runs inside the migration runner, over the SQL the BINARY
+#     CARRIES (`Migration.sql`), because a pending migration's class is not yet
+#     in `migration_current` — `declare_migration` runs inside the migration's
+#     own transaction, so the class only lands once the migration applies. It
+#     asks "what class did version V claim?" — spec §3's routing decision for
+#     whether the deploy may apply it.
+#
+# THE ASYMMETRY IS WHY THIS FILE EXISTS. If the Rust half MISSES a declaration
+# the awk half finds, the version reads as undeclared and the build halts — the
+# safe direction, and merely annoying. If the Rust half reads a DIFFERENT CLASS
+# than the awk half validated — 'additive' where the call says 'shape-breaking' —
+# the deploy auto-applies an operator-gated migration. That is the 2026-07-30
+# outage class, re-entered through the mechanism built to prevent it.
+#
+# Prior art, and the reason this shape is trusted: the manifest path-containment
+# rule (`scripts/install/containment-corpus.txt`), which caught a live
+# divergence in BOTH directions on its first run.
+#
+# Both harnesses check themselves against this file, and therefore each other:
+#   - .github/scripts/test-migration-declaration-parity.sh  (extracts the awk half)
+#   - migrate_ledger.rs::declaration_corpus_matches_the_shell  (include_str!)
+#
+# FORMAT (line-oriented, so both languages parse it the same way)
+#   `=== <case name>`     starts a case; the previous case ends here
+#   `sql: <text>`         appends one line of SQL to the case (`sql:` alone = blank line)
+#   `expect: <kind> <version> <class>`   one expected parse, IN ORDER
+#   `expect: !MALFORMED`  a call whose arguments could not be parsed
+#   Blank lines, and lines beginning with `#`, are ignored.
+#   A case with no `expect:` lines expects ZERO parses.
+#
+# `<kind>` is `declare` or `reclassify`. The class is the token as WRITTEN — an
+# invalid token is carried through verbatim rather than dropped, because both
+# consumers must be able to say which token they rejected.
+#
+# Both harnesses refuse an empty corpus: a corpus that parses to nothing would
+# let both sides pass while checking nothing.
+
+
+# --- The shapes every real migration in this repo actually uses -------------
+
+=== a declaration spanning three lines, as every real one does
+sql: SELECT declare_migration(
+sql:     20260731000010,
+sql:     'additive',
+sql:     'Two new enums, one new table, one new view, three new functions.'
+sql: );
+expect: declare 20260731000010 additive
+
+=== a one-line declaration
+sql: SELECT declare_migration(20260628000001, 'additive', 'Adds a column.');
+expect: declare 20260628000001 additive
+
+=== the backfill shape — one file declaring many versions
+sql: SELECT declare_migration(20260624000001, 'additive',
+sql:     'Baseline.');
+sql: SELECT declare_migration(20260626000003, 'shape-breaking',
+sql:     'Drops and recreates a function with a different signature.');
+sql: SELECT declare_migration(20260627000001, 'additive',
+sql:     'New table only.');
+expect: declare 20260624000001 additive
+expect: declare 20260626000003 shape-breaking
+expect: declare 20260627000001 additive
+
+=== a four-argument call naming its recorder
+sql: SELECT declare_migration(20260624000002, 'additive', 'Baseline.', 'backfill');
+expect: declare 20260624000002 additive
+
+=== PERFORM inside a plpgsql block
+sql: DO $$ BEGIN
+sql:     PERFORM declare_migration(20260701000001, 'shape-breaking', 'Renames a column.');
+sql: END $$;
+expect: declare 20260701000001 shape-breaking
+
+=== a reclassification is parsed, and is NOT a declaration
+sql: SELECT reclassify_migration(20260730000010, 'shape-breaking',
+sql:     'Believed additive at the time; the return type changed from uuid to uuid[].');
+expect: reclassify 20260730000010 shape-breaking
+
+
+# --- Full-line comments are stripped BEFORE anything is read ---------------
+# Migration headers here are long and quote SQL freely, and DEPLOYING.md's
+# worked example is a `declare_migration` call. A parser that counted commented
+# text would let a migration satisfy the rule by TALKING about declaring itself —
+# and would let the runner read a class out of a header that documents the
+# opposite of what the file does.
+
+=== a commented-out declaration declares nothing
+sql: -- SELECT declare_migration(20260101000001, 'additive', 'Not a real call.');
+sql: CREATE TABLE zz_thing (id int);
+
+=== an indented full-line comment is still a comment
+sql:     -- SELECT declare_migration(20260101000002, 'additive', 'Also not real.');
+
+=== a header that documents the mechanism, followed by a real call
+sql: -- Call `SELECT declare_migration(<version>, 'shape-breaking', '<why>')` to declare.
+sql: -- The vocabulary is 'additive' and 'shape-breaking'.
+sql: SELECT declare_migration(20260702000001, 'additive', 'The real one.');
+expect: declare 20260702000001 additive
+
+=== a trailing inline comment is NOT stripped
+# `--` also appears inside string literals, and a naive strip would truncate a
+# reason. Declarations are written on their own lines in this repo, so leaving
+# trailing comments in place costs nothing and keeps reasons intact.
+sql: SELECT declare_migration(20260703000001, 'additive', 'Adds x.'); -- and that is all
+expect: declare 20260703000001 additive
+
+
+# --- A definition and a COMMENT ON are not calls ---------------------------
+# `20260731000010` both DEFINES these functions and COMMENTs ON them at length.
+# Anchoring on the invoking keyword is what separates a call from its
+# definition — and it is why the mechanism's own migration does not read as
+# declaring six versions it never mentions.
+
+=== CREATE FUNCTION declare_migration is not a declaration
+sql: CREATE FUNCTION declare_migration(
+sql:     p_version bigint, p_class migration_class, p_reason text,
+sql:     p_recorded_by text DEFAULT 'migration'
+sql: ) RETURNS void LANGUAGE sql AS $$
+sql:     INSERT INTO kb_migration_ledger (version, class, reason, recorded_by)
+sql:     VALUES (p_version, p_class, p_reason, p_recorded_by);
+sql: $$;
+
+=== COMMENT ON FUNCTION declare_migration is not a declaration
+sql: COMMENT ON FUNCTION declare_migration(bigint, migration_class, text, text) IS
+sql: $c$Declare whether this migration is safe to apply ahead of its binary.$c$;
+
+=== the keyword must be immediately followed by whitespace then the name
+sql: SELECTdeclare_migration(20260101000003, 'additive', 'No space, no call.');
+sql: SELECT xdeclare_migration(20260101000004, 'additive', 'Wrong name.');
+
+=== whitespace is permitted between the name and its parenthesis
+sql: SELECT declare_migration (20260704000001, 'additive', 'Spaced.');
+expect: declare 20260704000001 additive
+
+
+# --- Malformed calls are REPORTED, never silently skipped ------------------
+# A parser that ignored anything it could not read would turn a typo into
+# silence, which is the failure this whole mechanism exists to make loud.
+
+=== a call with no version
+sql: SELECT declare_migration('additive', 'The version is missing.');
+expect: !MALFORMED
+
+=== a truncated call
+sql: SELECT declare_migration(oops
+expect: !MALFORMED
+
+=== a call with a version and no class
+sql: SELECT declare_migration(20260101000005);
+expect: !MALFORMED
+
+
+# --- The class token is carried through as written -------------------------
+# Neither consumer may quietly drop a token it does not recognise: the awk half
+# fails CI naming it, and the Rust half halts the build naming it. Dropping it
+# would make an unrecognised class read as an ABSENT one, which is a different
+# and less informative failure.
+
+=== an invalid class token survives the parse
+sql: SELECT declare_migration(20260705000001, 'addative', 'Typo in the vocabulary.');
+expect: declare 20260705000001 addative
+
+=== the retired third class is not silently accepted as additive
+sql: SELECT declare_migration(20260705000002, 'destructive', 'Dropped a table.');
+expect: declare 20260705000002 destructive
+
+=== an empty class token
+sql: SELECT declare_migration(20260705000003, '', 'Says nothing.');
+expect: declare 20260705000003
+
+
+# --- A reason that quotes the call syntax ----------------------------------
+# Not hypothetical tidiness: a reclassification's reason is expected to quote
+# what was believed before, and DEPLOYING.md's worked example is this text.
+#
+# Both parsers CONSUME the reason argument, which is what stops the quoted call
+# inside it being read as a call of its own. Stated precisely rather than
+# generously: consumption stops at the next `'`, so an SQL-escaped `''` inside a
+# reason ends it early, and text after that point is rescanned. This case pins
+# the realistic shape; it is NOT a general guarantee that a reason can never
+# yield a spurious parse. Both implementations share the limitation exactly,
+# which is the property this corpus is here to hold.
+
+=== a reason quoting the call syntax yields one parse, not two
+sql: SELECT declare_migration(20260706000001, 'additive',
+sql:     'Previously written as SELECT declare_migration(20260706000001, ''shape-breaking'', ...).');
+expect: declare 20260706000001 additive
+
+
+# --- Multiple calls in one statement stream --------------------------------
+
+=== declarations and a reclassification interleaved
+sql: SELECT declare_migration(20260707000001, 'additive', 'One.');
+sql: SELECT reclassify_migration(20260626000003, 'additive', 'Re-read: nothing breaks.');
+sql: SELECT declare_migration(20260707000002, 'shape-breaking', 'Two.');
+expect: declare 20260707000001 additive
+expect: reclassify 20260626000003 additive
+expect: declare 20260707000002 shape-breaking
+
+=== a file that declares nothing at all
+sql: CREATE TABLE zz_undeclared (id int);
+sql: ALTER TABLE zz_undeclared ADD COLUMN name text;
