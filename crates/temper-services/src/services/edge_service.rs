@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::facet_requests::EdgeFacetRow;
+use temper_core::types::graph::{EdgeKind, Polarity};
+use temper_core::types::ids::{EdgeId, ResourceId};
 use temper_workflow::types::graph::GraphEdgeRow;
 
 /// List the edges incident to a resource, scoped to profile visibility.
@@ -21,12 +23,10 @@ use temper_workflow::types::graph::GraphEdgeRow;
 /// - `direction` keeps the legacy `'outgoing'`/`'incoming'` vocabulary, derived
 ///   from which endpoint is the queried resource.
 ///
-/// Uses RUNTIME queries (not `query!` macros): sqlx's compile-time describe
-/// inlines the SQL-function bodies at plan time; `resources_visible_to` /
-/// `edges_visible_to` reference helpers UNQUALIFIED, which the describe step
-/// resolves against the build connection's search_path. Keeping these runtime
-/// sidesteps that. The result row decodes into the `sqlx::FromRow`-deriving
-/// `GraphEdgeRow` by field name; `COALESCE(label, '')` fills the nullable label.
+/// Compile-time-checked (`query!`), and the row is constructed explicitly rather
+/// than decoded by `FromRow`: `GraphEdgeRow` carries the `EdgeId`/`ResourceId`
+/// newtypes, which the macros do not decode into, so the ids come back as `Uuid`
+/// and are converted in the mapping closure (the repo's incumbent shape).
 pub async fn list_resource_edges(
     pool: &PgPool,
     profile_id: Uuid,
@@ -34,14 +34,16 @@ pub async fn list_resource_edges(
 ) -> ApiResult<Vec<GraphEdgeRow>> {
     // 404 parity: an invisible/absent resource is NotFound (the gate runs before
     // listing, so a visible resource with no edges still returns Ok(empty)).
-    let visible: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
+    // `visible!`: `EXISTS` yields TRUE or FALSE and never NULL, so the non-null override is safe
+    // even though sqlx types every expression column as nullable.
+    let visible: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
             SELECT 1 FROM resources_visible_to($1) rv
              WHERE rv.resource_id = $2
-        )",
+        ) AS "visible!""#,
+        profile_id,
+        resource_id,
     )
-    .bind(profile_id)
-    .bind(resource_id)
     .fetch_one(pool)
     .await?;
 
@@ -51,18 +53,27 @@ pub async fn list_resource_edges(
         ));
     }
 
-    let edges = sqlx::query_as::<_, GraphEdgeRow>(
-        "SELECT
+    // Nullability overrides, each earned: `peer_resource_id`/`direction` are total `CASE`s (an ELSE
+    // arm, both arms non-null — `kb_edges.source_id`/`target_id` are NOT NULL); `peer_slug` composes
+    // strict functions over `peer.title`, which is NOT NULL and INNER-joined; `label` is a COALESCE
+    // onto a non-null literal. sqlx types every expression column nullable, which is why all four
+    // need the annotation while the plain `e.*` columns do not.
+    //
+    // `edge_kind`/`polarity` take an explicit type override so the SQL enums decode straight into
+    // `EdgeKind`/`Polarity` (both derive `sqlx::Type` with their `type_name`) — no `::text`
+    // round-trip, matching what the runtime version decoded.
+    let edges = sqlx::query!(
+        r#"SELECT
             e.id AS edge_id,
-            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS peer_resource_id,
+            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS "peer_resource_id!",
             peer.title AS peer_title,
             lower(regexp_replace(
                 regexp_replace(peer.title, '[^a-zA-Z0-9]+', '-', 'g'),
-                '(^-+|-+$)', '', 'g')) AS peer_slug,
-            e.edge_kind AS edge_kind,
-            e.polarity AS polarity,
-            COALESCE(e.label, '') AS label,
-            (CASE WHEN e.source_id = $2 THEN 'outgoing' ELSE 'incoming' END) AS direction,
+                '(^-+|-+$)', '', 'g')) AS "peer_slug!",
+            e.edge_kind AS "edge_kind: EdgeKind",
+            e.polarity AS "polarity: Polarity",
+            COALESCE(e.label, '') AS "label!",
+            (CASE WHEN e.source_id = $2 THEN 'outgoing' ELSE 'incoming' END) AS "direction!",
             e.weight AS weight,
             e.created AS created
           FROM kb_edges e
@@ -70,12 +81,26 @@ pub async fn list_resource_edges(
           JOIN kb_resources peer
             ON peer.id = (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)
          WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
-           AND (e.source_id = $2 OR e.target_id = $2)",
+           AND (e.source_id = $2 OR e.target_id = $2)"#,
+        profile_id,
+        resource_id,
     )
-    .bind(profile_id)
-    .bind(resource_id)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|r| GraphEdgeRow {
+        edge_id: EdgeId::from(r.edge_id),
+        peer_resource_id: ResourceId::from(r.peer_resource_id),
+        peer_title: r.peer_title,
+        peer_slug: r.peer_slug,
+        edge_kind: r.edge_kind,
+        polarity: r.polarity,
+        label: r.label,
+        direction: r.direction,
+        weight: r.weight,
+        created: r.created,
+    })
+    .collect();
 
     Ok(edges)
 }
@@ -96,28 +121,29 @@ pub async fn list_resource_edges(
 /// the incumbent predicate rather than being a rule for facets, which is why it is not special-cased
 /// here.
 ///
-/// **The two queries here take different forms, and the reason is per-query, not per-function.**
-/// The visibility gate stays runtime for the reason documented on [`list_resource_edges`]: it calls
-/// `edges_visible_to`, a SQL function whose body sqlx's compile-time describe inlines, and which
-/// references other helpers unqualified. The facet SELECT below calls **no** SQL function — it is a
-/// plain join over base tables — so that exemption never applied to it, and it is a
-/// compile-time-checked `query_as!`.
+/// Both queries here are compile-time-checked. The facet SELECT became a `query_as!` on 2026-07-29;
+/// the visibility gate followed once the exemption it had been resting on was actually tested and
+/// found false. That exemption claimed sqlx's compile-time describe could not resolve
+/// `edges_visible_to`/`resources_visible_to` because their bodies reference helpers unqualified —
+/// but the describe step never inlines a function body, and `team_service::is_visible` had been
+/// calling `resources_visible_to` from a `query_scalar!` in this same crate the whole time.
 ///
-/// It was runtime until 2026-07-29, having inherited the exemption from its sibling above. Recorded
-/// rather than quietly corrected because the shape is worth recognising: an exemption stated once at
-/// function scope silently covers every query added to that function afterwards.
+/// Recorded rather than quietly corrected because the shape is worth recognising: an exemption
+/// stated once at function scope silently covers every query added to that function afterwards, and
+/// an unverified one spreads by citation — `lineage_service` adopted this exact claim by reference.
 pub async fn list_edge_facets(
     pool: &PgPool,
     profile_id: Uuid,
     edge_id: Uuid,
 ) -> ApiResult<Vec<EdgeFacetRow>> {
-    let visible: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
+    // `visible!`: `EXISTS` is never NULL (see the matching gate in `list_resource_edges`).
+    let visible: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
             SELECT 1 FROM edges_visible_to($1) v WHERE v.edge_id = $2
-        )",
+        ) AS "visible!""#,
+        profile_id,
+        edge_id,
     )
-    .bind(profile_id)
-    .bind(edge_id)
     .fetch_one(pool)
     .await?;
 

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.property_key,\n               count(DISTINCT p.property_value #>> '{}')::int AS \"distinct_values!\",\n               count(DISTINCT p.owner_id)::int               AS \"coverage!\"\n          FROM kb_properties p\n          JOIN kb_resource_homes h ON h.resource_id = p.owner_id\n                                  AND h.anchor_table = 'kb_contexts' AND h.anchor_id = $2\n          JOIN resources_visible_to($1) v ON v.resource_id = p.owner_id\n         WHERE p.owner_table = 'kb_resources' AND NOT p.is_folded\n         GROUP BY 1 HAVING count(DISTINCT p.property_value #>> '{}') BETWEEN 2 AND 24\n         ORDER BY 3 DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "property_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "distinct_values!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "coverage!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "64148d585f3227620c2ff2b08736406f25f1402b3a77f60e6ebad9458149210c"
+}

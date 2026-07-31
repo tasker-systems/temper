@@ -707,15 +707,15 @@ async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Resul
             // folded this region in between — and an UPDATE that left `is_folded` alone would then
             // stamp a folded row and quietly drop a region out of the live partition. Re-asserting it
             // live states the act's intent: this region belongs to the partition I just computed.
-            let touched = sqlx::query(
+            let touched = sqlx::query!(
                 "UPDATE kb_cogmap_regions \
                  SET component_id=$2, member_count=$3, last_event_id=$4, is_folded=false \
                  WHERE id=$1",
+                region,
+                component_id,
+                members.len() as i32,
+                ev.uuid(),
             )
-            .bind(region)
-            .bind(component_id)
-            .bind(members.len() as i32)
-            .bind(ev)
             .execute(&mut *tx)
             .await?
             .rows_affected();
@@ -751,14 +751,14 @@ async fn current_telos_text(
     anchor: HomeAnchor,
     lens_id: LensId,
 ) -> Result<Option<String>> {
-    Ok(
-        sqlx::query_scalar("SELECT anchor_telos_embedding($1, $2, $3)::text")
-            .bind(anchor.table())
-            .bind(anchor.uuid())
-            .bind(lens_id.uuid())
-            .fetch_one(&mut *tx)
-            .await?,
+    Ok(sqlx::query_scalar!(
+        "SELECT anchor_telos_embedding($1, $2, $3)::text",
+        anchor.table(),
+        anchor.uuid(),
+        lens_id.uuid(),
     )
+    .fetch_one(&mut *tx)
+    .await?)
 }
 
 /// The cheap clock's reading (spec §3.5, gate 1): how far has this anchor's telos moved since its
@@ -862,33 +862,33 @@ pub async fn refresh_salience(
     // 1. the telos-dependent readout, over every live region of this anchor+lens. `nullif(…, 'NaN')`
     //    guards the zero-centroid edge (a memberless/unembedded region → cosine-vs-zero = NaN), as
     //    populate_readouts does — salience coalesces the resulting NULL to 0 below.
-    let touched = sqlx::query(
+    let touched = sqlx::query!(
         "UPDATE kb_cogmap_regions r SET \
            telos_alignment = nullif(anchor_region_telos_alignment(\
                                r.id, r.home_anchor_table, r.home_anchor_id, $3), 'NaN'::double precision) \
          WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 \
            AND NOT r.is_folded",
+        anchor.table(),
+        anchor.uuid(),
+        lens_id.uuid(),
     )
-    .bind(anchor.table())
-    .bind(anchor.uuid())
-    .bind(lens_id.uuid())
     .execute(&mut *tx)
     .await?
     .rows_affected();
 
     // 2. re-blend. A LATER statement, so it reads the telos_alignment just written (see above).
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_regions r SET salience = \
            $4*coalesce(r.telos_alignment,0) + $5*r.reference_standing + $6*r.centrality \
          WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 \
            AND NOT r.is_folded",
+        anchor.table(),
+        anchor.uuid(),
+        lens_id.uuid(),
+        lens.s_telos,
+        lens.s_ref,
+        lens.s_central,
     )
-    .bind(anchor.table())
-    .bind(anchor.uuid())
-    .bind(lens_id.uuid())
-    .bind(lens.s_telos)
-    .bind(lens.s_ref)
-    .bind(lens.s_central)
     .execute(&mut *tx)
     .await?;
 
@@ -949,13 +949,13 @@ async fn write_region_members(
     .execute(&mut *tx)
     .await?;
     for m in members {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
              VALUES ($1,'kb_resources',$2,$3)",
+            region,
+            m,
+            member_affinity(*m, members, sub),
         )
-        .bind(region)
-        .bind(m)
-        .bind(member_affinity(*m, members, sub))
         .execute(&mut *tx)
         .await?;
     }
@@ -1006,7 +1006,7 @@ async fn populate_readouts(
     // which is NULL for a context region, so the old call silently returned NULL for every one of
     // them. The cogmap branch of `anchor_region_telos_alignment` delegates to the unchanged
     // `cogmap_region_telos_alignment`, so a cogmap's readouts are byte-identical to before.
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_regions r SET \
            content_cohesion   = cogmap_region_content_cohesion(r.id), \
            telos_alignment    = nullif(anchor_region_telos_alignment(\
@@ -1015,22 +1015,22 @@ async fn populate_readouts(
            centrality         = cogmap_region_centrality(r.id), \
            internal_tension   = cogmap_region_internal_tension(r.id, ARRAY['contradicts']) \
          WHERE r.id=$1",
+        region,
+        sub.lens_id.uuid(),
     )
-    .bind(region)
-    .bind(sub.lens_id.uuid())
     .execute(&mut *tx)
     .await?;
     // salience = lens-weighted blend of the three parts. telos_alignment is NULLABLE (NULL when the
     // telos has no embedded chunks) and salience is NOT NULL — so `$2*NULL = NULL` would violate the
     // constraint. coalesce to 0. (reference_standing/centrality coalesce to 0 inside their SQL fns.)
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_regions SET salience = \
            $2*coalesce(telos_alignment,0) + $3*reference_standing + $4*centrality WHERE id=$1",
+        region,
+        lens.s_telos,
+        lens.s_ref,
+        lens.s_central,
     )
-    .bind(region)
-    .bind(lens.s_telos)
-    .bind(lens.s_ref)
-    .bind(lens.s_central)
     .execute(&mut *tx)
     .await?;
     Ok(())

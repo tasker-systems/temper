@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", title AS \"title!\", doc_type, home AS \"home!\",\n                  degree AS \"degree!\", first_chunk, stage\n             FROM graph_atlas_nodes_visible($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "doc_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "home!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "degree!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "first_chunk",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "stage",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "34d18fd2d468953576863c9095529fe7e2daead04ed4f73b4460136ace20d5de"
+}

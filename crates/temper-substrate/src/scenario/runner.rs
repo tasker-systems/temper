@@ -251,20 +251,21 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
         } => {
             let src = lookup(&loaded.keys, from)?;
             let tgt = lookup(&loaded.keys, to)?;
-            // Runtime query (not a !-macro): the live-edge resolution + ambiguity guard is dynamic
-            // intent (the per-crate macro-cache exception). query_scalar returns the id column directly.
-            let edge_ids: Vec<Uuid> = sqlx::query_scalar(
+            // `edge_kind::text = $3` rather than `= $3::edge_kind`, CONFORMing to
+            // `readback::find_edge` — casting the COLUMN to text lets the macro bind a plain `&str`
+            // and needs no Rust mirror of the SQL enum. Same rows either way.
+            let edge_ids = sqlx::query_scalar!(
                 "SELECT id FROM kb_edges \
                  WHERE source_table='kb_resources' AND source_id=$1 \
                    AND target_table='kb_resources' AND target_id=$2 \
-                   AND edge_kind=$3::edge_kind \
+                   AND edge_kind::text=$3 \
                    AND home_anchor_table='kb_cogmaps' AND home_anchor_id=$4 \
                    AND NOT is_folded",
+                src,
+                tgt,
+                kind.as_sql(),
+                loaded.cogmap,
             )
-            .bind(src)
-            .bind(tgt)
-            .bind(kind.as_sql())
-            .bind(loaded.cogmap)
             .fetch_all(&mut *tx)
             .await?;
             let edge_id = match edge_ids.as_slice() {
@@ -285,10 +286,10 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
         Step::Revise { resource, body } => {
             let rid = lookup(&loaded.keys, resource)?;
             // resolve the resource's single non-folded body block (concept resources have exactly one).
-            let block_ids: Vec<Uuid> = sqlx::query_scalar(
+            let block_ids = sqlx::query_scalar!(
                 "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+                rid,
             )
-            .bind(rid)
             .fetch_all(&mut *tx)
             .await?;
             let block_id = match block_ids.as_slice() {

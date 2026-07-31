@@ -6,6 +6,12 @@ Anything unmarked is inferred.
 Goal: `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`. Grounded in the production outage of 2026-07-30
 (PR #576, ~40 minutes of failing writes). Companion prose: [DEPLOYING.md](../../../DEPLOYING.md).
 
+**This document is the design. For what to do when one of these checks goes red, or when a write
+path is failing in production, read
+[docs/development/schema-binary-pairing-playbook.md](../../development/schema-binary-pairing-playbook.md)** —
+which also records where the built mechanism turned out rougher than this design assumed (correcting
+a shipped misclassification, most of all).
+
 ---
 
 ## What this decides, in one paragraph
@@ -240,8 +246,14 @@ The cross-check is deliberately **asymmetric**:
 ### 3. The deploy applies additive migrations; nothing else
 
 A migration declaring itself **additive** is applied during the build phase, by a binary that
-contains it. This is exact rather than a hedge: *additive* is **defined** as safe with any binary in
-either direction, so:
+contains it. This is exact rather than a hedge: *additive* is **defined** as safe for a binary that
+**does not carry this migration** — a lagging binary meeting the new schema. `[corrected —
+2026-07-31]` This previously read *"safe with any binary in either direction"*, which is not what
+any consequence below actually needs, and read strictly would make almost every feature migration
+shape-breaking (a new binary reading a column it just added fails against the schema that predates
+it) — leaving this very rule with almost nothing to apply. The clause it serves is named
+`a-migrations-compatibility-with-a-LAGGING-binary-is-stated-not-remembered`, and the census above
+counts 109 of 148 as additive, which is only reachable under the one-direction reading. So:
 
 - it cannot create a mismatch, by construction;
 - `vercel rollback` stays safe — an additive migration left in place under a rolled-back binary is

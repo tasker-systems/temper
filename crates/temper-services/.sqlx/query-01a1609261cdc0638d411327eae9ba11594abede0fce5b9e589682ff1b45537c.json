@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.id            AS event_id,\n                  t.name          AS event_type,\n                  p.id            AS actor_profile_id,\n                  p.handle        AS actor_handle,\n                  e.occurred_at   AS occurred_at,\n                  e.payload       AS payload,\n                  e.\"references\"  AS refs,\n                  e.correlation_id AS correlation_id\n             FROM kb_events e\n             JOIN kb_event_types t ON t.id = e.event_type_id\n             JOIN kb_entities   en ON en.id = e.emitter_entity_id\n             JOIN kb_profiles    p ON p.id = en.profile_id\n            WHERE t.name = ANY($1)\n              AND ($2::jsonb IS NULL OR e.\"references\" @> $2::jsonb)\n              AND ($3::uuid  IS NULL OR p.id = $3::uuid)\n            ORDER BY e.occurred_at DESC, e.id DESC\n            LIMIT $4 OFFSET $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "event_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "actor_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "actor_handle",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "refs",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "correlation_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Jsonb",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "01a1609261cdc0638d411327eae9ba11594abede0fce5b9e589682ff1b45537c"
+}
