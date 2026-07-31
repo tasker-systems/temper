@@ -1,6 +1,11 @@
 -- Per-map fairness in wayfind Stage-1 region selection (issue #585, goal
 -- 019fb559-7191-75a3-99d4-879090c60e94; Task 2 of the cross-map-wayfind goal).
 --
+-- Renumbered 20260731000040 -> 20260731000050 after a sibling branch's context_rename_fns landed on
+-- main at 20260731000040 first. Only ever applied to a dev database, so no shipped migration is
+-- mutated — this is choosing a free number ahead of an already-landed neighbor. The version moves in
+-- two places in lockstep: this filename and the declare_migration() argument below.
+--
 -- THE BUG (#585, confirmed on prod by the Task-1 diagnostics). `wayfind_scope_ids`
 -- (20260712000090) picks the Stage-1 scope with a plain global
 -- `ORDER BY region_score DESC LIMIT regions_n` and NO per-map floor. A map with many regions
@@ -278,7 +283,7 @@ COMMENT ON FUNCTION wayfind_region_diagnostics(uuid, uuid, vector, int, varchar,
 -- dropped; the readback signatures are unchanged, so a binary that does not carry this calls the new
 -- functions identically. `additive` per the schema/binary pairing design.
 SELECT declare_migration(
-    20260731000040,
+    20260731000050,
     'additive',
     'Per-map round-robin fairness in wayfind Stage-1 (issue #585). New wayfind_region_scores becomes the single scoring home; wayfind_scope_ids and wayfind_region_diagnostics are rewired onto it (same signatures). Reorders region selection only; nothing dropped or shape-changed.'
 );
