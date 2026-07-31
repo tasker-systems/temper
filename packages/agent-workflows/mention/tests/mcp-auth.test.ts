@@ -188,8 +188,19 @@ describe("TEMPER_READ_TOOLS", () => {
   // FAILS IF: a mutating tool slips in under a name the exact-list test above was updated to
   // accept without thought. Names the write families from temper-mcp's service.rs directly,
   // so it keeps biting even if someone "fixes" the list assertion by pasting the new value.
+  //
+  // The list is split in two because PREFIX MATCHING IS NOT ENOUGH, in both directions:
+  //
+  //   - It under-matches when the mutating verb is not at the FRONT of the name. `facet_set` as a
+  //     prefix cannot reach `edge_facet_set`, which is the same act aimed at an edge. That is how
+  //     four write tools sat uncovered here; see MUTATING_EXACT.
+  //   - It over-matches when a write's name is a prefix of a read's. `cogmap_materialize` is a
+  //     write ("Requires cogmap-write"); `cogmap_materialize_delta` READS the delta it acts on. A
+  //     prefix entry for the first would condemn the second and block a legitimate future grant.
+  //
+  // So: families whose verb leads go in MUTATING_PREFIXES; everything else is matched whole.
   it("contains no tool from a mutating family", () => {
-    const MUTATING = [
+    const MUTATING_PREFIXES = [
       "create_",
       "update_",
       "delete_",
@@ -200,6 +211,7 @@ describe("TEMPER_READ_TOOLS", () => {
       "facet_set",
       "annotate_",
       "ingest_",
+      "rename_",
       "cogmap_bind",
       "cogmap_unbind",
       "cogmap_create",
@@ -217,14 +229,55 @@ describe("TEMPER_READ_TOOLS", () => {
       "invocation_close",
     ];
 
+    // Whole-name matches: writes no prefix above can reach. Each was verified against its
+    // `#[tool(description = ...)]` in crates/temper-mcp/src/service.rs.
+    const MUTATING_EXACT = [
+      "edge_facet_set", // `facet_set` on an edge — the `facet_set` prefix cannot see it
+      "record_citation_audit", // appends a signed audit event
+      "cogmap_materialize", // re-materializes regions; "Requires cogmap-write"
+      "context_materialize", // re-forms a context's regions
+    ];
+
     for (const tool of TEMPER_READ_TOOLS) {
-      for (const prefix of MUTATING) {
+      for (const prefix of MUTATING_PREFIXES) {
         expect(tool.startsWith(prefix), `${tool} matches the mutating name ${prefix}`).toBe(
           false,
         );
       }
+      for (const name of MUTATING_EXACT) {
+        expect(tool === name, `${tool} is the mutating tool ${name}`).toBe(false);
+      }
     }
   });
+
+  // FAILS IF: nothing, today — this is a NOTE, kept as an executable one so it cannot rot into a
+  // comment nobody rereads. `ingest_blocks` is a READ ("Read back the segments that have landed
+  // for an in-progress segmented ingest"), but the `ingest_` family prefix condemns it. That
+  // over-match is deliberate and currently free, because `ingest_blocks` is out of the allow-list
+  // for uncertainty anyway. What clears it, if it is ever wanted: move it to a whole-name
+  // exemption, the same way MUTATING_EXACT resolves the cogmap_materialize/_delta pair. Recorded
+  // so the next person hits a stated decision rather than an apparent bug.
+  it("over-matches ingest_blocks, a read, and that is the known and bounded cost", () => {
+    expect("ingest_blocks".startsWith("ingest_")).toBe(true);
+    expect([...TEMPER_READ_TOOLS]).not.toContain("ingest_blocks");
+  });
+
+  // DECLARED REMAINDER — deliberately a comment and NOT a test. Both lists above are
+  // hand-maintained, so they bite on a careless ADDITION TO THE ALLOW-LIST and are blind to a NEW
+  // WRITE TOOL added to temper-mcp. That blindness is exactly how `rename_context` came to be
+  // unnamed here: PR #594 added the tool, and nothing in this package had any reason to notice.
+  //
+  // A census assertion — "every tool in service.rs is classified read or write" — WOULD bite on
+  // addition, and unlike the analogous Rust case it is even reachable: all 62 tools live in one
+  // file and a vitest node environment can read it. It is deliberately not done. It would put a
+  // 62-name census of the whole MCP surface into a workspace-isolated package that uses 9 of them,
+  // and charge every unrelated tool addition a maintenance visit here. The narrower guard is the
+  // exact-list assertion above, which already forces deliberation on the only edit that can
+  // actually widen this agent's reach.
+  //
+  // It is a comment rather than an `it(...)` on purpose: a tautological test would put a passing
+  // row in the report for something nothing checks, which is a remainder reading as coverage —
+  // the failure this file's whole style exists to avoid.
 });
 
 describe("the temper connection definition", () => {

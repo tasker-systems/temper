@@ -54,13 +54,22 @@ export const TEMPER_CONNECTION_NAME = "temper";
  *
  * Taken as the READ HALF of the steward's 24-name list
  * (`packages/agent-workflows/steward/agent/connections/temper.ts`, its `// Reads` block).
+ *
  * Tools excluded for UNCERTAINTY rather than for being known writes — `ingest_blocks`,
- * `context_materialize`, `cogmap_materialize`, `resource_lineage`, `get_block_provenance`,
- * `describe_open_meta`, the `*_shape` / `*_region_metrics` / `*_analytics` region reads,
- * `invocation_show`, `invocation_list`, `list_my_invitations` — stay out. Several are plainly
- * reads; the rule an allow-list deserves is that "probably a read" is not a reason to grant,
- * and adding one later costs a line. If you add a name here, verify in
- * `crates/temper-mcp/src/service.rs` that it dispatches to a read.
+ * `resource_lineage`, `get_block_provenance`, `describe_open_meta`, the `*_shape` /
+ * `*_region_metrics` / `*_analytics` region reads, `invocation_show`, `invocation_list`,
+ * `list_my_invitations` — stay out. Several are plainly reads; the rule an allow-list deserves is
+ * that "probably a read" is not a reason to grant, and adding one later costs a line. If you add a
+ * name here, verify in `crates/temper-mcp/src/service.rs` that it dispatches to a read.
+ *
+ * **`context_materialize` and `cogmap_materialize` were on that uncertainty list and did not belong
+ * there — they are KNOWN WRITES**, so they are ineligible under the paragraph above rather than
+ * merely unvetted. `cogmap_materialize`'s own tool description ends *"Requires cogmap-write"*, and
+ * `context_materialize` re-forms a context's regions. The distinction is load-bearing precisely
+ * because of the sentence "adding one later costs a line": a name filed under *uncertainty* invites
+ * someone to resolve the uncertainty and grant it, which for these two would have granted a write.
+ * Note the near-miss pair — `cogmap_materialize_delta` and `steward_ingest_delta` **read** the
+ * delta that the materialize acts on, and are genuinely only uncertain.
  */
 export const TEMPER_READ_TOOLS = [
   "search",
