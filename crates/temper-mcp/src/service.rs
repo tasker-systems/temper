@@ -745,6 +745,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Rename a context — change its display name. The addressable slug is derived from the name server-side, so a rename RE-ADDRESSES the context: @me/notes becomes @me/field-notes, the old ref stops resolving, and every stored ref goes stale — use the context_ref in the result from now on. Authorized for the context's administrator (its profile owner, or an owner/maintainer of the owning team), or an instance admin. Idempotent — renamed: false when that is already the name. Refuses when the derived slug is taken under the same owner (it does NOT auto-suffix), or when the name has no addressable content. Pass the context by UUID (from list_contexts)."
+    )]
+    async fn rename_context(
+        &self,
+        Parameters(input): Parameters<tools::contexts::RenameContextInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::rename_context(self, input).await
+    }
+
+    #[tool(
         description = "List all available document types with schema summaries. Returns id, name, has_schema, and required_fields for each type. Use describe_doc_type for full schema details."
     )]
     async fn list_doc_types(
@@ -1037,5 +1049,22 @@ mod tests {
                 "{expected} is not advertised; router has {names:?}"
             );
         }
+    }
+
+    /// Same failure mode as above, for the context act set: a `rename_context` tool body that
+    /// exists in `tools/contexts.rs` but is never delegated from this impl block leaves rename the
+    /// one context act an agent cannot perform — which is the parity the spec adds it for.
+    #[test]
+    fn rename_context_is_advertised_by_the_router() {
+        let names: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        assert!(
+            names.iter().any(|n| n == "rename_context"),
+            "rename_context is not advertised; router has {names:?}"
+        );
     }
 }
