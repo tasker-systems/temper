@@ -104,6 +104,36 @@ jobs:
       TEMPER_ONNX_INTRA_THREADS: 0
       # Load the model from the checkout instead of downloading it: the repo already ships it.
       TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
+      # THIS JOB IS THE ONE THAT BUILDS A COMMIT-CARRYING BINARY, and that is the entire reason
+      # the variable is here. `crates/temper-api/build.rs` reads it at COMPILE time and bakes it
+      # into the binary as `TEMPER_BUILD_COMMIT`, which `/api/health` serves — the mechanism
+      # behind the goal register's `the-commit-serving-an-environment-is-knowable-without-inference`.
+      #
+      # Until this line existed the witness for that clause fired NOWHERE. It returned early when
+      # the variable was unset, which was every CI run, so every job ran it and no job could fail
+      # it: "a test no job enables" in a subtler costume.
+      #
+      # A FIXED SYNTHETIC VALUE, not `${{ github.sha }}`, for two reasons:
+      #
+      #   1. The plumbing is value-agnostic — it carries whatever it is handed — so a real sha
+      #      proves nothing a constant does not, while changing on every push. `build.rs` declares
+      #      `rerun-if-env-changed`, so a per-push value would recompile temper-api and relink its
+      #      dependents on every single run. A constant keeps the fingerprint stable: measured at
+      #      ~5s, paid once per cache lineage rather than per push.
+      #   2. It cannot be mistaken for a real deploy identity by anything reading a log.
+      #
+      # DELIBERATELY NOT SET on the Integration or Artifacts jobs. Those exercise the other branch
+      # — a build told no commit must report `null`, key present — and `crates/temper-api/tests/
+      # health_test.rs` (test-db gated, so it runs there and not here) asserts the wire shape that
+      # only an ABSENT commit can test: `skip_serializing_if = "Option::is_none"` drops `None`
+      # alone, so a commit-carrying build would satisfy "the key is present" no matter what.
+      # Setting this everywhere would have re-created the vacuity it was added to remove.
+      #
+      # Unrelated to `.github/scripts/test-vercel-build.sh`, which unsets this variable with
+      # `env -u` for a sandboxed `sh` invocation in the guard-tests job. That is a different job,
+      # and it clears a RUNTIME value for a script rather than a BUILD-time value for a compiler.
+      # The two must both keep doing what they do; they will look like they conflict.
+      VERCEL_GIT_COMMIT_SHA: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 
     steps:
       - name: Checkout code
