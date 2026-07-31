@@ -896,6 +896,27 @@ pub enum ContextAction {
         /// Target team: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
+    /// Rename a context. The slug is derived from the new name — there is no separate
+    /// `--slug`.
+    ///
+    /// THIS RE-ADDRESSES THE CONTEXT. After renaming `@me/temper` to "Temper KB", the ref
+    /// `@me/temper` no longer resolves and `@me/temper-kb` does. Every stored `@owner/slug`
+    /// string held by anyone, anywhere, is stale — scripts, agent instructions, bookmarks. Use
+    /// the `context_ref` in the output as the address from now on (a context UUID never
+    /// changes, and is the stable thing to store).
+    ///
+    /// Local state is NOT updated: the vault's projected context directory keeps its old name
+    /// (the next `temper pull` writes a second, new-named directory beside it, and the old one
+    /// survives with stale files), and a `sync.subscriptions.contexts` entry naming the old
+    /// slug silently stops matching. Refresh them yourself — re-subscribe with the new ref, and
+    /// re-run `temper pull` / `temper skill`.
+    Rename {
+        /// Context ref: a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`.
+        context: String,
+        /// The new display name. The new slug is derived from it.
+        #[arg(long)]
+        name: String,
+    },
     /// Orient in a context by its REGIONS: the distilled, region-level view of everything homed
     /// there, most salient first. The fastest way to see what a context is about without reading
     /// any single resource in it.
