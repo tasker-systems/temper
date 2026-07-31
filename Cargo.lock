@@ -6315,6 +6315,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "futures-core",
  "schemars",
  "serde",
  "serde_json",

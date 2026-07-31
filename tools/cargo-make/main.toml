@@ -413,12 +413,14 @@ script = [
 description = "Apply any pending sqlx migrations to the development database (idempotent)"
 # Kept separately callable so a `git pull` that lands migrations can be reconciled without
 # cycling the container.
+# Runs temper-substrate's `migrate`, not `sqlx migrate run`. The applying is still sqlx's
+# `Migrator` — the runner is a `Migrate` decorator, not a reimplementation — but it brackets each
+# apply so a migration that FAILS leaves a `failed` entry in `kb_migration_ledger` and one that
+# CRASHES leaves a `pending` that blocks the next run. Neither is recordable from inside a
+# migration: sqlx wraps the body and its bookkeeping in one transaction, so a failure rolls back
+# anything that transaction wrote. See crates/temper-substrate/src/migrate_ledger.rs.
 script = ['''
-if ! command -v sqlx > /dev/null 2>&1; then
-  echo "db-migrate: sqlx-cli not found — skipping. Install with: cargo install sqlx-cli"
-  exit 0
-fi
-sqlx migrate run
+cargo run -q -p temper-substrate --bin temper-substrate -- migrate
 ''']
 
 [tasks.docker-up]
