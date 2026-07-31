@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", source_id AS \"source_id!\", target_id AS \"target_id!\",\n                  edge_kind AS \"edge_kind!: EdgeKind\", polarity AS \"polarity!: Polarity\",\n                  label, weight AS \"weight!\"\n             FROM graph_region_composition_edges($1, $2, $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "target_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "edge_kind!: EdgeKind",
+        "type_info": {
+          "Custom": {
+            "name": "edge_kind",
+            "kind": {
+              "Enum": [
+                "express",
+                "contains",
+                "leads_to",
+                "near"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "polarity!: Polarity",
+        "type_info": {
+          "Custom": {
+            "name": "edge_polarity",
+            "kind": {
+              "Enum": [
+                "forward",
+                "inverse"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "weight!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0fc041a3c0235e5918ce768cf7e4bc217495c5979943c2dba3786c2c336e6b57"
+}

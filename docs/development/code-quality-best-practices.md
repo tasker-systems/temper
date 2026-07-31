@@ -162,9 +162,27 @@ one is a blocking review finding regardless of correctness.
 
 - Production queries live in the persistence layer (`temper-api/src/services/`, consolidating
   into `temper-substrate`) and use the compile-time-checked macros `sqlx::query!()` /
-  `query_as!()` / `query_scalar!()`. Runtime `query_as` is acceptable only where a `::vector`
-  cast or dynamic column/ORDER BY defeats the macro — the `unified_search` query in
-  `search_service.rs` is the established exception and the template for new ones.
+  `query_as!()` / `query_scalar!()`. **This rule is enforced** —
+  `.github/scripts/audit-sqlx-macro-exceptions.sh` pins the set of non-macro production queries
+  against an allow-list where every entry carries one of four written reasons (`dynamic-table`,
+  `vector-cast`, `dynamic-sql`, `dynamic-order-by`). Adding a runtime query fails CI until you
+  either convert it or declare which reason it claims.
+
+  **Why it needed an enforcer.** This rule sat here as prose for months and was widely ignored:
+  when it was finally measured, **66 of 112** production runtime call sites had no technical
+  obstacle at all. The largest cluster stated its own reason in a module header — *"the pgvector
+  `::vector` cast forces runtime; **the rest follow for consistency**"* — where the cast covered 3
+  of 19. Four other sites carried comments asserting reasons that did not survive checking, and one
+  of those false claims propagated by citation into a second file, taking two more queries with it.
+  All 66 were converted; the allow-list was seeded at the **46 that remain**, never by transcribing
+  the state of the tree, because a baseline built from today's habits blesses them as policy.
+
+  **The cost of getting this wrong is not style.** A runtime `sqlx::query` leaves no `.sqlx` cache
+  entry, and that cache is the compiler's record of the binary↔schema wire contract — the record
+  the schema/binary change detector reads. An exemption taken for tidiness silently subtracts from
+  the coverage of a safety check, which is worse than having no check, because it reads as
+  coverage. See [the classification](sqlx-macro-exception-classification.md) for the reasoning and
+  `python3 scripts/classify-sqlx-calls.py` to reproduce every count.
 - **DRY SQL via views.** When several service functions join the same tables the same way,
   extract a SQL view and query it with simple `WHERE`/`ORDER`/`LIMIT` — don't copy multi-table
   JOINs across functions (they drift, and the planner loses a stable plan).

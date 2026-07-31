@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT region_id AS \"region_id!\", cogmap_id AS \"cogmap_id!\", label,\n                  member_count AS \"member_count!\", salience AS \"salience!\", coherence\n             FROM graph_cogmap_territories($1, $2, $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "region_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "cogmap_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "member_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "salience!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "coherence",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "09e709e3d2743c81d63f7f4f854997e2592becca93ed0acc3d9b165edc0699cf"
+}

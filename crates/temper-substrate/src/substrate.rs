@@ -1,5 +1,5 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
-use crate::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
+use crate::ids::{CogmapId, ContextId, EntityId, LensId, ProfileId, ResourceId};
 use crate::knn::{self, KnnGraph};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -33,6 +33,26 @@ pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<CogmapId> {
         .fetch_one(pool)
         .await?;
     Ok(CogmapId::from(id))
+}
+
+/// The entity that seeded a cogmap — the emitter of its earliest map-anchored event (`cogmap_seeded`
+/// genesis). Materialization is attributed to it, so the act names a real referent rather than
+/// "whoever ran the binary" or "latest event".
+///
+/// Lives here rather than in the harness bin that calls it for two reasons, one of them structural:
+/// the repo's persistence rule puts SQL in a layer and never in a surface (a bin is a surface), and
+/// `cargo sqlx prepare` does not capture macro expansions from bin targets — so a `query!` written
+/// in `main.rs` compiles online and then fails every offline build for want of a cache entry.
+pub async fn cogmap_genesis_emitter(pool: &PgPool, cogmap: CogmapId) -> Result<EntityId> {
+    let id = sqlx::query_scalar!(
+        "SELECT emitter_entity_id FROM kb_events \
+         WHERE producing_anchor_table='kb_cogmaps' AND producing_anchor_id=$1 \
+         ORDER BY occurred_at ASC LIMIT 1",
+        cogmap.uuid(),
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(EntityId::from(id))
 }
 
 /// A context is addressed by (owner, slug) — the slug is unique per owner, not globally, so this is

@@ -7,10 +7,10 @@
 //! both endpoints readable) and keys on the edge LABEL `derived_from` — spanning
 //! both `edge_kind`s per L1's 2026-07-12 grounding.
 //!
-//! Runtime queries (not `query!` macros), matching `edge_service`: the SQL
-//! function body references visibility helpers UNQUALIFIED, which sqlx's
-//! compile-time describe cannot resolve against the build search_path. The result
-//! rows decode into `LineageRow` by field name.
+//! Compile-time-checked (`query!` macros). These were runtime, citing `edge_service`'s claim that
+//! sqlx's compile-time describe cannot resolve the visibility helpers a SQL function body
+//! references unqualified. That claim was never true — describe does not inline a function body —
+//! and both files are macros now.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -22,7 +22,9 @@ use temper_workflow::operations::decorated_ref;
 
 /// One row from `resource_lineage(...)`. Column set is identical for both
 /// directions.
-#[derive(sqlx::FromRow)]
+///
+/// No `FromRow` derive: `query_as!` constructs positionally and cannot use one, so the field order
+/// here IS the mapping and must match the SELECT list in [`walk`].
 struct LineageRow {
     resource_id: Uuid,
     title: String,
@@ -56,15 +58,26 @@ async fn walk(
     direction: &str,
     max_depth: i32,
 ) -> ApiResult<Vec<LineageNode>> {
-    let rows = sqlx::query_as::<_, LineageRow>(
-        "SELECT resource_id, title, is_active, edge_id, edge_is_folded, depth
+    // Every column takes `!`: sqlx types all six as nullable purely because they come from a
+    // set-returning function, but the function's final SELECT (`\sf resource_lineage`) projects
+    // `r.title`/`r.is_active` across an INNER `JOIN kb_resources` (both NOT NULL) and
+    // `w.resource_id`/`w.edge_id`/`w.edge_is_folded` off `kb_edges` columns that are NOT NULL,
+    // with `depth` a literal-seeded counter. None of the six can be NULL.
+    let rows = sqlx::query_as!(
+        LineageRow,
+        r#"SELECT resource_id AS "resource_id!",
+                  title AS "title!",
+                  is_active AS "is_active!",
+                  edge_id AS "edge_id!",
+                  edge_is_folded AS "edge_is_folded!",
+                  depth AS "depth!"
            FROM resource_lineage($1, $2, $3, $4)
-          ORDER BY depth, title",
+          ORDER BY depth, title"#,
+        profile_id,
+        resource_id,
+        direction,
+        max_depth,
     )
-    .bind(profile_id)
-    .bind(resource_id)
-    .bind(direction)
-    .bind(max_depth)
     .fetch_all(pool)
     .await?;
 
@@ -81,13 +94,14 @@ pub async fn resource_lineage(
     resource_id: Uuid,
     max_depth: i32,
 ) -> ApiResult<ResourceLineage> {
-    let visible: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
+    // `visible!`: `EXISTS` is never NULL.
+    let visible: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
             SELECT 1 FROM resources_visible_to($1) rv WHERE rv.resource_id = $2
-        )",
+        ) AS "visible!""#,
+        profile_id,
+        resource_id,
     )
-    .bind(profile_id)
-    .bind(resource_id)
     .fetch_one(pool)
     .await?;
 

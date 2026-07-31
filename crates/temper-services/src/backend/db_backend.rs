@@ -2513,7 +2513,7 @@ impl Backend for DbBackend {
         // ONE SERIALIZABLE transaction for the whole run. `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`
         // must precede any query in the transaction — it is the first statement after BEGIN.
         let mut tx = self.pool.begin().await.map_err(api_err)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        sqlx::query!("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             .execute(&mut *tx)
             .await
             .map_err(api_err)?;
@@ -2647,7 +2647,7 @@ impl Backend for DbBackend {
         // ONE SERIALIZABLE transaction for the whole run (mirrors reconcile). `SET TRANSACTION ISOLATION
         // LEVEL SERIALIZABLE` must be the first statement after BEGIN.
         let mut tx = self.pool.begin().await.map_err(api_err)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        sqlx::query!("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             .execute(&mut *tx)
             .await
             .map_err(api_err)?;
