@@ -26,11 +26,38 @@
 #
 # WHAT THE BUILD CONTAINER PROVIDES (measured 2026-07-30, real preview build; spec § Evidence)
 #   cargo and rustc pre-installed at /rust/bin and already on PATH; DATABASE_URL and
-#   DATABASE_URL_UNPOOLED both SET; SQLX_OFFLINE set by vercel.json; the previous
-#   deployment's build cache restored. A buildCommand runs BEFORE the @vercel/rust
-#   builders (@vercel/static-build priority 0, @vercel/rust priority 1), which is why the
-#   schema is in place before any function is built — and why compiling here warms the
-#   cache those builders use moments later rather than paying twice.
+#   DATABASE_URL_UNPOOLED both SET; SQLX_OFFLINE set by vercel.json. A buildCommand runs
+#   BEFORE the @vercel/rust builders (@vercel/static-build priority 0, @vercel/rust
+#   priority 1), which is why the schema is in place before any function is built.
+#
+# THE @vercel/rust BUILDERS DO NOT SHARE THIS STEP'S TARGET DIRECTORY
+#   `[observed — 2026-07-31]` Settled by the temper-migrate extraction, which was an
+#   A/B on exactly this question. No log can answer it directly: those builders emit ZERO
+#   lines, so the ~6m they run is silent (dpl_DrKxz1F67xiPe1zztMerweYZ7QTE). The earlier
+#   note here inferred "they do not reuse it" from that silence, which is what BOTH answers
+#   look like — the inference happened to be right and was not evidence.
+#
+#   The extraction removed ort, tokenizers, temper-core and temper-substrate from THIS
+#   step's compile. If the directory were shared, the builders had been getting all of that
+#   pre-built for free and would now have to build it themselves — ~3m more work:
+#
+#     dpl_DrKxz…  before  this step 2m55s   builders 5m56s   total 9m23s   cache 1.61 GB
+#     dpl_C6tEG…  after   this step 1m24s   builders 6m11s   total 8m04s   cache 1.23 GB
+#
+#   The builders moved +15s, not +3m. They were always compiling that base themselves, so
+#   the ~1m31s this step no longer spends is a real saving rather than work displaced
+#   downstream. (Totals reconcile: 1m31s saved − 15s = 1m16s ≈ the 1m19s observed.)
+#
+# AND THE BUILD CACHE NOW FITS, WHICH MAY MATTER MORE THAN THE MINUTE
+#   Before, EVERY build ended `Build cache size 1.61 GB exceeds limit of 1.50 GB.
+#   Invalidating cache.` — so the next one always started clean and cold was the steady
+#   state, structurally. Dropping ort from this step's target directory took the cache to
+#   1.23 GB, and dpl_C6tEG… is the first build here to report `Created build cache` and
+#   `Build cache uploaded` instead. A warm restore has NOT been observed yet — the first
+#   production build after the extraction still began clean, because its predecessor on
+#   that lineage carried the old oversized cache. Watch for `Restored build cache from
+#   previous deployment` on a subsequent build; if it appears, warm builds become possible
+#   here for the first time, and this step's cost drops again.
 #
 # WHY THE UNPOOLED URL
 #   sqlx's Migrator takes a Postgres advisory lock for exclusive access
@@ -116,12 +143,12 @@ else
   exit 0
 fi
 
-# The runner reads DATABASE_URL (temper-substrate's `substrate::connect`), so the choice
-# above is expressed by exporting it rather than by a flag. Keeping the Vercel-specific
-# variable knowledge in this script leaves the Rust side with one way to be told.
+# The runner reads DATABASE_URL (temper-migrate's `connect`), so the choice above is
+# expressed by exporting it rather than by a flag. Keeping the Vercel-specific variable
+# knowledge in this script leaves the Rust side with one way to be told.
 export DATABASE_URL="${MIGRATE_URL}"
 
-: "${MIGRATE_CMD:=cargo run --release --locked -p temper-substrate --bin temper-substrate -- migrate --additive-only}"
+: "${MIGRATE_CMD:=cargo run --release --locked -p temper-migrate --bin temper-migrate -- --additive-only}"
 
 # shellcheck disable=SC2086
 $MIGRATE_CMD

@@ -9,7 +9,8 @@ use temper_core::context_ref::ContextOwnerRef;
 use temper_core::types::cognitive_maps::{CogmapRegionMetricsRow, CogmapRegionRow};
 use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
-    ReassignContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
 };
 use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
 
@@ -99,6 +100,23 @@ impl<'a> ContextClient<'a> {
     ) -> Result<ReassignContextOutcome> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/contexts/{context_id}/reassign");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/contexts/{id}/rename — change the context's name; the slug is re-derived from it.
+    ///
+    /// The rename **re-addresses** the context: the outcome carries the composed `context_ref` the
+    /// caller should use from now on, because the old `@owner/slug` no longer resolves.
+    pub async fn rename(
+        &self,
+        context_id: Uuid,
+        body: &RenameContextRequest,
+    ) -> Result<RenameContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/rename");
         let req = self.http.post(&path).json(body);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))

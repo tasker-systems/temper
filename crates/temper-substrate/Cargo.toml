@@ -21,6 +21,9 @@ scenario-schema = ["schemars", "temper-core/scenario-schema"]
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+# MIGRATOR + the ledger runner. Light on purpose (sqlx/tokio/clap/anyhow) so the deploy can
+# compile the migrate binary without ort — see crates/temper-migrate/Cargo.toml.
+temper-migrate = { path = "../temper-migrate" }
 # `default-features = false`: temper-ingest's default is ["embed", "extract"], and `extract` pulls
 # kreuzberg (and, since PDF support landed, a 7 MB embedded pdfium). Nothing server-side calls
 # `temper_ingest::extract` — extraction is the CLI's job — so the server would carry it as dead
@@ -29,10 +32,6 @@ temper-ingest = { path = "../temper-ingest", default-features = false, features 
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros", "migrate", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-# For `migrate_ledger`'s `Migrate` impl only. sqlx's trait signatures are written in
-# `futures_core::future::BoxFuture`, and a decorator must match them exactly — already in the lock
-# as a transitive sqlx dependency, so this adds nothing new to the tree.
-futures-core = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }

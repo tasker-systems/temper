@@ -114,7 +114,7 @@ fi
 # A change to what the BUILD DOES deserves the same rehearsal, by the same argument.
 #
 # The build stopped being a compile on 2026-07-31: `vercel.json`'s buildCommand now runs
-# `temper-substrate migrate --additive-only`, which applies schema. A change to that script,
+# `temper-migrate --additive-only`, which applies schema. A change to that script,
 # or to the vercel.json that invokes it, is a change to a mechanism that can BLOCK OR BREAK
 # EVERY DEPLOY — and if only migration-carrying changesets built, such a change would first
 # execute on the merge to main, in production, having never run anywhere.

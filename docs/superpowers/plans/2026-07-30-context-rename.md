@@ -801,10 +801,20 @@ same refusal as the pre-check".
 
 **Mirror `20260715000010` exactly for the three pieces** (G9 quotes each):
 
-1. `INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES ('context_renamed',
-   NULL, 1) ON CONFLICT (name) DO NOTHING;` — **`NULL` payload_schema is load-bearing**: it keeps
-   the name out of the published-schema invariant, which is what makes G10's "no snapshot
-   regeneration" true.
+1. `INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
+   ('context_renamed', NULL, 1, 'domain') ON CONFLICT (name) DO NOTHING;` — **`NULL` payload_schema
+   is load-bearing**: it keeps the name out of the published-schema invariant, which is what makes
+   G10's "no snapshot regeneration" true.
+
+   **⚠️ `category` must be spelled explicitly, and G9's quoted template does not.** The template
+   (`20260715000010`) predates `20260719000010`, which dropped `kb_event_types.category`'s default
+   and left a standing rule at `:81` — *"Every future event-type registration must spell `category`
+   explicitly."* The column is `NOT NULL` with no default and a `CHECK (category IN ('domain',
+   'admin','system'))`, and `kb_events` carries a composite FK back to `(id, category)`. Copying
+   G9's three-column `INSERT` verbatim fails on apply with *"null value in column category violates
+   not-null constraint"*. The nearest post-`category` sibling is `20260724000110:55-57`
+   (`citation_audited` — also `NULL` payload_schema, also `ON CONFLICT DO NOTHING`). `category` is
+   not part of `TYPED_EVENT_NAMES`, so spelling it changes nothing about the snapshot exclusion.
 2. `_project_context_renamed(p_event uuid, p_payload jsonb) RETURNS uuid` — sets **`name` and
    `slug`** from `to_name`/`to_slug`, `RAISE EXCEPTION` when `NOT FOUND`. Model on
    `_project_context_reassigned` line for line, including that it **never authorizes**.
@@ -858,10 +868,14 @@ Copying that half in would refuse every rename. Copy only the "Context side" blo
 **Clauses:** `every-completed-rename-is-attributable` (the `from_*` payload fields),
 `replayed-history-is-not-re-adjudicated` (the replay arm dispatches the pure projector). **`enables`.**
 
-**Test tier:** `test-db` for the write path (via Task 6's service tests); `test-artifacts` if a
-replay-roundtrip case is added (`crates/temper-substrate/tests/replay_roundtrip.rs` is
-`#![cfg(feature = "artifact-tests")]`, G14). **Do not add a roundtrip case unless a reviewer asks** —
-`ContextReassigned` has none, and adding one only for rename would be an asymmetry.
+**Test tier:** `test-db` for the write path (via Task 6's service tests); **`test-artifacts` for the
+replay witness, which the controller authorized on 2026-07-30** — see Part 5 → *"the one clause with
+no evidence at all"*, where the fork was taken. An earlier draft of this task said *"do not add a
+roundtrip case unless a reviewer asks"* on the ground that `ContextReassigned` has none; the fork
+was resolved the other way, because symmetry with an untested sibling is a reason to doubt the
+sibling, and this was the only clause on the branch with no evidence of any kind. The witness is
+**not** a byte-identity roundtrip (that genuinely is not owed here) — it is the narrower
+authorization claim, and it lands in its own file rather than in `replay_roundtrip.rs`.
 
 **Spec sections to read:** "The write is event-sourced" → "Shape", "**Payload**".
 
@@ -1621,13 +1635,12 @@ oversight.**
   the G11 escalation resolves.
 - **Recording the originating surface on the emitter.** `resolve_emitter(pool, caller, "web")` is
   hardcoded at every service site (G8). Rename conforms; it does not fix it.
-- **A replay-roundtrip scenario for `context_renamed`.** `context_reassigned` has none (G10);
-  adding one only for rename would be an asymmetry. Task 3 Step 5 wires the replay arm; proving
-  roundtrip byte-identity is not owed here.
-  **⚠️ This bullet is not the record.** Excluding it leaves `replayed-history-is-not-re-adjudicated`
-  as the only clause on this branch with no evidence of any kind, so the decision belongs against
-  the clause, not in a list of things nobody is doing. **See Part 5 → "the one clause with no
-  evidence at all", which is where it must be resolved.** Do not treat this bullet as settling it.
+- **A byte-identity replay-*roundtrip* scenario for `context_renamed`.** `context_reassigned` has
+  none (G10); adding one only for rename would be an asymmetry, and proving roundtrip byte-identity
+  is not owed here. **This exclusion is now narrow, and deliberately so.** It covers the *roundtrip*
+  only. The clause `replayed-history-is-not-re-adjudicated` **is** witnessed, by
+  `crates/temper-substrate/tests/context_rename_replay.rs` — resolved against the clause in Part 5,
+  which is where that decision belongs and where it is recorded.
 
 ---
 
@@ -1748,7 +1761,7 @@ of the clause has evidence, another does not — the uncovered half is named) ·
 | `one-owner-never-holds-two-of-the-same-address` | 2, 6 | enables | **partial** | Sequential half: T6 Step 5 collision `409`. **Concurrent half** — the clause says *"under concurrency"* — covered only via T6 Step 5d, the direct mapper unit test; **no test provokes a real interleaved race**, and none is planned |
 | `every-completed-rename-is-attributable` | 2, 3, 6 · 11 | enables · witnesses | covered | T11 Step 6 asserts `from_*` **by value** |
 | `authority-is-decided-no-earlier-than-the-change` | 2, 6 | enables | covered | T6 Step 5 SQL-guard: `context_rename` called directly with an unauthorized emitter → `42501`, row unchanged |
-| `replayed-history-is-not-re-adjudicated` | 2, 3 | enables | **see below** | The only clause whose evidence is a whole test tier — treated separately |
+| `replayed-history-is-not-re-adjudicated` | 2, 3 | enables | covered | `context_rename_replay.rs` — a rename replays after its emitter lost the authority that admitted it. Fork resolved 2026-07-30; see below |
 | `system-authority-never-becomes-ownership` | 5 · 11 | enables · witnesses | covered | T11 Step 3 asserts the **absence** of residue rows |
 | `no-other-refusal-changes-its-voice` | 1 · **10** | enables · **witnesses** | **partial** | Voices-unchanged: T10 + recorded bite probe. Only-`ContextAdminAuthority`-diverges: T11's route tests. **A tenth authority appearing uncovered is NOT guarded** — see below |
 | `a-refusal-never-names-what-it-withholds` | 1, 5 · **10** | enables · **witnesses** | **partial** | Message-identity: T10 Step 4. **The clause says "structurally impossible"** — that half is a type-level property (`denial_for(&self)` cannot reach `Self::Subject`) held by the compiler and **argued, not tested**. Accepted: a compile-fail test to assert it would cost more than it protects |
@@ -1796,18 +1809,39 @@ emitter has since lost authority, and assert the projection still applies. That 
 the projector ever grows an authorization check — and it is the whole content of the clause. Tier is
 `test-artifacts` (`crates/temper-substrate/tests/`), which CI already runs as its own job.
 
-**This is a live decision, not a settled exclusion.** It is the register's *examined-and-inexpressible*
-vs *examined-and-deliberately-excluded* fork, and the discipline is explicit that the register may
-**surface** that fork and may not **take** it. Two honest options: add the replay test (small, and
-this clause is the only thing on the branch with zero evidence), or declare the clause uncovered
-**here, against the clause**, with the symmetry reason stated as the deliberate choice it is.
-Whichever is chosen, Part 3's bullet must point here rather than standing as the only record.
+**This was a live decision, not a settled exclusion.** It is the register's
+*examined-and-inexpressible* vs *examined-and-deliberately-excluded* fork, and the discipline is
+explicit that the register may **surface** that fork and may not **take** it.
+
+## RESOLVED 2026-07-30 — the frame owner took the fork: add the test
+
+`crates/temper-substrate/tests/context_rename_replay.rs` (`test-artifacts`). A rename lands under
+real maintainer authority; the admitting `kb_team_members` row is deleted; the ledger is snapshotted,
+the namespace reset, and the ledger replayed. **The load-bearing assertion is that `replay()` returns
+`Ok`** — it fails the moment `_project_context_renamed` grows an authorization check.
+
+Two things about its construction are worth carrying, because both are places the test could have
+looked like evidence without being any:
+
+- **The value assertion is not the evidence, and the file says so.** `kb_contexts` is a replay INPUT
+  table (`replay.rs:89-114`), restored **verbatim**, so the row comes back *already renamed*. An
+  assertion that the name matches after replay therefore passes even if the projector did nothing.
+  It is retained only to catch a projector that runs and writes the **wrong** pair.
+- **A companion test pins that the revocation is real.** Without it, "replayed under revoked
+  authority" could be satisfied by an actor who never lost anything, so a second test shows the
+  *mutation* half now refuses that same actor on that same context with `42501`.
+
+The symmetry argument that had excluded it — *`context_reassigned` has none* — is not a reason to
+skip a clause this register named deliberately; it is a reason to doubt the sibling. That doubt is
+**not** filed as a task (speculative work against an unobserved decay), but it is now named here
+rather than implied by an absence.
 
 ---
 
 # Part 6 — Spec corrections an implementer must not smooth over
 
-Four, each with disk or live-DB evidence in Part 0. **Read these before Task 1.**
+Five, each with disk or live-DB evidence in Part 0 or in the correction itself. **Read these before
+Task 1.** The fifth was found during implementation, by running the plan's own quoted SQL.
 
 1. **G3 — the enclosing-team read direction is inverted.** The spec's *"A maintainer of a parent
    team can read a child team's context"* is false; reads inherit **down** the tree. Affects Task
@@ -1820,6 +1854,14 @@ Four, each with disk or live-DB evidence in Part 0. **Read these before Task 1.*
 4. **Task 4 — `format_context_ref` does not exist.** The composer is `decorated_context_ref`
    (`temper-core/src/context_ref.rs:77-84`), and its `owner_addressable` parameter is **undecorated**
    while `ContextRow.owner_ref` is already decorated.
+5. **G9's quoted event-type `INSERT` does not run.** `kb_event_types.category` has been `NOT NULL`
+   with **no default** since `20260719000010`, which dropped the default deliberately and left the
+   standing rule *"Every future event-type registration must spell `category` explicitly"* (`:81`).
+   G9 quotes the template accurately — the template predates that migration — but an implementer
+   mirroring it produces a migration that fails on apply. Corrected inline at Task 2 piece 1. This
+   one is a reminder that **a quote of a real file is still only evidence about that file**: G9 was
+   true about `20260715000010` and false about what to write today, and only running it separated
+   the two.
 
 Two smaller line-number drifts, harmless but noted so a reader does not think they are looking at
 the wrong file: the spec cites `authz/mod.rs:103` for `denial()` (it is `:104`) and

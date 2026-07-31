@@ -14,7 +14,8 @@ use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::context_service::{
     self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
-    ReassignContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::state::AppState;
 use temper_workflow::operations::{Backend, MaterializeOnThreshold};
@@ -170,6 +171,37 @@ pub async fn reassign(
         ProfileId::from(auth.0.profile().id),
         context_id,
         body.to_team_id,
+    )
+    .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/contexts/{id}/rename",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    request_body = RenameContextRequest,
+    responses(
+        (status = 200, description = "Context renamed (or idempotent no-op when the canonical name already matched)", body = RenameContextOutcome),
+        (status = 400, description = "The name derives an empty slug (empty, whitespace-only, or no sluggifiable characters)"),
+        (status = 403, description = "Caller may read but not administer this context"),
+        (status = 404, description = "Context not found (uniform — no existence oracle for a caller who cannot see it)"),
+        (status = 409, description = "Another context under the same owner already holds the derived slug"),
+    )
+)]
+pub async fn rename(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+    Json(body): Json<RenameContextRequest>,
+) -> ApiResult<Json<RenameContextOutcome>> {
+    let outcome = context_service::rename(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        context_id,
+        &body.name,
     )
     .await?;
     Ok(Json(outcome))
