@@ -65,7 +65,7 @@ jobs:
           prefix-key: code-quality
 
       - name: Install cargo-sqlx and cargo-make
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.3
         with:
           # cargo-make is here for the ts-rs drift gate below, which invokes
           # `cargo make generate-ts-types` — deliberately the same entry point a developer runs,
