@@ -4502,6 +4502,22 @@ export interface components {
          */
         SearchDiagnostics: {
             /**
+             * Format: int64
+             * @description How many anchors actually contributed a resource to the scope, counting both the region-winner
+             *     arm and the cold-start arm. Equal to `anchors_visible` ⇒ every reachable anchor is represented;
+             *     `1` against a larger `anchors_visible` ⇒ a single-map result however large `scope_size` reads.
+             *     `Some` only for `wayfind` (issue #585).
+             */
+            anchors_reached?: number | null;
+            /**
+             * Format: int64
+             * @description How many region anchors — cognitive maps and contexts alike — the principal could have
+             *     reached on this query, after any single-anchor scoping. The denominator for
+             *     [`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that
+             *     pools across anchors (issue #585).
+             */
+            anchors_visible?: number | null;
+            /**
              * @description True when a ranking signal degraded silently — currently: server-side query embedding
              *     failed and the blend fell back to FTS + graph only. Results are still returned.
              */
@@ -4515,6 +4531,15 @@ export interface components {
             matched: number;
             /** @description Why the result set is shaped as it is. */
             reason: components["schemas"]["SearchReason"];
+            /**
+             * Format: int64
+             * @description The region width actually applied after the server-side clamp — what `--regions`/`regions`
+             *     resolved to, including the default substituted when the caller passed nothing. Since Stage-1
+             *     admits at most one region per anchor per round, this **bounds** `anchors_reached`: a caller
+             *     seeing `anchors_reached == regions_effective < anchors_visible` is looking at a width limit,
+             *     not at an irrelevant corpus. `Some` only for `wayfind` (issue #585).
+             */
+            regions_effective?: number | null;
             /** @description Which selector produced the corpus. */
             scope: components["schemas"]["SearchScope"];
             /**
@@ -4522,6 +4547,11 @@ export interface components {
              * @description Number of candidate resources the scope selector admitted, when it is cheaply knowable:
              *     the resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose
              *     corpus is not a bounded id-set at scope-resolution time.
+             *
+             *     **This is a resource count and is not a reach signal.** A wayfind drawn entirely from one map
+             *     and one drawn evenly across ten both report a figure in the hundreds — read
+             *     [`anchors_reached`](Self::anchors_reached) against
+             *     [`anchors_visible`](Self::anchors_visible) for that (issue #585).
              */
             scope_size?: number | null;
         };
@@ -4579,7 +4609,13 @@ export interface components {
             query?: string | null;
             /**
              * Format: int64
-             * @description Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless `wayfind`.
+             * @description Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless
+             *     `wayfind`.
+             *
+             *     **Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per
+             *     anchor per round, so a width of N reaches at most N maps/contexts. The width actually applied
+             *     is reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a
+             *     scope-width knob, not an output rollup — no response carries a region list.
              */
             regions?: number | null;
             /**

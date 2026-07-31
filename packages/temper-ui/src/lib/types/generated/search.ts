@@ -14,8 +14,35 @@ scope: SearchScope,
  * Number of candidate resources the scope selector admitted, when it is cheaply knowable:
  * the resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose
  * corpus is not a bounded id-set at scope-resolution time.
+ *
+ * **This is a resource count and is not a reach signal.** A wayfind drawn entirely from one map
+ * and one drawn evenly across ten both report a figure in the hundreds — read
+ * [`anchors_reached`](Self::anchors_reached) against
+ * [`anchors_visible`](Self::anchors_visible) for that (issue #585).
  */
 scope_size: bigint | null, 
+/**
+ * How many region anchors — cognitive maps and contexts alike — the principal could have
+ * reached on this query, after any single-anchor scoping. The denominator for
+ * [`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that
+ * pools across anchors (issue #585).
+ */
+anchors_visible: bigint | null, 
+/**
+ * How many anchors actually contributed a resource to the scope, counting both the region-winner
+ * arm and the cold-start arm. Equal to `anchors_visible` ⇒ every reachable anchor is represented;
+ * `1` against a larger `anchors_visible` ⇒ a single-map result however large `scope_size` reads.
+ * `Some` only for `wayfind` (issue #585).
+ */
+anchors_reached: bigint | null, 
+/**
+ * The region width actually applied after the server-side clamp — what `--regions`/`regions`
+ * resolved to, including the default substituted when the caller passed nothing. Since Stage-1
+ * admits at most one region per anchor per round, this **bounds** `anchors_reached`: a caller
+ * seeing `anchors_reached == regions_effective < anchors_visible` is looking at a width limit,
+ * not at an irrelevant corpus. `Some` only for `wayfind` (issue #585).
+ */
+regions_effective: bigint | null, 
 /**
  * Number of results returned (post-ranking, post-limit).
  */
