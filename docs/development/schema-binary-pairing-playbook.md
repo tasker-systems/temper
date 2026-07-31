@@ -212,11 +212,48 @@ resolving is a new entry and the `pending` stays as the record that it happened.
 
 ---
 
+## 4c. The deploy failed: "a shape-breaking migration is pending"
+
+The build applies additive migrations and refuses the rest. This message means the pending set
+reached one it will not take, so **nothing after it was applied and the binary did not deploy** —
+which is the safe state, not a broken one. Schema and binary are both at N-1, together.
+
+Find which one, and why it is being refused:
+
+```sql
+SELECT version, class, class_reason FROM migration_current WHERE class = 'shape-breaking'
+  AND version > (SELECT max(version) FROM _sqlx_migrations) ORDER BY version LIMIT 1;
+```
+
+Then take it as a cutover (§5 below) and redeploy. The next run finds it already applied in
+`_sqlx_migrations` and continues past it.
+
+**Three things worth knowing before you reach for a workaround:**
+
+- **Unrelated deploys are blocked too**, including hotfixes. That is the accepted cost of the
+  decision `[decided — 2026-07-31, Pete]`, not an oversight: the alternative is deploying a binary
+  that expects schema it does not have, which is the 2026-07-30 outage inverted. If the migration
+  should not have merged, **revert it** — that is the fast path, not disabling the gate.
+- **There is no override flag, on purpose.** The operator gate *is* applying the migration. A switch
+  that let the build take a shape-breaking migration would delete the only thing this mechanism does.
+- **Exit 3 is a refusal; any other non-zero is a failure.** If the log says *"the migration runner
+  exited 1"*, a migration genuinely broke — read `migration_current` for a `failed` state and go to
+  §4b, not to §5.
+
+A halt is also reachable from a migration that declares **nothing**, or a class token outside the
+vocabulary. Both halt for the same reason: silence is not safety, and the router will not guess.
+CI's declaration check should have caught either before merge — a halt for one of those means
+something reached `main` without it, which is worth understanding before simply adding the
+declaration.
+
+---
+
 ## 5. Shipping a shape-breaking migration
 
 A `shape-breaking` migration is **never** a silent `main` auto-deploy. It is an operator-gated
 cutover, per [`DEPLOYING.md` § *Applying schema changes per target*](../../DEPLOYING.md#applying-schema-changes-per-target),
-run against each target independently:
+run against each target independently. **The build enforces this rather than trusting it** — a
+deploy carrying an unapplied shape-breaking migration fails (§4c) until an operator has taken it:
 
 ```
 back up (durable Neon snapshot)  →  migrate  →  deploy the binary  →  verify
@@ -283,10 +320,17 @@ Stated so that a green cross-check is not read as more than it is.
   wire diff reports it — but it does not trigger the verdict, because sqlx infers nullability
   heuristically and a noisy signal folded into a verdict teaches people to ignore the verdict.
   **If you see a `NOTED … nullable[]` line, read it yourself.**
-- **A migration applied by something other than the runner.** `cargo make db-migrate` and CI use
-  `temper-substrate migrate`, which brackets each apply. A migration applied by `sqlx migrate run`,
-  by `psql`, or by hand gets no state entry at all — `migration_current.state` is NULL. That is
-  "not observed", never "did not happen", and production migrations are still hand-run today.
+- **A migration applied by something other than the runner.** `cargo make db-migrate`, CI, and the
+  deploy's own build (`scripts/vercel-build.sh`) all use `temper-substrate migrate`, which brackets
+  each apply. A migration applied by `sqlx migrate run`, by `psql`, or by hand gets no state entry at
+  all — `migration_current.state` is NULL. That is "not observed", never "did not happen".
+
+  Every migration applied to production before 2026-07-31 reads that way and always will: the
+  retroactive backfill in `20260731000020` has already fired and its `NOT EXISTS` guard is now
+  permanently satisfied, so nothing will ever fill those in. **A shape-breaking cutover, which is
+  hand-run by design, leaves a NULL state for the same reason** — the runner refuses it rather than
+  applying it, so it has nothing to observe. Read a NULL beside a `shape-breaking` class as "an
+  operator took this", not as a gap.
 - **`tests/e2e/.sqlx`.** Deliberately out of scope; the wire contract that breaks a deploy is the
   running binary's. Announced on every run so the omission is never silent.
 - **Whether the claim is *true*.** The cross-check tests a claim against the compiler's record. It
@@ -317,6 +361,16 @@ WIRE_DIFF_BASE=<rev> .github/scripts/sqlx-wire-diff.sh
 
 # What is actually running in production?
 curl -s "https://temperkb.io/api/health?cb=$(date +%s)" | jq -r .commit
+
+# What the DEPLOY will do to the schema — the same call vercel-build.sh makes.
+# Exit 0 = applied (or nothing pending); exit 3 = halted, an operator must take it.
+cargo run -p temper-substrate --bin temper-substrate -- migrate --additive-only
+
+# Apply EVERYTHING, shape-breaking included. What a developer and an operator run.
+cargo make db-migrate
+
+# Where does each migration stand?
+psql "$DATABASE_URL" -c "SELECT version, state, class FROM migration_current ORDER BY version DESC LIMIT 10"
 ```
 
 An exit of **2** from the wire diff means *the base could not be read*, never *nothing moved*. The
