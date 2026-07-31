@@ -87,6 +87,56 @@ export type ReassignContextRequest = {
 to_team_id: string, };
 
 /**
+ * Result of a context rename. `renamed` is `false` when the canonical name already equalled
+ * the stored one (idempotent no-op).
+ *
+ * Carries the **composed** `context_ref` as well as the `owner_ref` + `slug` halves it is built
+ * from: the caller has just had their address changed out from under them, so making them
+ * reconstruct the new one from parts is the wrong place to save a field.
+ */
+export type RenameContextOutcome = { context_id: string, 
+/**
+ * The stored (canonical) name after the call — on a no-op, the name it already had.
+ */
+name: string, 
+/**
+ * The per-owner-unique slug after the call, derived from `name`.
+ */
+slug: string, 
+/**
+ * The already-sigil'd owner addressable, unchanged by a rename: `@<handle>` for profiles,
+ * `+<team-slug>` for teams.
+ */
+owner_ref: string, 
+/**
+ * The full decorated context ref after the call — `{owner_ref}/{slug}`, the address the
+ * caller should use from now on.
+ *
+ * Composed **once**, server-side, by the service that produces this outcome; no surface
+ * reassembles it. Note the trap: `owner_ref` is already sigil-decorated, whereas
+ * `context_ref::decorated_context_ref`'s `owner_addressable` parameter is the *bare*
+ * handle/team-slug. The two spellings must never be mixed, or the ref reads `@@handle/slug`.
+ */
+context_ref: string, 
+/**
+ * `true` when this call changed the stored name; `false` when the canonical name was
+ * already the stored one (no event emitted, nothing written).
+ */
+renamed: boolean, };
+
+/**
+ * Request body for `POST /api/contexts/{id}/rename` — change a context's display name.
+ * The addressable slug is **derived** from the name server-side; there is deliberately no
+ * independent slug parameter. Rename is one field.
+ */
+export type RenameContextRequest = { 
+/**
+ * The new display name. Canonicalized (trimmed, internal whitespace collapsed) before it
+ * is stored, and sluggified to derive the new addressable slug.
+ */
+name: string, };
+
+/**
  * Result of sharing a context into a team. `shared` is `false` when the share already
  * existed (idempotent no-op).
  */
