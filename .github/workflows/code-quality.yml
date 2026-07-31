@@ -136,6 +136,15 @@ jobs:
       - name: Security tripwire — attestation covers archive AND manifest
         run: bash .github/scripts/audit-attest-subject-path.sh
 
+      # Not a security tripwire — a correctness one, and it protects another safeguard rather than
+      # the product. A runtime `sqlx::query` leaves no `.sqlx` cache entry, so it is invisible to
+      # the schema/binary change detector that reads that cache. This pins the 46 queries that are
+      # legitimately exempt, each against a written reason, so a 47th cannot appear silently. The
+      # prose rule it enforces has existed (unenforced) in code-quality-best-practices.md for
+      # months; when finally measured, 66 of 112 runtime sites had no reason at all.
+      - name: Tripwire — non-macro SQL queries are declared exceptions
+        run: bash .github/scripts/audit-sqlx-macro-exceptions.sh
+
       - name: Check documentation builds
         run: cargo doc --workspace --no-deps --document-private-items
         env:
@@ -172,8 +181,23 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # depth 2, not 0. The wire diff needs ONE base revision, not 246 commits of history — a full
+      # clone is ~445 MB and this job exists to be cheap enough that nobody is ever tempted to scope
+      # it away. Depth 2 covers a push (HEAD~1); a pull_request gets its base fetched explicitly
+      # below, one commit deep.
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      # Named, visible, and separate so that "we could not get the base" shows up as this step
+      # failing rather than as a check quietly deciding nothing moved. sqlx-wire-diff.sh also
+      # attempts this fetch itself; if BOTH fail it exits 2, and the cross-check turns that into a
+      # failure whenever the change carries a migration. "I could not look" never renders as
+      # "nothing moved".
+      - name: Fetch the base revision (for the wire diff)
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
 
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh
@@ -192,6 +216,37 @@ jobs:
 
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
+
+      # Spec §1's "silence is a failure" half. The checker itself lives in this job rather than in
+      # rust-quality because it parses migrations/*.sql and needs no toolchain and no database —
+      # which is also what makes it cheap enough that there is never a reason to scope it away.
+      # It runs BEFORE its harness so a real undeclared migration is reported as itself, not as a
+      # failing test case.
+      - name: Every migration declares its class (silence fails)
+        run: bash .github/scripts/audit-migration-declarations.sh
+
+      - name: Guard test — audit-migration-declarations
+        run: bash .github/scripts/test-audit-migration-declarations.sh
+
+      # Spec §2. The cross-check runs the wire diff itself and prints its output, so there is one
+      # step rather than two — but both harnesses run below, so a broken differ cannot hide behind
+      # a cross-check that never reaches it.
+      #
+      # Deliberately asymmetric: a wire move with nothing declaring shape-breaking FAILS, while a
+      # shape-breaking declaration with an empty wire diff PASSES (noted). The caches only see what
+      # a compile-checked query touches, so a real break can be invisible to them, and failing an
+      # honest over-declaration would train under-declaration — the behaviour that produced the
+      # 2026-07-30 outage.
+      - name: A migration's classification survives the compiler's record (cross-check)
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash .github/scripts/sqlx-schema-crosscheck.sh
+
+      - name: Guard test — sqlx-wire-diff
+        run: bash .github/scripts/test-sqlx-wire-diff.sh
+
+      - name: Guard test — sqlx-schema-crosscheck
+        run: bash .github/scripts/test-sqlx-schema-crosscheck.sh
 
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
@@ -243,6 +298,13 @@ jobs:
 
       - name: Guard test — audit-attest-subject-path
         run: bash .github/scripts/test-audit-attest-subject-path.sh
+
+      # Most of what this exercises is the ENUMERATOR the tripwire shells out to, because the
+      # tripwire's coverage is exactly that enumerator's coverage. Its turbofish case is a real
+      # regression: `(?:::<[^>]*>)?` cannot cross `Option<String>`, which hid 10 production sites
+      # and left the old script reporting exactly the allow-list's own size.
+      - name: Guard test — audit-sqlx-macro-exceptions
+        run: bash .github/scripts/test-audit-sqlx-macro-exceptions.sh
 
   typescript-quality:
     name: TypeScript Quality

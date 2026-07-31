@@ -9,7 +9,7 @@ use crate::cluster::connected_components;
 use crate::fingerprint::component_fingerprint;
 use crate::substrate::Substrate;
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
@@ -96,24 +96,18 @@ pub(crate) async fn live_components(
     anchor: HomeAnchor,
     lens_id: Uuid,
 ) -> Result<Vec<(Uuid, Vec<Uuid>, String)>> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "SELECT id, member_ids, fingerprint FROM kb_cogmap_components \
          WHERE home_anchor_table=$1 AND home_anchor_id=$2 AND lens_id=$3 AND NOT is_folded",
+        anchor.table(),
+        anchor.uuid(),
+        lens_id,
     )
-    .bind(anchor.table())
-    .bind(anchor.uuid())
-    .bind(lens_id)
     .fetch_all(pool)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| {
-            (
-                r.get::<Uuid, _>("id"),
-                r.get::<Vec<Uuid>, _>("member_ids"),
-                r.get::<String, _>("fingerprint"),
-            )
-        })
+        .map(|r| (r.id, r.member_ids, r.fingerprint))
         .collect())
 }
 

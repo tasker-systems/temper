@@ -10,7 +10,7 @@
 //! entry — the macro cache is reserved for the substrate read/mutation queries.
 
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
@@ -31,12 +31,10 @@ use temper_core::types::property_owner::PropertyOwner;
 /// (`check_can_modify`) already binds it directly as the substrate principal — so this is an existence
 /// check that returns the same id typed. Errors if no such profile exists.
 pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<ProfileId> {
-    let id: Uuid = sqlx::query("SELECT id FROM kb_profiles WHERE id = $1")
-        .bind(prod_profile)
+    let id = sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE id = $1", prod_profile)
         .fetch_one(pool)
         .await
-        .with_context(|| format!("profile {prod_profile} not found"))?
-        .get("id");
+        .with_context(|| format!("profile {prod_profile} not found"))?;
     Ok(ProfileId::from(id))
 }
 
@@ -49,17 +47,16 @@ pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<Profil
 /// therefore needs its entity provisioned (`profile_service`) *and* backfilled (a migration)
 /// before any caller can send it.
 pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -> Result<EntityId> {
-    let id: Uuid = sqlx::query(
-        "SELECT e.id FROM kb_entities e \
-         JOIN kb_profiles p ON p.id = e.profile_id \
-         WHERE e.profile_id = $1 AND e.name = p.handle || '@' || $2",
+    let id = sqlx::query_scalar!(
+        r#"SELECT e.id FROM kb_entities e
+             JOIN kb_profiles p ON p.id = e.profile_id
+            WHERE e.profile_id = $1 AND e.name = p.handle || '@' || $2"#,
+        profile.uuid(),
+        surface,
     )
-    .bind(profile.uuid())
-    .bind(surface)
     .fetch_one(pool)
     .await
-    .with_context(|| format!("no emitter entity <handle>@{surface} for the resolved profile"))?
-    .get("id");
+    .with_context(|| format!("no emitter entity <handle>@{surface} for the resolved profile"))?;
     Ok(EntityId::from(id))
 }
 
@@ -70,16 +67,15 @@ pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -
 /// (visibility-gated, UUID-primary). Do not introduce new callers of this function in production code.
 pub async fn resolve_context(pool: &PgPool, owner: ProfileId, name: &str) -> Result<ContextId> {
     let slug = slugify(name);
-    let id: Uuid = sqlx::query(
-        "SELECT id FROM kb_contexts \
-         WHERE owner_table = 'kb_profiles' AND owner_id = $1 AND slug = $2",
+    let id = sqlx::query_scalar!(
+        r#"SELECT id FROM kb_contexts
+            WHERE owner_table = 'kb_profiles' AND owner_id = $1 AND slug = $2"#,
+        owner.uuid(),
+        slug,
     )
-    .bind(owner.uuid())
-    .bind(&slug)
     .fetch_one(pool)
     .await
-    .with_context(|| format!("no context {slug:?} owned by the resolved profile"))?
-    .get("id");
+    .with_context(|| format!("no context {slug:?} owned by the resolved profile"))?;
     Ok(ContextId::from(id))
 }
 
@@ -332,11 +328,11 @@ async fn resolve_target_block(
         // Explicit addressing: validate the block belongs to this resource and is non-folded.
         // A null row ⇒ not-this-resource; is_folded ⇒ folded — both rejected before any write.
         Some(target) => {
-            let is_folded: Option<bool> = sqlx::query_scalar(
+            let is_folded = sqlx::query_scalar!(
                 "SELECT is_folded FROM kb_content_blocks WHERE id=$1 AND resource_id=$2",
+                target,
+                resource.uuid(),
             )
-            .bind(target)
-            .bind(resource.uuid())
             .fetch_optional(&mut *conn)
             .await?;
             match is_folded {
@@ -352,10 +348,10 @@ async fn resolve_target_block(
         }
         // Default: resolve the resource's single non-folded body block (CONFORM scenario runner revise).
         None => {
-            let block_ids: Vec<Uuid> = sqlx::query_scalar(
+            let block_ids = sqlx::query_scalar!(
                 "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+                resource.uuid(),
             )
-            .bind(resource.uuid())
             .fetch_all(&mut *conn)
             .await?;
             match block_ids.as_slice() {

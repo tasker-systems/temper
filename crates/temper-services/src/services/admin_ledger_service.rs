@@ -212,18 +212,6 @@ pub async fn ledger_epoch(pool: &PgPool) -> ApiResult<Option<DateTime<Utc>>> {
     .await?)
 }
 
-/// One row of the ledger join, as the driver returns it.
-type LedgerRow = (
-    Uuid,
-    String,
-    Uuid,
-    String,
-    DateTime<Utc>,
-    serde_json::Value,
-    serde_json::Value,
-    Option<Uuid>,
-);
-
 async fn fetch(
     pool: &PgPool,
     // The gate's output, not the whole catalogue: `readable_event_types` decided this.
@@ -233,12 +221,21 @@ async fn fetch(
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
-    // Runtime `query_as` rather than the `query_as!` macro: the two axes select different
-    // predicates over one statement (`$2::jsonb IS NULL OR …`, `$3::uuid IS NULL OR …`), which is
-    // the dynamic-predicate case the `search_service` precedent covers. The columns are fixed and
-    // the binds are parameters — nothing is interpolated.
-    let rows = sqlx::query_as::<_, LedgerRow>(
-        r#"SELECT e.id, t.name, p.id, p.handle, e.occurred_at, e.payload, e."references", e.correlation_id
+    // Compile-time-checked. The `$2::jsonb IS NULL OR …` / `$3::uuid IS NULL OR …` shape is a
+    // NULL-passthrough parameter, not dynamic SQL: the statement text is a single static literal
+    // and both axes are binds, so nothing is interpolated and the macro handles it. No column needs
+    // a nullability override — every one is a plain reference to a NOT NULL column except
+    // `e.correlation_id`, which is genuinely nullable and stays `Option`. The `AS` aliases are
+    // required only because `e.id`/`p.id` and the rest would otherwise collide as field names.
+    let rows = sqlx::query!(
+        r#"SELECT e.id            AS event_id,
+                  t.name          AS event_type,
+                  p.id            AS actor_profile_id,
+                  p.handle        AS actor_handle,
+                  e.occurred_at   AS occurred_at,
+                  e.payload       AS payload,
+                  e."references"  AS refs,
+                  e.correlation_id AS correlation_id
              FROM kb_events e
              JOIN kb_event_types t ON t.id = e.event_type_id
              JOIN kb_entities   en ON en.id = e.emitter_entity_id
@@ -248,43 +245,33 @@ async fn fetch(
               AND ($3::uuid  IS NULL OR p.id = $3::uuid)
             ORDER BY e.occurred_at DESC, e.id DESC
             LIMIT $4 OFFSET $5"#,
+        // The authorized set, NOT ADMIN_EVENT_TYPES. Binding the catalogue here would make the gate
+        // decorative — it would compute a type set and then query for every type anyway.
+        types as &[&str],
+        subject_probe,
+        actor,
+        limit,
+        offset,
     )
-    // The authorized set, NOT ADMIN_EVENT_TYPES. Binding the catalogue here would make the gate
-    // decorative — it would compute a type set and then query for every type anyway.
-    .bind(types)
-    .bind(subject_probe)
-    .bind(actor)
-    .bind(limit)
-    .bind(offset)
     .fetch_all(pool)
     .await?;
 
     rows.into_iter()
-        .map(
-            |(
+        .map(|r| {
+            let event_id = r.event_id;
+            Ok(AdminLedgerEntry {
                 event_id,
-                event_type,
-                actor_profile_id,
-                actor_handle,
-                occurred_at,
-                payload,
-                refs,
-                correlation_id,
-            )| {
-                Ok(AdminLedgerEntry {
-                    event_id,
-                    event_type,
-                    actor_profile_id,
-                    actor_handle,
-                    occurred_at,
-                    payload,
-                    references: serde_json::from_value(refs).map_err(|e| {
-                        ApiError::Internal(format!("malformed references on {event_id}: {e}"))
-                    })?,
-                    correlation_id,
-                })
-            },
-        )
+                event_type: r.event_type,
+                actor_profile_id: r.actor_profile_id,
+                actor_handle: r.actor_handle,
+                occurred_at: r.occurred_at,
+                payload: r.payload,
+                references: serde_json::from_value(r.refs).map_err(|e| {
+                    ApiError::Internal(format!("malformed references on {event_id}: {e}"))
+                })?,
+                correlation_id: r.correlation_id,
+            })
+        })
         .collect()
 }
 

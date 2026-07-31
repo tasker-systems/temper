@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", title AS \"title!\", doc_type, degree AS \"degree!\",\n                  anchor_id AS \"anchor_id!\", anchor_label\n             FROM graph_cogmap_orphan_nodes($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "doc_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "degree!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "anchor_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "anchor_label",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d3790d7cfadc01dfabe52746124254169b46383ff30ddd747f41f73eb629132e"
+}

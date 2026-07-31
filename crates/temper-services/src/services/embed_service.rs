@@ -149,7 +149,7 @@ pub async fn enqueue_stale(
         ReembedScope::All => (None, None),
     };
 
-    let stale: Vec<Uuid> = sqlx::query_scalar(
+    let stale: Vec<Uuid> = sqlx::query_scalar!(
         "SELECT DISTINCT r.id \
            FROM kb_resources r \
            JOIN kb_chunks ch ON ch.resource_id = r.id \
@@ -165,11 +165,11 @@ pub async fn enqueue_stale(
                        AND h.anchor_table = 'kb_contexts' \
                        AND h.anchor_id = $3::uuid)) \
           LIMIT $4",
+        model,
+        resource_filter,
+        context_filter,
+        i64::from(limit),
     )
-    .bind(model)
-    .bind(resource_filter)
-    .bind(context_filter)
-    .bind(i64::from(limit))
     .fetch_all(pool)
     .await?;
 
@@ -202,29 +202,32 @@ pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64
         ReembedScope::All => (None, None),
     };
 
-    let row: (i64, i64) = sqlx::query_as(
-        "SELECT count(DISTINCT r.id), count(*) \
-           FROM kb_resources r \
-           JOIN kb_chunks ch ON ch.resource_id = r.id \
-           JOIN kb_content_blocks b ON b.id = ch.block_id \
-          WHERE r.is_active \
-            AND ch.is_current \
-            AND NOT b.is_folded \
-            AND ch.embedded_with IS DISTINCT FROM $1 \
-            AND ($2::uuid IS NULL OR r.id = $2::uuid) \
-            AND ($3::uuid IS NULL OR EXISTS ( \
-                    SELECT 1 FROM kb_resource_homes h \
-                     WHERE h.resource_id = r.id \
-                       AND h.anchor_table = 'kb_contexts' \
-                       AND h.anchor_id = $3::uuid))",
+    // Both counts take `!`: sqlx types every aggregate expression as nullable, but `count()` over an
+    // empty grouping set still returns 0 — it is never NULL. Aliased because the two columns would
+    // otherwise both be named `count`.
+    let row = sqlx::query!(
+        r#"SELECT count(DISTINCT r.id) AS "resources!", count(*) AS "chunks!"
+           FROM kb_resources r
+           JOIN kb_chunks ch ON ch.resource_id = r.id
+           JOIN kb_content_blocks b ON b.id = ch.block_id
+          WHERE r.is_active
+            AND ch.is_current
+            AND NOT b.is_folded
+            AND ch.embedded_with IS DISTINCT FROM $1
+            AND ($2::uuid IS NULL OR r.id = $2::uuid)
+            AND ($3::uuid IS NULL OR EXISTS (
+                    SELECT 1 FROM kb_resource_homes h
+                     WHERE h.resource_id = r.id
+                       AND h.anchor_table = 'kb_contexts'
+                       AND h.anchor_id = $3::uuid))"#,
+        model,
+        resource_filter,
+        context_filter,
     )
-    .bind(model)
-    .bind(resource_filter)
-    .bind(context_filter)
     .fetch_one(pool)
     .await?;
 
-    Ok((row.0 as u64, row.1 as u64))
+    Ok((row.resources as u64, row.chunks as u64))
 }
 
 /// Re-enqueue `dead` embed jobs so a following claim can drain them (issue #299, Phase 4). Returns the

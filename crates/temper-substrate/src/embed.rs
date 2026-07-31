@@ -13,7 +13,7 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     // re-runs (run_eval invokes the binary several times) skip already-embedded chunks instead of paying
     // the full ONNX cost again. (Content-mutation re-embed is a content_hash check — deferred to the
     // scenario-DSL work; this eval's content is immutable once seeded.)
-    let chunks = sqlx::query(
+    let chunks = sqlx::query!(
         "SELECT ch.id AS chunk_id, cc.content \
          FROM kb_chunks ch \
          JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
@@ -23,8 +23,8 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     .fetch_all(pool)
     .await?;
     for row in chunks {
-        let chunk_id: Uuid = row.get("chunk_id");
-        let content: String = row.get("content");
+        let chunk_id = row.chunk_id;
+        let content = row.content;
         if content.trim().is_empty() {
             continue;
         }
@@ -181,11 +181,13 @@ pub async fn embed_resource_chunks(
     }
 
     if !blank.is_empty() {
-        sqlx::query("UPDATE kb_chunks SET embedded_with = $1 WHERE id = ANY($2)")
-            .bind(model)
-            .bind(&blank)
-            .execute(pool)
-            .await?;
+        sqlx::query!(
+            "UPDATE kb_chunks SET embedded_with = $1 WHERE id = ANY($2)",
+            model,
+            &blank,
+        )
+        .execute(pool)
+        .await?;
     }
 
     let mut embedded = 0u64;

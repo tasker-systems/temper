@@ -23,12 +23,12 @@ use uuid::Uuid;
 /// Upsert, not insert: the caller may have provisioned the profile through a path that already
 /// wrote a (`denied`) standing row.
 pub async fn approve(pool: &PgPool, profile: Uuid) {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO kb_principal_standing (profile_id, state)
          VALUES ($1, 'approved')
          ON CONFLICT (profile_id) DO UPDATE SET state = 'approved', updated = now()",
+        profile,
     )
-    .bind(profile)
     .execute(pool)
     .await
     .expect("seed approved standing");
@@ -39,12 +39,12 @@ pub async fn approve(pool: &PgPool, profile: Uuid) {
 /// Gating-team ownership no longer confers admin standing on its own; a fixture that needs a system
 /// admin must write this row. `granted_by` is left NULL (a fixture bootstrap, not a delegated grant).
 pub async fn grant_governance(pool: &PgPool, profile: Uuid) {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO kb_principal_governance (profile_id)
          VALUES ($1)
          ON CONFLICT (profile_id) DO NOTHING",
+        profile,
     )
-    .bind(profile)
     .execute(pool)
     .await
     .expect("seed governance grant");
@@ -97,7 +97,7 @@ pub async fn authenticated_profile_for(
 /// admin fn but do not themselves exercise the gate; the seal has no test bypass, so the honest path
 /// is to mint one. The operator handle is uniquified so a test may mint more than one.
 pub async fn system_admin_proof(pool: &PgPool) -> crate::auth::SystemAdmin {
-    let id: Uuid = sqlx::query_scalar(
+    let id: Uuid = sqlx::query_scalar!(
         "INSERT INTO kb_profiles (handle, display_name) \
          VALUES ('operator-' || gen_random_uuid(), 'operator') RETURNING id",
     )

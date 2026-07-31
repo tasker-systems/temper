@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT resource_id AS \"resource_id!\",\n                  title AS \"title!\",\n                  is_active AS \"is_active!\",\n                  edge_id AS \"edge_id!\",\n                  edge_is_folded AS \"edge_is_folded!\",\n                  depth AS \"depth!\"\n           FROM resource_lineage($1, $2, $3, $4)\n          ORDER BY depth, title",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_active!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "edge_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "edge_is_folded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "depth!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "460f73ea8c47d24dba8097572590588a716306758ebf5f37b4bc83b6be35874e"
+}

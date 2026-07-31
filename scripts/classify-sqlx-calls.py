@@ -4,7 +4,7 @@ r"""Enumerate sqlx query call sites, split by macro-vs-runtime and production-vs
 Supports docs/development/sqlx-macro-exception-classification.md, whose counts are
 otherwise unverifiable assertions. Run it: `python3 scripts/classify-sqlx-calls.py`.
 
-Three things a flat grep gets wrong, each found by getting them wrong first:
+Four things a flat grep gets wrong, each found by getting them wrong first:
 
 1. `#[cfg(test)] mod tests { ... }` blocks live inside the same files as production code,
    so test-module membership needs BRACE MATCHING. Matching only
@@ -18,11 +18,48 @@ Three things a flat grep gets wrong, each found by getting them wrong first:
 
 3. Macros may be bare (`query_as!`), since no other macro of that name is in scope. So
    the two spellings need two patterns, not one with an optional `!`.
+
+4. A TURBOFISH CANNOT BE MATCHED WITH A CHARACTER CLASS. The original runtime pattern
+   ended `(?:::<[^>]*>)?\s*\(`, and `[^>]*` cannot cross a nested generic: in
+   `sqlx::query_as::<_, (Uuid, Option<String>, i32)>(`, it halts at the `>` closing
+   `Option<String>`, the optional group then backtracks away, and `\s*\(` meets a `:`.
+   The whole call site becomes invisible. That hid **10 production runtime sites** — 8 in
+   `graph_service.rs`, 2 in `context_graph_service.rs` — every one of them a
+   `query_as::<_, (…)>` projecting into a tuple.
+
+   This was not a harmless undercount. The number this script reports is what Arc A's
+   "the count must be 46 before the allow-list is seeded" instruction keys on, and after
+   the 56 classified sites were converted the OLD pattern reported exactly 46 — the
+   done-number, reached while ten unconverted sites sat behind the blind spot. An
+   enumerator that backs an enforcement gate has to see the whole corpus, or the gate
+   reads as coverage over a corpus it cannot see, which is the defect the gate exists to
+   prevent. Angle brackets nest: count depth, don't character-class.
 """
-import re, sys, json
+import os, re, subprocess, sys, json
 from pathlib import Path
 
-ROOT = Path("/Users/petetaylor/projects/tasker-systems/temper")
+
+def _repo_root():
+    """The tree to scan. `SQLX_SCAN_ROOT` overrides — that is the seam a guard test points at a
+    fixture directory, mirroring `MIGRATIONS_DIR` in `.github/scripts/audit-grant-sinks.sh`.
+
+    This was a hardcoded absolute path to one developer's checkout until 2026-07-30, which meant
+    the script could not run in CI at all — worth knowing, because the allow-list check is
+    specified to shell out to it."""
+    if env := os.environ.get("SQLX_SCAN_ROOT"):
+        return Path(env)
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return Path(top)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Not in a git tree (a tarball, a fixture dir): fall back to this file's parent repo.
+        return Path(__file__).resolve().parent.parent
+
+
+ROOT = _repo_root()
 
 # Production source only. `tests/` dirs anywhere and the standalone e2e crate are excluded
 # by the spec: "the wire contract that can break a deploy is the running binary's".
@@ -65,24 +102,66 @@ def test_spans(text):
 #   MACRO may be bare — `query_as!` is unambiguous, since no other macro of that name is
 #   in scope.
 QFN = r'query(?:_as|_scalar|_file|_as_with|_with|_file_as|_file_scalar)?'
-CALL_RUNTIME = re.compile(r'\bsqlx::(' + QFN + r')\s*(?:::<[^>]*>)?\s*\(')
+# The runtime scan is two-stage — see note 4 in the module docstring. Stage 1 finds the
+# path + function name; stage 2 walks forward over an OPTIONAL turbofish with angle-bracket
+# depth counting, then requires the open paren. A regex cannot do stage 2.
+CALL_RUNTIME_HEAD = re.compile(r'\bsqlx::(' + QFN + r')\b')
 CALL_MACRO = re.compile(r'\b(?:sqlx::)?(' + QFN + r')!\s*[({\[]')
+
+
+def _skip_ws(text, i):
+    while i < len(text) and text[i].isspace():
+        i += 1
+    return i
+
+
+def _skip_turbofish(text, i):
+    """Advance past a `::<...>` turbofish, counting `<`/`>` depth so nested generics are
+    crossed. Returns the index after it, i unchanged when there is no turbofish, or None
+    when the brackets never balance (malformed source — the call is not counted)."""
+    i = _skip_ws(text, i)
+    if not text.startswith("::<", i):
+        return i
+    depth, j = 0, i + 2
+    while j < len(text):
+        if text[j] == "<":
+            depth += 1
+        elif text[j] == ">":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def runtime_calls(text):
+    """(offset, fn_name) for each runtime `sqlx::query*(...)` call — macros excluded."""
+    for m in CALL_RUNTIME_HEAD.finditer(text):
+        i = m.end()
+        if i < len(text) and text[i] == "!":
+            continue  # a macro; CALL_MACRO counts it
+        j = _skip_turbofish(text, i)
+        if j is None:
+            continue
+        j = _skip_ws(text, j)
+        if j < len(text) and text[j] == "(":
+            yield m.start(), m.group(1)
 
 def main():
     rows = []
     for f in production_files():
         text = f.read_text(encoding="utf-8", errors="replace")
         spans = test_spans(text)
-        for rx, is_macro in ((CALL_RUNTIME, False), (CALL_MACRO, True)):
-            for m in rx.finditer(text):
-                pos = m.start()
-                rows.append({
-                    "file": str(f.relative_to(ROOT)),
-                    "line": text.count("\n", 0, pos) + 1,
-                    "fn": m.group(1),
-                    "macro": is_macro,
-                    "in_test": any(a <= pos <= b for a, b in spans),
-                })
+        found = [(pos, fn, False) for pos, fn in runtime_calls(text)]
+        found += [(m.start(), m.group(1), True) for m in CALL_MACRO.finditer(text)]
+        for pos, fn, is_macro in found:
+            rows.append({
+                "file": str(f.relative_to(ROOT)),
+                "line": text.count("\n", 0, pos) + 1,
+                "fn": fn,
+                "macro": is_macro,
+                "in_test": any(a <= pos <= b for a, b in spans),
+            })
     prod = [r for r in rows if not r["in_test"]]
     macro = [r for r in prod if r["macro"]]
     runtime = [r for r in prod if not r["macro"]]
