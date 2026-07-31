@@ -560,19 +560,39 @@ mod tests {
             "fixture precondition: the admin must NOT be able to read this context"
         );
 
+        // The clause is about RESIDUE, so the measurement has to be a DELTA, not an absolute.
+        //
+        // This assertion was `assert_eq!(memberships, 0)` and could never pass: `kb_profiles`
+        // carries `trg_sync_personal_team`, which on INSERT creates a personal team with the new
+        // profile as its `owner`. So `mk_actor` gives the admin one membership before this test
+        // does anything, and the absolute-zero form was measuring the fixture rather than the act.
+        //
+        // The failure value said so: it reported 1, which is exactly the personal-team baseline —
+        // had the rename granted anything there would have been 2. The clause was satisfied the
+        // whole time; only its instrument was wrong.
+        let memberships_before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE profile_id = $1")
+                .bind(*admin)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
         let outcome = context_service::rename(&pool, admin, context, "Renamed By Admin")
             .await
             .expect("a system admin may rename a context they cannot read");
         assert!(outcome.renamed, "the rename actually happened");
         assert_eq!(outcome.slug, "renamed-by-admin");
 
-        let memberships: i64 =
+        let memberships_after: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE profile_id = $1")
                 .bind(*admin)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(memberships, 0, "renaming granted the admin no membership");
+        assert_eq!(
+            memberships_after, memberships_before,
+            "renaming granted the admin no membership it did not already hold"
+        );
 
         let grants: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM kb_access_grants \
