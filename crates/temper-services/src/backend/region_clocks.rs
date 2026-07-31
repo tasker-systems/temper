@@ -128,18 +128,33 @@ async fn shape_watermark(
     anchor: HomeAnchor,
 ) -> anyhow::Result<Option<uuid::Uuid>> {
     // The column is `shape_materialized_event_id` on BOTH anchor tables (T2 gave contexts the same
-    // column cogmaps already had), but the table name cannot be bound as a parameter — match to a
-    // literal rather than interpolating. The enum is closed, so this is exhaustive by construction.
-    let sql = match anchor {
+    // column cogmaps already had), and the table name cannot be bound as a parameter. That does NOT
+    // make this a runtime query: the set of tables is closed and small, so the statement goes inside
+    // each match arm rather than being selected into one runtime call. Both literals then land in
+    // the `.sqlx` cache — a query chosen at runtime from a fixed set is still two static queries.
+    // The enum is closed, so this stays exhaustive by construction.
+    //
+    // No nullability override: the column IS nullable on both tables (NULL before the first
+    // materialize), which is exactly what this function's `Option` return reports.
+    let id = anchor.uuid();
+    Ok(match anchor {
         HomeAnchor::Context(_) => {
-            "SELECT shape_materialized_event_id FROM kb_contexts WHERE id = $1"
+            sqlx::query_scalar!(
+                "SELECT shape_materialized_event_id FROM kb_contexts WHERE id = $1",
+                id,
+            )
+            .fetch_one(pool)
+            .await?
         }
-        HomeAnchor::Cogmap(_) => "SELECT shape_materialized_event_id FROM kb_cogmaps WHERE id = $1",
-    };
-    Ok(sqlx::query_scalar(sql)
-        .bind(anchor.uuid())
-        .fetch_one(pool)
-        .await?)
+        HomeAnchor::Cogmap(_) => {
+            sqlx::query_scalar!(
+                "SELECT shape_materialized_event_id FROM kb_cogmaps WHERE id = $1",
+                id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+    })
 }
 
 #[cfg(all(test, feature = "test-db"))]

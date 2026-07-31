@@ -63,18 +63,26 @@ pub async fn context_panorama(
     })
     .collect();
 
-    let buckets: Vec<ResidualBucket> = sqlx::query_as::<_, (String, i32)>(
-        "SELECT group_value, member_count FROM graph_context_residual_counts($1, $2, $3, $4, $5)",
+    // Both columns take `!` only because a set-returning function's columns always read as nullable.
+    // In the body (`\sf graph_context_residual_counts`) `group_value` is `COALESCE(g.gv, '(none)')`
+    // — a COALESCE onto a non-null literal — and `member_count` is `count(*)::int`, which is 0 over
+    // an empty group, never NULL.
+    let buckets: Vec<ResidualBucket> = sqlx::query!(
+        r#"SELECT group_value AS "group_value!", member_count AS "member_count!"
+             FROM graph_context_residual_counts($1, $2, $3, $4, $5)"#,
+        profile_id.as_uuid(),
+        *context_id,
+        group_key,
+        container_types,
+        depth,
     )
-    .bind(profile_id.as_uuid())
-    .bind(*context_id)
-    .bind(group_key)
-    .bind(container_types)
-    .bind(depth)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(value, count)| ResidualBucket { value, count })
+    .map(|r| ResidualBucket {
+        value: r.group_value,
+        count: r.member_count,
+    })
     .collect();
 
     let group_keys = available_group_keys(pool, profile_id, context_id).await?;
@@ -97,11 +105,14 @@ async fn available_group_keys(
     profile_id: ProfileId,
     context_id: ContextId,
 ) -> ApiResult<Vec<GroupKeyMeta>> {
-    Ok(sqlx::query_as::<_, (String, i32, i32)>(
+    // The two counts take `!` because sqlx types every expression column as nullable; `count()` is
+    // never NULL, and the `::int` cast of a non-null value stays non-null. `property_key` is a plain
+    // column reference (`kb_properties.property_key` is NOT NULL), so it needs no annotation.
+    Ok(sqlx::query!(
         r#"
         SELECT p.property_key,
-               count(DISTINCT p.property_value #>> '{}')::int AS distinct_values,
-               count(DISTINCT p.owner_id)::int               AS coverage
+               count(DISTINCT p.property_value #>> '{}')::int AS "distinct_values!",
+               count(DISTINCT p.owner_id)::int               AS "coverage!"
           FROM kb_properties p
           JOIN kb_resource_homes h ON h.resource_id = p.owner_id
                                   AND h.anchor_table = 'kb_contexts' AND h.anchor_id = $2
@@ -110,16 +121,16 @@ async fn available_group_keys(
          GROUP BY 1 HAVING count(DISTINCT p.property_value #>> '{}') BETWEEN 2 AND 24
          ORDER BY 3 DESC
         "#,
+        profile_id.as_uuid(),
+        *context_id,
     )
-    .bind(profile_id.as_uuid())
-    .bind(*context_id)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(key, distinct_values, coverage)| GroupKeyMeta {
-        key,
-        distinct_values,
-        coverage,
+    .map(|r| GroupKeyMeta {
+        key: r.property_key,
+        distinct_values: r.distinct_values,
+        coverage: r.coverage,
     })
     .collect())
 }
@@ -146,15 +157,17 @@ pub async fn residual_member_ids(
     pool: &PgPool,
     query: ResidualMemberQuery<'_>,
 ) -> ApiResult<Vec<Uuid>> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM graph_context_residual_members($1, $2, $3, $4, $5, $6)",
+    // `id!`: nullable only because it comes from a set-returning function — the body projects
+    // `c.id`, which traces back to `kb_resources.id` (the primary key).
+    Ok(sqlx::query_scalar!(
+        r#"SELECT id AS "id!" FROM graph_context_residual_members($1, $2, $3, $4, $5, $6)"#,
+        query.profile_id.as_uuid(),
+        *query.context_id,
+        query.group_key,
+        query.group_value,
+        query.container_types,
+        query.depth,
     )
-    .bind(query.profile_id.as_uuid())
-    .bind(*query.context_id)
-    .bind(query.group_key)
-    .bind(query.group_value)
-    .bind(query.container_types)
-    .bind(query.depth)
     .fetch_all(pool)
     .await?)
 }

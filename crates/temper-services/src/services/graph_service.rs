@@ -91,11 +91,16 @@ pub async fn cogmap_neighborhood_slice(
         return Err(ApiError::BadRequest("seeds must be non-empty".into()));
     }
     // Deny-as-absence: profile must read the cogmap.
-    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
-        .bind(profile_id.as_uuid())
-        .bind(cogmap_id)
-        .fetch_one(pool)
-        .await?;
+    // `readable!`: sqlx types a function-call column as nullable, but `cogmap_readable_by_profile`
+    // is `SELECT EXISTS (...) OR profile_explicit_grant(...)` and `profile_explicit_grant` is itself
+    // a bare `SELECT EXISTS (...)` — both arms are total, so the OR can never evaluate to NULL.
+    let readable: bool = sqlx::query_scalar!(
+        r#"SELECT cogmap_readable_by_profile($1, $2) AS "readable!""#,
+        profile_id.as_uuid(),
+        cogmap_id,
+    )
+    .fetch_one(pool)
+    .await?;
     if !readable {
         return Err(ApiError::NotFound(
             "cognitive map not found or not readable".to_string(),
@@ -185,11 +190,14 @@ pub async fn cogmap_panorama(
     cogmap_id: Uuid,
     lens_id: Option<Uuid>,
 ) -> ApiResult<TerritoryOverview> {
-    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
-        .bind(profile_id.as_uuid())
-        .bind(cogmap_id)
-        .fetch_one(pool)
-        .await?;
+    // `readable!` for the reason given on `cogmap_neighborhood_slice`'s identical gate.
+    let readable: bool = sqlx::query_scalar!(
+        r#"SELECT cogmap_readable_by_profile($1, $2) AS "readable!""#,
+        profile_id.as_uuid(),
+        cogmap_id,
+    )
+    .fetch_one(pool)
+    .await?;
     if !readable {
         return Err(ApiError::NotFound(
             "cognitive map not found or not readable".to_string(),
@@ -201,15 +209,20 @@ pub async fn cogmap_panorama(
     let lens: Uuid = match lens_id {
         Some(l) => l,
         None => {
-            sqlx::query_scalar(
-                "SELECT COALESCE(
+            // `lens!` is the ONE override here that is not provably non-null in SQL: the COALESCE
+            // still yields NULL if the global `telos-default` lens row is missing. It is declared
+            // non-null because the binding is `let lens: Uuid`, so the runtime version demanded a
+            // non-null value already — the annotation states the existing contract rather than
+            // widening it, and a missing default lens surfaces the same decode error either way.
+            sqlx::query_scalar!(
+                r#"SELECT COALESCE(
                  (SELECT lens_id FROM kb_cogmap_regions
                    WHERE cogmap_id = $1 AND NOT is_folded
                    GROUP BY lens_id ORDER BY count(*) DESC LIMIT 1),
                  (SELECT id FROM kb_cogmap_lenses
-                   WHERE name = 'telos-default' AND cogmap_id IS NULL LIMIT 1))",
+                   WHERE name = 'telos-default' AND cogmap_id IS NULL LIMIT 1)) AS "lens!""#,
+                cogmap_id,
             )
-            .bind(cogmap_id)
             .fetch_one(pool)
             .await?
         }
@@ -358,13 +371,14 @@ pub async fn region_composition_slice(
     // unfolded, and be cogmap-readable by the caller. Selecting the count adds
     // no visibility surface — it is strictly less sensitive than the members
     // the composition returns below.
-    let readable: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_cogmap_regions reg \
-         WHERE reg.id = ANY($1) AND NOT reg.is_folded \
-           AND cogmap_readable_by_profile($2, reg.cogmap_id)",
+    // `readable!`: `count(*)` returns 0 over an empty set — never NULL.
+    let readable: i64 = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "readable!" FROM kb_cogmap_regions reg
+         WHERE reg.id = ANY($1) AND NOT reg.is_folded
+           AND cogmap_readable_by_profile($2, reg.cogmap_id)"#,
+        &regions,
+        profile_id.as_uuid(),
     )
-    .bind(&regions)
-    .bind(profile_id.as_uuid())
     .fetch_one(pool)
     .await?;
     if (readable as usize) < regions.len() {
@@ -389,10 +403,10 @@ pub async fn region_composition_slice(
     // Node id set: region members (seeds) FIRST so NODE_CAP never drops a facet in
     // favour of a neighbor, then the walked endpoints. Seeds also ensure an
     // isolated facet with no edges still renders.
-    let seeds: Vec<Uuid> = sqlx::query_scalar(
+    let seeds: Vec<Uuid> = sqlx::query_scalar!(
         "SELECT DISTINCT member_id FROM kb_cogmap_region_members WHERE region_id = ANY($1)",
+        &regions,
     )
-    .bind(&regions)
     .fetch_all(pool)
     .await?;
     let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();

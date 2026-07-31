@@ -34,8 +34,12 @@
 //!
 //! A macro read states its own nullability, so several carry `!` / `?` overrides. Each one is a
 //! claim about the SQL (a set-returning function's contract, a `COALESCE`, an INNER JOIN) and is
-//! commented where it is not obvious — an `!` on a column that can in fact be NULL is a panic, which
-//! is the one way a conversion here can be worse than the `row.get` it replaced.
+//! commented where it is not obvious. Getting one wrong is a real defect but not a catastrophic
+//! one: `!` expands to `row.try_get_unchecked::<T, _>(i)?`
+//! (`sqlx-macros-core-0.8.6/src/query/output.rs:147`), so a NULL arriving in a column declared
+//! non-null is a decode **error** propagated through `?` — a 500, not a crash. That is strictly
+//! better than the `row.get` it replaced, which panics on NULL (`try_get` is the fallible
+//! spelling). The override is a claim to state carefully, not a loaded gun.
 //!
 //! The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
 //! (`public`), and the connection's search_path resolves unqualified names and the visibility
