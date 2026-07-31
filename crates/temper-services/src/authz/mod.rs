@@ -102,6 +102,36 @@ pub(crate) trait ScopedAuthority: Sized + Copy + Debug {
     /// into existence leaks. If you are tempted to "simplify" this method away, that is what you
     /// would be removing.
     fn denial() -> ApiError;
+
+    /// How this domain renders a refusal **for the arm that refused** — one gate, two dialects.
+    ///
+    /// [`denial`](Self::denial) gives a domain exactly one refusal, which is all most of them want.
+    /// Some gates need two: a context rename answers `403` to a principal who can *read* the context
+    /// but not administer it, and `404` to one who cannot see it at all. That is not an oracle — the
+    /// `403` goes only to callers who already read the subject, so it discloses nothing a `GET` would
+    /// not already have told them — but it cannot be spelled by a method that does not know which arm
+    /// it is refusing from. This is a **dispatch widening, not a replacement**: `denial` stays, the
+    /// default here delegates to it, and every authority that wants one dialect keeps saying so once.
+    ///
+    /// **Overriding this on an existing authority changes that authority's refusal voice.** That is a
+    /// behavioral change to a shipped gate, not a refactor, and it is guarded: the boundary suite in
+    /// this module asserts that for every authority, every denial arm's `denial_for` renders
+    /// identically to its `denial` — same `ApiError` discriminant *and* same message — for all but the
+    /// authorities that deliberately declare two dialects. If that suite reds, you changed a refusal
+    /// someone else's tests are downstream of.
+    ///
+    /// The property the static signature bought us survives intact:
+    ///
+    /// > `&self` exposes the **arm enum**, which carries no subject data. A refusal still
+    /// > structurally cannot name the subject it refused.
+    ///
+    /// Which is why this takes `&self` and not `Self::Subject`. Widening it to the subject would
+    /// reopen the question `read_gates.rs:68-70` records as already settled — whether the ambiguity
+    /// in "team not found or not readable" is preserved by the signature, or by everyone remembering
+    /// to preserve it.
+    fn denial_for(&self) -> ApiError {
+        Self::denial()
+    }
 }
 
 /// Proof that `authority` was resolved for `subject`, and that it is not a denial.
@@ -146,7 +176,7 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
 ) -> ApiResult<Authorized<A>> {
     let authority = A::resolve(pool, caller, subject).await?;
     if authority.is_denial() {
-        return Err(A::denial());
+        return Err(authority.denial_for());
     }
     Ok(Authorized { authority, subject })
 }
