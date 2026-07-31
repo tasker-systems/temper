@@ -1444,6 +1444,86 @@ pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Resul
     Ok(ids.into_iter().map(|(id,)| id).collect())
 }
 
+/// One candidate region's Stage-1 wayfind competition signal, as returned by
+/// `wayfind_region_diagnostics` (issue #585). This is the per-region scoring `wayfind_scope_ids`
+/// computes and then DISCARDS at its `top_regions` LIMIT — surfaced here keyed by map so the cross-map
+/// competition is observable. Substrate-local; read-only instrumentation, not a wire type.
+///
+/// The signal is the SAME blend `wayfind_scope_ids` selects on
+/// (`region_score = α·sal_norm + β·query_cos + κ·prior`), so `in_top_n` is exactly the flag "this
+/// region's members would be in the wayfind scope for this query" — the witness for "no single map
+/// monopolizes the top-N".
+#[derive(Debug, Clone, PartialEq)]
+pub struct WayfindRegionDiagnosticRow {
+    /// The candidate region (`kb_cogmap_regions.id`).
+    pub region_id: Uuid,
+    /// The region's home anchor kind — `kb_cogmaps` or `kb_contexts`. Together with
+    /// [`Self::home_anchor_id`], THE MAP the region belongs to: the key the monopoly is read against.
+    pub home_anchor_table: String,
+    /// The region's home anchor id (the cogmap/context UUID).
+    pub home_anchor_id: Uuid,
+    /// The home anchor's display name (cogmap/context `name`), resolved so a sweep reads by map rather
+    /// than by UUID. `None` only if the anchor row was concurrently removed (defensive).
+    pub home_anchor_name: Option<String>,
+    /// Per-kind salience normalization (`percent_rank` within the anchor kind), in `[0,1]`. The axis
+    /// the richest map is penalized on (#585): many small regions cluster at the bottom of the shared
+    /// cogmap partition.
+    pub sal_norm: f64,
+    /// Cosine of the region centroid vs the query embedding, NaN-guarded to `0.0`. The dominant term
+    /// (β=0.6) and the one a broad concept map wins against technical-vocabulary maps.
+    pub query_cos: f64,
+    /// The composite `α·sal_norm + β·query_cos + κ·prior` the top-N cut is applied to.
+    pub region_score: f64,
+    /// Whether this region cleared the Stage-1 top-N cut for this query — i.e. whether its members
+    /// enter the wayfind scope. The per-map distribution of `true`s is what makes a monopoly visible.
+    pub in_top_n: bool,
+}
+
+/// Read-only instrumentation of wayfind's Stage-1 region selection (SQL `wayfind_region_diagnostics`,
+/// issue #585): one row per candidate region across the principal's visible anchors, carrying the
+/// `sal_norm` / `query_cos` / `region_score` and top-N flag that [`wayfind_scope_ids`] computes and
+/// discards. Takes the IDENTICAL [`WayfindScopeQuery`] inputs as [`wayfind_scope_ids`] — same principal,
+/// lens, embedding, region count, and anchor scope — so the reported competition is exactly the one that
+/// query would run. Rows come back highest-`region_score` first.
+///
+/// Gate is in the SQL (`visible_region_anchors`): a principal who can see no anchors gets zero rows,
+/// never an error. Runtime `sqlx::query` — the `::vector` cast on the embedding forbids the compile-time
+/// macros (the same established exception as [`wayfind_scope_ids`] / [`unified_search`]).
+pub async fn wayfind_region_diagnostics(
+    pool: &PgPool,
+    q: WayfindScopeQuery<'_>,
+) -> Result<Vec<WayfindRegionDiagnosticRow>> {
+    let emb_text = q.embedding.map(format_pgvector);
+    let rows = sqlx::query(
+        "SELECT region_id, home_anchor_table, home_anchor_id, home_anchor_name,
+                sal_norm, query_cos, region_score, in_top_n
+           FROM wayfind_region_diagnostics($1, $2, $3::vector, $4, $5, $6)",
+    )
+    .bind(q.principal)
+    .bind(q.lens_id)
+    .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
+    .bind(q.regions)
+    // NULL/NULL when None → unscoped: pool every visible anchor over both kinds.
+    .bind(q.anchor.map(HomeAnchor::table))
+    .bind(q.anchor.map(HomeAnchor::uuid))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| WayfindRegionDiagnosticRow {
+            region_id: r.get("region_id"),
+            home_anchor_table: r.get("home_anchor_table"),
+            home_anchor_id: r.get("home_anchor_id"),
+            home_anchor_name: r.get("home_anchor_name"),
+            sal_norm: r.get("sal_norm"),
+            query_cos: r.get("query_cos"),
+            region_score: r.get("region_score"),
+            in_top_n: r.get("in_top_n"),
+        })
+        .collect())
+}
+
 /// One region's analytics-tier scalar metrics, as returned by `anchor_region_metrics`. The stored
 /// readout columns of `kb_cogmap_regions` (computed once at materialization). Substrate-local; the
 /// `temper-services` wrapper maps this to the `CogmapRegionMetricsRow` wire type.
