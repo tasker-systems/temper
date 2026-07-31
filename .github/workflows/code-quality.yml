@@ -202,6 +202,17 @@ jobs:
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
 
+      # Spec §1's "silence is a failure" half. The checker itself lives in this job rather than in
+      # rust-quality because it parses migrations/*.sql and needs no toolchain and no database —
+      # which is also what makes it cheap enough that there is never a reason to scope it away.
+      # It runs BEFORE its harness so a real undeclared migration is reported as itself, not as a
+      # failing test case.
+      - name: Every migration declares its class (silence fails)
+        run: bash .github/scripts/audit-migration-declarations.sh
+
+      - name: Guard test — audit-migration-declarations
+        run: bash .github/scripts/test-audit-migration-declarations.sh
+
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
       # harness asserts both directions, and that a path merely CONTAINING "migrations"
