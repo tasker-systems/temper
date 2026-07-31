@@ -671,6 +671,37 @@ pub async fn reassign_context_with(
     Ok(())
 }
 
+/// Rename a context in place (event-sourced) under an explicit [`EventContext`].
+/// The single write path for a context's `(name, slug)` pair; `kb_contexts` is a replay input
+/// table, so the `context_renamed` projector is an idempotent re-apply on replay.
+/// `from` is `(name, slug)` before, `to` is `(name, slug)` after — the `from` pair is carried for
+/// the trail only (`kb_contexts` keeps no before-image), never read by the projector.
+pub async fn rename_context_with(
+    pool: &PgPool,
+    context: ContextId,
+    from: (&str, &str),
+    to: (&str, &str),
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire_with(
+        &mut tx,
+        SeedAction::ContextRename {
+            context,
+            from_name: from.0,
+            from_slug: from.1,
+            to_name: to.0,
+            to_slug: to.1,
+            emitter,
+        },
+        ctx,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 // ── cogmap-homed kernel writes (L0 reconcile) ──────────────────────────────────
 
 /// Create a kernel resource homed to a **cogmap** (not a context) — the shape the L0 reconciler

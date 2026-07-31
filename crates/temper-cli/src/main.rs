@@ -440,6 +440,19 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            ContextAction::Rename { context, name } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::rename_remote(
+                            client,
+                            &context,
+                            &name,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             ContextAction::Shape { context, lens } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {

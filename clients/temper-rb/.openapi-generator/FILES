@@ -168,6 +168,8 @@ lib/temper/generated/models/reconcile_tombstone.rb
 lib/temper/generated/models/refusal.rb
 lib/temper/generated/models/relationship_ack.rb
 lib/temper/generated/models/remove_member_outcome.rb
+lib/temper/generated/models/rename_context_outcome.rb
+lib/temper/generated/models/rename_context_request.rb
 lib/temper/generated/models/requested.rb
 lib/temper/generated/models/residual_bucket.rb
 lib/temper/generated/models/residual_context.rb

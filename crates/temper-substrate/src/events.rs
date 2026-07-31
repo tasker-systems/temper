@@ -44,6 +44,7 @@ pub enum EventKind {
     ResourceRehomed,
     ResourceReassigned,
     ContextReassigned,
+    ContextRenamed,
     RelationshipAsserted,
     RelationshipRetyped,
     RelationshipReweighted,
@@ -115,6 +116,7 @@ impl EventKind {
             EventKind::ResourceRehomed => "resource_rehomed",
             EventKind::ResourceReassigned => "resource_reassigned",
             EventKind::ContextReassigned => "context_reassigned",
+            EventKind::ContextRenamed => "context_renamed",
             EventKind::RelationshipAsserted => "relationship_asserted",
             EventKind::RelationshipRetyped => "relationship_retyped",
             EventKind::RelationshipReweighted => "relationship_reweighted",
@@ -156,6 +158,7 @@ impl EventKind {
             "resource_rehomed" => EventKind::ResourceRehomed,
             "resource_reassigned" => EventKind::ResourceReassigned,
             "context_reassigned" => EventKind::ContextReassigned,
+            "context_renamed" => EventKind::ContextRenamed,
             "relationship_asserted" => EventKind::RelationshipAsserted,
             "relationship_retyped" => EventKind::RelationshipRetyped,
             "relationship_reweighted" => EventKind::RelationshipReweighted,
@@ -408,6 +411,14 @@ pub enum SeedAction<'a> {
         to_owner_id: Uuid,
         emitter: EntityId,
     },
+    ContextRename {
+        context: ContextId,
+        from_name: &'a str,
+        from_slug: &'a str,
+        to_name: &'a str,
+        to_slug: &'a str,
+        emitter: EntityId,
+    },
     RelationshipRetype {
         edge: EdgeId,
         kind: EdgeKind,
@@ -460,6 +471,7 @@ impl SeedAction<'_> {
             SeedAction::ResourceRehome { .. } => EventKind::ResourceRehomed,
             SeedAction::ResourceReassign { .. } => EventKind::ResourceReassigned,
             SeedAction::ContextReassign { .. } => EventKind::ContextReassigned,
+            SeedAction::ContextRename { .. } => EventKind::ContextRenamed,
             SeedAction::RelationshipRetype { .. } => EventKind::RelationshipRetyped,
             SeedAction::RelationshipReweight { .. } => EventKind::RelationshipReweighted,
             SeedAction::InvocationOpen { .. } => EventKind::DelegatedLaunch,
@@ -1217,6 +1229,35 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("context_reassign returned null")?;
+            Ok(Fired::Context(ContextId::from(id)))
+        }
+
+        SeedAction::ContextRename {
+            context,
+            from_name,
+            from_slug,
+            to_name,
+            to_slug,
+            emitter,
+        } => {
+            let payload = payloads::ContextRenamed {
+                context_id: context,
+                from_name: from_name.to_string(),
+                from_slug: from_slug.to_string(),
+                to_name: to_name.to_string(),
+                to_slug: to_slug.to_string(),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT context_rename($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("context_rename returned null")?;
             Ok(Fired::Context(ContextId::from(id)))
         }
 

@@ -205,6 +205,8 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::CitationAudited
             | EventKind::ResourceReassigned
             | EventKind::ContextReassigned
+            // A rename moves two identity columns of one row. No content, so no sidecar.
+            | EventKind::ContextRenamed
             | EventKind::DelegatedLaunch
             | EventKind::InvocationClosed
             // Admin-ledger events (NULL-anchored, spec 2026-07-16): no content, no sidecar.
@@ -539,6 +541,16 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
             EventKind::ContextReassigned => {
                 sqlx::query("SELECT _project_context_reassigned($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            // The pure projector half, deliberately: `_project_context_renamed` never authorizes,
+            // so replayed history is not re-adjudicated against present-day membership. The
+            // authorizing half is `context_rename`, which the walk never calls.
+            EventKind::ContextRenamed => {
+                sqlx::query("SELECT _project_context_renamed($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)

@@ -1906,6 +1906,80 @@
         ]
       }
     },
+    "/api/contexts/{id}/rename": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Contexts"
+        ],
+        "operationId": "rename",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Context renamed (or idempotent no-op when the canonical name already matched)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameContextOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name derives an empty slug (empty, whitespace-only, or no sluggifiable characters)"
+          },
+          "403": {
+            "description": "Caller may read but not administer this context"
+          },
+          "404": {
+            "description": "Context not found (uniform — no existence oracle for a caller who cannot see it)"
+          },
+          "409": {
+            "description": "Another context under the same owner already holds the derived slug"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/contexts/{id}/shape": {
       "parameters": [
         {
@@ -10908,6 +10982,57 @@
         "properties": {
           "residual_owned": {
             "$ref": "#/components/schemas/ResidualOwnedReach"
+          }
+        }
+      },
+      "RenameContextOutcome": {
+        "type": "object",
+        "description": "Result of a context rename. `renamed` is `false` when the canonical name already equalled\nthe stored one (idempotent no-op).\n\nCarries the **composed** `context_ref` as well as the `owner_ref` + `slug` halves it is built\nfrom: the caller has just had their address changed out from under them, so making them\nreconstruct the new one from parts is the wrong place to save a field.",
+        "required": [
+          "context_id",
+          "name",
+          "slug",
+          "owner_ref",
+          "context_ref",
+          "renamed"
+        ],
+        "properties": {
+          "context_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "context_ref": {
+            "type": "string",
+            "description": "The full decorated context ref after the call — `{owner_ref}/{slug}`, the address the\ncaller should use from now on.\n\nComposed **once**, server-side, by the service that produces this outcome; no surface\nreassembles it. Note the trap: `owner_ref` is already sigil-decorated, whereas\n`context_ref::decorated_context_ref`'s `owner_addressable` parameter is the *bare*\nhandle/team-slug. The two spellings must never be mixed, or the ref reads `@@handle/slug`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The stored (canonical) name after the call — on a no-op, the name it already had."
+          },
+          "owner_ref": {
+            "type": "string",
+            "description": "The already-sigil'd owner addressable, unchanged by a rename: `@<handle>` for profiles,\n`+<team-slug>` for teams."
+          },
+          "renamed": {
+            "type": "boolean",
+            "description": "`true` when this call changed the stored name; `false` when the canonical name was\nalready the stored one (no event emitted, nothing written)."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The per-owner-unique slug after the call, derived from `name`."
+          }
+        }
+      },
+      "RenameContextRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/contexts/{id}/rename` — change a context's display name.\nThe addressable slug is **derived** from the name server-side; there is deliberately no\nindependent slug parameter. Rename is one field.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new display name. Canonicalized (trimmed, internal whitespace collapsed) before it\nis stored, and sluggified to derive the new addressable slug."
           }
         }
       },

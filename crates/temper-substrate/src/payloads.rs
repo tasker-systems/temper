@@ -809,6 +809,23 @@ pub struct ContextReassigned {
     pub to_owner_id: Uuid,
 }
 
+/// Rename a context in place — set `kb_contexts.(name, slug)` to the target pair.
+/// The owner is untouched; this moves the identity pair under the same, unchanged owner.
+/// `from_name`/`from_slug` are recorded for the audit trail; the projector writes only the new
+/// pair. That pair is not decoration: `kb_contexts` has **no `updated` column** and keeps no
+/// before-image, so a rename bumps no row-level timestamp and the event trail is the entirety of
+/// what makes a completed rename attributable. A payload carrying only `to_*` would leave nothing
+/// on disk able to say what the context used to be called.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ContextRenamed {
+    pub context_id: ContextId,
+    pub from_name: String,
+    pub from_slug: String,
+    pub to_name: String,
+    pub to_slug: String,
+}
+
 // `ProvenanceSource` is the shared wire carrier — canonical home `temper_core::types::provenance`
 // (CLAUDE.md: "the wire type lives in temper-core", the same chain as authorship below). Re-exported
 // so substrate's `payloads::ProvenanceSource` users (`Incorporation`, `BlockProvenanceCorrected`, and

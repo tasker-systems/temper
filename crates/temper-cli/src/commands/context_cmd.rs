@@ -5,7 +5,9 @@ use crate::config;
 use crate::error::{Result, TemperError};
 use crate::output;
 use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::context::{ReassignContextRequest, ShareContextRequest};
+use temper_core::types::context::{
+    ReassignContextRequest, RenameContextRequest, ShareContextRequest,
+};
 
 /// Parse the `--owner` CLI value into a typed owner descriptor.
 ///
@@ -255,6 +257,50 @@ pub async fn transfer_remote(
         .reassign(context_id, &ReassignContextRequest { to_team_id })
         .await
         .map_err(|e| map_share_err("transfer", e))?;
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// Map a `context rename` client error to a CLI error. Deliberately **not** [`map_share_err`]:
+/// that message names a target team ("...AND manage the target team"), and a rename has no target
+/// team — reusing it would state a requirement that does not exist. A rename requires only that you
+/// administer the context itself.
+fn map_rename_err(e: temper_client::error::ClientError) -> TemperError {
+    match e {
+        temper_client::error::ClientError::Forbidden => TemperError::Api(
+            "not authorized: `context rename` requires that you administer the context \
+             (own it, or manage its owning team as owner/maintainer) — or that you are an \
+             instance administrator."
+                .to_owned(),
+        ),
+        other => crate::actions::runtime::client_err_to_temper(other),
+    }
+}
+
+/// `temper context rename <context_ref> --name <name>` — change a context's name; the server
+/// re-derives the slug from it.
+///
+/// The rename **re-addresses** the context: the printed outcome carries the new `context_ref`,
+/// which is the address to use from now on. Uses the `@me`-accepting read resolver, like
+/// `transfer` — the headline flow is `@me/my-project`.
+pub async fn rename_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    name: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let outcome = client
+        .contexts()
+        .rename(
+            context_id,
+            &RenameContextRequest {
+                name: name.to_owned(),
+            },
+        )
+        .await
+        .map_err(map_rename_err)?;
     let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
     Ok(())

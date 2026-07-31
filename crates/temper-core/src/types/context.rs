@@ -161,3 +161,50 @@ pub struct ReassignContextOutcome {
     #[serde(default)]
     pub inherited_read_grants: Vec<InheritedReadGrant>,
 }
+
+/// Request body for `POST /api/contexts/{id}/rename` — change a context's display name.
+/// The addressable slug is **derived** from the name server-side; there is deliberately no
+/// independent slug parameter. Rename is one field.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameContextRequest {
+    /// The new display name. Canonicalized (trimmed, internal whitespace collapsed) before it
+    /// is stored, and sluggified to derive the new addressable slug.
+    pub name: String,
+}
+
+/// Result of a context rename. `renamed` is `false` when the canonical name already equalled
+/// the stored one (idempotent no-op).
+///
+/// Carries the **composed** `context_ref` as well as the `owner_ref` + `slug` halves it is built
+/// from: the caller has just had their address changed out from under them, so making them
+/// reconstruct the new one from parts is the wrong place to save a field.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameContextOutcome {
+    pub context_id: Uuid,
+    /// The stored (canonical) name after the call — on a no-op, the name it already had.
+    pub name: String,
+    /// The per-owner-unique slug after the call, derived from `name`.
+    pub slug: String,
+    /// The already-sigil'd owner addressable, unchanged by a rename: `@<handle>` for profiles,
+    /// `+<team-slug>` for teams.
+    pub owner_ref: String,
+    /// The full decorated context ref after the call — `{owner_ref}/{slug}`, the address the
+    /// caller should use from now on.
+    ///
+    /// Composed **once**, server-side, by the service that produces this outcome; no surface
+    /// reassembles it. Note the trap: `owner_ref` is already sigil-decorated, whereas
+    /// `context_ref::decorated_context_ref`'s `owner_addressable` parameter is the *bare*
+    /// handle/team-slug. The two spellings must never be mixed, or the ref reads `@@handle/slug`.
+    pub context_ref: String,
+    /// `true` when this call changed the stored name; `false` when the canonical name was
+    /// already the stored one (no event emitted, nothing written).
+    pub renamed: bool,
+}

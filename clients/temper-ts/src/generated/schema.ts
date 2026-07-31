@@ -503,6 +503,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contexts/{id}/rename": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rename"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contexts/{id}/shape": {
         parameters: {
             query?: never;
@@ -3985,6 +4004,54 @@ export interface components {
             residual_owned: components["schemas"]["ResidualOwnedReach"];
         };
         /**
+         * @description Result of a context rename. `renamed` is `false` when the canonical name already equalled
+         *     the stored one (idempotent no-op).
+         *
+         *     Carries the **composed** `context_ref` as well as the `owner_ref` + `slug` halves it is built
+         *     from: the caller has just had their address changed out from under them, so making them
+         *     reconstruct the new one from parts is the wrong place to save a field.
+         */
+        RenameContextOutcome: {
+            /** Format: uuid */
+            context_id: string;
+            /**
+             * @description The full decorated context ref after the call — `{owner_ref}/{slug}`, the address the
+             *     caller should use from now on.
+             *
+             *     Composed **once**, server-side, by the service that produces this outcome; no surface
+             *     reassembles it. Note the trap: `owner_ref` is already sigil-decorated, whereas
+             *     `context_ref::decorated_context_ref`'s `owner_addressable` parameter is the *bare*
+             *     handle/team-slug. The two spellings must never be mixed, or the ref reads `@@handle/slug`.
+             */
+            context_ref: string;
+            /** @description The stored (canonical) name after the call — on a no-op, the name it already had. */
+            name: string;
+            /**
+             * @description The already-sigil'd owner addressable, unchanged by a rename: `@<handle>` for profiles,
+             *     `+<team-slug>` for teams.
+             */
+            owner_ref: string;
+            /**
+             * @description `true` when this call changed the stored name; `false` when the canonical name was
+             *     already the stored one (no event emitted, nothing written).
+             */
+            renamed: boolean;
+            /** @description The per-owner-unique slug after the call, derived from `name`. */
+            slug: string;
+        };
+        /**
+         * @description Request body for `POST /api/contexts/{id}/rename` — change a context's display name.
+         *     The addressable slug is **derived** from the name server-side; there is deliberately no
+         *     independent slug parameter. Rename is one field.
+         */
+        RenameContextRequest: {
+            /**
+             * @description The new display name. Canonicalized (trimmed, internal whitespace collapsed) before it
+             *     is stored, and sluggified to derive the new addressable slug.
+             */
+            name: string;
+        };
+        /**
          * @description One residual bucket: a distinct value of the group key, and how many otherwise
          *     uncontained resources carry it.
          */
@@ -6251,6 +6318,64 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+        };
+    };
+    rename: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Context renamed (or idempotent no-op when the canonical name already matched) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenameContextOutcome"];
+                };
+            };
+            /** @description The name derives an empty slug (empty, whitespace-only, or no sluggifiable characters) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller may read but not administer this context */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context not found (uniform — no existence oracle for a caller who cannot see it) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Another context under the same owner already holds the derived slug */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
