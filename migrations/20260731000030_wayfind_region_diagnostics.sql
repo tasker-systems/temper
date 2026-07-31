@@ -132,3 +132,13 @@ COMMENT ON FUNCTION wayfind_region_diagnostics(uuid, uuid, vector, int, varchar,
     'Same visibility gate (visible_region_anchors) and same signature as wayfind_scope_ids; deny ⇒ zero '
     'rows, never an error. Does not report cold-start region-less anchors — they form no candidate '
     'region to score.';
+
+-- This migration declares itself. Purely additive: one new read-only function (CREATE FUNCTION +
+-- COMMENT), nothing pre-existing altered or dropped, and no deployed binary reads it yet — the
+-- readback wrapper that calls it ships in the same paired binary. Safe to apply ahead of that binary
+-- in either direction (the lagging-binary test), so `additive` per the schema/binary pairing design.
+SELECT declare_migration(
+    20260731000030,
+    'additive',
+    'One new read-only instrumentation function (wayfind_region_diagnostics) mirroring wayfind_scope_ids Stage-1 scoring. Nothing pre-existing is altered or dropped, and no binary reads it yet.'
+);
