@@ -26,11 +26,21 @@
 #
 # WHAT THE BUILD CONTAINER PROVIDES (measured 2026-07-30, real preview build; spec § Evidence)
 #   cargo and rustc pre-installed at /rust/bin and already on PATH; DATABASE_URL and
-#   DATABASE_URL_UNPOOLED both SET; SQLX_OFFLINE set by vercel.json; the previous
-#   deployment's build cache restored. A buildCommand runs BEFORE the @vercel/rust
-#   builders (@vercel/static-build priority 0, @vercel/rust priority 1), which is why the
-#   schema is in place before any function is built — and why compiling here warms the
-#   cache those builders use moments later rather than paying twice.
+#   DATABASE_URL_UNPOOLED both SET; SQLX_OFFLINE set by vercel.json. A buildCommand runs
+#   BEFORE the @vercel/rust builders (@vercel/static-build priority 0, @vercel/rust
+#   priority 1), which is why the schema is in place before any function is built.
+#
+# TWO CLAIMS THAT WERE HERE AND DID NOT SURVIVE MEASUREMENT `[observed — 2026-07-31]`
+#   "the previous deployment's build cache restored" — every build ends with `Build cache
+#   size 1.61 GB exceeds limit of 1.50 GB. Invalidating cache.`, so the NEXT one starts
+#   clean. Cold is the steady state, structurally, not occasionally.
+#
+#   "compiling here warms the cache those builders use moments later rather than paying
+#   twice" — NOT ESTABLISHED, in either direction. The @vercel/rust builders emit ZERO
+#   lines to the build log (in dpl_DrKxz1F67xiPe1zztMerweYZ7QTE the log is silent for the
+#   whole ~6m they run), so nothing in any log says whether they share this step's target
+#   directory. Whichever it is, this step's own compile is now cheap: it builds
+#   temper-migrate, which does not link ort.
 #
 # WHY THE UNPOOLED URL
 #   sqlx's Migrator takes a Postgres advisory lock for exclusive access
@@ -116,12 +126,12 @@ else
   exit 0
 fi
 
-# The runner reads DATABASE_URL (temper-substrate's `substrate::connect`), so the choice
-# above is expressed by exporting it rather than by a flag. Keeping the Vercel-specific
-# variable knowledge in this script leaves the Rust side with one way to be told.
+# The runner reads DATABASE_URL (temper-migrate's `connect`), so the choice above is
+# expressed by exporting it rather than by a flag. Keeping the Vercel-specific variable
+# knowledge in this script leaves the Rust side with one way to be told.
 export DATABASE_URL="${MIGRATE_URL}"
 
-: "${MIGRATE_CMD:=cargo run --release --locked -p temper-substrate --bin temper-substrate -- migrate --additive-only}"
+: "${MIGRATE_CMD:=cargo run --release --locked -p temper-migrate --bin temper-migrate -- --additive-only}"
 
 # shellcheck disable=SC2086
 $MIGRATE_CMD

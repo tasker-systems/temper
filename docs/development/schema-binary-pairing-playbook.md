@@ -321,7 +321,7 @@ Stated so that a green cross-check is not read as more than it is.
   heuristically and a noisy signal folded into a verdict teaches people to ignore the verdict.
   **If you see a `NOTED … nullable[]` line, read it yourself.**
 - **A migration applied by something other than the runner.** `cargo make db-migrate`, CI, and the
-  deploy's own build (`scripts/vercel-build.sh`) all use `temper-substrate migrate`, which brackets
+  deploy's own build (`scripts/vercel-build.sh`) all use the `temper-migrate` binary, which brackets
   each apply. A migration applied by `sqlx migrate run`, by `psql`, or by hand gets no state entry at
   all — `migration_current.state` is NULL. That is "not observed", never "did not happen".
 
@@ -364,7 +364,7 @@ curl -s "https://temperkb.io/api/health?cb=$(date +%s)" | jq -r .commit
 
 # What the DEPLOY will do to the schema — the same call vercel-build.sh makes.
 # Exit 0 = applied (or nothing pending); exit 3 = halted, an operator must take it.
-cargo run -p temper-substrate --bin temper-substrate -- migrate --additive-only
+cargo run -p temper-migrate --bin temper-migrate -- --additive-only
 
 # Apply EVERYTHING, shape-breaking included. What a developer and an operator run.
 cargo make db-migrate

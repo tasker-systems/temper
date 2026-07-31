@@ -106,7 +106,7 @@ dynamic-sql 2 crates/temper-substrate/src/embed.rs
 dynamic-table 37 crates/temper-substrate/src/replay.rs
 vector-cast 2 crates/temper-substrate/src/embed.rs
 vector-cast 2 crates/temper-substrate/src/write.rs
-vector-cast 3 crates/temper-substrate/src/readback/mod.rs
+vector-cast 4 crates/temper-substrate/src/readback/mod.rs
 EOF
 
 if [[ -n "${SQLX_ALLOWLIST_FILE:-}" ]]; then

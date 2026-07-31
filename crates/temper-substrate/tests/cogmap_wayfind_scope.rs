@@ -9,9 +9,13 @@
 //! degrades to its direct homed scope, never errors (3); deny — a non-member of the map's team gets
 //! zero ids (4); lens override recomputes salience from the stored components, reordering selection (5).
 
+use std::collections::HashSet;
+
 use sqlx::PgPool;
 use temper_core::types::ids::{LensId, ProfileId};
-use temper_substrate::readback::{wayfind_scope_ids, WayfindScopeQuery};
+use temper_substrate::readback::{
+    wayfind_region_diagnostics, wayfind_scope_ids, WayfindScopeQuery,
+};
 use uuid::Uuid;
 
 mod common;
@@ -462,4 +466,297 @@ async fn lens_override_recomputes_salience_from_components(pool: PgPool) {
         !ov.contains(&a[0]),
         "region A excluded under override lens: {ov:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// wayfind_region_diagnostics — the Stage-1 competition instrumentation (issue #585).
+//
+// These reuse the same deterministic, hand-planted regions (no materialize, no ONNX) so the reported
+// sal_norm/query_cos/region_score are exactly predictable. They prove the diagnostics report the REGION
+// stage keyed by map (not unified_search's per-hit scores), and — critically — that the diagnostics
+// stay in lockstep with `wayfind_scope_ids`' actual selection.
+// ---------------------------------------------------------------------------
+
+/// Plant a region on an ARBITRARY cogmap (not just `fx.cogmap`), reusing the fixture's lens/event/sys.
+/// Returns `(region_id, member_ids)` so a caller can map a diagnostics `region_id` back to the members
+/// it would put in scope — the join the equivalence test needs.
+async fn seed_region_on(
+    pool: &PgPool,
+    fx: &Fx,
+    cogmap: Uuid,
+    salience: f64,
+    centroid: &str,
+    member_titles: &[&str],
+) -> (Uuid, Vec<Uuid>) {
+    let region = insert_region(
+        pool,
+        RegionSeed {
+            cogmap,
+            lens: fx.lens,
+            event: fx.event,
+            salience,
+            telos_alignment: None,
+            reference_standing: None,
+            centrality: None,
+            centroid,
+            member_count: member_titles.len() as i32,
+        },
+    )
+    .await;
+    let mut ids = Vec::new();
+    for t in member_titles {
+        let rid = insert_homed_resource(pool, cogmap, fx.sys, t).await;
+        add_member(pool, region, rid).await;
+        ids.push(rid);
+    }
+    (region, ids)
+}
+
+/// Genesis a SECOND cogmap named `name` and make it visible to `p1` (a fresh team `p1` joins), with
+/// `slug` giving the team its slug. Returns its id. The fixture's own map is `fx.cogmap`; this is how a
+/// test puts two sibling maps in one wayfind pool — the setup the #585 monopoly needs.
+///
+/// NB `genesis_cogmap(pool, name, telos_title)` takes the cogmap NAME first — so `name` is what lands in
+/// `kb_cogmaps.name` and what `wayfind_region_diagnostics.home_anchor_name` resolves to.
+async fn add_visible_map(pool: &PgPool, p1: Uuid, slug: &str, name: &str) -> Uuid {
+    let (cogmap, _telos) = common::genesis_cogmap(pool, name, name).await;
+    let team = common::create_team(pool, &format!("{slug}-team")).await;
+    common::add_team_member(pool, team, p1).await;
+    sqlx::query("INSERT INTO kb_team_cogmaps (team_id, cogmap_id) VALUES ($1, $2)")
+        .bind(team)
+        .bind(cogmap)
+        .execute(pool)
+        .await
+        .expect("join second cogmap to team");
+    cogmap
+}
+
+// 6. THE #585 WITNESS: two sibling cogmaps in one wayfind pool, and the diagnostics make the cross-map
+//    monopoly observable — keyed by map. MAP_A's regions are both high query-cosine AND high salience;
+//    MAP_B's are low query-cosine. regions=2. Both top-N slots go to MAP_A; MAP_B is shut out. The point
+//    is that MAP_B's regions are STILL REPORTED here (with their real, losing scores) even though their
+//    members never reach Stage-2 ranking — which is exactly the blindness this instrument removes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn diagnostics_expose_cross_map_monopoly_keyed_by_map(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let map_b = add_visible_map(&pool, fx.p1, "wayfind-map-b", "Wayfind Map B").await;
+    let hi = vec768(&[(0, 1.0)]); // high query-cosine (axis 0 = query)
+    let lo = vec768(&[(1, 1.0)]); // zero query-cosine
+
+    // MAP_A (fx.cogmap): both regions relevant + salient → they sweep the top-2.
+    let (a1, _) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["a1"]).await;
+    let (a2, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.9, &hi, &["a2"]).await;
+    // MAP_B: both regions irrelevant to the query → shut out despite being visible.
+    let (b1, _) = seed_region_on(&pool, &fx, map_b, 1.0, &lo, &["b1"]).await;
+    let (b2, _) = seed_region_on(&pool, &fx, map_b, 0.9, &lo, &["b2"]).await;
+    let q = query_axis0();
+
+    let diag = wayfind_region_diagnostics(
+        &pool,
+        WayfindScopeQuery {
+            principal: ProfileId::from(fx.p1),
+            lens_id: None,
+            embedding: Some(&q),
+            regions: Some(2),
+            anchor: None, // unscoped: pool every visible anchor
+        },
+    )
+    .await
+    .expect("region diagnostics");
+
+    // Every candidate region is reported — including the losers (the whole point vs Stage-2 scores).
+    let row = |rid: Uuid| {
+        diag.iter()
+            .find(|r| r.region_id == rid)
+            .unwrap_or_else(|| panic!("region {rid} must appear in diagnostics: {diag:?}"))
+    };
+    for rid in [a1, a2, b1, b2] {
+        let _ = row(rid);
+    }
+
+    // Keyed by map: the two maps are distinguishable, and each row names its home map.
+    assert_eq!(row(a1).home_anchor_id, fx.cogmap);
+    assert_eq!(row(b1).home_anchor_id, map_b);
+    assert_eq!(row(a1).home_anchor_table, "kb_cogmaps");
+    assert_eq!(
+        row(b1).home_anchor_name.as_deref(),
+        Some("Wayfind Map B"),
+        "the home map name is resolved so a sweep reads by map, not UUID"
+    );
+
+    // The monopoly is legible: both top-N slots belong to MAP_A; MAP_B is shut out.
+    assert!(
+        row(a1).in_top_n && row(a2).in_top_n,
+        "MAP_A swept the top-2"
+    );
+    assert!(
+        !row(b1).in_top_n && !row(b2).in_top_n,
+        "MAP_B is shut out despite being visible: {diag:?}"
+    );
+    let top_by_map = |map: Uuid| {
+        diag.iter()
+            .filter(|r| r.in_top_n && r.home_anchor_id == map)
+            .count()
+    };
+    assert_eq!(top_by_map(fx.cogmap), 2, "MAP_A holds 2/2 top-N slots");
+    assert_eq!(top_by_map(map_b), 0, "MAP_B holds 0 top-N slots");
+
+    // The losing map's regions carry real, observable scores — its low query-cosine is the visible
+    // cause, not an absence. This is the signal Stage-2 per-hit scores can never show for a shut-out map.
+    assert!(
+        (row(b1).query_cos).abs() < 1e-6,
+        "MAP_B region's zero query-cosine is reported, not hidden: {:?}",
+        row(b1)
+    );
+    assert!(
+        row(a1).region_score > row(b1).region_score,
+        "the winner outscores the shut-out region, and both scores are visible"
+    );
+}
+
+// 7. ANTI-DRIFT GUARD: the diagnostics' `in_top_n` selection must equal `wayfind_scope_ids`' actual
+//    scope. Each region gets exactly one member, so a diagnostics `region_id` maps to one scope id.
+//    In a no-cold-start fixture the only extra id `wayfind_scope_ids` returns is the public L0 kernel
+//    telos (region-less, reached via the auto-joined root team) — which the diagnostics correctly do
+//    NOT report (no candidate region to score). Subtract that one known id and the two must coincide.
+//    If Task 2 changes the ranking in only one of the two functions, this fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn wayfind_region_diagnostics_matches_scope_ids(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let map_b = add_visible_map(&pool, fx.p1, "wayfind-eq-b", "Wayfind Eq B").await;
+
+    // Distinct multi-axis centroids give four STRICTLY distinct region_scores (cosines 1.0 / 0.894 /
+    // 0.707 / 0.447), so no tie straddles a top-N LIMIT boundary. A boundary tie would let the two
+    // functions' independent `ORDER BY region_score DESC LIMIT n` break it differently and flake this
+    // guard — the equivalence we want is of the SCORING, not of Postgres' arbitrary tiebreak.
+    // Resulting order: a1 (1.05) > b1 (0.987) > a2 (0.474) > b2 (0.318).
+    let (a1, a1m) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &vec768(&[(0, 1.0)]), &["a1"]).await;
+    let (a2, a2m) = seed_region_on(
+        &pool,
+        &fx,
+        fx.cogmap,
+        0.5,
+        &vec768(&[(0, 1.0), (1, 1.0)]),
+        &["a2"],
+    )
+    .await;
+    let (b1, b1m) = seed_region_on(
+        &pool,
+        &fx,
+        map_b,
+        0.8,
+        &vec768(&[(0, 1.0), (1, 0.5)]),
+        &["b1"],
+    )
+    .await;
+    let (b2, b2m) = seed_region_on(
+        &pool,
+        &fx,
+        map_b,
+        0.1,
+        &vec768(&[(0, 1.0), (1, 2.0)]),
+        &["b2"],
+    )
+    .await;
+    let member_of = |rid: Uuid| -> Uuid {
+        match rid {
+            r if r == a1 => a1m[0],
+            r if r == a2 => a2m[0],
+            r if r == b1 => b1m[0],
+            r if r == b2 => b2m[0],
+            other => panic!("unexpected region {other}"),
+        }
+    };
+    let q = query_axis0();
+    let query = |regions| WayfindScopeQuery {
+        principal: ProfileId::from(fx.p1),
+        lens_id: None,
+        embedding: Some(&q),
+        regions: Some(regions),
+        anchor: None,
+    };
+
+    // Sweep a few region counts so the equivalence is pinned across cut sizes, not one lucky N.
+    for regions in [1, 2, 3] {
+        let diag = wayfind_region_diagnostics(&pool, query(regions))
+            .await
+            .expect("diagnostics");
+        let scope: HashSet<Uuid> = wayfind_scope_ids(&pool, query(regions))
+            .await
+            .expect("scope ids")
+            .into_iter()
+            .collect();
+
+        let expected: HashSet<Uuid> = diag
+            .iter()
+            .filter(|r| r.in_top_n)
+            .map(|r| member_of(r.region_id))
+            .collect();
+
+        // `wayfind_scope_ids` also emits the public L0 kernel telos via cold-start (region-less map);
+        // the diagnostics report only scored candidate regions, so remove that one known id.
+        let l0_telos: Uuid = "00000000-0000-0000-0005-000000000002".parse().unwrap();
+        let scope_regions: HashSet<Uuid> = scope.into_iter().filter(|id| *id != l0_telos).collect();
+
+        assert_eq!(
+            scope_regions, expected,
+            "regions={regions}: diagnostics in_top_n must match wayfind_scope_ids' actual scope \
+             (cold-start L0 telos excluded); a mismatch means the two functions have drifted"
+        );
+        assert!(
+            !expected.is_empty(),
+            "regions={regions}: the fixture must select at least one region, else the guard is vacuous"
+        );
+    }
+}
+
+// 8. SCORES ARE REAL: the reported sal_norm/query_cos/region_score are the actual Stage-1 blend, not
+//    placeholders. Region A (axis-0 centroid, salience 1.0) vs region B (axis-1, salience 0.0), query
+//    on axis 0. Hand-computed: A → sal_norm 1.0, query_cos 1.0, score 0.4·1 + 0.6·1 + 0.05·1(cogmap
+//    prior) = 1.05; B → sal_norm 0.0, query_cos 0.0, score 0.05. regions=1 ⇒ only A clears the cut.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn diagnostics_report_the_real_stage1_scores(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let (a, _) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &vec768(&[(0, 1.0)]), &["a"]).await;
+    let (b, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.0, &vec768(&[(1, 1.0)]), &["b"]).await;
+    let q = query_axis0();
+
+    let diag = wayfind_region_diagnostics(
+        &pool,
+        WayfindScopeQuery {
+            principal: ProfileId::from(fx.p1),
+            lens_id: None,
+            embedding: Some(&q),
+            regions: Some(1),
+            anchor: None,
+        },
+    )
+    .await
+    .expect("diagnostics");
+
+    let ra = diag
+        .iter()
+        .find(|r| r.region_id == a)
+        .expect("region A row");
+    let rb = diag
+        .iter()
+        .find(|r| r.region_id == b)
+        .expect("region B row");
+    let close = |x: f64, y: f64| (x - y).abs() < 1e-6;
+
+    assert!(close(ra.sal_norm, 1.0), "A sal_norm=1.0: {ra:?}");
+    assert!(close(ra.query_cos, 1.0), "A query_cos=1.0: {ra:?}");
+    assert!(close(ra.region_score, 1.05), "A score=1.05: {ra:?}");
+    assert!(ra.in_top_n, "A clears the top-1 cut: {ra:?}");
+
+    assert!(close(rb.sal_norm, 0.0), "B sal_norm=0.0: {rb:?}");
+    assert!(close(rb.query_cos, 0.0), "B query_cos=0.0: {rb:?}");
+    assert!(
+        close(rb.region_score, 0.05),
+        "B score=0.05 (κ·prior only): {rb:?}"
+    );
+    assert!(!rb.in_top_n, "B excluded by the top-1 cut: {rb:?}");
+
+    // Rows come back highest-score first.
+    assert_eq!(diag.first().map(|r| r.region_id), Some(a), "winner first");
 }

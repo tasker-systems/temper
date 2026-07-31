@@ -1,0 +1,39 @@
+[package]
+name = "temper-migrate"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# WHY THIS CRATE EXISTS SEPARATELY FROM temper-substrate
+#
+# The deploy's build command applies the pending additive schema BEFORE the API functions
+# are built (`scripts/vercel-build.sh`). While `MIGRATOR` and the ledger runner lived in
+# temper-substrate, that step compiled ort and tokenizers — temper-substrate depends on
+# `temper-ingest(embed)` non-optionally — to decide whether a migration is additive.
+#
+# `[observed — 2026-07-31, dpl_DrKxz1F67xiPe1zztMerweYZ7QTE]` that cost 2m55s of a 9m
+# build, and it is paid on EVERY deploy: each build ends with `Build cache size 1.61 GB
+# exceeds limit of 1.50 GB. Invalidating cache.`, so the next one always starts cold.
+# There is no warm path that would amortize it.
+#
+# A feature flag on temper-substrate was the alternative and it does not work: temper-api
+# and temper-services need `embed`, so cargo's feature unification links ort into any
+# workspace build regardless. Only an isolated `--no-default-features` invocation would
+# skip it, which is too fragile a property to rest a deploy on.
+#
+# So the dependency list below is the point of the crate. Keep it sqlx + tokio + anyhow +
+# clap + futures-core. Anything else added here lands on the deploy's critical path,
+# ahead of the schema being applied.
+
+[dependencies]
+# `migrate` carries the Migrator; `macros` carries the compile-time query! checking that
+# the repo requires of production SQL. No `uuid`/`json`/`chrono` — the ledger's three
+# queries bind only i64 and &str.
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "macros", "migrate"] }
+# For `ledger`'s `Migrate` impl only. sqlx's trait signatures are written in
+# `futures_core::future::BoxFuture`, and a decorator must match them exactly — already in
+# the lock as a transitive sqlx dependency, so this adds nothing new to the tree.
+futures-core = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
