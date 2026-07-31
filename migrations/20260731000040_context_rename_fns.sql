@@ -2,10 +2,12 @@
 -- Mirrors context_reassign (20260715000010); this moves the identity pair in place.
 -- Additive only: one event-type row + two functions. No table changes.
 --
--- Renumbered from 20260730000020 while this branch was open: 20260731000010/20 landed on main
--- first, and a migration must sit above main's high-water mark. Never applied anywhere but a dev
--- database under the old number, so there is no applied file being edited — the rule that forbids
--- that is intact.
+-- Renumbered twice while this branch was open, both times for the same reason and neither time by
+-- editing an applied file: 20260730000020 -> 20260731000030 when 20260731000010/20 landed on main,
+-- then -> 20260731000040 to clear a sibling branch's 20260731000030
+-- (`wayfind_region_diagnostics`) that may merge first. Only ever applied to a dev database, so the
+-- rule that a shipped migration is immutable is intact — this is choosing a number before anyone
+-- else has it, which is the cheap half of the collision playbook.
 --
 -- kb_contexts is a replay INPUT table (restored verbatim), not a projection, so this
 -- projector is an idempotent re-apply on replay — the same property context_reassign states
@@ -143,7 +145,7 @@ $$;
 -- ordinary shape-forward risk every event type carries, not a property of applying this schema
 -- ahead of its binary.
 SELECT declare_migration(
-    20260731000030,
+    20260731000040,
     'additive',
     'Two new CREATE FUNCTIONs and one event-type row. Nothing pre-existing is altered or dropped, no signature or return type moves, and a binary that predates this migration calls none of it. The kb_event_types row is inert until the paired binary fires context_rename.'
 );
