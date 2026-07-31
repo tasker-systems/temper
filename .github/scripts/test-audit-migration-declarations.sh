@@ -291,7 +291,22 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '29999999999999'; then
   ok "a reclassification naming no real migration fails"
 else bad "a reclassification naming no real migration fails" "exit=$rc" "$out"; fi
 
-# ── 14. The real repo passes — the check is live, not just fixture-true ─────────────────────────
+# ── 14. An EMPTY class token is rejected, and the message names the token it rejected ───────────
+# The verdict was never in doubt; the message was. `IFS=$'\t' read` collapses a run of tabs, so an
+# empty class shifted every field left and the checker reported the REASON as the offending class.
+# A guard on the verdict alone would have stayed green through that.
+D="${WORK}/emptyclass"; new_fixture "$D"
+cat > "$D/20260801000016_empty_class.sql" <<'SQL'
+SELECT declare_migration(20260801000016, '', 'A reason, but no class at all.');
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] \
+   && printf '%s' "$out" | grep -q "declares class ''" \
+   && ! printf '%s' "$out" | grep -q "declares class 'A reason"; then
+  ok "an empty class token is rejected, naming the empty token and not the reason"
+else bad "an empty class token is rejected, naming the empty token and not the reason" "exit=$rc" "$out"; fi
+
+# ── 15. The real repo passes — the check is live, not just fixture-true ─────────────────────────
 out="$(bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "the repo's own migrations/ passes"
 else bad "the repo's own migrations/ passes" "exit=$rc" "$out"; fi
