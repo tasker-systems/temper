@@ -58,8 +58,12 @@ chmod +x "$STUB"
 
 # Run the build script in a controlled environment. Every variable the script reads is cleared
 # first, so a leaked value from the developer's own shell cannot decide a verdict.
+#
+# Runs from a scratch CWD, not the repo root: the script creates `public/` relative to wherever it
+# is invoked, and a harness that littered the working tree would be its own kind of bug.
 run_build() {
-  ( cd "$REPO_ROOT" && env -u DATABASE_URL -u DATABASE_URL_UNPOOLED -u VERCEL_ENV \
+  rm -rf "${WORK}/cwd" && mkdir -p "${WORK}/cwd"
+  ( cd "${WORK}/cwd" && env -u DATABASE_URL -u DATABASE_URL_UNPOOLED -u VERCEL_ENV \
       -u VERCEL_GIT_COMMIT_SHA "$@" \
       STUB_SAW="${WORK}/saw" MIGRATE_CMD="$STUB" sh "$BUILD_SH" 2>&1 )
 }
@@ -122,7 +126,24 @@ if [ "$rc" -ne 0 ] \
   ok "a failed apply fails the build and is distinguished from a refusal"
 else bad "a failed apply fails the build and is distinguished from a refusal" "exit=$rc" "$out"; fi
 
-# ── 7. vercel.json actually points at this script ───────────────────────────────────────────────
+# ── 7. The static-build phase gets an output directory ──────────────────────────────────────────
+# `[observed — 2026-07-31]` Setting a buildCommand at all makes Vercel run a static-build phase that
+# demands an output directory, even on a project whose only outputs are api/*.rs. The first real
+# build through this script migrated correctly and then died on "No Output Directory named public".
+# Asserted on the SKIP path too, because a deploy with no database configured must still deploy.
+reset_saw
+out="$(run_build DATABASE_URL=postgres://x)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -d "${WORK}/cwd/public" ]; then
+  ok "an output directory exists after a successful run"
+else bad "an output directory exists after a successful run" "exit=$rc" "$out"; fi
+
+reset_saw
+out="$(run_build)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -d "${WORK}/cwd/public" ]; then
+  ok "an output directory exists even when the migration is skipped"
+else bad "an output directory exists even when the migration is skipped" "exit=$rc" "$out"; fi
+
+# ── 8. vercel.json actually points at this script ───────────────────────────────────────────────
 # Every assertion above is about a script that only matters if the deploy runs it. A guard that
 # never checked the wiring would stay green through a rename.
 if grep -q '"buildCommand": *"sh scripts/vercel-build.sh"' "${REPO_ROOT}/vercel.json"; then

@@ -24,3 +24,8 @@ tmp/
 # --all-features`, which enables the `typescript` feature). The authoritative output lives in
 # packages/temper-ui/src/lib/types/generated/, written by `cargo make generate-ts-types`.
 crates/*/bindings/
+
+# Created by scripts/vercel-build.sh — the static-build phase Vercel runs once a
+# buildCommand exists demands an output directory, and this project has no static
+# output. Never committed; it exists only for the duration of a build.
+/public/

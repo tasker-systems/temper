@@ -59,10 +59,32 @@
 #   mechanism, and the only trace would be the absence of `recorded_by = 'runner'` rows in
 #   `kb_migration_ledger`, which is exactly the kind of absence nobody notices.
 #
+# WHY THIS CREATES AN EMPTY public/ — measured, and it is not cosmetic
+#   `[observed — 2026-07-31, deployment CrJj58WNjcWZfhuDfwHRHSr7DKwj]` Setting a
+#   buildCommand at all makes Vercel run a STATIC-BUILD phase, and that phase demands an
+#   output directory even on a project whose only outputs are `api/*.rs`. The first build
+#   through this script did everything right and then died on:
+#
+#     Finished `release` profile [optimized] target(s) in 3m 08s
+#      Running `target/release/temper-substrate migrate --additive-only`
+#     no additive migration was pending
+#     Error: No Output Directory named "public" found after the Build completed.
+#
+#   The spec's § Evidence probe established that a buildCommand RUNS here, that cargo is on
+#   PATH, and that DATABASE_URL_UNPOOLED is set — all true, and none of it establishes that
+#   a build with a buildCommand set SUCCEEDS. That gap is what this line closes.
+#
+#   An empty directory is the honest answer rather than a placeholder file: this project
+#   genuinely has no static output. It changes no routing — vercel.json's first rule is
+#   `{ "handle": "filesystem" }`, and an empty directory contributes no files for it to
+#   match, so every request falls through to the same function routes as before.
+#
 # MIGRATE_CMD is injected by the guard test and is never set in a real build.
 set -u
 
 echo "build: VERCEL_ENV=${VERCEL_ENV:-unset} commit=${VERCEL_GIT_COMMIT_SHA:-unknown}"
+
+mkdir -p public
 
 # Prefer the direct connection; fall back to whatever DATABASE_URL is, which is what a
 # local or self-hosted invocation has.
