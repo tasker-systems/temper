@@ -31,6 +31,49 @@ struct Cli {
 /// from 1 (anyhow's failure exit) for that reason.
 const HALTED: i32 = 3;
 
+/// The carried migration set and the database disagree about history. Distinct from 1 because the
+/// operator's next move is different and the ledger has nothing to say about it — see
+/// [`ledger::divergent_version`].
+const DIVERGED: i32 = 4;
+
+/// Exit on the divergence class if that is what this is; otherwise hand the error back unchanged.
+///
+/// Written as a `Result` pass-through rather than a branch at each call site so the two run modes
+/// cannot drift — the full run and the additive run reach `run_direct`'s validation identically.
+fn classify<T>(outcome: Result<T, sqlx::migrate::MigrateError>) -> Result<T> {
+    let err = match outcome {
+        Ok(value) => return Ok(value),
+        Err(err) => err,
+    };
+
+    let Some(version) = ledger::divergent_version(&err) else {
+        return Err(err.into());
+    };
+
+    eprintln!("{err}");
+    eprintln!();
+    eprintln!("DIVERGED at migration {version}");
+    eprintln!();
+    eprintln!(
+        "The database has applied a migration that does not match the set this binary carries.\n\
+         Nothing was applied and nothing failed — sqlx refuses before touching the schema, so\n\
+         `kb_migration_ledger` has no entry for this and `migration_current` will show nothing\n\
+         unusual. Do not go looking there.\n\
+         \n\
+         The usual causes, in the order they actually occur:\n\
+         \n\
+         * two branches claimed the same migration version, and the other one merged first;\n\
+         * a shipped migration was edited or renumbered — sqlx checksums applied migrations, so\n\
+           any change to one already applied is permanent and must be superseded, never amended;\n\
+         * this environment's database was branched from one carrying a version this build lacks.\n\
+         \n\
+         On a PREVIEW the cheap fix is usually to renumber this branch's migration above the one\n\
+         that merged, and let the preview's database be re-created. On PRODUCTION, stop: a\n\
+         mismatch there means a shipped migration changed under a database that already ran it."
+    );
+    std::process::exit(DIVERGED);
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -38,12 +81,12 @@ async fn main() -> Result<()> {
     let mut conn = pool.acquire().await?;
 
     if !cli.additive_only {
-        ledger::run_with_ledger(&MIGRATOR, &mut conn).await?;
+        classify(ledger::run_with_ledger(&MIGRATOR, &mut conn).await)?;
         println!("migrations applied; outcomes recorded in kb_migration_ledger");
         return Ok(());
     }
 
-    let run = ledger::run_additive_only(&MIGRATOR, &mut conn).await?;
+    let run = classify(ledger::run_additive_only(&MIGRATOR, &mut conn).await)?;
 
     if run.applied.is_empty() {
         println!("no additive migration was pending");

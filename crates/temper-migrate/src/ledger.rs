@@ -602,6 +602,36 @@ pub fn plan_additive_run(migrator: &Migrator, applied: &HashSet<i64>) -> Additiv
     }
 }
 
+/// The migration whose applied state disagrees with the set this binary carries — if that is what
+/// went wrong.
+///
+/// # Why this is its own failure class rather than "a migration failed"
+///
+/// `[observed — 2026-07-31, dpl_H2kyr2yz1dhVfRvJBBvYhBaZXWnF]` A preview deploy died with
+/// `migration 20260731000040 was previously applied but has been modified`, and the build script
+/// reported it as *"an apply that FAILED"* and sent the operator to
+/// `SELECT * FROM migration_current WHERE state <> 'success'`. **That query returns nothing here.**
+/// Both variants below are raised by `run_direct` *before or instead of* applying anything
+/// (`sqlx-core-0.8.6/src/migrate/migrator.rs:161` and `:176`), so no apply was attempted, no
+/// `pending` row was written, and there is no unsuccessful outcome to find. The advice was correct
+/// for the failure it was written for and pointed at an empty result for the one that happened.
+///
+/// The two variants are one class because the operator does one thing about both: the database has
+/// applied something this binary's `migrations/` no longer matches. In practice that is a shipped
+/// migration edited or renumbered, or two branches claiming one version — which is exactly what
+/// produced the observation above, when a sibling PR merged the same version first.
+///
+/// Deliberately NOT included: [`MigrateError::Dirty`] and a genuinely failed apply. For those the
+/// ledger query *is* the right advice — a `pending` row with no terminal entry is precisely what
+/// [`LedgerRecorder::dirty_version`] reads — so folding them in here would break the guidance that
+/// currently works to fix the guidance that does not.
+pub fn divergent_version(err: &MigrateError) -> Option<i64> {
+    match err {
+        MigrateError::VersionMismatch(v) | MigrateError::VersionMissing(v) => Some(*v),
+        _ => None,
+    }
+}
+
 /// Apply the leading run of additive migrations, recording each apply's outcome, and stop at the
 /// first that is not additive.
 ///
@@ -945,6 +975,44 @@ mod tests {
         assert!(
             unrecognised.is_empty(),
             "class tokens outside the vocabulary: {unrecognised:?}"
+        );
+    }
+
+    #[test]
+    fn a_disagreement_about_history_is_named_and_carries_its_version() {
+        // The two `run_direct` raises before anything is applied. The version matters: it is the
+        // whole of what the operator needs to go look at, and the observed failure named one.
+        assert_eq!(
+            divergent_version(&MigrateError::VersionMismatch(20260731000040)),
+            Some(20260731000040)
+        );
+        assert_eq!(
+            divergent_version(&MigrateError::VersionMissing(20260731000040)),
+            Some(20260731000040)
+        );
+    }
+
+    #[test]
+    fn a_failed_apply_and_a_dirty_migration_are_not_divergences() {
+        // This is the half that bites. Widening `divergent_version` to "any migration error" would
+        // satisfy the test above and silently reroute genuine apply failures away from the ledger
+        // query — which is the ONLY place their evidence exists, since a failed apply DOES leave a
+        // `failed` row and a crash DOES leave the `pending` one `dirty_version` reads. The fix for
+        // misleading advice must not consume the advice that works.
+        assert_eq!(
+            divergent_version(&MigrateError::Dirty(20260731000040)),
+            None
+        );
+        assert_eq!(
+            divergent_version(&MigrateError::VersionNotPresent(20260731000040)),
+            None
+        );
+        assert_eq!(
+            divergent_version(&MigrateError::ExecuteMigration(
+                sqlx::Error::PoolClosed,
+                20260731000040
+            )),
+            None
         );
     }
 }

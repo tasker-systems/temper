@@ -187,13 +187,23 @@ migration declared about itself, read straight out of the SQL the deploying bina
 The order every target still owns is **back up → migrate → verify → deploy**; what changed
 is that the middle step is automatic for the additive class and only for it.
 
-> **A halt is a refusal, not a failure.** If a build log says the runner *exited 3*, a
-> shape-breaking migration is waiting for an operator. Any other non-zero exit is a
-> migration that genuinely broke — read the trail, don't reach for the cutover runbook:
+> **Three non-zero exits, three different next moves. Read the code before the message.**
+>
+> | Exit | What happened | What to do |
+> |---|---|---|
+> | **3** | A **refusal**. A shape-breaking migration is waiting for an operator | Take it as a cutover (below). Not a failure |
+> | **4** | A **disagreement about history** — the database has applied a migration this build's `migrations/` no longer matches | Nothing was applied and nothing failed. Usually two branches claimed one version, or a shipped migration was edited. See the playbook § 4d |
+> | anything else | A migration **genuinely broke** while applying | Read the trail below. Don't reach for the cutover runbook |
 >
 > ```sql
 > SELECT * FROM migration_current WHERE state IS DISTINCT FROM 'success' ORDER BY version;
 > ```
+>
+> **That query answers for the last row only.** On an exit 4 it returns nothing — sqlx
+> refuses before touching the schema, so there is no apply to have an outcome. An empty
+> result there is the expected reading, not a missing record. `[observed — 2026-07-31,
+> dpl_H2kyr2yz1dhVfRvJBBvYhBaZXWnF]` this exact confusion shipped: the build reported a
+> checksum mismatch as *"an apply that FAILED"* and sent the reader here.
 >
 > A NULL `state` there is "no runner ever observed this", not "it did not happen" — every
 > migration applied by hand before this mechanism existed reads that way, permanently.

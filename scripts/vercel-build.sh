@@ -167,9 +167,23 @@ if [ "$rc" -eq 3 ]; then
   echo "An operator must take it as a cutover (DEPLOYING.md § 'Shape-breaking migration')." >&2
   echo "Until then this deploy is refused, because shipping the binary without its schema is" >&2
   echo "the failure this gate exists to prevent." >&2
+elif [ "$rc" -eq 4 ]; then
+  # Exit 4 is the carried set disagreeing with the database's history. The runner has already
+  # printed which version and what to do; the one thing worth adding here is that this is NOT
+  # the ledger's business, because the branch below used to claim it was.
+  #
+  # `[observed — 2026-07-31, dpl_H2kyr2yz1dhVfRvJBBvYhBaZXWnF]` a real preview died on
+  # `migration 20260731000040 was previously applied but has been modified` and this script
+  # sent the operator to a ledger query that returns zero rows for it — sqlx refuses before
+  # applying, so there is no outcome recorded. Right advice, wrong failure.
+  echo "BUILD FAILED: this deploy's migrations disagree with the database's history." >&2
+  echo "" >&2
+  echo "Nothing was applied and nothing failed, so the ledger has nothing to show for it." >&2
+  echo "The runner's output above names the version and the likely cause." >&2
 else
   echo "BUILD FAILED: the migration runner exited ${rc}." >&2
-  echo "This is an apply that FAILED, not one that was refused — see the ledger:" >&2
+  echo "This is an apply that FAILED — it was neither refused (3) nor a disagreement about" >&2
+  echo "history (4), so a migration ran and broke. The ledger recorded it:" >&2
   echo "  SELECT * FROM migration_current WHERE state <> 'success' ORDER BY version;" >&2
 fi
 exit "$rc"

@@ -248,6 +248,42 @@ declaration.
 
 ---
 
+## 4d. The deploy failed: "migrations disagree with the database's history" (exit 4)
+
+The runner exited **4**. The database has applied a migration whose checksum or version the set
+this build carries no longer matches. **Nothing was applied and nothing failed** — sqlx validates
+before touching the schema.
+
+**Do not go to the ledger.** `migration_current` will show nothing unusual, because there was no
+apply to record an outcome for. `[observed — 2026-07-31, dpl_H2kyr2yz1dhVfRvJBBvYhBaZXWnF]` the
+build script originally called this "an apply that FAILED" and pointed here; the empty result that
+produced is what this section exists to prevent you re-deriving.
+
+The causes, in the order they actually occur:
+
+**Two branches claimed the same migration version, and the other merged first.** This is the common
+one. It is invisible until the second branch's preview runs, because each branch's own CI is green
+about a set only it can see. The observed instance: PRs #593 and #594 both used
+`20260731000040`; #594 merged, production applied it, and #593's preview — whose Neon branch had
+already applied its own different `20260731000040` — refused.
+
+*Fix:* renumber this branch's migration above whatever merged, in **both** the filename and the
+`declare_migration()` argument (they are two separate claims and CI checks them independently), and
+let the preview's database be re-created.
+
+**A shipped migration was edited or renumbered.** sqlx checksums applied migrations, so any change
+to one already applied is permanent — see [[project_shipped_migrations_are_checksum_locked]]. A
+mistake in a shipped migration is superseded by a new migration, never amended in place.
+
+**The environment's database was branched from one carrying a version this build lacks.** A preview
+Neon branch taken from production after production moved ahead of this PR's base.
+
+> **On production, stop.** A mismatch there means a migration that production already ran has
+> changed underneath it. That is not a renumbering problem; work out which migration changed and
+> why before applying anything.
+
+---
+
 ## 5. Shipping a shape-breaking migration
 
 A `shape-breaking` migration is **never** a silent `main` auto-deploy. It is an operator-gated
@@ -363,7 +399,8 @@ WIRE_DIFF_BASE=<rev> .github/scripts/sqlx-wire-diff.sh
 curl -s "https://temperkb.io/api/health?cb=$(date +%s)" | jq -r .commit
 
 # What the DEPLOY will do to the schema — the same call vercel-build.sh makes.
-# Exit 0 = applied (or nothing pending); exit 3 = halted, an operator must take it.
+# Exit 0 = applied (or nothing pending); 3 = halted, an operator must take it;
+# 4 = the carried set disagrees with the database's history (§4d).
 cargo run -p temper-migrate --bin temper-migrate -- --additive-only
 
 # Apply EVERYTHING, shape-breaking included. What a developer and an operator run.
