@@ -8,6 +8,12 @@
 //! high-salience low-cosine one, i.e. relevance buys a top-N slot (2); cold-start — a region-less map
 //! degrades to its direct homed scope, never errors (3); deny — a non-member of the map's team gets
 //! zero ids (4); lens override recomputes salience from the stored components, reordering selection (5).
+//!
+//! Per-map fairness (issue #585, Task 2): a relevant sibling map, volume-crowded by a dominant map,
+//! reaches the top-N under per-map round-robin — the monopoly a global `LIMIT` would produce is broken
+//! without a tuning constant (6). The diagnostics and the scope funnel read ONE scoring home
+//! (`wayfind_region_scores`), so their selection cannot drift (7), and the reported scores are the real
+//! Stage-1 blend (8).
 
 use std::collections::HashSet;
 
@@ -531,95 +537,122 @@ async fn add_visible_map(pool: &PgPool, p1: Uuid, slug: &str, name: &str) -> Uui
     cogmap
 }
 
-// 6. THE #585 WITNESS: two sibling cogmaps in one wayfind pool, and the diagnostics make the cross-map
-//    monopoly observable — keyed by map. MAP_A's regions are both high query-cosine AND high salience;
-//    MAP_B's are low query-cosine. regions=2. Both top-N slots go to MAP_A; MAP_B is shut out. The point
-//    is that MAP_B's regions are STILL REPORTED here (with their real, losing scores) even though their
-//    members never reach Stage-2 ranking — which is exactly the blindness this instrument removes.
+// 6. THE #585 WITNESS (Task 2 — per-map fairness): a RELEVANT sibling map, volume-crowded by a
+//    dominant map, now reaches the top-N. It MUST fail against the pre-fix global-`LIMIT` selection
+//    and pass under per-map round-robin — the register's required witness for `no-single-map-monopoly`.
+//
+//    MAP_A (fx.cogmap) has THREE regions, all high query-cosine (axis 0 = query): scores ≈ a1 0.917,
+//    a2 0.783, a3 0.65. MAP_B has ONE region whose centroid mixes axes 0+1 (cos ≈ 0.707) — genuinely
+//    relevant, but its champion b1 ≈ 0.741 sits BELOW MAP_A's top two. regions=2.
+//      - Under the pre-fix global `ORDER BY region_score DESC LIMIT 2`, the top-2 are {a1, a2}: both
+//        MAP_A, MAP_B shut out purely because MAP_A has more high regions. THE #585 MONOPOLY.
+//      - Under per-map round-robin, round 1 admits each map's champion by score → {a1, b1}: MAP_B's
+//        competitive champion reaches the scope. The monopoly is broken WITHOUT a tuning constant.
+//    The witness asserts both the diagnostics flag AND the real scope funnel (`wayfind_scope_ids`)
+//    surface MAP_B, and encodes the crowding (≥ regions_n of MAP_A outscore b1) that made it a monopoly.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn diagnostics_expose_cross_map_monopoly_keyed_by_map(pool: PgPool) {
+async fn per_map_round_robin_admits_a_crowded_relevant_sibling(pool: PgPool) {
     let fx = fixture(&pool).await;
     let map_b = add_visible_map(&pool, fx.p1, "wayfind-map-b", "Wayfind Map B").await;
     let hi = vec768(&[(0, 1.0)]); // high query-cosine (axis 0 = query)
-    let lo = vec768(&[(1, 1.0)]); // zero query-cosine
+    let mid = vec768(&[(0, 1.0), (1, 1.0)]); // cos ≈ 0.707: relevant, but below MAP_A's axis-0 regions
 
-    // MAP_A (fx.cogmap): both regions relevant + salient → they sweep the top-2.
-    let (a1, _) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["a1"]).await;
+    // MAP_A (fx.cogmap): three relevant regions — the "volume" that monopolizes under a global LIMIT.
+    let (a1, a1m) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["a1"]).await;
     let (a2, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.9, &hi, &["a2"]).await;
-    // MAP_B: both regions irrelevant to the query → shut out despite being visible.
-    let (b1, _) = seed_region_on(&pool, &fx, map_b, 1.0, &lo, &["b1"]).await;
-    let (b2, _) = seed_region_on(&pool, &fx, map_b, 0.9, &lo, &["b2"]).await;
+    let (a3, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.8, &hi, &["a3"]).await;
+    // MAP_B: one relevant-but-lower champion. Global top-2 shuts it out; round-robin admits it.
+    let (b1, b1m) = seed_region_on(&pool, &fx, map_b, 1.0, &mid, &["b1"]).await;
     let q = query_axis0();
 
-    let diag = wayfind_region_diagnostics(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(2),
-            anchor: None, // unscoped: pool every visible anchor
-        },
-    )
-    .await
-    .expect("region diagnostics");
+    let query = WayfindScopeQuery {
+        principal: ProfileId::from(fx.p1),
+        lens_id: None,
+        embedding: Some(&q),
+        regions: Some(2),
+        anchor: None, // unscoped: pool every visible anchor
+    };
+    let diag = wayfind_region_diagnostics(&pool, query.clone())
+        .await
+        .expect("region diagnostics");
 
-    // Every candidate region is reported — including the losers (the whole point vs Stage-2 scores).
+    // Every candidate region is reported, keyed by map — the losers (a3) too.
     let row = |rid: Uuid| {
         diag.iter()
             .find(|r| r.region_id == rid)
             .unwrap_or_else(|| panic!("region {rid} must appear in diagnostics: {diag:?}"))
     };
-    for rid in [a1, a2, b1, b2] {
+    for rid in [a1, a2, a3, b1] {
         let _ = row(rid);
     }
-
-    // Keyed by map: the two maps are distinguishable, and each row names its home map.
     assert_eq!(row(a1).home_anchor_id, fx.cogmap);
     assert_eq!(row(b1).home_anchor_id, map_b);
-    assert_eq!(row(a1).home_anchor_table, "kb_cogmaps");
     assert_eq!(
         row(b1).home_anchor_name.as_deref(),
         Some("Wayfind Map B"),
         "the home map name is resolved so a sweep reads by map, not UUID"
     );
 
-    // The monopoly is legible: both top-N slots belong to MAP_A; MAP_B is shut out.
+    // THE CROWDING that made this a #585 monopoly: at least `regions_n` (=2) of MAP_A's regions
+    // strictly outscore MAP_B's champion, so a global `ORDER BY region_score DESC LIMIT 2` would fill
+    // both slots with MAP_A and exclude b1. This is what per-map fairness overrides.
+    let a_beats_b1 = [a1, a2, a3]
+        .iter()
+        .filter(|&&r| row(r).region_score > row(b1).region_score)
+        .count();
     assert!(
-        row(a1).in_top_n && row(a2).in_top_n,
-        "MAP_A swept the top-2"
+        a_beats_b1 >= 2,
+        "fixture invalid: MAP_A must out-score b1 on ≥2 regions so a global LIMIT would monopolize \
+         (a1={:.4} a2={:.4} a3={:.4} b1={:.4})",
+        row(a1).region_score,
+        row(a2).region_score,
+        row(a3).region_score,
+        row(b1).region_score
     );
-    assert!(
-        !row(b1).in_top_n && !row(b2).in_top_n,
-        "MAP_B is shut out despite being visible: {diag:?}"
-    );
+
+    // THE FIX: the monopoly is broken. MAP_B's champion clears the cut; MAP_A does not sweep both slots.
     let top_by_map = |map: Uuid| {
         diag.iter()
             .filter(|r| r.in_top_n && r.home_anchor_id == map)
             .count()
     };
-    assert_eq!(top_by_map(fx.cogmap), 2, "MAP_A holds 2/2 top-N slots");
-    assert_eq!(top_by_map(map_b), 0, "MAP_B holds 0 top-N slots");
-
-    // The losing map's regions carry real, observable scores — its low query-cosine is the visible
-    // cause, not an absence. This is the signal Stage-2 per-hit scores can never show for a shut-out map.
     assert!(
-        (row(b1).query_cos).abs() < 1e-6,
-        "MAP_B region's zero query-cosine is reported, not hidden: {:?}",
-        row(b1)
+        row(b1).in_top_n,
+        "MAP_B's competitive champion reaches the top-N under per-map fairness: {diag:?}"
+    );
+    assert_eq!(
+        top_by_map(fx.cogmap),
+        1,
+        "MAP_A no longer sweeps: 1/2 slots"
+    );
+    assert_eq!(top_by_map(map_b), 1, "MAP_B reaches: 1/2 slots");
+
+    // And the REAL scope funnel — not just the diagnostics mirror — surfaces MAP_B's member, so its
+    // content actually reaches Stage-2 ranking. Both read the single scoring home, so they agree.
+    let scope: HashSet<Uuid> = wayfind_scope_ids(&pool, query)
+        .await
+        .expect("wayfind scope")
+        .into_iter()
+        .collect();
+    assert!(
+        scope.contains(&b1m[0]),
+        "MAP_B's member enters the wayfind scope (no longer volume-crowded out): {scope:?}"
     );
     assert!(
-        row(a1).region_score > row(b1).region_score,
-        "the winner outscores the shut-out region, and both scores are visible"
+        scope.contains(&a1m[0]),
+        "MAP_A's champion is still in scope — fairness is not a swap, both maps are reachable: {scope:?}"
     );
 }
 
-// 7. ANTI-DRIFT GUARD: the diagnostics' `in_top_n` selection must equal `wayfind_scope_ids`' actual
+// 7. EQUIVALENCE GUARD: the diagnostics' `in_top_n` selection must equal `wayfind_scope_ids`' actual
 //    scope. Each region gets exactly one member, so a diagnostics `region_id` maps to one scope id.
 //    In a no-cold-start fixture the only extra id `wayfind_scope_ids` returns is the public L0 kernel
 //    telos (region-less, reached via the auto-joined root team) — which the diagnostics correctly do
 //    NOT report (no candidate region to score). Subtract that one known id and the two must coincide.
-//    If Task 2 changes the ranking in only one of the two functions, this fails.
+//    Since Task 2 the two functions read ONE scoring home (`wayfind_region_scores`), so this equivalence
+//    is true by construction — the test now guards the WIRING (scope_ids' member-deref of the shared
+//    winners matches diagnostics' region rows), across the same round-robin cut sizes, not two copies of
+//    a blend that could drift.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn wayfind_region_diagnostics_matches_scope_ids(pool: PgPool) {
     let fx = fixture(&pool).await;
