@@ -116,8 +116,8 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'shape-breaking migration is 
 else bad "a halted run (exit 3) fails the build, naming why" "exit=$rc" "$out"; fi
 
 # ── 6. A FAILED apply fails the build, and is not reported as a refusal ─────────────────────────
-# Exit 3 is a refusal; anything else is a migration that broke. Collapsing them would send an
-# operator to the cutover runbook for a genuine error.
+# Exit 3 is a refusal, exit 4 is a disagreement about history; anything else is a migration that
+# broke. Collapsing them would send an operator to the cutover runbook for a genuine error.
 reset_saw
 out="$(run_build DATABASE_URL=postgres://x STUB_RC=1)"; rc=$?
 if [ "$rc" -ne 0 ] \
@@ -125,6 +125,26 @@ if [ "$rc" -ne 0 ] \
    && ! printf '%s' "$out" | grep -q 'shape-breaking migration is pending'; then
   ok "a failed apply fails the build and is distinguished from a refusal"
 else bad "a failed apply fails the build and is distinguished from a refusal" "exit=$rc" "$out"; fi
+
+# ── 6b. A DIVERGENCE (exit 4) is not reported as a failed apply ─────────────────────────────────
+# `[observed — 2026-07-31, dpl_H2kyr2yz1dhVfRvJBBvYhBaZXWnF]` A real preview died on
+#   Error: migration 20260731000040 was previously applied but has been modified
+# and this script called it "an apply that FAILED", pointing at
+#   SELECT * FROM migration_current WHERE state <> 'success'
+# which returns ZERO rows for it: sqlx refuses before applying, so nothing was recorded. The advice
+# was right for the failure it was written for and empty for the one that happened.
+#
+# Both halves are asserted, because only the second one bites. Requiring the new text alone would
+# pass even if the misleading ledger advice were still printed beside it — and that advice being
+# printed IS the defect.
+reset_saw
+out="$(run_build DATABASE_URL=postgres://x STUB_RC=4)"; rc=$?
+if [ "$rc" -eq 4 ] \
+   && printf '%s' "$out" | grep -q 'disagree with the database' \
+   && ! printf '%s' "$out" | grep -q "state <> 'success'" \
+   && ! printf '%s' "$out" | grep -q 'shape-breaking migration is pending'; then
+  ok "a divergence (exit 4) is not reported as a failed apply, and omits the ledger query"
+else bad "a divergence (exit 4) is not reported as a failed apply, and omits the ledger query" "exit=$rc" "$out"; fi
 
 # ── 7. The static-build phase gets a NON-EMPTY output directory ─────────────────────────────────
 # Setting a buildCommand at all makes Vercel run a static-build phase that demands an output
