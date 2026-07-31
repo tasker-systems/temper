@@ -114,8 +114,23 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #   ATTENUATION — `can_read=true, can_write=false`, no delete, no grant. Deliberately NOT a
 #                 self-grant in the escalating sense: it strictly REMOVES capability from the
 #                 grantee relative to the ownership it just lost, which is the whole point.
+# REVIEWED 2026-07-31 (context rename, Task 11) — `authz/context_admin.rs` is a NEW entry and is
+# TEST-ONLY. The insert is `grant_context_read`, inside the
+# `#[cfg(all(test, feature = "test-db"))] mod tests`, in an ephemeral per-test database. It exists
+# because the register claims ONE class — read-without-administration — reached through FOUR
+# genuinely different mechanisms, and this is the only one of the four that is not a team predicate
+# at all. The build owes each route separately, so route 4 has to mint a real grant row.
+#   AUTHORITY   — n/a: no production grantor; the fixture writes the row directly. Nothing in the
+#                 shipped binary reaches it, and `context_service::rename` grants nothing — the
+#                 whole feature only ever READS this table, through `contexts_readable_by` arm 4.
+#   ATTENUATION — `can_read=true` and nothing else; `can_write`/`can_delete`/`can_grant` are left at
+#                 their `false` column defaults (verified live on `information_schema`). Not a
+#                 self-grant: `arm4_…` seeds `granter` and `grantee` as two distinct profiles and
+#                 the grantee is deliberately NOT the context's owner — a grantee who administered
+#                 the context would resolve `Administers` and the test would prove nothing.
 read -r -d '' BASELINE <<'EOF' || true
 2 crates/temper-services/src/authz/audit_gate.rs
+1 crates/temper-services/src/authz/context_admin.rs
 1 crates/temper-services/src/backend/db_backend.rs
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/connection_service.rs
