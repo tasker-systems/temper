@@ -62,11 +62,12 @@ There are exactly **two** classes, and they are the tokens the tooling speaks:
 
 | token | meaning |
 |---|---|
-| `additive` | Safe with any binary **in either direction** — the old binary against the new schema *and* the new binary against the old. |
+| `additive` | Safe for a binary that **does not carry this migration** — a lagging binary meeting the new schema. |
 | `shape-breaking` | Anything else. Operator-gated cutover; never a silent `main` auto-deploy. |
 
-`additive` is a *definition*, not a vibe: if you cannot say both directions are fine,
-the migration is `shape-breaking`. Dropping something is shape-breaking — there is no
+`additive` is a *definition*, not a vibe. The one question is: **does a binary that
+predates this migration keep working against the schema after it is applied?** If you
+cannot say yes, the migration is `shape-breaking`. Dropping something is shape-breaking — there is no
 separate `destructive` class, because every rule downstream only ever asks whether a
 class is additive.
 
@@ -92,11 +93,30 @@ Three things about that call are load-bearing:
   CI. Silence is not a classification, and an absent statement is as loud as a wrong
   one.
 
-It lives in the database (`kb_migration_classifications`) rather than only in a file
-header because the declaration has to be readable by a binary that does **not carry
-that migration** — `MIGRATOR` embeds only the migrations its own binary has. Writing
-it from inside the migration means it propagates to every target automatically, with
-no second spelling to drift.
+It lives in the database (`kb_migration_ledger`, read through the `migration_current`
+view) rather than only in a file header, because the declaration has to be readable by
+a binary that does **not carry that migration** — `MIGRATOR` embeds only the migrations
+its own binary has. Writing it from inside the migration means it propagates to every
+target automatically, with no second spelling to drift.
+
+The ledger is **append-only**, and it carries a second axis beside the claim: what
+happened to the apply. `cargo make db-migrate` runs `temper-substrate migrate`, which
+brackets each apply with `pending` before and `success`/`failed` after — from outside
+the migration's own transaction, because sqlx wraps the body and its bookkeeping
+together and a failure rolls back anything that transaction wrote. A migration that
+crashes mid-apply leaves an unresolved `pending`, and the next run refuses to proceed.
+
+Because it is append-only, a classification that turns out wrong is corrected by
+**appending** `reclassify_migration(...)` from a later migration — the current view
+follows the revision while the original claim survives beside it.
+
+CI checks the declaration two ways: that one exists at all, and that what it claims
+survives contact with the `.sqlx` caches — the only artifact in the repo that records
+the *binary's* side of the contract. **When either check goes red, or a write path
+fails in production, go to
+[docs/development/schema-binary-pairing-playbook.md](docs/development/schema-binary-pairing-playbook.md)** —
+it is organised by what you are looking at, and it also states what these checks
+cannot see.
 
 ### A function's return type is a wire contract with the binary
 

@@ -220,7 +220,78 @@ out="$(run_audit "$D")"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "a CREATE FUNCTION / COMMENT ON of the same name is not a declaration"
 else bad "a CREATE FUNCTION / COMMENT ON of the same name is not a declaration" "exit=$rc" "$out"; fi
 
-# ── 10. The real repo passes — the check is live, not just fixture-true ─────────────────────────
+# ── 10. The four-argument form parses — the backfill's shape ────────────────────────────────────
+# `declare_migration` takes an optional `p_recorded_by`, which the backfill passes as 'backfill'
+# because the migration being described is not the one writing. A parser that took "the last quoted
+# string" as the reason would read 'backfill' as the reason and never notice.
+D="${WORK}/fourarg"; new_fixture "$D"
+cat > "$D/20260801000012_backfilled.sql" <<'SQL'
+SELECT declare_migration(
+    20260801000012,
+    'additive',
+    'A real reason, followed by a provenance argument.',
+    'backfill'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "the four-argument declare_migration form parses"
+else bad "the four-argument declare_migration form parses" "exit=$rc" "$out"; fi
+
+# ── 11. A reclassification is validated but does NOT declare ────────────────────────────────────
+# It names a migration that already shipped. Letting it satisfy "this version is declared" would let
+# a migration declare itself by revising someone else.
+D="${WORK}/reclass"; new_fixture "$D"
+cat > "$D/20260801000013_only_reclassifies.sql" <<'SQL'
+SELECT reclassify_migration(
+    20260801000001,
+    'shape-breaking',
+    'Revised: the earlier additive call missed a required parameter.'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000013'; then
+  ok "a migration that only reclassifies still fails for declaring nothing itself"
+else bad "a migration that only reclassifies still fails for declaring nothing itself" "exit=$rc" "$out"; fi
+
+# ── 12. A reclassification with a bad class still fails ─────────────────────────────────────────
+D="${WORK}/reclassbad"; new_fixture "$D"
+cat > "$D/20260801000014_reclass_bad.sql" <<'SQL'
+SELECT declare_migration(
+    20260801000014,
+    'additive',
+    'Declares itself properly.'
+);
+SELECT reclassify_migration(
+    20260801000001,
+    'destructive',
+    'Not one of the two classes.'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'destructive'; then
+  ok "a reclassification is validated like a declaration"
+else bad "a reclassification is validated like a declaration" "exit=$rc" "$out"; fi
+
+# ── 13. A reclassification naming a nonexistent version fails ───────────────────────────────────
+D="${WORK}/reclassghost"; new_fixture "$D"
+cat > "$D/20260801000015_reclass_ghost.sql" <<'SQL'
+SELECT declare_migration(
+    20260801000015,
+    'additive',
+    'Declares itself properly.'
+);
+SELECT reclassify_migration(
+    29999999999999,
+    'additive',
+    'No migration file has this version.'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '29999999999999'; then
+  ok "a reclassification naming no real migration fails"
+else bad "a reclassification naming no real migration fails" "exit=$rc" "$out"; fi
+
+# ── 14. The real repo passes — the check is live, not just fixture-true ─────────────────────────
 out="$(bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "the repo's own migrations/ passes"
 else bad "the repo's own migrations/ passes" "exit=$rc" "$out"; fi

@@ -6,6 +6,12 @@ Anything unmarked is inferred.
 Goal: `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`. Grounded in the production outage of 2026-07-30
 (PR #576, ~40 minutes of failing writes). Companion prose: [DEPLOYING.md](../../../DEPLOYING.md).
 
+**This document is the design. For what to do when one of these checks goes red, or when a write
+path is failing in production, read
+[docs/development/schema-binary-pairing-playbook.md](../../development/schema-binary-pairing-playbook.md)** —
+which also records where the built mechanism turned out rougher than this design assumed (correcting
+a shipped misclassification, most of all).
+
 ---
 
 ## What this decides, in one paragraph

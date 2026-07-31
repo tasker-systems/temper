@@ -83,29 +83,36 @@ parse_declarations() {
         { buf = buf " " $0 }
         END {
             rest = buf
-            # A CALL, not any mention of the name. `20260731000010` both defines the function and
-            # COMMENTs ON it, and `CREATE FUNCTION declare_migration(p_version bigint, …)` /
+            # A CALL, not any mention of the name. `20260731000010` both defines these functions
+            # and COMMENTs ON them, and `CREATE FUNCTION declare_migration(p_version bigint, …)` /
             # `COMMENT ON FUNCTION declare_migration(bigint, …)` are not declarations of anything.
             # Anchoring on the invoking keyword is what separates a call from its definition — and
             # it still leaves a genuinely malformed call (`SELECT declare_migration(oops`) caught
             # rather than skipped, which a looser "ignore anything unparseable" rule would not.
-            while (match(rest, /(SELECT|PERFORM)[[:space:]]+declare_migration[[:space:]]*\(/)) {
+            #
+            # Both function names are parsed, and the distinction is carried through: a
+            # `reclassify_migration` entry is VALIDATED like any other (real version, known class,
+            # non-empty reason) but does NOT count as declaring anything. It names a migration that
+            # already shipped, so letting it satisfy "this version is declared" would let a
+            # migration declare itself by revising someone else.
+            while (match(rest, /(SELECT|PERFORM)[[:space:]]+(declare|reclassify)_migration[[:space:]]*\(/)) {
+                kind = (substr(rest, RSTART, RLENGTH) ~ /reclassify/) ? "reclassify" : "declare"
                 rest = substr(rest, RSTART + RLENGTH)
 
-                if (!match(rest, /^[[:space:]]*[0-9]+/)) { print "!MALFORMED\t\t"; continue }
+                if (!match(rest, /^[[:space:]]*[0-9]+/)) { print "!MALFORMED\t\t\t"; continue }
                 ver = substr(rest, RSTART, RLENGTH)
                 gsub(/[[:space:]]/, "", ver)
                 rest = substr(rest, RSTART + RLENGTH)
 
-                if (!match(rest, /'"'"'[^'"'"']*'"'"'/)) { print "!MALFORMED\t\t"; continue }
+                if (!match(rest, /'"'"'[^'"'"']*'"'"'/)) { print "!MALFORMED\t\t\t"; continue }
                 cls = substr(rest, RSTART + 1, RLENGTH - 2)
                 rest = substr(rest, RSTART + RLENGTH)
 
-                if (!match(rest, /'"'"'[^'"'"']*'"'"'/)) { print ver "\t" cls "\t"; continue }
+                if (!match(rest, /'"'"'[^'"'"']*'"'"'/)) { print ver "\t" cls "\t\t" kind; continue }
                 rsn = substr(rest, RSTART + 1, RLENGTH - 2)
                 rest = substr(rest, RSTART + RLENGTH)
 
-                print ver "\t" cls "\t" rsn
+                print ver "\t" cls "\t" rsn "\t" kind
             }
         }
     ' "$1"
@@ -113,7 +120,8 @@ parse_declarations() {
 
 # ── Collect the two sets ────────────────────────────────────────────────────────────────────────
 FILE_VERSIONS=""      # every migration file's own version
-DECLARED_VERSIONS=""  # every version any file declares
+DECLARED_VERSIONS=""  # every version some file DECLARES
+ALL_NAMED_VERSIONS="" # every version any call names, declaration or reclassification
 PROBLEMS=""
 
 shopt -s nullglob
@@ -133,7 +141,7 @@ for f in "${FILES[@]}"; do
     esac
     FILE_VERSIONS="${FILE_VERSIONS}${fver}"$'\n'
 
-    while IFS=$'\t' read -r ver cls rsn; do
+    while IFS=$'\t' read -r ver cls rsn kind; do
         [ -z "${ver}${cls}${rsn}" ] && continue
 
         if [ "$ver" = '!MALFORMED' ]; then
@@ -143,7 +151,10 @@ for f in "${FILES[@]}"; do
 
         [ "$LIST_ONLY" -eq 1 ] && printf '%s\t%s\t%s\n' "$ver" "$cls" "$rsn"
 
-        DECLARED_VERSIONS="${DECLARED_VERSIONS}${ver}"$'\n'
+        # A reclassification revises a version that already shipped; it never declares one.
+        [ "$kind" = "declare" ] && DECLARED_VERSIONS="${DECLARED_VERSIONS}${ver}"$'\n'
+        # Either kind must still name a REAL migration, so a typo is caught in both.
+        ALL_NAMED_VERSIONS="${ALL_NAMED_VERSIONS}${ver}"$'\n'
 
         # C — vocabulary and a reason that says something.
         if ! printf '%s\n' $VALID_CLASSES | grep -qx -- "$cls"; then
@@ -159,6 +170,7 @@ done
 
 FILE_SET="$(printf '%s' "$FILE_VERSIONS" | sort -u)"
 DECL_SET="$(printf '%s' "$DECLARED_VERSIONS" | sort -u)"
+NAMED_SET="$(printf '%s' "$ALL_NAMED_VERSIONS" | sort -u)"
 
 # A — a migration that says nothing.
 UNDECLARED="$(comm -23 <(printf '%s\n' "$FILE_SET") <(printf '%s\n' "$DECL_SET") | sed '/^$/d')"
@@ -170,11 +182,11 @@ if [ -n "$UNDECLARED" ]; then
 fi
 
 # B — a declaration pointing at no migration.
-GHOSTS="$(comm -13 <(printf '%s\n' "$FILE_SET") <(printf '%s\n' "$DECL_SET") | sed '/^$/d')"
+GHOSTS="$(comm -13 <(printf '%s\n' "$FILE_SET") <(printf '%s\n' "$NAMED_SET") | sed '/^$/d')"
 if [ -n "$GHOSTS" ]; then
     while read -r v; do
         [ -z "$v" ] && continue
-        PROBLEMS="${PROBLEMS}  ${v}: declared, but no migration file has that version. A copy-pasted or mistyped version argument."$'\n'
+        PROBLEMS="${PROBLEMS}  ${v}: named by a declare/reclassify call, but no migration file has that version. A copy-pasted or mistyped version argument."$'\n'
     done <<< "$GHOSTS"
 fi
 
