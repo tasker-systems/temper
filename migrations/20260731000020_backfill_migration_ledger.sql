@@ -537,13 +537,38 @@ SELECT declare_migration(20260730000010, 'shape-breaking',
 -- The NOT EXISTS guard means a database where the runner DID observe the apply keeps the real
 -- observation and gains no invented one. On a fresh database the runner writes pending→success as
 -- it goes, and this block then adds nothing at all.
-INSERT INTO kb_migration_ledger (version, state, reason, recorded_by)
-SELECT m.version,
-       'success',
-       'Retroactive. Inferred from the presence of a _sqlx_migrations row at backfill time, not observed by the runner — which did not exist when this migration ran.',
-       'backfill'
-  FROM _sqlx_migrations m
- WHERE NOT EXISTS (
-     SELECT 1 FROM kb_migration_ledger l
-      WHERE l.version = m.version AND l.state IS NOT NULL
- );
+--
+-- ── Why this is dynamic SQL and not a plain INSERT ──────────────────────────────────────────────
+-- `[observed — 2026-07-31, CI]` `_sqlx_migrations` is not guaranteed to exist when this migration
+-- runs. `crates/temper-substrate/tests/common/mod.rs::reset_schema` rebuilds the baseline with
+-- `DROP SCHEMA public CASCADE` — which takes sqlx's bookkeeping table with it — and then applies
+-- the migration FILES directly rather than through `MIGRATOR.run`, so that one migration can be
+-- excluded. Nothing recreates `_sqlx_migrations` on that path.
+--
+-- Postgres resolves relation names at PARSE time, and the simple query protocol parses the whole
+-- multi-statement file before executing any of it. So a plain `FROM _sqlx_migrations` fails the
+-- ENTIRE migration on that path — `relation "_sqlx_migrations" does not exist`, 32 test databases
+-- at once — and no in-statement guard can prevent it. `EXECUTE` defers resolution to run time,
+-- which is the only thing that can.
+--
+-- This is the honest semantics rather than a workaround: with no `_sqlx_migrations` there is no
+-- record of what was already applied, so there is nothing to infer retroactive state FROM. Those
+-- migrations keep a NULL state, which reads as "not observed" — never "did not happen".
+DO $backfill$
+BEGIN
+    IF to_regclass('public._sqlx_migrations') IS NOT NULL THEN
+        EXECUTE $q$
+            INSERT INTO kb_migration_ledger (version, state, reason, recorded_by)
+            SELECT m.version,
+                   'success',
+                   'Retroactive. Inferred from the presence of a _sqlx_migrations row at backfill time, not observed by the runner — which did not exist when this migration ran.',
+                   'backfill'
+              FROM _sqlx_migrations m
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM kb_migration_ledger l
+                  WHERE l.version = m.version AND l.state IS NOT NULL
+             )
+        $q$;
+    END IF;
+END
+$backfill$;
