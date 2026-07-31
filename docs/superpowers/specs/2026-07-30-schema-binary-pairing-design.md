@@ -240,8 +240,14 @@ The cross-check is deliberately **asymmetric**:
 ### 3. The deploy applies additive migrations; nothing else
 
 A migration declaring itself **additive** is applied during the build phase, by a binary that
-contains it. This is exact rather than a hedge: *additive* is **defined** as safe with any binary in
-either direction, so:
+contains it. This is exact rather than a hedge: *additive* is **defined** as safe for a binary that
+**does not carry this migration** — a lagging binary meeting the new schema. `[corrected —
+2026-07-31]` This previously read *"safe with any binary in either direction"*, which is not what
+any consequence below actually needs, and read strictly would make almost every feature migration
+shape-breaking (a new binary reading a column it just added fails against the schema that predates
+it) — leaving this very rule with almost nothing to apply. The clause it serves is named
+`a-migrations-compatibility-with-a-LAGGING-binary-is-stated-not-remembered`, and the census above
+counts 109 of 148 as additive, which is only reachable under the one-direction reading. So:
 
 - it cannot create a mismatch, by construction;
 - `vercel rollback` stays safe — an additive migration left in place under a rolled-back binary is
