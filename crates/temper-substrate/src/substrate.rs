@@ -19,13 +19,14 @@ pub struct Substrate {
     pub lens_id: LensId,
 }
 
+/// Connect to the development/production database.
+///
+/// Delegates rather than restating: temper-migrate's binary needs exactly this, and two copies of
+/// "read `DATABASE_URL`, fall back to the dev URL" would drift the moment either side changed. In
+/// tests, ephemeral databases are provided by `#[sqlx::test]` with `temper_substrate::MIGRATOR`
+/// applied to `public`.
 pub async fn connect() -> Result<PgPool> {
-    // The connection's search_path is the database default (`public`) in production, dev, and
-    // tests. No per-connection `SET search_path` is needed. In tests, ephemeral databases are
-    // provided by `#[sqlx::test]` with `temper_substrate::MIGRATOR` applied to `public`.
-    let url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://temper:temper@localhost:5437/temper_development".into());
-    Ok(PgPool::connect(&url).await?)
+    temper_migrate::connect().await
 }
 
 pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<CogmapId> {

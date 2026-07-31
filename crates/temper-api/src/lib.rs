@@ -12,4 +12,7 @@ pub mod routes;
 pub use routes::{create_app, create_internal_app, openapi_spec};
 
 /// Migrator used by `#[sqlx::test]` to create isolated per-test databases.
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+///
+/// Declared once, in temper-migrate; re-exported here so every existing
+/// `#[sqlx::test(migrator = "temper_api::MIGRATOR")]` keeps resolving.
+pub use temper_migrate::MIGRATOR;

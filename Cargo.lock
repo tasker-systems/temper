@@ -6025,6 +6025,7 @@ dependencies = [
  "sqlx",
  "temper-auth",
  "temper-core",
+ "temper-migrate",
  "temper-principal",
  "temper-services",
  "temper-substrate",
@@ -6264,6 +6265,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-migrate"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures-core",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "temper-principal"
 version = "0.1.0"
 dependencies = [
@@ -6295,6 +6307,7 @@ dependencies = [
  "temper-core",
  "temper-ingest",
  "temper-macros",
+ "temper-migrate",
  "temper-principal",
  "temper-substrate",
  "temper-workflow",
@@ -6315,7 +6328,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "futures-core",
  "schemars",
  "serde",
  "serde_json",
@@ -6324,6 +6336,7 @@ dependencies = [
  "sqlx",
  "temper-core",
  "temper-ingest",
+ "temper-migrate",
  "tokio",
  "uuid",
 ]
