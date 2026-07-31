@@ -543,13 +543,9 @@ mod tests {
     /// A system admin renames a context they cannot otherwise read — and acquires nothing by it.
     ///
     /// The clause is about **residue**, so the assertions are about what did *not* appear: no
-    /// *new* `kb_team_members` row, no `kb_access_grants` row, no change to `kb_contexts.owner_*`.
-    /// The membership check is a **delta** on purpose — every profile is born into exactly one
-    /// team, its own `personal-<handle>` pool (minted by `trg_sync_personal_team` on profile
-    /// creation, role `owner`), so a raw `count = 0` would fail on that structural baseline while
-    /// proving nothing about the rename. What the residue claim actually forbids is the rename
-    /// *adding* one. The sharpest assertion is the last — after the rename the admin still cannot
-    /// *read* the context, which is the same predicate that was false before they acted on it.
+    /// `kb_team_members` row, no `kb_access_grants` row, no change to `kb_contexts.owner_*`. The
+    /// sharpest of them is the last one — after the rename the admin still cannot *read* the
+    /// context, which is the same predicate that was false before they acted on it.
     #[sqlx::test(migrations = "../../migrations")]
     async fn system_admin_rename_leaves_no_ownership_residue(pool: PgPool) {
         let owner = mk_profile(&pool, "owner").await;
@@ -564,8 +560,16 @@ mod tests {
             "fixture precondition: the admin must NOT be able to read this context"
         );
 
-        // The admin's team footprint the instant *before* the rename. Born into `personal-admin`
-        // and nothing else, this is the baseline the residue claim measures against.
+        // The clause is about RESIDUE, so the measurement has to be a DELTA, not an absolute.
+        //
+        // This assertion was `assert_eq!(memberships, 0)` and could never pass: `kb_profiles`
+        // carries `trg_sync_personal_team`, which on INSERT creates a personal team with the new
+        // profile as its `owner`. So `mk_actor` gives the admin one membership before this test
+        // does anything, and the absolute-zero form was measuring the fixture rather than the act.
+        //
+        // The failure value said so: it reported 1, which is exactly the personal-team baseline —
+        // had the rename granted anything there would have been 2. The clause was satisfied the
+        // whole time; only its instrument was wrong.
         let memberships_before: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE profile_id = $1")
                 .bind(*admin)
@@ -587,7 +591,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             memberships_after, memberships_before,
-            "renaming granted the admin no new team membership"
+            "renaming granted the admin no membership it did not already hold"
         );
 
         let grants: i64 = sqlx::query_scalar(
