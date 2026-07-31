@@ -228,6 +228,17 @@ jobs:
       - name: Guard test — audit-migration-declarations
         run: bash .github/scripts/test-audit-migration-declarations.sh
 
+      # Spec §3's routing half depends on reading the SAME declaration the checker above reads,
+      # from a SECOND parser in a different language: the awk one runs here over migrations/*.sql,
+      # and a Rust twin runs inside the migration runner over the SQL the binary carries, because a
+      # PENDING migration's class is not in the database yet. The drift has teeth in one direction —
+      # a Rust half reading `additive` where the call says `shape-breaking` auto-applies an
+      # operator-gated migration, which is the 2026-07-30 outage re-entered through its own cure.
+      # Both halves answer to scripts/migration-declaration-corpus.txt; this is the awk side of that
+      # check, and migrate_ledger.rs::declaration_corpus_matches_the_shell is the Rust side.
+      - name: Guard test — migration-declaration parity (awk half of the shared corpus)
+        run: bash .github/scripts/test-migration-declaration-parity.sh
+
       # Spec §2. The cross-check runs the wire diff itself and prints its output, so there is one
       # step rather than two — but both harnesses run below, so a broken differ cannot hide behind
       # a cross-check that never reaches it.
@@ -254,6 +265,14 @@ jobs:
       # does not trigger a build.
       - name: Guard test — vercel-ignore-build (polarity + migration scoping)
         run: bash .github/scripts/test-vercel-ignore-build.sh
+
+      # Its sibling: ignore-build decides WHETHER to build, vercel-build decides what the build does
+      # to the schema. Three things live only in that script and would otherwise be exercised for
+      # the first time in a production deploy — which connection it migrates over (pooled would fail
+      # only under concurrency), what a missing DATABASE_URL means (skip, loudly), and that a halted
+      # run FAILS the deploy rather than shipping a binary ahead of its schema.
+      - name: Guard test — vercel-build (connection choice, skip, and the halt)
+        run: bash .github/scripts/test-vercel-build.sh
 
       # The gate itself needs cargo, so it runs in rust-quality; this harness stubs the generator
       # and therefore stays pure bash, which is what lets it live in this job at all.

@@ -3,6 +3,7 @@
   "framework": null,
   "installCommand": "cd packages/temper-cloud && bun install",
   "ignoreCommand": "sh scripts/vercel-ignore-build.sh",
+  "buildCommand": "sh scripts/vercel-build.sh",
   "build": {
     "env": {
       "SQLX_OFFLINE": "true"

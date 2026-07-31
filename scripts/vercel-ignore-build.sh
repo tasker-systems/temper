@@ -111,5 +111,24 @@ if printf '%s\n' "${changed}" | grep -q '^migrations/'; then
   exit 1
 fi
 
-echo "skip: preview with no migration change"
+# A change to what the BUILD DOES deserves the same rehearsal, by the same argument.
+#
+# The build stopped being a compile on 2026-07-31: `vercel.json`'s buildCommand now runs
+# `temper-substrate migrate --additive-only`, which applies schema. A change to that script,
+# or to the vercel.json that invokes it, is a change to a mechanism that can BLOCK OR BREAK
+# EVERY DEPLOY — and if only migration-carrying changesets built, such a change would first
+# execute on the merge to main, in production, having never run anywhere.
+#
+# That is not hypothetical: it is what the register already recorded about the preview path
+# itself, which sat provisioned and inert through its entire history until the canary shipped.
+# The same trap, one level in.
+#
+# `scripts/vercel-*.sh` deliberately includes THIS script. A canary whose own change skipped
+# its rehearsal would be the one file in the repo exempt from the rule it enforces.
+if printf '%s\n' "${changed}" | grep -qE '^(vercel\.json|scripts/vercel-[a-z0-9-]*\.sh)$'; then
+  echo "build: this changeset changes the build's own configuration — rehearsing it"
+  exit 1
+fi
+
+echo "skip: preview with no migration or build-configuration change"
 exit 0

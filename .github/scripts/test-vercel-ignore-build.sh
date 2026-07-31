@@ -41,6 +41,19 @@ expect "preview with an empty changeset skips" 0 VERCEL_ENV=preview CHANGED_PATH
 # A path merely CONTAINING the word must not count — only the migrations/ directory.
 expect "docs mentioning migrations do not trigger" 0 VERCEL_ENV=preview CHANGED_PATHS="docs/migrations-guide.md"
 
+# A change to what the BUILD DOES gets the same rehearsal. Since 2026-07-31 the buildCommand
+# applies schema, so a change there can block or break every deploy — and without this, such a
+# change would first execute on the merge to main, having never run anywhere.
+expect "preview building the build script builds" 1 VERCEL_ENV=preview CHANGED_PATHS="scripts/vercel-build.sh"
+expect "preview changing vercel.json builds"      1 VERCEL_ENV=preview CHANGED_PATHS="vercel.json"
+# Including this very script: a canary exempt from its own rule is the one file nothing rehearses.
+expect "preview changing the canary itself builds" 1 VERCEL_ENV=preview CHANGED_PATHS="scripts/vercel-ignore-build.sh"
+
+# Scoped, not fuzzy — a neighbouring path must not inherit the trigger.
+expect "a nested path under scripts/ does not trigger" 0 VERCEL_ENV=preview CHANGED_PATHS="scripts/install/install.sh"
+expect "an unrelated script does not trigger" 0 VERCEL_ENV=preview CHANGED_PATHS="scripts/classify-sqlx-calls.py"
+expect "a doc naming vercel.json does not trigger" 0 VERCEL_ENV=preview CHANGED_PATHS="docs/vercel.json.md"
+
 # Fail SAFE: an unknown environment builds rather than silently skipping.
 expect "unknown VERCEL_ENV builds" 1 VERCEL_ENV= CHANGED_PATHS="README.md"
 

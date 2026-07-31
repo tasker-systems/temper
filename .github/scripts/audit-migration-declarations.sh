@@ -61,10 +61,20 @@ cd "$(git rev-parse --show-toplevel)"
 # Overridable so the test harness can point the scan at a fixture directory.
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 
-# The vocabulary. `DEPLOYING.md` § "Every migration declares which of the two it is" is the prose
-# statement of the same two tokens, and the `migration_class` enum in `20260731000010` is the SQL
-# one. Three spellings is two too many, but the checker must run with no database and no toolchain,
-# so this copy is the price of that. Keep it in step with both.
+# The vocabulary. There are now FOUR spellings of these two tokens: the `migration_class` enum in
+# `20260731000010` (the SQL one), `DEPLOYING.md` § "Every migration declares which of the two it is"
+# (the prose one), this copy, and `ADDITIVE`/`SHAPE_BREAKING` in
+# `crates/temper-substrate/src/migrate_ledger.rs` (the router's, which decides whether a deploy may
+# apply a migration). Keep all four in step.
+#
+# THREE OF THE FOUR ARE THE PRICE OF RUNNING WITHOUT SOMETHING: this checker must run with no
+# database and no toolchain, and the router must decide about a PENDING migration, whose class is
+# not in the database yet. Neither can read the enum.
+#
+# Worth distinguishing from the parser duplication next door, which is dangerous enough to need a
+# shared corpus (`scripts/migration-declaration-corpus.txt`): a token renamed in SQL and not here
+# fails EVERY migration loudly, and one renamed in SQL and not in the router halts EVERY deploy
+# loudly. This drift announces itself. A parser that silently read the wrong class does not.
 VALID_CLASSES="additive shape-breaking"
 
 LIST_ONLY=0
@@ -141,7 +151,18 @@ for f in "${FILES[@]}"; do
     esac
     FILE_VERSIONS="${FILE_VERSIONS}${fver}"$'\n'
 
-    while IFS=$'\t' read -r ver cls rsn kind; do
+    # Split the four fields BY HAND rather than with `IFS=$'\t' read -r ver cls rsn kind`.
+    #
+    # Tab is an IFS *whitespace* character, so bash collapses a run of tabs into a single
+    # delimiter. A declaration with an EMPTY class token — `declare_migration(V, '', 'why')` —
+    # emits `V<TAB><TAB>why<TAB>declare`, and the collapsing read then shifts every field left:
+    # the reason lands in `cls`, and the check below reports "declares class 'why', which is not
+    # one of: …". The verdict stayed correct and the message named the wrong token, which is the
+    # kind of wrong that survives review. `[observed — 2026-07-31]`, from the parity harness.
+    while IFS= read -r rec; do
+        ver="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
+        cls="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+        rsn="${rest%%$'\t'*}"; kind="${rest#*$'\t'}"
         [ -z "${ver}${cls}${rsn}" ] && continue
 
         if [ "$ver" = '!MALFORMED' ]; then
