@@ -181,8 +181,23 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # depth 2, not 0. The wire diff needs ONE base revision, not 246 commits of history — a full
+      # clone is ~445 MB and this job exists to be cheap enough that nobody is ever tempted to scope
+      # it away. Depth 2 covers a push (HEAD~1); a pull_request gets its base fetched explicitly
+      # below, one commit deep.
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      # Named, visible, and separate so that "we could not get the base" shows up as this step
+      # failing rather than as a check quietly deciding nothing moved. sqlx-wire-diff.sh also
+      # attempts this fetch itself; if BOTH fail it exits 2, and the cross-check turns that into a
+      # failure whenever the change carries a migration. "I could not look" never renders as
+      # "nothing moved".
+      - name: Fetch the base revision (for the wire diff)
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
 
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh
@@ -212,6 +227,26 @@ jobs:
 
       - name: Guard test — audit-migration-declarations
         run: bash .github/scripts/test-audit-migration-declarations.sh
+
+      # Spec §2. The cross-check runs the wire diff itself and prints its output, so there is one
+      # step rather than two — but both harnesses run below, so a broken differ cannot hide behind
+      # a cross-check that never reaches it.
+      #
+      # Deliberately asymmetric: a wire move with nothing declaring shape-breaking FAILS, while a
+      # shape-breaking declaration with an empty wire diff PASSES (noted). The caches only see what
+      # a compile-checked query touches, so a real break can be invisible to them, and failing an
+      # honest over-declaration would train under-declaration — the behaviour that produced the
+      # 2026-07-30 outage.
+      - name: A migration's classification survives the compiler's record (cross-check)
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash .github/scripts/sqlx-schema-crosscheck.sh
+
+      - name: Guard test — sqlx-wire-diff
+        run: bash .github/scripts/test-sqlx-wire-diff.sh
+
+      - name: Guard test — sqlx-schema-crosscheck
+        run: bash .github/scripts/test-sqlx-schema-crosscheck.sh
 
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
