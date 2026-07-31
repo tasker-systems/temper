@@ -1483,10 +1483,12 @@ pub struct WayfindScopeQuery<'a> {
 /// this function only establishes scope.
 ///
 /// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
-/// macros (the same established exception as [`unified_search`] / [`vector_search`]). All tuning
-/// constants (α/β, the anchor prior κ, default/ceiling N, thin threshold, recall floor, and the
-/// per-anchor-kind normalization) live in the SQL function's `k` CTE, never here. Gate is in the SQL at
-/// every stage: a principal who can see no anchors gets zero rows, never an error.
+/// macros (the same established exception as [`unified_search`] / [`vector_search`]). Since Task 2 the
+/// region SCORING and per-map round-robin selection live in `wayfind_region_scores`; this SQL function
+/// only ASSEMBLES scope from the winners (member-deref) plus cold-start. All tuning constants (α/β, the
+/// anchor prior κ, default/ceiling N, thin threshold, recall floor, and the per-anchor-kind
+/// normalization) live in the SQL, never here. Gate is in the SQL at every stage: a principal who can
+/// see no anchors gets zero rows, never an error.
 pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Result<Vec<Uuid>> {
     let emb_text = q.embedding.map(format_pgvector);
     let ids: Vec<(Uuid,)> =
@@ -1504,14 +1506,15 @@ pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Resul
 }
 
 /// One candidate region's Stage-1 wayfind competition signal, as returned by
-/// `wayfind_region_diagnostics` (issue #585). This is the per-region scoring `wayfind_scope_ids`
-/// computes and then DISCARDS at its `top_regions` LIMIT — surfaced here keyed by map so the cross-map
-/// competition is observable. Substrate-local; read-only instrumentation, not a wire type.
+/// `wayfind_region_diagnostics` (issue #585). These are the per-region scores `wayfind_scope_ids`
+/// consumes but discards — surfaced here keyed by map so the cross-map competition is observable.
+/// Substrate-local; read-only instrumentation, not a wire type.
 ///
-/// The signal is the SAME blend `wayfind_scope_ids` selects on
-/// (`region_score = α·sal_norm + β·query_cos + κ·prior`), so `in_top_n` is exactly the flag "this
-/// region's members would be in the wayfind scope for this query" — the witness for "no single map
-/// monopolizes the top-N".
+/// Since Task 2 both functions read ONE scoring home (`wayfind_region_scores`), so `in_top_n` is
+/// exactly the flag "this region's members are in the wayfind scope for this query" — computed once,
+/// not mirrored. Selection is per-map round-robin over `region_score = α·sal_norm + β·query_cos +
+/// κ·prior`, so `in_top_n`'s per-map distribution is the witness for "no single map monopolizes the
+/// top-N".
 #[derive(Debug, Clone, PartialEq)]
 pub struct WayfindRegionDiagnosticRow {
     /// The candidate region (`kb_cogmap_regions.id`).
