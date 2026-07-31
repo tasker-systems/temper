@@ -30,17 +30,34 @@
 #   BEFORE the @vercel/rust builders (@vercel/static-build priority 0, @vercel/rust
 #   priority 1), which is why the schema is in place before any function is built.
 #
-# TWO CLAIMS THAT WERE HERE AND DID NOT SURVIVE MEASUREMENT `[observed — 2026-07-31]`
-#   "the previous deployment's build cache restored" — every build ends with `Build cache
-#   size 1.61 GB exceeds limit of 1.50 GB. Invalidating cache.`, so the NEXT one starts
-#   clean. Cold is the steady state, structurally, not occasionally.
+# THE @vercel/rust BUILDERS DO NOT SHARE THIS STEP'S TARGET DIRECTORY
+#   `[observed — 2026-07-31]` Settled by the temper-migrate extraction, which was an
+#   A/B on exactly this question. No log can answer it directly: those builders emit ZERO
+#   lines, so the ~6m they run is silent (dpl_DrKxz1F67xiPe1zztMerweYZ7QTE). The earlier
+#   note here inferred "they do not reuse it" from that silence, which is what BOTH answers
+#   look like — the inference happened to be right and was not evidence.
 #
-#   "compiling here warms the cache those builders use moments later rather than paying
-#   twice" — NOT ESTABLISHED, in either direction. The @vercel/rust builders emit ZERO
-#   lines to the build log (in dpl_DrKxz1F67xiPe1zztMerweYZ7QTE the log is silent for the
-#   whole ~6m they run), so nothing in any log says whether they share this step's target
-#   directory. Whichever it is, this step's own compile is now cheap: it builds
-#   temper-migrate, which does not link ort.
+#   The extraction removed ort, tokenizers, temper-core and temper-substrate from THIS
+#   step's compile. If the directory were shared, the builders had been getting all of that
+#   pre-built for free and would now have to build it themselves — ~3m more work:
+#
+#     dpl_DrKxz…  before  this step 2m55s   builders 5m56s   total 9m23s   cache 1.61 GB
+#     dpl_C6tEG…  after   this step 1m24s   builders 6m11s   total 8m04s   cache 1.23 GB
+#
+#   The builders moved +15s, not +3m. They were always compiling that base themselves, so
+#   the ~1m31s this step no longer spends is a real saving rather than work displaced
+#   downstream. (Totals reconcile: 1m31s saved − 15s = 1m16s ≈ the 1m19s observed.)
+#
+# AND THE BUILD CACHE NOW FITS, WHICH MAY MATTER MORE THAN THE MINUTE
+#   Before, EVERY build ended `Build cache size 1.61 GB exceeds limit of 1.50 GB.
+#   Invalidating cache.` — so the next one always started clean and cold was the steady
+#   state, structurally. Dropping ort from this step's target directory took the cache to
+#   1.23 GB, and dpl_C6tEG… is the first build here to report `Created build cache` and
+#   `Build cache uploaded` instead. A warm restore has NOT been observed yet — the first
+#   production build after the extraction still began clean, because its predecessor on
+#   that lineage carried the old oversized cache. Watch for `Restored build cache from
+#   previous deployment` on a subsequent build; if it appears, warm builds become possible
+#   here for the first time, and this step's cost drops again.
 #
 # WHY THE UNPOOLED URL
 #   sqlx's Migrator takes a Postgres advisory lock for exclusive access
