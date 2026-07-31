@@ -543,9 +543,13 @@ mod tests {
     /// A system admin renames a context they cannot otherwise read — and acquires nothing by it.
     ///
     /// The clause is about **residue**, so the assertions are about what did *not* appear: no
-    /// `kb_team_members` row, no `kb_access_grants` row, no change to `kb_contexts.owner_*`. The
-    /// sharpest of them is the last one — after the rename the admin still cannot *read* the
-    /// context, which is the same predicate that was false before they acted on it.
+    /// *new* `kb_team_members` row, no `kb_access_grants` row, no change to `kb_contexts.owner_*`.
+    /// The membership check is a **delta** on purpose — every profile is born into exactly one
+    /// team, its own `personal-<handle>` pool (minted by `trg_sync_personal_team` on profile
+    /// creation, role `owner`), so a raw `count = 0` would fail on that structural baseline while
+    /// proving nothing about the rename. What the residue claim actually forbids is the rename
+    /// *adding* one. The sharpest assertion is the last — after the rename the admin still cannot
+    /// *read* the context, which is the same predicate that was false before they acted on it.
     #[sqlx::test(migrations = "../../migrations")]
     async fn system_admin_rename_leaves_no_ownership_residue(pool: PgPool) {
         let owner = mk_profile(&pool, "owner").await;
@@ -560,19 +564,31 @@ mod tests {
             "fixture precondition: the admin must NOT be able to read this context"
         );
 
+        // The admin's team footprint the instant *before* the rename. Born into `personal-admin`
+        // and nothing else, this is the baseline the residue claim measures against.
+        let memberships_before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE profile_id = $1")
+                .bind(*admin)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
         let outcome = context_service::rename(&pool, admin, context, "Renamed By Admin")
             .await
             .expect("a system admin may rename a context they cannot read");
         assert!(outcome.renamed, "the rename actually happened");
         assert_eq!(outcome.slug, "renamed-by-admin");
 
-        let memberships: i64 =
+        let memberships_after: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE profile_id = $1")
                 .bind(*admin)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(memberships, 0, "renaming granted the admin no membership");
+        assert_eq!(
+            memberships_after, memberships_before,
+            "renaming granted the admin no new team membership"
+        );
 
         let grants: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM kb_access_grants \
