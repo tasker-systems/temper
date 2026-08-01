@@ -33,7 +33,7 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const FORM_CONTENT_TYPES = new Set([
 	'application/x-www-form-urlencoded',
 	'multipart/form-data',
-	'text/plain'
+	'text/plain',
 ]);
 
 /** The message SvelteKit's built-in check returns; preserved for parity. */

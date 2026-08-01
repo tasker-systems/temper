@@ -3,14 +3,14 @@ export * from './generated/access.ts';
 export * from './generated/context.ts';
 export * from './generated/invitation.ts';
 export * from './generated/profile.ts';
+export * from './generated/reassign.ts';
 export * from './generated/resource.ts';
 export * from './generated/search.ts';
-export * from './generated/reassign.ts';
-export * from './generated/team.ts';
 export * from './generated/serde_json/JsonValue.ts';
+export * from './generated/team.ts';
 
-import type { Profile } from './generated/profile.ts';
 import type { Entitlements } from './generated/access.ts';
+import type { Profile } from './generated/profile.ts';
 
 /**
  * Wire shape of `GET /api/profile` — Profile fields flattened with an

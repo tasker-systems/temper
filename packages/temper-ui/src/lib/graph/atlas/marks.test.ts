@@ -20,7 +20,7 @@ describe('groupByAxis', () => {
 		const { ideas, sources } = groupByAxis([
 			node('f1', 'cogmap'),
 			node('x1', 'context'),
-			node('f2', 'cogmap')
+			node('f2', 'cogmap'),
 		]);
 		expect(ideas.map((n) => n.id)).toEqual(['f1', 'f2']);
 		expect(sources.map((n) => n.id)).toEqual(['x1']);

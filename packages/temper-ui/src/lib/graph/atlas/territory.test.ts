@@ -1,7 +1,7 @@
 // territory.test.ts
-import { describe, it, expect } from 'vitest';
-import { isEmptyTerritory } from './territory';
+import { describe, expect, it } from 'vitest';
 import type { Territory } from '$lib/types/generated/graph_territory';
+import { isEmptyTerritory } from './territory';
 
 const t = (over: Partial<Territory>): Territory => ({
 	id: 'x',
@@ -11,7 +11,7 @@ const t = (over: Partial<Territory>): Territory => ({
 	salience: null,
 	coherence: null,
 	anchor_id: 'a',
-	...over
+	...over,
 });
 
 describe('isEmptyTerritory', () => {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-	resolveOidcConfig,
-	parseDiscovery,
 	buildAuthorizeUrl,
 	buildLogoutUrl,
 	decodeIdToken,
 	identityClaimsFromTokens,
-	type OidcTokenResponse
+	type OidcTokenResponse,
+	parseDiscovery,
+	resolveOidcConfig,
 } from './oidc-core';
 
 /** Build a real header.payload.signature JWT string, mirroring decodeIdToken's own tests. */
@@ -30,13 +30,13 @@ describe('resolveOidcConfig', () => {
 			AUTH0_DOMAIN: 'tenant.us.auth0.com',
 			AUTH0_CLIENT_ID: 'auth0-client',
 			AUTH0_CLIENT_SECRET: 'auth0-secret',
-			AUTH0_AUDIENCE: 'auth0-aud'
+			AUTH0_AUDIENCE: 'auth0-aud',
 		});
 		expect(cfg).toEqual({
 			issuer: 'https://org.okta.com/oauth2/abc',
 			clientId: 'oidc-client',
 			clientSecret: 'oidc-secret',
-			audience: 'oidc-aud'
+			audience: 'oidc-aud',
 		});
 	});
 
@@ -45,13 +45,13 @@ describe('resolveOidcConfig', () => {
 			AUTH0_DOMAIN: 'temperkb.us.auth0.com',
 			AUTH0_CLIENT_ID: 'auth0-client',
 			AUTH0_CLIENT_SECRET: 'auth0-secret',
-			AUTH0_AUDIENCE: 'https://api.temperkb.io'
+			AUTH0_AUDIENCE: 'https://api.temperkb.io',
 		});
 		expect(cfg).toEqual({
 			issuer: 'https://temperkb.us.auth0.com',
 			clientId: 'auth0-client',
 			clientSecret: 'auth0-secret',
-			audience: 'https://api.temperkb.io'
+			audience: 'https://api.temperkb.io',
 		});
 	});
 
@@ -59,7 +59,7 @@ describe('resolveOidcConfig', () => {
 		const cfg = resolveOidcConfig({
 			OIDC_ISSUER: 'https://org.okta.com/oauth2/abc',
 			OIDC_CLIENT_ID: 'c',
-			OIDC_CLIENT_SECRET: 's'
+			OIDC_CLIENT_SECRET: 's',
 		});
 		expect(cfg.audience).toBeUndefined();
 	});
@@ -69,7 +69,7 @@ describe('resolveOidcConfig', () => {
 			OIDC_ISSUER: 'https://org.okta.com/oauth2/abc',
 			OIDC_CLIENT_ID: 'c',
 			OIDC_CLIENT_SECRET: 's',
-			OIDC_AUDIENCE: ''
+			OIDC_AUDIENCE: '',
 		});
 		expect(cfg.audience).toBeUndefined();
 	});
@@ -78,43 +78,43 @@ describe('resolveOidcConfig', () => {
 		const cfg = resolveOidcConfig({
 			OIDC_ISSUER: 'https://org.okta.com/oauth2/abc/',
 			OIDC_CLIENT_ID: 'c',
-			OIDC_CLIENT_SECRET: 's'
+			OIDC_CLIENT_SECRET: 's',
 		});
 		expect(cfg.issuer).toBe('https://org.okta.com/oauth2/abc');
 	});
 
 	it('throws when no issuer can be resolved', () => {
-		expect(() =>
-			resolveOidcConfig({ OIDC_CLIENT_ID: 'c', OIDC_CLIENT_SECRET: 's' })
-		).toThrow(/issuer/i);
+		expect(() => resolveOidcConfig({ OIDC_CLIENT_ID: 'c', OIDC_CLIENT_SECRET: 's' })).toThrow(
+			/issuer/i,
+		);
 	});
 
 	it('throws when client id is missing', () => {
-		expect(() =>
-			resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_SECRET: 's' })
-		).toThrow(/client id/i);
+		expect(() => resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_SECRET: 's' })).toThrow(
+			/client id/i,
+		);
 	});
 
 	it('resolves clientSecret as undefined (does not throw) for a public PKCE client', () => {
 		const cfg = resolveOidcConfig({
 			OIDC_ISSUER: 'https://x',
 			OIDC_CLIENT_ID: 'c',
-			OIDC_PUBLIC_CLIENT: 'true'
+			OIDC_PUBLIC_CLIENT: 'true',
 		});
 		expect(cfg.clientSecret).toBeUndefined();
 	});
 
 	it('throws when no client secret is configured and OIDC_PUBLIC_CLIENT is unset', () => {
-		expect(() =>
-			resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_ID: 'c' })
-		).toThrow(/client secret/i);
+		expect(() => resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_ID: 'c' })).toThrow(
+			/client secret/i,
+		);
 	});
 
 	it('succeeds with clientSecret undefined when OIDC_PUBLIC_CLIENT=true', () => {
 		const cfg = resolveOidcConfig({
 			OIDC_ISSUER: 'https://x',
 			OIDC_CLIENT_ID: 'c',
-			OIDC_PUBLIC_CLIENT: 'true'
+			OIDC_PUBLIC_CLIENT: 'true',
 		});
 		expect(cfg.clientSecret).toBeUndefined();
 	});
@@ -123,7 +123,7 @@ describe('resolveOidcConfig', () => {
 		const cfg = resolveOidcConfig({
 			AUTH0_DOMAIN: 'tenant.us.auth0.com',
 			AUTH0_CLIENT_ID: 'auth0-client',
-			AUTH0_CLIENT_SECRET: 'auth0-secret'
+			AUTH0_CLIENT_SECRET: 'auth0-secret',
 		});
 		expect(cfg.clientSecret).toBe('auth0-secret');
 	});
@@ -133,7 +133,7 @@ describe('resolveOidcConfig', () => {
 			OIDC_ISSUER: 'https://as.example.com',
 			OIDC_CLIENT_ID: 'temper-ui',
 			OIDC_PUBLIC_CLIENT: 'true',
-			OIDC_DISCOVERY_URL: 'https://as.example.com/.well-known/oauth-authorization-server/'
+			OIDC_DISCOVERY_URL: 'https://as.example.com/.well-known/oauth-authorization-server/',
 		});
 		expect(cfg.discoveryUrl).toBe('https://as.example.com/.well-known/oauth-authorization-server');
 	});
@@ -142,7 +142,7 @@ describe('resolveOidcConfig', () => {
 		const cfg = resolveOidcConfig({
 			OIDC_ISSUER: 'https://org.okta.com/oauth2/abc',
 			OIDC_CLIENT_ID: 'c',
-			OIDC_CLIENT_SECRET: 's'
+			OIDC_CLIENT_SECRET: 's',
 		});
 		expect(cfg.discoveryUrl).toBeUndefined();
 	});
@@ -155,27 +155,27 @@ describe('parseDiscovery', () => {
 			token_endpoint: 'https://idp/token',
 			end_session_endpoint: 'https://idp/logout',
 			jwks_uri: 'https://idp/jwks',
-			extra_field_we_ignore: true
+			extra_field_we_ignore: true,
 		});
 		expect(endpoints).toEqual({
 			authorization_endpoint: 'https://idp/authorize',
 			token_endpoint: 'https://idp/token',
 			end_session_endpoint: 'https://idp/logout',
-			jwks_uri: 'https://idp/jwks'
+			jwks_uri: 'https://idp/jwks',
 		});
 	});
 
 	it('tolerates a missing end_session_endpoint (provider has no RP-initiated logout)', () => {
 		const endpoints = parseDiscovery({
 			authorization_endpoint: 'https://idp/authorize',
-			token_endpoint: 'https://idp/token'
+			token_endpoint: 'https://idp/token',
 		});
 		expect(endpoints.end_session_endpoint).toBeUndefined();
 	});
 
 	it('throws when a required endpoint is missing', () => {
 		expect(() => parseDiscovery({ token_endpoint: 'https://idp/token' })).toThrow(
-			/authorization_endpoint/
+			/authorization_endpoint/,
 		);
 	});
 
@@ -203,7 +203,7 @@ describe('buildAuthorizeUrl', () => {
 
 	it('includes audience when configured (Auth0)', () => {
 		const url = new URL(
-			buildAuthorizeUrl(endpoint, { ...base, audience: 'https://api' }, 's', 'c')
+			buildAuthorizeUrl(endpoint, { ...base, audience: 'https://api' }, 's', 'c'),
 		);
 		expect(url.searchParams.get('audience')).toBe('https://api');
 	});
@@ -219,8 +219,8 @@ describe('buildLogoutUrl', () => {
 		const url = new URL(
 			buildLogoutUrl('https://idp/logout', {
 				clientId: 'client-123',
-				returnTo: 'https://app/'
-			})
+				returnTo: 'https://app/',
+			}),
 		);
 		expect(url.origin + url.pathname).toBe('https://idp/logout');
 		expect(url.searchParams.get('post_logout_redirect_uri')).toBe('https://app/');
@@ -233,16 +233,16 @@ describe('buildLogoutUrl', () => {
 			buildLogoutUrl('https://idp/logout', {
 				clientId: 'client-123',
 				returnTo: 'https://app/',
-				idToken: 'the.id.token'
-			})
+				idToken: 'the.id.token',
+			}),
 		);
 		expect(url.searchParams.get('id_token_hint')).toBe('the.id.token');
 	});
 
 	it('falls back to returnTo when the provider has no end_session_endpoint', () => {
-		expect(
-			buildLogoutUrl(undefined, { clientId: 'client-123', returnTo: 'https://app/' })
-		).toBe('https://app/');
+		expect(buildLogoutUrl(undefined, { clientId: 'client-123', returnTo: 'https://app/' })).toBe(
+			'https://app/',
+		);
 	});
 });
 
@@ -271,13 +271,13 @@ describe('identityClaimsFromTokens', () => {
 			access_token: jwt(claims),
 			token_type: 'Bearer',
 			expires_in: 3600,
-			refresh_token: 'refresh-xyz'
+			refresh_token: 'refresh-xyz',
 			// no id_token — the Temper AS's /oauth/token response shape
 		};
 		expect(identityClaimsFromTokens(tokens)).toMatchObject({
 			sub: 'temper-as|abc',
 			email: 'a@b.com',
-			email_verified: true
+			email_verified: true,
 		});
 	});
 
@@ -288,7 +288,7 @@ describe('identityClaimsFromTokens', () => {
 			access_token: jwt(accessTokenClaims),
 			id_token: jwt(idTokenClaims),
 			token_type: 'Bearer',
-			expires_in: 3600
+			expires_in: 3600,
 		};
 		expect(identityClaimsFromTokens(tokens)).toMatchObject({ sub: 'auth0|123', email: 'a@b.com' });
 	});

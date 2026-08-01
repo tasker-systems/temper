@@ -1,4 +1,4 @@
-import { focusToken, type Focus } from './nav';
+import { type Focus, focusToken } from './nav';
 
 export interface CrumbSegment {
 	label: string;
@@ -51,7 +51,11 @@ export function crumbModel(input: CrumbInput): CrumbSegment[] {
 			segs.push({ label: label ?? 'Region', kind: 'territory', focusPath: encode(walked) });
 		} else if (f.kind === 'container') {
 			// A goal container's leaf is its title (resolved from the drill subgraph seed).
-			segs.push({ label: input.seedTitle ?? 'Container', kind: 'container', focusPath: encode(walked) });
+			segs.push({
+				label: input.seedTitle ?? 'Container',
+				kind: 'container',
+				focusPath: encode(walked),
+			});
 		} else if (f.kind === 'bucket') {
 			// A residual bucket carries no id/title — its label comes from the group value.
 			segs.push({ label: `Unfiled · ${f.value}`, kind: 'bucket', focusPath: encode(walked) });

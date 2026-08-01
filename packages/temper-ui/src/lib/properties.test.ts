@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeProperties, MANAGED_KEY_ORDER } from './properties';
+import { MANAGED_KEY_ORDER, mergeProperties } from './properties';
 
 describe('mergeProperties', () => {
 	it('puts doc_type first, always', () => {
@@ -11,7 +11,7 @@ describe('mergeProperties', () => {
 		const rows = mergeProperties(
 			{ 'temper-provenance': 'user-created', 'temper-stage': 'done' },
 			null,
-			'task'
+			'task',
 		);
 		// stage precedes provenance in MANAGED_KEY_ORDER despite sorting after it
 		expect(rows.map((r) => r.key)).toEqual(['doc_type', 'temper-stage', 'temper-provenance']);
@@ -47,7 +47,7 @@ describe('mergeProperties', () => {
 
 	it('handles both tiers absent', () => {
 		expect(mergeProperties(null, null, 'kernel_landmark')).toEqual([
-			{ key: 'doc_type', value: 'kernel_landmark', managed: true }
+			{ key: 'doc_type', value: 'kernel_landmark', managed: true },
 		]);
 	});
 
@@ -63,7 +63,7 @@ describe('mergeProperties', () => {
 			'temper-llm-run',
 			'temper-provenance',
 			'temper-branch',
-			'temper-pr'
+			'temper-pr',
 		]);
 	});
 });

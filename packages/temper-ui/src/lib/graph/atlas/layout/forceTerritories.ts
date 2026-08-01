@@ -1,4 +1,12 @@
-import { forceCenter, forceCollide, forceManyBody, forceSimulation, forceX, forceY, type SimulationNodeDatum } from 'd3-force';
+import {
+	forceCenter,
+	forceCollide,
+	forceManyBody,
+	forceSimulation,
+	forceX,
+	forceY,
+	type SimulationNodeDatum,
+} from 'd3-force';
 import type { Territory } from '$lib/types/generated/graph_territory';
 import type { PositionedTerritory } from './packTerritories';
 
@@ -30,11 +38,13 @@ function territoryRadius(t: Territory, maxWeight: number): number {
 
 export function forceTerritories(
 	territories: Territory[],
-	size: { width: number; height: number }
+	size: { width: number; height: number },
 ): PositionedTerritory[] {
 	if (territories.length === 0) return [];
 	const maxWeight = Math.max(
-		...territories.map((t) => (t.kind === 'region' ? (t.salience ?? 0) : Math.max(1, t.member_count)))
+		...territories.map((t) =>
+			t.kind === 'region' ? (t.salience ?? 0) : Math.max(1, t.member_count),
+		),
 	);
 	const n = territories.length;
 	const cx = size.width / 2;
@@ -49,14 +59,17 @@ export function forceTerritories(
 		member_count: t.member_count,
 		r: territoryRadius(t, maxWeight),
 		x: cx + Math.cos((i / Math.max(1, n)) * 2 * Math.PI) * spread,
-		y: cy + Math.sin((i / Math.max(1, n)) * 2 * Math.PI) * spread
+		y: cy + Math.sin((i / Math.max(1, n)) * 2 * Math.PI) * spread,
 	}));
 	const sim = forceSimulation(nodes)
 		.force('charge', forceManyBody().strength(-40))
 		.force('center', forceCenter(cx, cy))
 		.force('x', forceX(cx).strength(0.04))
 		.force('y', forceY(cy).strength(0.06))
-		.force('collide', forceCollide<SimTerritory>().radius((d) => d.r + LABEL_BAND / 2 + 3))
+		.force(
+			'collide',
+			forceCollide<SimTerritory>().radius((d) => d.r + LABEL_BAND / 2 + 3),
+		)
 		.stop();
 	for (let i = 0; i < TICKS; i++) sim.tick();
 	return nodes.map((d) => ({
@@ -68,6 +81,6 @@ export function forceTerritories(
 		y: d.y,
 		r: d.r,
 		salience: d.salience,
-		member_count: d.member_count
+		member_count: d.member_count,
 	}));
 }

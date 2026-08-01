@@ -102,7 +102,7 @@ export function resolveOidcConfig(env: EnvLike): OidcConfig {
 	// fast here rather than surface later as an opaque 401 from the provider.
 	if (!clientSecret && !isPublicClient) {
 		throw new Error(
-			'OIDC client secret not configured: set OIDC_CLIENT_SECRET (or AUTH0_CLIENT_SECRET), or set OIDC_PUBLIC_CLIENT=true for a public PKCE client'
+			'OIDC client secret not configured: set OIDC_CLIENT_SECRET (or AUTH0_CLIENT_SECRET), or set OIDC_PUBLIC_CLIENT=true for a public PKCE client',
 		);
 	}
 
@@ -111,7 +111,7 @@ export function resolveOidcConfig(env: EnvLike): OidcConfig {
 		clientId,
 		clientSecret: clientSecret ? clientSecret : undefined,
 		audience: audience ? audience : undefined,
-		discoveryUrl: rawDiscoveryUrl ? rawDiscoveryUrl.replace(/\/$/, '') : undefined
+		discoveryUrl: rawDiscoveryUrl ? rawDiscoveryUrl.replace(/\/$/, '') : undefined,
 	};
 }
 
@@ -157,7 +157,7 @@ export function buildAuthorizeUrl(
 	authorizationEndpoint: string,
 	params: AuthorizeParams,
 	state: string,
-	codeChallenge: string
+	codeChallenge: string,
 ): string {
 	const search = new URLSearchParams({
 		response_type: 'code',
@@ -170,7 +170,7 @@ export function buildAuthorizeUrl(
 		scope: 'openid profile email offline_access',
 		state,
 		code_challenge: codeChallenge,
-		code_challenge_method: 'S256'
+		code_challenge_method: 'S256',
 	});
 	if (params.audience) {
 		search.set('audience', params.audience);
@@ -192,14 +192,14 @@ export interface LogoutParams {
  */
 export function buildLogoutUrl(
 	endSessionEndpoint: string | undefined,
-	params: LogoutParams
+	params: LogoutParams,
 ): string {
 	if (!endSessionEndpoint) {
 		return params.returnTo;
 	}
 	const search = new URLSearchParams({
 		post_logout_redirect_uri: params.returnTo,
-		client_id: params.clientId
+		client_id: params.clientId,
 	});
 	if (params.idToken) {
 		search.set('id_token_hint', params.idToken);

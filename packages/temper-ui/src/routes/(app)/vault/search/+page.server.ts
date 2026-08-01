@@ -1,6 +1,6 @@
-import type { PageServerLoad } from './$types';
 import { apiGet } from '$lib/server/api';
 import type { ResourceListResponse } from '$lib/types';
+import type { PageServerLoad } from './$types';
 
 const DEFAULT_LIMIT = 50;
 
@@ -11,8 +11,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	const resources = await apiGet<ResourceListResponse>(
 		`/api/resources?${params}`,
-		locals.accessToken!
-	).catch(() => ({ rows: [], total: BigInt(0), facets: { doc_type: {} } } as ResourceListResponse));
+		locals.accessToken!,
+	).catch(() => ({ rows: [], total: BigInt(0), facets: { doc_type: {} } }) as ResourceListResponse);
 
 	return {
 		query: q,
@@ -21,7 +21,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		limit: Number(params.get('limit')),
 		offset: Number(params.get('offset') ?? 0),
 		facets: Object.fromEntries(
-			Object.entries(resources.facets.doc_type).map(([k, v]) => [k, Number(v ?? 0)])
-		) as Record<string, number>
+			Object.entries(resources.facets.doc_type).map(([k, v]) => [k, Number(v ?? 0)]),
+		) as Record<string, number>,
 	};
 };

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { ResourceRow } from './types/generated/resource';
 import {
-	contextHref,
 	contextGraphHref,
+	contextHref,
 	isContextGraphLocation,
 	isContextLocation,
 	resourceHref,
-	searchHref
+	searchHref,
 } from './vault-url';
-import type { ResourceRow } from './types/generated/resource';
 
 const ID = '019f420c-cf01-7bc1-87c9-09684b0fa69e';
 
@@ -36,7 +36,7 @@ function makeRow(partial: Partial<ResourceRow>): ResourceRow {
 		body_hash: null,
 		ingest_state: 'complete',
 		body_storage: 'derived',
-		...partial
+		...partial,
 	};
 }
 
@@ -57,9 +57,7 @@ describe('contextGraphHref', () => {
 	});
 
 	it('keeps the owner sigil but encodes the slug scope', () => {
-		expect(contextGraphHref('+acme-team', 'ops team')).toBe(
-			'/graph/+acme-team?context=ops%20team'
-		);
+		expect(contextGraphHref('+acme-team', 'ops team')).toBe('/graph/+acme-team?context=ops%20team');
 	});
 });
 
@@ -70,7 +68,7 @@ describe('resourceHref', () => {
 			context_slug: null,
 			cogmap_id: 'x',
 			cogmap_name: 'Map',
-			doc_type_name: 'concept'
+			doc_type_name: 'concept',
 		});
 		expect(resourceHref(row)).toBe(`/vault/r/${ID}`);
 	});
@@ -79,7 +77,7 @@ describe('resourceHref', () => {
 		const row = makeRow({
 			context_owner_ref: '@j-cole-taylor',
 			context_slug: 'temper',
-			doc_type_name: 'task'
+			doc_type_name: 'task',
 		});
 		expect(resourceHref(row)).toBe(`/vault/r/${ID}`);
 	});
@@ -110,15 +108,15 @@ describe('isContextLocation', () => {
 				{ owner: '@me', context: 'temper' },
 				at('/vault/@me/temper'),
 				'@me',
-				'temper'
-			)
+				'temper',
+			),
 		).toBe(true);
 	});
 
 	it('matches the Atlas door, where the context is the ?context= scope', () => {
-		expect(isContextLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper')).toBe(
-			true
-		);
+		expect(
+			isContextLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper'),
+		).toBe(true);
 	});
 
 	it('does not match a different owner or a different context', () => {
@@ -138,17 +136,27 @@ describe('isContextLocation', () => {
 				{ owner: '@me', context: 'temper' },
 				at('/vault/@me/temper?context=writing'),
 				'@me',
-				'writing'
-			)
+				'writing',
+			),
 		).toBe(false);
 	});
 
 	it('round-trips both builders, so the inverse cannot drift from them', () => {
 		expect(
-			isContextLocation({ owner: '@me', context: 'ops team' }, at(contextHref('@me', 'ops team')), '@me', 'ops team')
+			isContextLocation(
+				{ owner: '@me', context: 'ops team' },
+				at(contextHref('@me', 'ops team')),
+				'@me',
+				'ops team',
+			),
 		).toBe(true);
 		expect(
-			isContextLocation({ owner: '@me' }, at(contextGraphHref('@me', 'ops team')), '@me', 'ops team')
+			isContextLocation(
+				{ owner: '@me' },
+				at(contextGraphHref('@me', 'ops team')),
+				'@me',
+				'ops team',
+			),
 		).toBe(true);
 	});
 });
@@ -156,7 +164,7 @@ describe('isContextLocation', () => {
 describe('isContextGraphLocation', () => {
 	it('is true on the Atlas door for that context', () => {
 		expect(
-			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper')
+			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper'),
 		).toBe(true);
 	});
 
@@ -166,14 +174,14 @@ describe('isContextGraphLocation', () => {
 				{ owner: '@me', context: 'temper' },
 				at('/vault/@me/temper'),
 				'@me',
-				'temper'
-			)
+				'temper',
+			),
 		).toBe(false);
 	});
 
 	it('is false on the door for some other context', () => {
 		expect(
-			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=writing'), '@me', 'temper')
+			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=writing'), '@me', 'temper'),
 		).toBe(false);
 	});
 });

@@ -1,7 +1,6 @@
 // nav.test.ts
 import { describe, expect, it } from 'vitest';
 import {
-	focusToken,
 	activeFilterCount,
 	buildAscendUrl,
 	buildCogmapUrl,
@@ -12,26 +11,27 @@ import {
 	buildDrillTerritoriesUrl,
 	buildDrillTerritoryUrl,
 	buildEdgeSelectUrl,
-	buildNodeSelectUrl,
 	buildFiltersUrl,
 	buildHomeLensUrl,
 	buildHomeUrl,
+	buildNodeSelectUrl,
+	buildPanoramaUrl,
 	buildScopeFilterUrl,
 	clearHomeLensUrl,
 	clearScopeFilterUrl,
-	buildPanoramaUrl,
 	clearSelectionUrl,
 	deriveTier,
+	focusToken,
 	parseCogmap,
 	parseContextScope,
 	parseFilters,
 	parseFocus,
-	territoryIds,
 	parseFocusPath,
 	parseHomeLens,
 	parseScopeFilter,
 	parseSelection,
-	selectedElement
+	selectedElement,
+	territoryIds,
 } from './nav';
 
 const url = (qs: string) => new URL(`https://x/graph/@me${qs}`);
@@ -117,10 +117,10 @@ describe('edge selection (?sel)', () => {
 	});
 	it('buildEdgeSelectUrl / buildNodeSelectUrl set ?sel, leave ?focus intact', () => {
 		expect(buildEdgeSelectUrl(url('?focus=node:n1'), 'e9')).toBe(
-			'/graph/@me?focus=node%3An1&sel=edge%3Ae9'
+			'/graph/@me?focus=node%3An1&sel=edge%3Ae9',
 		);
 		expect(buildNodeSelectUrl(url('?focus=territory:R'), 'c9')).toBe(
-			'/graph/@me?focus=territory%3AR&sel=node%3Ac9'
+			'/graph/@me?focus=territory%3AR&sel=node%3Ac9',
 		);
 	});
 	it('clearSelectionUrl drops ?sel', () => {
@@ -129,26 +129,33 @@ describe('edge selection (?sel)', () => {
 	it('selectedElement prefers edge sel, else focus node', () => {
 		expect(selectedElement({ kind: 'node', id: 'n1' }, url('?sel=edge:e9'))).toEqual({
 			kind: 'edge',
-			id: 'e9'
+			id: 'e9',
 		});
-		expect(selectedElement({ kind: 'node', id: 'n1' }, url(''))).toEqual({ kind: 'node', id: 'n1' });
+		expect(selectedElement({ kind: 'node', id: 'n1' }, url(''))).toEqual({
+			kind: 'node',
+			id: 'n1',
+		});
 		expect(selectedElement({ kind: 'none' }, url(''))).toEqual({ kind: 'none' });
 	});
 });
 
 describe('filters', () => {
 	it('parses edge_kinds + doc_types CSV', () => {
-		expect(parseFilters(url('?edge_kinds=derived,contains&doc_types=task,goal').searchParams)).toEqual({
+		expect(
+			parseFilters(url('?edge_kinds=derived,contains&doc_types=task,goal').searchParams),
+		).toEqual({
 			lensId: null,
 			edgeKinds: ['derived', 'contains'],
-			docTypes: ['task', 'goal']
+			docTypes: ['task', 'goal'],
 		});
 	});
 	it('buildFiltersUrl sets/clears CSV params', () => {
 		expect(buildFiltersUrl(url('?cogmap=c1'), { edgeKinds: ['derived'] })).toBe(
-			'/graph/@me?cogmap=c1&edge_kinds=derived'
+			'/graph/@me?cogmap=c1&edge_kinds=derived',
 		);
-		expect(buildFiltersUrl(url('?cogmap=c1&edge_kinds=derived'), { edgeKinds: [] })).toBe('/graph/@me?cogmap=c1');
+		expect(buildFiltersUrl(url('?cogmap=c1&edge_kinds=derived'), { edgeKinds: [] })).toBe(
+			'/graph/@me?cogmap=c1',
+		);
 	});
 });
 
@@ -166,16 +173,22 @@ describe('focus-as-path', () => {
 	it('parses a territory→node path', () => {
 		expect(parseFocusPath(url('?focus=territory:R,node:N'))).toEqual([
 			{ kind: 'territory', id: 'R' },
-			{ kind: 'node', id: 'N' }
+			{ kind: 'node', id: 'N' },
 		]);
 	});
 	it('parseFocus returns the leaf segment', () => {
-		expect(parseFocus(url('?focus=territory:R,node:N').searchParams)).toEqual({ kind: 'node', id: 'N' });
-		expect(parseFocus(url('?focus=territory:R').searchParams)).toEqual({ kind: 'territory', id: 'R' });
+		expect(parseFocus(url('?focus=territory:R,node:N').searchParams)).toEqual({
+			kind: 'node',
+			id: 'N',
+		});
+		expect(parseFocus(url('?focus=territory:R').searchParams)).toEqual({
+			kind: 'territory',
+			id: 'R',
+		});
 	});
 	it('drillNode appends when a territory leaf is present', () => {
 		expect(buildDrillNodeUrl(url('?focus=territory:R'), 'N')).toBe(
-			'/graph/@me?focus=territory%3AR%2Cnode%3AN'
+			'/graph/@me?focus=territory%3AR%2Cnode%3AN',
 		);
 	});
 	it('drillNode sets directly when drilled from panorama', () => {
@@ -183,21 +196,17 @@ describe('focus-as-path', () => {
 	});
 	it('drillNode replaces a trailing node leaf while KEEPING a territory prefix', () => {
 		expect(buildDrillNodeUrl(url('?focus=territory:R,node:N'), 'N2')).toBe(
-			'/graph/@me?focus=territory%3AR%2Cnode%3AN2'
+			'/graph/@me?focus=territory%3AR%2Cnode%3AN2',
 		);
 	});
 	it('drillNode replaces a bare node leaf with no prefix', () => {
-		expect(buildDrillNodeUrl(url('?focus=node:N'), 'N2')).toBe(
-			'/graph/@me?focus=node%3AN2'
-		);
+		expect(buildDrillNodeUrl(url('?focus=node:N'), 'N2')).toBe('/graph/@me?focus=node%3AN2');
 	});
 	it('drillTerritory sets the first hop', () => {
 		expect(buildDrillTerritoryUrl(url(''), 'R')).toBe('/graph/@me?focus=territory%3AR');
 	});
 	it('ascend pops one segment', () => {
-		expect(buildAscendUrl(url('?focus=territory:R,node:N'))).toBe(
-			'/graph/@me?focus=territory%3AR'
-		);
+		expect(buildAscendUrl(url('?focus=territory:R,node:N'))).toBe('/graph/@me?focus=territory%3AR');
 		expect(buildAscendUrl(url('?focus=territory:R'))).toBe('/graph/@me');
 	});
 });
@@ -230,7 +239,9 @@ describe('scope filter (?scope)', () => {
 	});
 
 	it('builds a scope filter preserving the committed lens', () => {
-		expect(buildScopeFilterUrl(u('?home=build'), '+tasker')).toBe('/graph/@me?home=build&scope=%2Btasker');
+		expect(buildScopeFilterUrl(u('?home=build'), '+tasker')).toBe(
+			'/graph/@me?home=build&scope=%2Btasker',
+		);
 	});
 
 	it('clears the scope filter, keeping the lens', () => {
@@ -263,7 +274,7 @@ describe('territory union (Beat D)', () => {
 	it('add unions into the territory leaf and round-trips', () => {
 		expect(idsAfter(buildDrillTerritoryUrl(u('?focus=territory:A'), 'B', { add: true }))).toEqual([
 			'A',
-			'B'
+			'B',
 		]);
 	});
 
@@ -287,7 +298,9 @@ describe('context door', () => {
 	});
 
 	it('entering a context clears any focus', () => {
-		expect(buildContextUrl(u('/graph/@me?focus=node:abc'), 'temper')).toBe('/graph/@me?context=temper');
+		expect(buildContextUrl(u('/graph/@me?focus=node:abc'), 'temper')).toBe(
+			'/graph/@me?context=temper',
+		);
 	});
 
 	it('parses a container focus and puts it on tier 1', () => {
@@ -307,13 +320,13 @@ describe('context door', () => {
 		expect(parseFocus(new URL(`http://x${url}`).searchParams)).toEqual({
 			kind: 'bucket',
 			groupKey: 'stage',
-			value: 'in:progress'
+			value: 'in:progress',
 		});
 	});
 
 	it('builds a container drill', () => {
 		expect(buildDrillContainerUrl(u('/graph/@me?context=temper'), '9f2e')).toBe(
-			'/graph/@me?context=temper&focus=container%3A9f2e'
+			'/graph/@me?context=temper&focus=container%3A9f2e',
 		);
 	});
 });
@@ -330,7 +343,7 @@ describe('focusToken', () => {
 
 	it('serializes a bucket by (groupKey, value), never undefined', () => {
 		expect(focusToken({ kind: 'bucket', groupKey: 'doc_type', value: 'session' })).toBe(
-			'bucket:doc_type:session'
+			'bucket:doc_type:session',
 		);
 	});
 
@@ -339,7 +352,7 @@ describe('focusToken', () => {
 			{ kind: 'node', id: 'n1' },
 			{ kind: 'territory', id: 't1' },
 			{ kind: 'container', id: 'c1' },
-			{ kind: 'bucket', groupKey: 'stage', value: 'in:progress' }
+			{ kind: 'bucket', groupKey: 'stage', value: 'in:progress' },
 		];
 		for (const f of kinds) {
 			const params = new URLSearchParams({ focus: focusToken(f) });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { forceNeighborhood } from './forceNeighborhood';
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+import { forceNeighborhood } from './forceNeighborhood';
 
 // Beat D: the radial force pulls context-resources (builder axis) to an outer ring
 // and cogmap facets (ideas) to the center. This is deterministic (ring init, no
@@ -17,7 +17,7 @@ function edge(id: string, source: string, target: string) {
 		edge_kind: 'express',
 		polarity: 'forward',
 		label: 'derived_from',
-		weight: 1
+		weight: 1,
 	};
 }
 
@@ -28,10 +28,10 @@ describe('forceNeighborhood radial-by-home', () => {
 				node('f1', 'cogmap'),
 				node('f2', 'cogmap'),
 				node('c1', 'context'),
-				node('c2', 'context')
+				node('c2', 'context'),
 			],
 			// each facet derived_from a context doc; facets linked to each other
-			edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')]
+			edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')],
 		} as AtlasSubgraph;
 
 		const size = { width: 800, height: 800 };
@@ -54,15 +54,20 @@ describe('forceNeighborhood radial-by-home', () => {
 			node('f1', 'cogmap'),
 			node('f2', 'cogmap'),
 			node('c1', 'context'),
-			node('c2', 'context')
+			node('c2', 'context'),
 		],
-		edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')]
+		edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')],
 	} as AtlasSubgraph;
 
 	it('inverts the radial when coreHome is context', () => {
-		const laid = forceNeighborhood(mixedSubgraph, [], { width: 1040, height: 620, coreHome: 'context' });
+		const laid = forceNeighborhood(mixedSubgraph, [], {
+			width: 1040,
+			height: 620,
+			coreHome: 'context',
+		});
 		const mean = (home: string) => {
-			const rs = laid.nodes.filter((n) => n.home === home)
+			const rs = laid.nodes
+				.filter((n) => n.home === home)
 				.map((n) => Math.hypot(n.x - 520, n.y - 310));
 			return rs.reduce((a, b) => a + b, 0) / rs.length;
 		};
@@ -73,7 +78,8 @@ describe('forceNeighborhood radial-by-home', () => {
 	it('defaults to coreHome cogmap — Beat D behaviour is unchanged', () => {
 		const laid = forceNeighborhood(mixedSubgraph, [], { width: 1040, height: 620 });
 		const mean = (home: string) => {
-			const rs = laid.nodes.filter((n) => n.home === home)
+			const rs = laid.nodes
+				.filter((n) => n.home === home)
 				.map((n) => Math.hypot(n.x - 520, n.y - 310));
 			return rs.reduce((a, b) => a + b, 0) / rs.length;
 		};

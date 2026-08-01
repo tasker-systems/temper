@@ -7,11 +7,11 @@
  * consumes the cookie to verify state and exchange the code for tokens.
  */
 
-import type { RequestHandler } from './$types';
+import { createHash, randomBytes } from 'node:crypto';
 import { redirect } from '@sveltejs/kit';
-import { randomBytes, createHash } from 'node:crypto';
 import { authorizeUrl } from '$lib/server/oidc';
 import { writePkce } from '$lib/server/session';
+import type { RequestHandler } from './$types';
 
 function base64url(buf: Buffer): string {
 	return buf.toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');

@@ -13,10 +13,10 @@
  * page.
  */
 
-import type { RequestHandler } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { exchangeCode, identityClaimsFromTokens } from '$lib/server/oidc';
-import { readPkce, clearPkce, writeSession } from '$lib/server/session';
+import { clearPkce, readPkce, writeSession } from '$lib/server/session';
+import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
 	const code = url.searchParams.get('code');
@@ -24,7 +24,10 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	const error = url.searchParams.get('error');
 
 	if (error) {
-		console.warn('OIDC callback returned error', { error, description: url.searchParams.get('error_description') });
+		console.warn('OIDC callback returned error', {
+			error,
+			description: url.searchParams.get('error_description'),
+		});
 		clearPkce(cookies);
 		throw redirect(303, '/?error=auth_failed');
 	}
@@ -42,13 +45,13 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	if (pkce.state !== state) {
 		console.warn('OIDC callback state mismatch — possible CSRF', {
 			expected: pkce.state,
-			received: state
+			received: state,
 		});
 		clearPkce(cookies);
 		throw redirect(303, '/?error=auth_state_mismatch');
 	}
 
-	let tokens;
+	let tokens: Awaited<ReturnType<typeof exchangeCode>>;
 	try {
 		tokens = await exchangeCode(code, pkce.verifier);
 	} catch (err) {
@@ -57,7 +60,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		throw redirect(303, '/?error=auth_exchange_failed');
 	}
 
-	let idTokenClaims;
+	let idTokenClaims: ReturnType<typeof identityClaimsFromTokens>;
 	try {
 		idTokenClaims = identityClaimsFromTokens(tokens);
 	} catch (err) {
@@ -70,7 +73,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		accessToken: tokens.access_token,
 		refreshToken: tokens.refresh_token ?? null,
 		idTokenClaims,
-		expiresAt: Math.floor(Date.now() / 1000) + tokens.expires_in
+		expiresAt: Math.floor(Date.now() / 1000) + tokens.expires_in,
 	});
 
 	clearPkce(cookies);

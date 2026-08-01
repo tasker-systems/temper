@@ -1,12 +1,12 @@
-import type { PageServerLoad } from './$types';
 import { error } from '@sveltejs/kit';
-import { apiGet, ApiError } from '$lib/server/api';
-import { readTrail, readResourceEdges } from '$lib/server/graph-reads';
 import { parseRef } from '$lib/ref';
-import type { ResourceDetail } from '$lib/types/resource-detail';
+import { ApiError, apiGet } from '$lib/server/api';
+import { readResourceEdges, readTrail } from '$lib/server/graph-reads';
 import type { ContentResponse } from '$lib/types';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { GraphEdgeRow } from '$lib/types/generated/graph';
+import type { ResourceDetail } from '$lib/types/resource-detail';
+import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	const accessToken = locals.accessToken!;
@@ -29,7 +29,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const [content, trail, edges] = await Promise.all([
 		apiGet<ContentResponse>(`/api/resources/${id}/content`, accessToken).then((r) => r.markdown),
 		readTrail(accessToken, 'node', id).catch((): EventTrail | null => null),
-		readResourceEdges(accessToken, id).catch((): GraphEdgeRow[] => [])
+		readResourceEdges(accessToken, id).catch((): GraphEdgeRow[] => []),
 	]);
 
 	return { resource, content, trail, edges };

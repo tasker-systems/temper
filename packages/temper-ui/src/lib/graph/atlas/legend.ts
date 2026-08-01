@@ -1,14 +1,15 @@
 // legend.ts
+
+import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
 import {
+	type AtlasDocType,
 	DOC_TYPE_HUES,
 	docTypeHue,
-	isAuthored,
 	EDGE_COLORS,
 	EDGE_KINDS,
 	edgeStyle,
-	type AtlasDocType
+	isAuthored,
 } from './palette';
-import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
 
 export interface LegendSwatch {
 	docType: string;
@@ -63,7 +64,7 @@ function legendEdge(overrides: Partial<AtlasEdge> = {}): AtlasEdge {
 		polarity: 'forward',
 		label: null,
 		weight: 1,
-		...overrides
+		...overrides,
 	};
 }
 
@@ -73,7 +74,7 @@ export function legendModel(): LegendModel {
 	const docTypes = (Object.keys(DOC_TYPE_HUES) as AtlasDocType[]).map((dt) => ({
 		docType: dt,
 		hue: docTypeHue(dt),
-		authored: isAuthored(dt)
+		authored: isAuthored(dt),
 	}));
 
 	const edgeKinds: EdgeKindSwatch[] = EDGE_KINDS.map((kind) => {
@@ -83,7 +84,7 @@ export function legendModel(): LegendModel {
 
 	const edgeColors: EdgeColorSwatch[] = Object.entries(EDGE_COLORS).map(([label, color]) => ({
 		label,
-		color
+		color,
 	}));
 
 	const forward = edgeStyle(legendEdge({ polarity: 'forward' }));
@@ -95,8 +96,8 @@ export function legendModel(): LegendModel {
 		{
 			label: 'near (symmetric)',
 			marker: near.markerStart || near.markerEnd ? 'end' : 'none',
-			color: near.color
-		}
+			color: near.color,
+		},
 	];
 
 	const weight: WeightSwatch[] = [1, 3, 5].map((w) => {
@@ -108,11 +109,11 @@ export function legendModel(): LegendModel {
 		docTypes,
 		home: [
 			{ label: 'cogmap-homed', filled: true },
-			{ label: 'context-homed', filled: false }
+			{ label: 'context-homed', filled: false },
 		],
 		edgeKinds,
 		edgeColors,
 		polarity,
-		weight
+		weight,
 	};
 }

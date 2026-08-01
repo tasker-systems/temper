@@ -15,12 +15,12 @@
 // harness/page contract lives). Nested payload types (AtlasSubgraph, TerritoryOverview, …)
 // are checked where components consume them via svelte-check.
 import { describe, expect, it } from 'vitest';
-import { resourceHref } from '$lib/vault-url';
-import type { AtlasViewData } from './viewData';
-import type { AtlasFixtureBundle } from '../../../routes/dev/atlas/+page';
 import type { HomeContext } from '$lib/types/generated/graph_home';
+import { resourceHref } from '$lib/vault-url';
 import { WORDS } from '../../../../scripts/atlas-synthetic-vocabulary.mjs';
 import bundleJson from '../../../../static/dev/atlas-fixtures.json';
+import type { AtlasFixtureBundle } from '../../../routes/dev/atlas/+page';
+import type { AtlasViewData } from './viewData';
 
 // Pinned to AtlasViewData: if the type gains/loses a field, this object stops
 // satisfying `Record<keyof AtlasViewData, true>` and `bun run check` fails, forcing
@@ -42,7 +42,7 @@ const REQUIRED_KEYS = {
 	filters: true,
 	focusPath: true,
 	crumbTerritory: true,
-	scopeFilter: true
+	scopeFilter: true,
 } satisfies Record<keyof AtlasViewData, true>;
 
 const EXPECTED_KEYS = Object.keys(REQUIRED_KEYS).sort();
@@ -65,7 +65,7 @@ const EXPECTED_SCENARIOS = [
 	'coldStartCogmap',
 	'sparseAnchor',
 	'residualDrill',
-	'nearEmptyAnchor'
+	'nearEmptyAnchor',
 ];
 
 const bundle = bundleJson as AtlasFixtureBundle;
@@ -272,7 +272,7 @@ describe('committed atlas fixtures', () => {
 			'taylor',
 			'self-cognition',
 			'019eea5e', // real personal-team id prefix
-			'agent-y23aqxuvzjysb5n8laueuigixoftcwyu'
+			'agent-y23aqxuvzjysb5n8laueuigixoftcwyu',
 		];
 		// Serialize scenarios only (skip _meta, whose note legitimately says "personal-data-free").
 		const haystack = JSON.stringify(scenarioNames.map(scenario)).toLowerCase();
@@ -294,7 +294,10 @@ describe('committed atlas fixtures', () => {
 
 		const check = (label: string, value: unknown) => {
 			if (typeof value !== 'string' || value.length === 0) return;
-			for (const token of value.toLowerCase().split(/[^a-z]+/).filter(Boolean)) {
+			for (const token of value
+				.toLowerCase()
+				.split(/[^a-z]+/)
+				.filter(Boolean)) {
 				if (!bank.has(token)) offenders.push(`${label}: ${JSON.stringify(value)}`);
 			}
 		};
@@ -322,7 +325,7 @@ describe('committed atlas fixtures', () => {
 		// Report every offender at once — fixing them one round-trip at a time is the slow way
 		// to discover that a whole field was missed.
 		expect(offenders.slice(0, 20), `un-sanitized free text (${offenders.length} total)`).toEqual(
-			[]
+			[],
 		);
 	});
 });

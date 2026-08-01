@@ -15,12 +15,31 @@ import type { AtlasEdge, NodeHome } from '$lib/types/generated/graph_atlas';
 import type { TerritoryKind } from '$lib/types/generated/graph_territory';
 
 export type AtlasDocType =
-	| 'concept' | 'fact' | 'domain' | 'principle' | 'commitment' | 'concern' | 'theme' | 'question'
-	| 'research' | 'task' | 'session' | 'goal' | 'decision' | 'memory';
+	| 'concept'
+	| 'fact'
+	| 'domain'
+	| 'principle'
+	| 'commitment'
+	| 'concern'
+	| 'theme'
+	| 'question'
+	| 'research'
+	| 'task'
+	| 'session'
+	| 'goal'
+	| 'decision'
+	| 'memory';
 
 /** Warm/authored — rendered filled. */
 export const AUTHORED_DOC_TYPES: ReadonlySet<AtlasDocType> = new Set([
-	'concept', 'fact', 'domain', 'principle', 'commitment', 'concern', 'theme', 'question'
+	'concept',
+	'fact',
+	'domain',
+	'principle',
+	'commitment',
+	'concern',
+	'theme',
+	'question',
 ]);
 
 /** Locked dark-canvas hues (light mode adds a contrast ring, not a hue fork). */
@@ -40,7 +59,7 @@ export const DOC_TYPE_HUES: Record<AtlasDocType, string> = {
 	session: '#7ed24a',
 	goal: '#3a8ae8',
 	decision: '#6a6ee8',
-	memory: '#2ec9b0'
+	memory: '#2ec9b0',
 };
 
 /** Neutral for unknown/absent doc-types. */
@@ -50,7 +69,7 @@ export const FALLBACK_HUE = '#9aa5b5';
 export const EDGE_COLORS = {
 	structural: '#8b93a5',
 	contradicts: '#d98a8a',
-	derived: '#5f6b86'
+	derived: '#5f6b86',
 } as const;
 
 /** Dark contrast ring applied to dots in light mode so pale hues read. */
@@ -70,7 +89,7 @@ export const LIGHT_MODE_RING = '#2a2f38';
 export const TERRITORY_TINTS: Record<TerritoryKind, string> = {
 	region: '#e0b060',
 	context: '#7dbae8',
-	cogmap: '#e8942e'
+	cogmap: '#e8942e',
 };
 
 /** Atlas canvas slate background. */
@@ -80,8 +99,16 @@ export const CANVAS_BG = '#1b1e26';
  * Atlas Home door tokens (spec Task 4). Cogmap door reuses the cogmap territory
  * hue (`TERRITORY_TINTS.cogmap`) so the door and the panorama wash agree.
  */
-export const TEAM_DOOR = { fill: 'rgba(58,138,232,0.13)', stroke: '#3a8ae8', ink: '#cfe0f6' } as const;
-export const COGMAP_DOOR = { fill: 'rgba(232,148,46,0.13)', stroke: '#e8942e', ink: '#f4d3a6' } as const;
+export const TEAM_DOOR = {
+	fill: 'rgba(58,138,232,0.13)',
+	stroke: '#3a8ae8',
+	ink: '#cfe0f6',
+} as const;
+export const COGMAP_DOOR = {
+	fill: 'rgba(232,148,46,0.13)',
+	stroke: '#e8942e',
+	ink: '#f4d3a6',
+} as const;
 
 const SALIENCE_FLOOR = 0.35;
 
@@ -95,7 +122,10 @@ export function isAuthored(docType: string | null): boolean {
 }
 
 /** A node's dot mark: hue by doc-type, filled vs outline by home. */
-export function nodeMark(docType: string | null, home: NodeHome): { color: string; filled: boolean } {
+export function nodeMark(
+	docType: string | null,
+	home: NodeHome,
+): { color: string; filled: boolean } {
 	return { color: docTypeHue(docType), filled: home === 'cogmap' };
 }
 
@@ -134,7 +164,7 @@ const KIND_DASH: Record<AtlasEdge['edge_kind'], string | null> = {
 	contains: null,
 	leads_to: '7 4',
 	express: '1 4',
-	near: '4 4'
+	near: '4 4',
 };
 
 /**
@@ -160,6 +190,6 @@ export function edgeStyle(edge: AtlasEdge): EdgeStyle {
 		width,
 		dash,
 		markerStart: !symmetric && edge.polarity === 'inverse',
-		markerEnd: !symmetric && edge.polarity === 'forward'
+		markerEnd: !symmetric && edge.polarity === 'forward',
 	};
 }

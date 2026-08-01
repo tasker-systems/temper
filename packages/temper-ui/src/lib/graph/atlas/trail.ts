@@ -21,18 +21,16 @@ export interface TrailRow {
  *  canonical dotted event type (e.g. "relationship.reweighted"); we show the
  *  trailing segment title-cased. Confidence is normalized (absent → null). */
 export function trailModel(trail: EventTrail): TrailRow[] {
-	return [...trail.events]
-		.reverse()
-		.map((e) => ({
-			id: e.event_id,
-			kind: humanizeKind(e.kind),
-			rawKind: e.kind,
-			actor: e.actor_entity_id,
-			actorName: e.actor_name,
-			occurredAt: e.occurred_at,
-			confidence: e.confidence ?? null,
-			payload: e.payload
-		}));
+	return [...trail.events].reverse().map((e) => ({
+		id: e.event_id,
+		kind: humanizeKind(e.kind),
+		rawKind: e.kind,
+		actor: e.actor_entity_id,
+		actorName: e.actor_name,
+		occurredAt: e.occurred_at,
+		confidence: e.confidence ?? null,
+		payload: e.payload,
+	}));
 }
 
 function humanizeKind(kind: string): string {

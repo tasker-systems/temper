@@ -1,6 +1,6 @@
-import type { PageServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { parseRef } from '$lib/ref';
+import type { PageServerLoad } from './$types';
 
 /**
  * Legacy context-shaped resource URL. Resolution was always trailing-UUID-only,

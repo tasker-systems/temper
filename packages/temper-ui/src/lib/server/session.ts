@@ -13,9 +13,9 @@
  * person" between requests.
  */
 
+import { createHash } from 'node:crypto';
 import type { Cookies } from '@sveltejs/kit';
 import { CompactEncrypt, compactDecrypt } from 'jose';
-import { createHash } from 'node:crypto';
 import { SESSION_SECRET } from '$env/static/private';
 import type { OidcIdTokenClaims } from './oidc';
 
@@ -83,7 +83,7 @@ export async function writeSession(cookies: Cookies, data: SessionData): Promise
 		httpOnly: true,
 		secure: true,
 		sameSite: 'lax',
-		maxAge: COOKIE_MAX_AGE_SECONDS
+		maxAge: COOKIE_MAX_AGE_SECONDS,
 	});
 }
 
@@ -113,7 +113,7 @@ export async function writePkce(cookies: Cookies, data: PkceData): Promise<void>
 		httpOnly: true,
 		secure: true,
 		sameSite: 'lax',
-		maxAge: PKCE_COOKIE_MAX_AGE_SECONDS
+		maxAge: PKCE_COOKIE_MAX_AGE_SECONDS,
 	});
 }
 

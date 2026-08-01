@@ -8,7 +8,7 @@ function req(
 	method: string,
 	contentType: string | null,
 	origin: string | null,
-	url = `${APP_ORIGIN}/some-action`
+	url = `${APP_ORIGIN}/some-action`,
 ): Request {
 	const headers = new Headers();
 	if (contentType !== null) headers.set('content-type', contentType);
@@ -23,8 +23,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'application/x-www-form-urlencoded', 'https://evil.example.com'),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(true);
 	});
 
@@ -32,14 +32,14 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'multipart/form-data; boundary=x', 'https://evil.example.com'),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(true);
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'text/plain', 'https://evil.example.com'),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(true);
 	});
 
@@ -48,8 +48,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 			expect(
 				isForbiddenCrossOriginFormPost(
 					req(method, 'application/x-www-form-urlencoded', 'https://evil.example.com'),
-					APP_ORIGIN
-				)
+					APP_ORIGIN,
+				),
 			).toBe(true);
 		}
 	});
@@ -58,8 +58,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'application/x-www-form-urlencoded', null),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(true);
 	});
 
@@ -67,8 +67,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'application/x-www-form-urlencoded', APP_ORIGIN),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(false);
 	});
 
@@ -76,8 +76,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'Application/X-WWW-Form-Urlencoded; charset=UTF-8', 'https://evil.example.com'),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(true);
 	});
 
@@ -85,8 +85,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('POST', 'application/json', 'https://evil.example.com'),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(false);
 	});
 
@@ -94,8 +94,8 @@ describe('isForbiddenCrossOriginFormPost', () => {
 		expect(
 			isForbiddenCrossOriginFormPost(
 				req('GET', 'application/x-www-form-urlencoded', 'https://evil.example.com'),
-				APP_ORIGIN
-			)
+				APP_ORIGIN,
+			),
 		).toBe(false);
 	});
 });

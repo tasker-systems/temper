@@ -34,7 +34,7 @@ interface Node {
 
 export function packCogmapTerritories(
 	orphans: OrphanNode[],
-	size: { width: number; height: number }
+	size: { width: number; height: number },
 ): CogmapTerritory[] {
 	if (orphans.length === 0) return [];
 
@@ -50,8 +50,8 @@ export function packCogmapTerritories(
 	const root = hierarchy<Node>({
 		children: [...groups.entries()].map(([cogmapId, facets]) => ({
 			cogmapId,
-			children: facets.map((orphan) => ({ orphan }))
-		}))
+			children: facets.map((orphan) => ({ orphan })),
+		})),
 	}).sum((d) => (d.orphan ? 1 : 0));
 
 	const packed = pack<Node>().size([size.width, size.height]).padding(14)(root);
@@ -64,7 +64,7 @@ export function packCogmapTerritories(
 			docType: leaf.data.orphan!.doc_type,
 			x: leaf.x,
 			y: leaf.y,
-			r: Math.max(4, leaf.r)
+			r: Math.max(4, leaf.r),
 		}));
 		// All facets in a group share anchor_id, so any element's anchor_label works.
 		const anchorLabel = group.children?.[0]?.data.orphan?.anchor_label;
@@ -75,7 +75,7 @@ export function packCogmapTerritories(
 			x: group.x,
 			y: group.y,
 			r: group.r,
-			facets
+			facets,
 		};
 	});
 }

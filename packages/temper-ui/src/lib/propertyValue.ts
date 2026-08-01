@@ -28,7 +28,7 @@ export function classifyValue(value: unknown): ClassifiedValue {
 		return {
 			kind: 'object',
 			entries,
-			summary: `{${entries.length} ${entries.length === 1 ? 'key' : 'keys'}}`
+			summary: `{${entries.length} ${entries.length === 1 ? 'key' : 'keys'}}`,
 		};
 	}
 

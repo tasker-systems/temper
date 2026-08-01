@@ -41,7 +41,7 @@ export function isContextLocation(
 	params: ContextLocationParams,
 	url: URL,
 	ownerRef: string,
-	slug: string
+	slug: string,
 ): boolean {
 	if (params.owner !== ownerRef) return false;
 	return (params.context ?? url.searchParams.get('context')) === slug;
@@ -52,7 +52,7 @@ export function isContextGraphLocation(
 	params: ContextLocationParams,
 	url: URL,
 	ownerRef: string,
-	slug: string
+	slug: string,
 ): boolean {
 	return isContextLocation(params, url, ownerRef, slug) && url.pathname.startsWith('/graph/');
 }

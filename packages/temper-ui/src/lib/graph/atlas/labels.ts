@@ -2,7 +2,7 @@
 export function labelAnchors(
 	nodes: { id: string; degree: number }[],
 	seedId: string,
-	k: number
+	k: number,
 ): Set<string> {
 	const ranked = nodes
 		.filter((n) => n.id !== seedId)
@@ -44,7 +44,7 @@ export function wrapLabel(text: string, cap: number, maxLines = 2): string[] {
 /** Salience → field intensity (0..1). Exponent > 1 widens the salient/tail separation. */
 export function intensityOf(salience: number | null, maxSalience: number): number {
 	if (maxSalience <= 0) return 0;
-	return Math.pow(Math.min(1, (salience ?? 0) / maxSalience), 1.4);
+	return Math.min(1, (salience ?? 0) / maxSalience) ** 1.4;
 }
 
 /** Field-effect style from intensity: brighter fill/stroke + wider glow for salient regions. */
@@ -53,7 +53,7 @@ export function fieldStyle(intensity: number, ghost: boolean) {
 	return {
 		fillOpacity: 0.05 + intensity * 0.3,
 		strokeOpacity: 0.25 + intensity * 0.5,
-		glowPx: 1 + intensity * 11
+		glowPx: 1 + intensity * 11,
 	};
 }
 
@@ -72,12 +72,12 @@ export function territoryWeight(t: { salience: number | null; member_count: numb
 /** The top-K regions by salience — the ones that draw an in-panorama label. */
 export function labeledRegionIds(
 	regions: { id: string; salience: number | null }[],
-	k: number
+	k: number,
 ): Set<string> {
 	return new Set(
 		[...regions]
 			.sort((a, b) => (b.salience ?? 0) - (a.salience ?? 0))
 			.slice(0, k)
-			.map((r) => r.id)
+			.map((r) => r.id),
 	);
 }
