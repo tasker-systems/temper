@@ -55,6 +55,12 @@ What to pick up next session
 EOF
 ```
 
+> **Every resource a session note names goes in as `[title](./<full-uuidv7>)`.** Session notes are
+> the most reference-dense documents anyone writes here, and `Connections` is nearly all references —
+> so this is where an abbreviated id does the most damage. A UUIDv7 prefix is a **timestamp**: the
+> goal and the task created a minute after it share their first seven characters, so a prefix names
+> whichever of them the reader guesses. See *Referencing Other Resources* in `SKILL.md`.
+
 Link the session to a task by updating the task's stage after saving:
 ```bash
 temper resource update <ref> --stage done
