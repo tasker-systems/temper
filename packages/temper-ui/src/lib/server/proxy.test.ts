@@ -80,7 +80,13 @@ describe('forwardRequest (passthrough)', () => {
 	// behaviors the platform rewrite used to handle: compression and redirects.
 	let server: Server;
 	let base: string;
-	let lastRequest: { method: string; url: string; body: string; auth: string | undefined };
+	let lastRequest: {
+		method: string;
+		url: string;
+		body: string;
+		auth: string | undefined;
+		traceparent: string | undefined;
+	};
 
 	beforeAll(async () => {
 		server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -91,7 +97,8 @@ describe('forwardRequest (passthrough)', () => {
 					method: req.method ?? '',
 					url: req.url ?? '',
 					body: Buffer.concat(chunks).toString('utf-8'),
-					auth: req.headers.authorization
+					auth: req.headers.authorization,
+					traceparent: req.headers.traceparent as string | undefined
 				};
 
 				if (req.url?.startsWith('/redirect')) {
@@ -167,6 +174,23 @@ describe('forwardRequest (passthrough)', () => {
 		);
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe('/landed');
+	});
+
+	it('forwards an inbound traceparent to the upstream unchanged', async () => {
+		const tp = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+		await forwardRequest(
+			base,
+			'/api/x',
+			'',
+			new Request('http://ui.local/api/x', { headers: { traceparent: tp } })
+		);
+		expect(lastRequest.traceparent).toBe(tp);
+	});
+
+	it('generates a well-formed W3C traceparent when the caller sent none', async () => {
+		await forwardRequest(base, '/api/x', '', new Request('http://ui.local/api/x'));
+		// version 00, 32-hex trace-id, 16-hex span-id, sampled.
+		expect(lastRequest.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
 	});
 });
 
