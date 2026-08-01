@@ -2,7 +2,7 @@ use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
     AdminSlackAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    InvocationCmd, ResourceAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    InvocationCmd, MemoryAction, ResourceAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -1172,6 +1172,75 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             SkillAction::Check => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 temper_cli::commands::skill::check(&config)
+            }
+        },
+        Commands::Memory { action } => match action {
+            MemoryAction::Status => {
+                let config = temper_cli::config::load_global_config()?;
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
+                })?;
+                rt.block_on(temper_cli::commands::memory::status(&config, output_format))
+            }
+            MemoryAction::Emit { path } => {
+                let config = temper_cli::config::load_global_config()?;
+                match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {
+                    temper_cli::commands::memory::emit::EmitOutcome::NotConfigured { reason } => {
+                        temper_cli::output::warning(reason);
+                        Ok(())
+                    }
+                    temper_cli::commands::memory::emit::EmitOutcome::Configured => {
+                        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                            temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
+                        })?;
+                        let written = rt.block_on(temper_cli::commands::memory::emit(
+                            &config,
+                            path.as_deref(),
+                        ))?;
+                        temper_cli::output::success(format!(
+                            "Memory index written: {}",
+                            written.display()
+                        ));
+                        Ok(())
+                    }
+                }
+            }
+            MemoryAction::Check { path } => {
+                let config = temper_cli::config::load_global_config()?;
+                match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {
+                    temper_cli::commands::memory::emit::EmitOutcome::NotConfigured { reason } => {
+                        temper_cli::output::warning(reason);
+                        Ok(())
+                    }
+                    temper_cli::commands::memory::emit::EmitOutcome::Configured => {
+                        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                            temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
+                        })?;
+                        match rt.block_on(temper_cli::commands::memory::check(
+                            &config,
+                            path.as_deref(),
+                        ))? {
+                            temper_cli::commands::memory::check::DriftVerdict::Match => {
+                                temper_cli::output::success("Memory index is up to date.");
+                                Ok(())
+                            }
+                            temper_cli::commands::memory::check::DriftVerdict::Absent => {
+                                temper_cli::output::warning(
+                                    "No memory index on disk yet — run `temper memory emit`.",
+                                );
+                                Ok(())
+                            }
+                            temper_cli::commands::memory::check::DriftVerdict::Drifted { diff } => {
+                                temper_cli::output::error("Memory index has drifted from Temper:");
+                                temper_cli::output::plain_err(diff);
+                                // Drain here too: `process::exit` runs no destructors, and this
+                                // arm is one of the counted exits, not an uncounted fifth.
+                                temper_telemetry::shutdown_telemetry();
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                }
             }
         },
         Commands::Pull { context } => commands::pull::run(&context),

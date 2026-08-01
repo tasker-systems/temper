@@ -58,6 +58,17 @@ fn render_outcome_registers(surface: &str) -> Result<String> {
 /// can never be a committed projection) and no values to interpolate. Templating it would buy a
 /// seam with nothing on either side of it.
 static MCP_SKILL_MD: &str = include_str!("../../skill-content/mcp/SKILL.md");
+/// The memory-discovery copy, CLI surface. Was briefly a shared `{% if %}` template with the MCP
+/// copy below; the two paragraphs turned out to share no prose and no interpolated value, so the
+/// `surface` parameter was only ever selecting between two fixed strings — a seam with nothing on
+/// either side of it, exactly what the `MCP_SKILL_MD` comment above already warns against. Two
+/// plain consts buy identical testability (`the_cli_skill_points_at_memory_status`,
+/// `the_mcp_skill_describes_the_convention_without_naming_a_context`) with less machinery.
+static MEMORIES_CLI_MD: &str = include_str!("../../skill-content/memories-cli.md");
+/// The memory-discovery copy, MCP surface. Config-free by construction: names the doc type and the
+/// two `open_meta` keys, never a CLI command or a user's context — see `MEMORIES_CLI_MD` above for
+/// why this is a plain const rather than the other branch of a shared template.
+static MEMORIES_MCP_MD: &str = include_str!("../../skill-content/mcp/memories.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
 static IMPLEMENTATION_GROUNDING_MD: &str =
@@ -798,6 +809,7 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "outcome-registers.md".to_string(),
         render_outcome_registers(SURFACE_MCP)?,
     );
+    files.insert("memories.md".to_string(), MEMORIES_MCP_MD.to_string());
     // Shipped to both surfaces verbatim: these three name no command on either, so they are the
     // same bytes in both trees rather than two renders of one template.
     files.insert(
@@ -1100,6 +1112,7 @@ pub fn generate_skill_files_with_hash(
         "session-lifecycle.md".to_string(),
         render_session_lifecycle(SURFACE_CLI)?,
     );
+    files.insert("memories.md".to_string(), MEMORIES_CLI_MD.to_string());
     files.insert(
         "cognitive-maps.md".to_string(),
         COGNITIVE_MAPS_MD.to_string(),
@@ -1237,6 +1250,7 @@ mod tests {
         assert!(files.contains_key("implementation-grounding.md"));
         assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("session-lifecycle.md"));
+        assert!(files.contains_key("memories.md"));
         assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("teams.md"));
         assert!(files.contains_key("knowledge-base.md"));
@@ -1302,6 +1316,7 @@ mod tests {
             [
                 "SKILL.md",
                 "implementation-grounding.md",
+                "memories.md",
                 "outcome-registers.md",
                 "plan-verification.md",
                 "references/frontmatter.md",
@@ -1317,6 +1332,61 @@ mod tests {
         assert!(
             !files.contains_key("knowledge-base.md"),
             "knowledge-base.md is hand-maintained; emitting it would clobber it"
+        );
+    }
+
+    // ── Memory-convention discovery (both audiences) ─────────────────────────
+    //
+    // These tests read `MEMORIES_CLI_MD`/`MEMORIES_MCP_MD` directly — not the whole rendered
+    // tree. The full MCP tree already contains `@me/<ctx>` placeholders throughout
+    // (`session-lifecycle.md`, `outcome-registers.md`, `SKILL.md` all use it as generic
+    // addressing syntax), so a whole-tree render would fail
+    // `the_mcp_skill_describes_the_convention_without_naming_a_context`'s negative assertions for
+    // reasons that have nothing to do with the memory copy itself. Scoping to the one const under
+    // test is what makes the assertion mean what it says.
+
+    #[test]
+    fn the_cli_skill_points_at_memory_status() {
+        let rendered = MEMORIES_CLI_MD;
+        assert!(
+            rendered.contains("temper memory status"),
+            "an unadopted machine learns the feature exists from the CLI skill"
+        );
+    }
+
+    #[test]
+    fn the_mcp_skill_describes_the_convention_without_naming_a_context() {
+        let rendered = MEMORIES_MCP_MD;
+        assert!(
+            rendered.contains("type `memory`"),
+            "Desktop needs to know the doc type"
+        );
+        assert!(
+            !rendered.contains("@me/"),
+            "the MCP tree is config-free; naming a user context removes its ability to be gated"
+        );
+        assert!(
+            !rendered.contains("temper memory"),
+            "Desktop has no CLI; pointing it at a CLI command is a dead end"
+        );
+    }
+
+    /// `memories.md` is shipped in both trees but is dead content unless each surface's router
+    /// names it — the same failure mode `every_shipped_guidance_file_is_named_by_the_router` and
+    /// `the_mcp_router_names_every_file_it_ships` guard against for every other supporting file.
+    #[test]
+    fn memories_md_is_named_by_both_routers() {
+        let cli_config = test_config();
+        let cli_files = generate_skill_files_with_hash(&cli_config, "testhash").unwrap();
+        assert!(
+            cli_files["SKILL.md"].contains("memories.md"),
+            "the CLI SKILL.md never mentions memories.md, so no session will read it"
+        );
+
+        let mcp_files = generate_agent_skill_files().unwrap();
+        assert!(
+            mcp_files["SKILL.md"].contains("memories.md"),
+            "the MCP SKILL.md never mentions memories.md, so no session will read it"
         );
     }
 

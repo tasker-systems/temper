@@ -6082,6 +6082,7 @@ dependencies = [
  "sigstore-trust-root",
  "sigstore-types",
  "sigstore-verify",
+ "similar",
  "temp-env",
  "temper-client",
  "temper-core",

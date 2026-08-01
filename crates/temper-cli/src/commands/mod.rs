@@ -13,6 +13,7 @@ pub mod facet;
 pub mod init;
 pub mod invitations;
 pub mod invocation;
+pub mod memory;
 pub mod pull;
 pub mod resource;
 pub mod search_cmd;

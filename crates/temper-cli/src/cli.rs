@@ -241,6 +241,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillAction,
     },
+    /// Manage the Claude Code memory projection
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
     /// Authenticate with temper cloud
     #[command(name = "auth")]
     Auth {
@@ -1801,6 +1806,29 @@ pub enum SkillAction {
         /// Directory to write the tree into (e.g. `agent-skills`)
         #[arg(long)]
         path: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemoryAction {
+    /// Report this machine's memory state — works whether or not you have opted in
+    Status,
+    /// Render the index from Temper and write it
+    Emit {
+        /// Override the configured index_path (for a machine mid-adoption)
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Check whether the on-disk index matches a fresh render — the LOCAL drift gate.
+    ///
+    /// The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can
+    /// diff it — this is the command a person or a hook runs instead, gating on the exit code.
+    /// Exits non-zero when the on-disk index has drifted from Temper.
+    Check {
+        /// Override the configured index_path — must match whatever `emit --path` last wrote,
+        /// or this checks a different file than the one that was written.
+        #[arg(long)]
+        path: Option<String>,
     },
 }
 

@@ -26,6 +26,7 @@ upfront; read only what the current task requires.
 - `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. Read when
   **authoring or amending a goal or sub-goal**, not to start a task
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
+- `memories.md` — This machine's `MEMORY.md`: what generates it, and how to check it for drift
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
 - `teams.md` — Working with teams: create, invite (email as correlator), list your invitations, join, roles, offboarding
@@ -320,3 +321,7 @@ Read `session-lifecycle.md` for:
 - Session end save pattern
 - Mid-session drift detection
 - Checkpoint prompts
+
+## Memories
+
+Read `memories.md` — this machine's `MEMORY.md` is a generated projection, not a hand-edited file.
