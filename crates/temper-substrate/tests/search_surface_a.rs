@@ -1272,6 +1272,69 @@ async fn vec_norm_does_not_pay_for_chunk_count(pool: sqlx::PgPool) {
     );
 }
 
+/// CHANNEL 2, UNSCOPED BRANCH — the aggregate must be taken over the resource's FULL current chunk
+/// set, never over `ann`. `ann` is the global top-k, so aggregating there conditions on the chunks
+/// that WON a slot, and conditioning on winners cannot correct a selection effect when the selection
+/// *is* the bias being corrected.
+///
+/// Same fixture as above, but with `p_k = 2` so the top-k admits only `long`'s single best chunk
+/// (0.28) and `short`'s only chunk (0.30) — `long`'s 19 poor chunks are cut.
+///
+/// **The bite:** aggregating over `ann` gives `long` n = 1, where the shrinkage factor is 0 AND
+/// `AVG` equals `MIN` identically — so the correction is a no-op twice over and `long` keeps its
+/// unpenalized 0.86 against `short`'s 0.85. Re-deriving over all 20 of `long`'s current chunks
+/// restores the penalty. This is the case the tiny-corpus witness above cannot see, because there
+/// `p_k = 100` admits every chunk and nothing is ever cut.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vec_norm_aggregates_over_full_chunk_set_not_the_admitted_slice(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "vectopk").await;
+
+    let short = mk_chunks(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "short",
+        "temper://vectopk/short",
+        vec![at_cos(0.70)],
+    )
+    .await;
+
+    let mut many = vec![at_cos(0.72)];
+    many.extend(std::iter::repeat_n(at_cos(0.40), 19));
+    let long = mk_chunks(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "long",
+        "temper://vectopk/long",
+        many,
+    )
+    .await;
+
+    // p_k = 2: only long's best chunk and short's single chunk are admitted.
+    let got = vector_candidates(&pool, owner.uuid(), &unit(0), 2).await;
+    let s = got
+        .iter()
+        .find(|(id, _)| *id == short.uuid())
+        .expect("short is admitted by the top-k")
+        .1;
+    let l = got
+        .iter()
+        .find(|(id, _)| *id == long.uuid())
+        .expect("long is admitted by the top-k")
+        .1;
+
+    assert!(
+        s > l,
+        "the shrinkage must be computed over all 20 of long's chunks, not the 1 that won a top-k \
+         slot — otherwise the correction is a no-op on exactly its target case: short={s} long={l}"
+    );
+}
+
 /// CHANNEL 1 — `ts_rank` flag 32 applies NO length normalization, so two documents containing the
 /// query term the same number of times score identically however much unrelated material one of them
 /// carries. Length then decides the blend, because `fts_norm` enters `unified_search` raw at

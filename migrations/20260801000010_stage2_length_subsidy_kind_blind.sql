@@ -63,10 +63,24 @@
 --     scores well above its own mean; it simply no longer scores at its unpenalized minimum. This is
 --     why the flat length-controlled alternatives were not taken: replacing MIN with AVG outright
 --     penalizes a long document for containing anything besides the answer.
---   * `count(*)` counts the draws that actually competed for the minimum — every current chunk in the
---     scoped branch, and in the unscoped branch only those that reached the global top-k pool. That is
---     the correct denominator in both cases, and it is why the same expression is right in each branch
---     despite the branches differing in what they admit.
+--   * The statistics must come from the resource's FULL current chunk set — every draw that competed —
+--     which is why the two branches compute them differently. In the SCOPED branch `ann` carries no
+--     top-k, so it already holds every current chunk of every scoped resource and a plain aggregate
+--     over it is correct. In the UNSCOPED branch `ann` is the global top-k, so aggregating over it
+--     would condition on the winners: `count(*)` would count the chunks that WON a slot rather than
+--     the draws that competed, and conditioning on winners cannot correct a selection effect when the
+--     selection IS the bias being corrected. That branch therefore re-derives MIN/AVG/N over all
+--     current chunks of the admitted resources.
+--
+--     This is not a theoretical nicety — it was measured, after the naive form was written and
+--     committed. Aggregating over `ann` in the unscoped branch leaves **75.3%** of scored
+--     resource-query pairs at n = 1, where the shrinkage factor is 0; and worse, at n = 1 `AVG` equals
+--     `MIN` identically, so `(AVG - MIN)` is **0.000000** and the correction is a no-op *no matter what
+--     the factor is*. Fixing only the denominator would therefore have fixed nothing. It was also
+--     mis-signed: a document placing many chunks in the top-k is broadly relevant and got penalized
+--     most, while the long document whose one lucky chunk placed high — the exact target case — got
+--     n = 1 and went uncorrected. Measured on plain search, the naive form scored **21.0%** distilled
+--     share against **22.0%** for making no vector change at all, and **27.5%** for the form below.
 --
 -- Measured on 20 real queries with REAL query vectors (via crates/temper-ingest/examples/
 -- query_vectors.rs, PR #604 — the affordance that made an end-to-end vector counterfactual possible
@@ -75,20 +89,26 @@
 -- returning zero distilled rows:
 --
 --   wayfind (--regions 3)      shipped 10.5% (13/20 zero)  ->  35.0% (3/20 zero)
---   plain search (no scope)    shipped 12.5% ( 7/20 zero)  ->  22.0% (4/20 zero)
+--   plain search (no scope)    shipped 12.5% ( 7/20 zero)  ->  27.5% (3/20 zero)
 --
 -- The two channels dominate in OPPOSITE modes, which is why both are changed together and neither is
 -- sufficient alone: in wayfind the vector arm is unbounded over the scope, so Channel 2 carries the
--- larger effect; in plain search resources compete for slots in a global top-k CHUNK pool, so a
--- one-chunk resource must win a slot outright and Channel 2 measured a 0.0-point change there. A
--- Channel-2-only fix would have looked like a large win and done nothing at all for plain search,
--- which is the majority of traffic.
+-- larger effect (+24.5); in plain search Channel 1 carries most of the gain, because resources there
+-- compete for slots in a global top-k CHUNK pool and a one-chunk resource must win a slot outright —
+-- an ADMISSION effect no change to the per-resource aggregate can undo. A Channel-2-only fix would
+-- have looked like a large win and done far less for plain search, which is the majority of traffic.
 --
--- WHAT THIS DOES NOT DO. It cannot reach material that never enters the scope. 15 of 385 regions in
--- the self-cognition map are ever selected, and 239 live distilled nodes are unreachable through the
--- region arm by any query (research 019fbb76-1a15-7e70-8ca9-74b23a0772a9, goal
--- 019fbb77-72a3-72e1-bbbd-13eb6aa64982). This improves the ranking of what was ADMITTED; region
--- formation is a separate question with a separate home.
+-- WHAT THIS DOES NOT DO. It cannot reach material that never enters the scope, and the size of that
+-- remainder is larger than the number first cited here. 15 of 385 regions in the self-cognition map
+-- are ever selected; of its 679 live visible nodes only 135 are ever reachable unscoped, so **544 are
+-- unreachable** — not the 239 singletons an earlier draft named, because non-selected MULTI-member
+-- regions contribute too (research 019fbbc0-90c5-71e3-9a88-990380168ba6, correcting
+-- 019fbb76-1a15-7e70-8ca9-74b23a0772a9; goal 019fbb77-72a3-72e1-bbbd-13eb6aa64982).
+--
+-- Nor does re-forming the regions rescue it: four formation regimes were materialized on a disposable
+-- branch and the best returns 78 of 679 distinct nodes against the incumbent's 58, with no arm making
+-- a singleton selectable at any width. Formation is not the binding constraint. This migration
+-- improves the ranking of what was ADMITTED, and that is the whole of its claim.
 --
 -- SCORES REMAIN COMPARABLE ACROSS QUERIES. Both corrections are per-row functions of a single
 -- document; neither is a window over the candidate set. Absolute magnitudes do change (the FTS arm
@@ -141,16 +161,27 @@ BEGIN
          ORDER BY c.embedding <=> p_emb
          LIMIT p_k
       )
-      -- Order statistic shrunk toward the mean by the draws that produced it.     -- ← CHANGED
-      SELECT a.resource_id,
-             (1.0 - (MIN(a.dist)
-                     + (AVG(a.dist) - MIN(a.dist)) * (1.0 - 1.0 / sqrt(count(*)::float8))
+      -- Admission is UNCHANGED: exactly the resource set the previous body returned, and the
+      -- visibility/active/complete predicates still land AFTER `LIMIT p_k` so the HNSW index is not
+      -- defeated. Only the score differs.
+      , admitted AS (
+        SELECT DISTINCT a.resource_id
+          FROM ann a
+          JOIN kb_resources r                      ON r.id = a.resource_id AND r.is_active
+                                                  AND r.ingest_state = 'complete'
+          JOIN resources_visible_to(p_principal) v ON v.resource_id = a.resource_id
+      )
+      -- Order statistic shrunk toward the mean by the draws that produced it. Re-derived over the
+      -- resource's FULL current chunk set, NOT over `ann` — `ann` is the top-k, so aggregating there
+      -- conditions on the winners and the correction collapses to a no-op (see header). -- ← CHANGED
+      SELECT ad.resource_id,
+             (1.0 - (MIN(c.embedding <=> p_emb)
+                     + (AVG(c.embedding <=> p_emb) - MIN(c.embedding <=> p_emb))
+                       * (1.0 - 1.0 / sqrt(count(*)::float8))
                     ) / 2.0)::real
-        FROM ann a
-        JOIN kb_resources r                      ON r.id = a.resource_id AND r.is_active
-                                                AND r.ingest_state = 'complete'
-        JOIN resources_visible_to(p_principal) v ON v.resource_id = a.resource_id
-       GROUP BY a.resource_id;
+        FROM admitted ad
+        JOIN kb_chunks c ON c.resource_id = ad.resource_id AND c.is_current
+       GROUP BY ad.resource_id;
   ELSE
     RETURN QUERY
       WITH scoped_res AS (
@@ -170,7 +201,9 @@ BEGIN
           JOIN scoped_res s ON s.id = c.resource_id
          WHERE p_emb IS NOT NULL AND c.is_current
       )
-      -- Order statistic shrunk toward the mean by the draws that produced it.     -- ← CHANGED
+      -- Order statistic shrunk toward the mean by the draws that produced it. Aggregating over `ann`
+      -- is correct HERE and only here: this branch's `ann` carries no top-k, so it already holds every
+      -- current chunk of every scoped resource — the full draw set.                -- ← CHANGED
       SELECT a.resource_id,
              (1.0 - (MIN(a.dist)
                      + (AVG(a.dist) - MIN(a.dist)) * (1.0 - 1.0 / sqrt(count(*)::float8))
@@ -187,5 +220,5 @@ $$;
 SELECT declare_migration(
     20260801000010,
     'additive',
-    'Stage-2 length subsidy removed kind-blind (goal 019fb559). search_fts_candidates ts_rank flag 32 -> 33 (log-length normalization); search_vector_candidates best-of-N shrunk toward the chunk mean by (1 - 1/sqrt(N)), an identity at N=1. Same signatures, same return shapes; ranking scores change.'
+    'Stage-2 length subsidy removed kind-blind (goal 019fb559). search_fts_candidates ts_rank flag 32 -> 33 (log-length normalization); search_vector_candidates best-of-N shrunk toward the chunk mean by (1 - 1/sqrt(N)), an identity at N=1, computed over the resource full current chunk set in both branches. Same signatures, same return shapes; ranking scores change.'
 );
