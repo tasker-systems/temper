@@ -10,8 +10,7 @@ use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::templates::{
-    CommandWrapperTemplate, MemoriesTemplate, OutcomeRegistersTemplate, SessionLifecycleTemplate,
-    SkillTemplate,
+    CommandWrapperTemplate, OutcomeRegistersTemplate, SessionLifecycleTemplate, SkillTemplate,
 };
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
@@ -52,10 +51,6 @@ fn render_outcome_registers(surface: &str) -> Result<String> {
     render_md(&OutcomeRegistersTemplate { surface })
 }
 
-fn render_memories(surface: &str) -> Result<String> {
-    render_md(&MemoriesTemplate { surface })
-}
-
 // ── Static content (compiled into the binary) ────────────────────────────────
 
 /// The MCP skill's router. A plain file, not a template, and deliberately so: it has no CLI twin
@@ -63,6 +58,17 @@ fn render_memories(surface: &str) -> Result<String> {
 /// can never be a committed projection) and no values to interpolate. Templating it would buy a
 /// seam with nothing on either side of it.
 static MCP_SKILL_MD: &str = include_str!("../../skill-content/mcp/SKILL.md");
+/// The memory-discovery copy, CLI surface. Was briefly a shared `{% if %}` template with the MCP
+/// copy below; the two paragraphs turned out to share no prose and no interpolated value, so the
+/// `surface` parameter was only ever selecting between two fixed strings — a seam with nothing on
+/// either side of it, exactly what the `MCP_SKILL_MD` comment above already warns against. Two
+/// plain consts buy identical testability (`the_cli_skill_points_at_memory_status`,
+/// `the_mcp_skill_describes_the_convention_without_naming_a_context`) with less machinery.
+static MEMORIES_CLI_MD: &str = include_str!("../../skill-content/memories-cli.md");
+/// The memory-discovery copy, MCP surface. Config-free by construction: names the doc type and the
+/// two `open_meta` keys, never a CLI command or a user's context — see `MEMORIES_CLI_MD` above for
+/// why this is a plain const rather than the other branch of a shared template.
+static MEMORIES_MCP_MD: &str = include_str!("../../skill-content/mcp/memories.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
 static IMPLEMENTATION_GROUNDING_MD: &str =
@@ -803,7 +809,7 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "outcome-registers.md".to_string(),
         render_outcome_registers(SURFACE_MCP)?,
     );
-    files.insert("memories.md".to_string(), render_memories(SURFACE_MCP)?);
+    files.insert("memories.md".to_string(), MEMORIES_MCP_MD.to_string());
     // Shipped to both surfaces verbatim: these three name no command on either, so they are the
     // same bytes in both trees rather than two renders of one template.
     files.insert(
@@ -1106,7 +1112,7 @@ pub fn generate_skill_files_with_hash(
         "session-lifecycle.md".to_string(),
         render_session_lifecycle(SURFACE_CLI)?,
     );
-    files.insert("memories.md".to_string(), render_memories(SURFACE_CLI)?);
+    files.insert("memories.md".to_string(), MEMORIES_CLI_MD.to_string());
     files.insert(
         "cognitive-maps.md".to_string(),
         COGNITIVE_MAPS_MD.to_string(),
@@ -1332,8 +1338,8 @@ mod tests {
     // ── Memory-convention discovery (both audiences) ─────────────────────────
 
     /// The two packagings this repo ships. Distinct from `SURFACE_CLI`/`SURFACE_MCP` (the `&str`
-    /// values `render_memories` actually takes) — this enum exists only to give the tests below a
-    /// typed, unambiguous caller.
+    /// constants used elsewhere) — this enum exists only to give the tests below a typed,
+    /// unambiguous caller.
     enum Surface {
         Cli,
         Mcp,
@@ -1345,20 +1351,21 @@ mod tests {
         test_config()
     }
 
-    /// Renders **only** the memory-discovery copy for a surface — not the whole tree.
+    /// Returns **only** the memory-discovery copy for a surface — not the whole tree.
     ///
     /// This matters: the full MCP tree already contains `@me/<ctx>` placeholders throughout
     /// (`session-lifecycle.md`, `outcome-registers.md`, `SKILL.md` all use it as generic
     /// addressing syntax), so a whole-tree render would fail
     /// `the_mcp_skill_describes_the_convention_without_naming_a_context`'s negative assertions for
-    /// reasons that have nothing to do with the memory copy itself. Scoping to the one template
-    /// under test is what makes the assertion mean what it says.
+    /// reasons that have nothing to do with the memory copy itself. Scoping to the one const under
+    /// test is what makes the assertion mean what it says. `_config` is accepted and unused: the
+    /// copy needs no interpolation, but keeping the parameter means a future config-derived value
+    /// (if one is ever needed here) has somewhere to land without changing every call site.
     fn render_skill_for(surface: Surface, _config: &Config) -> String {
-        let surface_str = match surface {
-            Surface::Cli => SURFACE_CLI,
-            Surface::Mcp => SURFACE_MCP,
-        };
-        render_memories(surface_str).expect("memories template renders")
+        match surface {
+            Surface::Cli => MEMORIES_CLI_MD.to_string(),
+            Surface::Mcp => MEMORIES_MCP_MD.to_string(),
+        }
     }
 
     #[test]

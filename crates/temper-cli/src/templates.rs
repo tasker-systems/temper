@@ -97,15 +97,3 @@ pub struct SessionLifecycleTemplate<'a> {
 pub struct OutcomeRegistersTemplate<'a> {
     pub surface: &'a str,
 }
-
-/// Makes the memory convention discoverable, for two audiences that need different things: a
-/// Claude Code machine has `MEMORY.md`, a config, and the CLI, so its copy may name commands; a
-/// Desktop/mobile/web client has none of that and reads memories natively as resources, so its
-/// copy names the doc type and never a CLI command or a user's context. The two paragraphs share
-/// no prose — this is a single file for one reason only: the router-mention wiring (`memories.md`
-/// named by both surfaces' SKILL.md) is identical, and a shared template keeps that in one place.
-#[derive(Template)]
-#[template(path = "shared/memories.md")]
-pub struct MemoriesTemplate<'a> {
-    pub surface: &'a str,
-}
