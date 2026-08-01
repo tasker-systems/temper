@@ -9,7 +9,41 @@ use crate::cli::Cli;
 use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
-use crate::templates::{CommandWrapperTemplate, SkillTemplate};
+use crate::templates::{CommandWrapperTemplate, SessionLifecycleTemplate, SkillTemplate};
+
+// ── Surfaces ─────────────────────────────────────────────────────────────────
+
+/// The two packagings of the same discipline. `cli` ships to `~/.claude/skills/temper/` and speaks
+/// `temper …` commands; `mcp` is the committed `agent-skills/` projection and speaks tool calls.
+///
+/// They exist as one template set because the discipline is about outcomes and grounding, which are
+/// surface-independent by design — only the worked examples differ. Two hand-maintained copies of
+/// the same prose is the drift this repo already has an open goal about, in a place where no
+/// equivalence test could see it.
+pub const SURFACE_CLI: &str = "cli";
+pub const SURFACE_MCP: &str = "mcp";
+
+/// Render a markdown template so it ends with exactly one newline.
+///
+/// askama strips a single trailing newline from the template file, so a template that ends the way
+/// every other file in this tree ends renders one byte short. That is invisible until something
+/// compares the render against a file on disk — which is exactly what the `agent-skills` drift gate
+/// does, where it would read as permanent, uncloseable drift. Normalising here rather than padding
+/// the template keeps the fix where a reader will find it.
+fn render_md<T: Template>(template: &T) -> Result<String> {
+    let mut rendered = template
+        .render()
+        .map_err(|e| TemperError::Config(format!("template render error: {}", e)))?;
+    while rendered.ends_with('\n') {
+        rendered.pop();
+    }
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn render_session_lifecycle(surface: &str) -> Result<String> {
+    render_md(&SessionLifecycleTemplate { surface })
+}
 
 // ── Static content (compiled into the binary) ────────────────────────────────
 
@@ -18,7 +52,6 @@ static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verif
 static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
 static OUTCOME_REGISTERS_MD: &str = include_str!("../../skill-content/outcome-registers.md");
-static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
 static KNOWLEDGE_BASE_MD: &str = include_str!("../../../../agent-skills/knowledge-base.md");
@@ -699,7 +732,7 @@ pub fn generate_skill_files_with_hash(
     );
     files.insert(
         "session-lifecycle.md".to_string(),
-        SESSION_LIFECYCLE_MD.to_string(),
+        render_session_lifecycle(SURFACE_CLI)?,
     );
     files.insert(
         "cognitive-maps.md".to_string(),
