@@ -106,6 +106,13 @@ jobs:
       - name: Check generated TypeScript types are up to date with the Rust (ts-rs drift)
         run: bash .github/scripts/check-ts-rs-drift.sh
 
+      # The same shape one tier up: `agent-skills/` is a committed projection of shared templates,
+      # so an edited template with an un-re-emitted tree ships a skill that disagrees with its own
+      # source. Hand-maintained, that tree taught doc types temper has never had. Its harness is in
+      # the guard-tests job; it runs here because the emit needs cargo.
+      - name: Check the committed agent-skills projection is up to date (skills drift)
+        run: bash .github/scripts/check-skills-drift.sh
+
       # Security tripwires (docs/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
       # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
@@ -278,6 +285,13 @@ jobs:
       # and therefore stays pure bash, which is what lets it live in this job at all.
       - name: Guard test — check-ts-rs-drift
         run: bash .github/scripts/test-check-ts-rs-drift.sh
+
+      # Same seam, same reason: the gate needs cargo to emit, this harness stubs the emit and so
+      # stays pure bash. Two of its cases are the ones that matter — an emit that succeeds while
+      # writing nothing, and one whose report the gate can no longer read. Both would otherwise
+      # leave the gate green having compared nothing.
+      - name: Guard test — check-skills-drift
+        run: bash .github/scripts/test-check-skills-drift.sh
 
       # Release-integrity harnesses. emit-manifest produces the per-file manifest the CLI parses;
       # test-install drives install.sh with a locally-built archive. Both are pure bash and belong

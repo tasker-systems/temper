@@ -1,193 +1,104 @@
 # Frontmatter Reference
 
-Complete YAML frontmatter schemas for each vault primitive type.
+> **Generated from `temper_workflow`'s embedded JSON Schemas — the same ones the server validates
+> against.** Do not hand-edit: run the emit command and commit the result. It exists in generated
+> form for one reason. Its hand-written predecessor described a set of primitives temper had
+> already retired, and nothing could notice, because a document describing types is not connected
+> to the types. Derived from the validator's own source, this one cannot name a doc type that does
+> not exist, nor omit one that does.
 
-## Ticket
+A resource's frontmatter has **two tiers**, and the distinction is enforced on write:
 
-```yaml
----
-id: "019d1d24-2000-738c-bf4e-834cc33ec611"   # UUIDv7 (time-ordered)
-type: ticket
-title: "Ground-State Data Quality"             # Human-readable, quoted
-slug: "2026-03-24-ground-state-data-quality"   # date-prefixed kebab-case
-project: "storyteller"                         # matches [projects.*] key in temper.toml
-milestone: "tier-betwixt-grammar-to-vocabulary" # milestone slug, or null
-stage: backlog                                  # backlog | in-progress | done | cancelled
-scope: epic                                     # patch | feature | epic | null
-seq: 20                                         # ordering integer
-created: 2026-03-24T07:08:27.300279-04:00      # ISO 8601 with timezone
-updated: 2026-03-24T08:09:44.989237-04:00      # ISO 8601 with timezone
-branch: null                                    # git branch name, or null
-pr: null                                        # PR URL, or null
----
-```
+| Tier | Vocabulary | Rejects unknown keys? |
+|------|-----------|----------------------|
+| `managed_meta` | **Closed** — the `temper-*` workflow/provenance keys below | **Yes.** An unknown key is an error |
+| `open_meta` | **Open** — anything you like | No. Some keys are *recognized* (below); the rest are stored as-is |
 
-**File location**: `tickets/{project}/{slug}.md`
+Identity is **not** metadata. `title`, the doc type, and the resource's home (a context or a
+cognitive map) are first-class fields on the write call, never `managed_meta` keys. The **slug is
+derived from the title** on every surface — there is no way to set one, and a slug placed in
+frontmatter is inert.
 
-**Stage transitions**: `backlog` → `in-progress` → `done` or `cancelled`
+## Doc types
 
-**Body structure**: Free-form markdown. Typically includes Summary, scope description,
-context links, and acceptance criteria for feature/epic tickets. Patch tickets can be
-as brief as a single paragraph.
+These 14 are the complete set. A `doc_type_name` outside it is rejected.
 
-## Milestone
+- `commitment`
+- `concept`
+- `concern`
+- `decision`
+- `domain`
+- `fact`
+- `goal`
+- `memory`
+- `principle`
+- `question`
+- `research`
+- `session`
+- `task`
+- `theme`
 
-```yaml
----
-id: "019d20f9-6a92-7532-bc67-deb3924ece06"
-type: milestone
-title: "Tier Betwixt: Grammar to Vocabulary"
-slug: "tier-betwixt-grammar-to-vocabulary"      # kebab-case, no date prefix
-project: "storyteller"
-seq: 290                                         # ordering integer
-status: active                                   # active | completed | paused
-created: 2026-03-23                              # date only (YYYY-MM-DD)
----
-```
+## `managed_meta` by doc type
 
-**File location**: `milestones/{project}/{slug}.md`
+The type-specific half of the closed vocabulary. A key listed against one type is accepted on that type; sending it on another is a validation error, not a silent no-op.
 
-**Body structure**: Should include:
-- Why this milestone exists (motivation, what gap it fills)
-- Scope (what's in, what's out, prerequisites)
-- Sequencing (ordered list of work chunks)
-- Relationship to other milestones/tiers
-- Status narrative (where things stand)
+| Doc type | Keys | Must the caller send one? |
+|---|---|---|
+| `commitment` | *(none beyond the universal set)* | no |
+| `concept` | *(none beyond the universal set)* | no |
+| `concern` | *(none beyond the universal set)* | no |
+| `decision` | *(none beyond the universal set)* | no |
+| `domain` | *(none beyond the universal set)* | no |
+| `fact` | *(none beyond the universal set)* | no |
+| `goal` | `temper-seq` — Ordering within context (integer)<br>`temper-status` — Goal lifecycle status (one of: `active`, `completed`, `paused`, `cancelled`) | no |
+| `memory` | *(none beyond the universal set)* | no |
+| `principle` | *(none beyond the universal set)* | no |
+| `question` | *(none beyond the universal set)* | no |
+| `research` | *(none beyond the universal set)* | no |
+| `session` | *(none beyond the universal set)* | no |
+| `task` | `temper-branch` — Git branch name<br>`temper-effort` — Work size estimate (one of: `small`, `medium`, `large`)<br>`temper-mode` — Work type (one of: `plan`, `build`)<br>`temper-pr` — Pull request URL or identifier<br>`temper-seq` — Ordering within goal (integer)<br>`temper-stage` — Task workflow stage (one of: `backlog`, `in-progress`, `done`, `cancelled`) | `temper-stage` — optional, defaults to `backlog` |
+| `theme` | *(none beyond the universal set)* | no |
 
-## Session
+## Universal `managed_meta` keys
 
-```yaml
----
-id: "019d1d24-2000-7379-8f26-ae4ae87bc5c6"
-type: session
-date: 2026-03-24                                # date only
-project: storyteller                            # unquoted is fine for simple strings
-cluster: ""                                     # optional grouping tag
----
-```
+Accepted on every doc type.
 
-**File location**: `sessions/{project}/{date} — {title}.md`
+- `temper-llm-model` — Model that produced this resource
+- `temper-llm-run` — UUIDv7 of the graph-index run that created this resource
+- `temper-provenance` — How this resource was created (one of: `llm-discovered`, `user-created`)
 
-Note the em dash (—) in the filename, not a hyphen. If multiple sessions occur on the
-same date, they each get distinct titles.
+## Server-managed fields — never send these
 
-**Body structure** (standard template):
+Stamped by the server. They appear on every resource you read and are rejected (or ignored) on write.
 
-```markdown
-# Session: {title}
+- `temper-id`
+- `temper-provisional-id`
+- `temper-type`
+- `temper-context`
+- `temper-owner`
+- `temper-created`
+- `temper-updated`
+- `temper-source`
+- `temper-legacy-id`
+- `temper-slug`
 
-## Goal
-What this session set out to accomplish.
+## `open_meta` — the open tier
 
-## What happened
-What was attempted, what worked, what didn't.
+Any key is accepted and stored. The keys below are *recognized*: they carry a declared shape, and some are indexed for search. An unrecognized key is neither an error nor indexed.
 
-## Decisions
-Significant choices made and why (alternatives considered).
+| Key | Shape | Notes |
+|---|---|---|
+| `keywords` | string or array | FTS-indexed at weight C (convention v1). Deliberately-attached topical tags that boost search ranking. A JSON array of strings (space-joined into the vector) or a bare JSON string. Synonymous with `tags` for ranking. |
+| `tags` | string or array | FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string. |
+| `descriptor` | string | FTS-indexed at weight D (convention v1). The full section descriptor, for corpora where importers truncate it out of the title under length pressure — keeps the discriminating words searchable. A JSON string. |
+| `date` | string | Shape-convention (not FTS-indexed). ISO-8601 calendar date, YYYY-MM-DD. The most common open_meta key in production. |
+| `relates_to` | array | Shape-convention (not indexed). Soft relationship to other resources (UUIDs, slugs, or refs). Parallel to the hard edge model. |
+| `derived_from` | string or array | Shape-convention (not indexed). Source resources this was derived from. |
+| `preceded_by` | string or array | Shape-convention (not indexed). Resources that precede this in sequence. |
+| `references` | array | Shape-convention (not indexed). Referenced resources or external URIs. |
+| `depends_on` | array | Shape-convention (not indexed). Dependencies (UUIDs, slugs, or refs). |
 
-## What connected
-Concepts, patterns, or cross-project links noticed.
+**Discouraged keys.** Legal, but they shadow a managed field and drift away from it silently:
 
-## To pick up
-Next steps, open threads, things to investigate.
-```
-
-## Concept
-
-```yaml
----
-type: concept
-description: ""                                 # one-line summary
-aliases: []                                     # alternative names
-tags: []                                        # categorization tags
-sources: []                                     # source document references
-related: []                                     # related concept slugs
-created: 2026-03-24
-updated: 2026-03-24
----
-```
-
-**File location**: `concepts/{slug}.md`
-
-**Body structure**:
-
-```markdown
-# {title}
-
-Brief description of the concept and why it matters across the work.
-
-## Threads
-Where this concept appears and how it manifests in each context.
-
-## Open Questions
-Things we've wondered about or haven't resolved yet.
-```
-
-## Research
-
-```yaml
----
-id: "019d1d24-2000-7379-8f26-ae4ae87bc5c6"
-type: research
-date: 2026-03-24
-project: "storyteller"
-title: "Knowledge Graph Query Patterns"
-slug: "knowledge-graph-query-patterns"
----
-```
-
-**File location**: `sessions/{project}/` or a dedicated research directory
-
-**Body structure**:
-
-```markdown
-# {title}
-
-## Topic
-What question or area is being investigated.
-
-## Findings
-Key discoveries, data points, and conclusions.
-
-## Sources
-References, links, documentation consulted.
-
-## Implications
-How this affects current or planned work.
-
-## Open Questions
-What remains unknown or needs further investigation.
-```
-
-## Source
-
-```yaml
----
-type: source
-path:                                           # filesystem path to the source document
-project:                                        # which project owns this source
-tags: []
----
-```
-
-**File location**: `sources/{slug}.md`
-
-Lightweight stubs that point to documents in other repositories. The body is typically
-a one-line description plus a list of key concepts found in the source.
-
-## Slug Derivation Rules
-
-- **Tickets**: `{YYYY-MM-DD}-{kebab-cased-title}` — date prefix from creation date
-- **Milestones**: `{kebab-cased-title}` — no date prefix
-- **Sessions**: filename uses `{YYYY-MM-DD} — {title}.md` (em dash, spaces around it)
-- **Concepts**: `{kebab-cased-title}` — no date prefix
-- **Research**: `{kebab-cased-title}` — no date prefix
-
-Kebab-case rules: lowercase, replace spaces with hyphens, strip special characters
-(colons, quotes, parentheses), collapse multiple hyphens.
-
-## ID Generation
-
-IDs use UUIDv7 format (RFC 9562), which embeds a timestamp for natural ordering. When
-generating IDs programmatically isn't possible, use a placeholder or omit the `id` field —
-it's used for deduplication and ordering but isn't required for the vault to function.
+- `slug` — the canonical value lives in `temper-slug`
+- `title` — the canonical value lives in `temper-title`

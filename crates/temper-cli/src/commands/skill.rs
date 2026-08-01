@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use askama::Template;
@@ -9,7 +9,9 @@ use crate::cli::Cli;
 use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
-use crate::templates::{CommandWrapperTemplate, SessionLifecycleTemplate, SkillTemplate};
+use crate::templates::{
+    CommandWrapperTemplate, OutcomeRegistersTemplate, SessionLifecycleTemplate, SkillTemplate,
+};
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
 
@@ -45,13 +47,21 @@ fn render_session_lifecycle(surface: &str) -> Result<String> {
     render_md(&SessionLifecycleTemplate { surface })
 }
 
+fn render_outcome_registers(surface: &str) -> Result<String> {
+    render_md(&OutcomeRegistersTemplate { surface })
+}
+
 // ── Static content (compiled into the binary) ────────────────────────────────
 
+/// The MCP skill's router. A plain file, not a template, and deliberately so: it has no CLI twin
+/// to share prose with (the CLI router bakes a per-user context list, which is exactly why that one
+/// can never be a committed projection) and no values to interpolate. Templating it would buy a
+/// seam with nothing on either side of it.
+static MCP_SKILL_MD: &str = include_str!("../../skill-content/mcp/SKILL.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
 static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
-static OUTCOME_REGISTERS_MD: &str = include_str!("../../skill-content/outcome-registers.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
 static KNOWLEDGE_BASE_MD: &str = include_str!("../../../../agent-skills/knowledge-base.md");
@@ -351,6 +361,287 @@ They compose multiple CLI commands into guided workflows.
 | `session start` | Start a session without a predefined task |
 "#;
 
+// ── Generated frontmatter reference ──────────────────────────────────────────
+
+/// Prose that frames the generated tables. Kept beside them rather than in a template because it
+/// is meaningless without them — it explains what the derivation *is*.
+static FRONTMATTER_PREAMBLE: &str = r#"# Frontmatter Reference
+
+> **Generated from `temper_workflow`'s embedded JSON Schemas — the same ones the server validates
+> against.** Do not hand-edit: run the emit command and commit the result. It exists in generated
+> form for one reason. Its hand-written predecessor described a set of primitives temper had
+> already retired, and nothing could notice, because a document describing types is not connected
+> to the types. Derived from the validator's own source, this one cannot name a doc type that does
+> not exist, nor omit one that does.
+
+A resource's frontmatter has **two tiers**, and the distinction is enforced on write:
+
+| Tier | Vocabulary | Rejects unknown keys? |
+|------|-----------|----------------------|
+| `managed_meta` | **Closed** — the `temper-*` workflow/provenance keys below | **Yes.** An unknown key is an error |
+| `open_meta` | **Open** — anything you like | No. Some keys are *recognized* (below); the rest are stored as-is |
+
+Identity is **not** metadata. `title`, the doc type, and the resource's home (a context or a
+cognitive map) are first-class fields on the write call, never `managed_meta` keys. The **slug is
+derived from the title** on every surface — there is no way to set one, and a slug placed in
+frontmatter is inert.
+"#;
+
+/// Generate `references/frontmatter.md` from the embedded doc-type schemas.
+///
+/// Everything here is read from `temper_workflow::schema` — `DOC_TYPE_NAMES` for the type set,
+/// `updatable_fields` + `enum_fields` for the per-type keys, `base_schema_value` for the universal
+/// ones, and `describe_open_meta` for the open tier. That sourcing *is* the feature: the validator
+/// and this document cannot disagree, because there is only one of them.
+pub fn generate_frontmatter_reference() -> Result<String> {
+    use temper_workflow::frontmatter::fields::SYSTEM_MANAGED_FIELDS;
+    use temper_workflow::schema;
+
+    let mut out = String::from(FRONTMATTER_PREAMBLE);
+
+    out.push_str("\n## Doc types\n\n");
+    out.push_str(&format!(
+        "These {} are the complete set. A `doc_type_name` outside it is rejected.\n\n",
+        schema::DOC_TYPE_NAMES.len()
+    ));
+    for name in schema::DOC_TYPE_NAMES {
+        out.push_str(&format!("- `{name}`\n"));
+    }
+
+    out.push_str("\n## `managed_meta` by doc type\n\n");
+    out.push_str(
+        "The type-specific half of the closed vocabulary. A key listed against one type is \
+         accepted on that type; sending it on another is a validation error, not a silent \
+         no-op.\n\n",
+    );
+    out.push_str("| Doc type | Keys | Must the caller send one? |\n|---|---|---|\n");
+    let wire_keys = managed_wire_keys()?;
+    for name in schema::DOC_TYPE_NAMES {
+        let fields = schema::updatable_fields(name)?;
+        let enums = schema::enum_fields(name)?;
+        let mut described: Vec<String> = fields
+            .iter()
+            .filter(|(key, _)| wire_keys.contains(key))
+            .map(|(key, prop)| describe_property(key, prop, &enums))
+            .collect();
+        described.sort();
+        let keys = if described.is_empty() {
+            "*(none beyond the universal set)*".to_string()
+        } else {
+            described.join("<br>")
+        };
+        // A schema-required key the server defaults is not required *of a caller*. Both halves are
+        // read from the code that enforces them, so this column cannot drift from either.
+        let defaults = defaulted_managed_keys(name);
+        let mut required: Vec<String> = schema::required_fields(name)?
+            .into_iter()
+            .filter(|f| !SYSTEM_MANAGED_FIELDS.contains(&f.as_str()) && wire_keys.contains(f))
+            .map(|f| match defaults.get(&f) {
+                Some(value) => format!("`{f}` — optional, defaults to `{value}`"),
+                None => format!("`{f}` — **required**"),
+            })
+            .collect();
+        required.sort();
+        let required = if required.is_empty() {
+            "no".to_string()
+        } else {
+            required.join("<br>")
+        };
+        out.push_str(&format!("| `{name}` | {keys} | {required} |\n"));
+    }
+
+    out.push_str("\n## Universal `managed_meta` keys\n\n");
+    out.push_str("Accepted on every doc type.\n\n");
+    let base = schema::base_schema_value()?;
+    let base_enums = extract_base_enum_fields(&base);
+    let mut universal: Vec<String> = base_properties(&base)
+        .into_iter()
+        .filter(|(key, _)| wire_keys.contains(*key))
+        .map(|(key, prop)| format!("- {}\n", describe_property(key, prop, &base_enums)))
+        .collect();
+    universal.sort();
+    for line in universal {
+        out.push_str(&line);
+    }
+
+    out.push_str("\n## Server-managed fields — never send these\n\n");
+    out.push_str(
+        "Stamped by the server. They appear on every resource you read and are rejected (or \
+         ignored) on write.\n\n",
+    );
+    for field in SYSTEM_MANAGED_FIELDS {
+        out.push_str(&format!("- `{field}`\n"));
+    }
+
+    out.push_str("\n## `open_meta` — the open tier\n\n");
+    let convention = schema::describe_open_meta()?;
+    out.push_str(
+        "Any key is accepted and stored. The keys below are *recognized*: they carry a declared \
+         shape, and some are indexed for search. An unrecognized key is neither an error nor \
+         indexed.\n\n",
+    );
+    out.push_str("| Key | Shape | Notes |\n|---|---|---|\n");
+    if let Some(props) = convention
+        .schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+    {
+        for (key, prop) in props {
+            let shape = json_type_label(prop);
+            let notes = prop
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("—");
+            out.push_str(&format!("| `{key}` | {shape} | {notes} |\n"));
+        }
+    }
+    if !convention.discouraged_keys.is_empty() {
+        out.push_str(
+            "\n**Discouraged keys.** Legal, but they shadow a managed field and drift \
+                      away from it silently:\n\n",
+        );
+        for d in &convention.discouraged_keys {
+            out.push_str(&format!(
+                "- `{}` — the canonical value lives in `{}`\n",
+                d.key, d.use_instead
+            ));
+        }
+    }
+
+    Ok(out)
+}
+
+/// The `managed_meta` **wire** vocabulary, derived from the type that defines it.
+///
+/// This is deliberately not "every `temper-*` property in the JSON Schema". The schema describes
+/// frontmatter as it rests on disk, which is a *superset*: it carries identity keys like
+/// `temper-title` that `ManagedMeta`'s `deny_unknown_fields` rejects at the wire boundary. A
+/// reference generated from the schema alone therefore tells an agent to send a key that hard-fails
+/// — which is the same genre of defect as documenting a doc type that does not exist, one tier down.
+///
+/// Built from an **exhaustive struct literal** — no `..Default::default()` — so a field added to
+/// `ManagedMeta` stops this file compiling until the reference is taught about it.
+fn managed_wire_keys() -> Result<std::collections::BTreeSet<String>> {
+    use temper_workflow::types::managed_meta::ManagedMeta;
+
+    let all = ManagedMeta {
+        stage: Some(String::new()),
+        mode: Some(String::new()),
+        effort: Some(String::new()),
+        status: Some(String::new()),
+        seq: Some(0),
+        branch: Some(String::new()),
+        pr: Some(String::new()),
+        llm_model: Some(String::new()),
+        llm_run: Some(String::new()),
+        provenance: Some(String::new()),
+    };
+
+    let value = serde_json::to_value(&all)
+        .map_err(|e| TemperError::Config(format!("ManagedMeta serialization error: {e}")))?;
+    let obj = value.as_object().ok_or_else(|| {
+        TemperError::Config("ManagedMeta did not serialize to an object".to_string())
+    })?;
+    Ok(obj.keys().cloned().collect())
+}
+
+/// The managed keys a doc type's own defaults fill in, as `key → default value`.
+///
+/// Read by running the real default pass over an empty object, so "is this actually required of a
+/// caller?" is answered by the code that answers it at write time. `temper-stage` is schema-required
+/// on `task` and also auto-defaulted to `backlog`; reporting it as flatly *required* would send
+/// agents hunting for a value the server supplies.
+fn defaulted_managed_keys(doc_type: &str) -> BTreeMap<String, String> {
+    let mut meta = serde_json::json!({});
+    temper_workflow::defaults::apply_managed_defaults(doc_type, &mut meta);
+    meta.as_object()
+        .map(|o| {
+            o.iter()
+                .map(|(k, v)| {
+                    let rendered = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                    (k.clone(), rendered)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Base-schema properties as `(name, definition)` pairs, in schema order.
+fn base_properties(base: &serde_json::Value) -> Vec<(&str, &serde_json::Value)> {
+    base.get("properties")
+        .and_then(|p| p.as_object())
+        .map(|o| o.iter().map(|(k, v)| (k.as_str(), v)).collect())
+        .unwrap_or_default()
+}
+
+/// Enum values declared directly on the base schema's properties, keyed by property name.
+fn extract_base_enum_fields(base: &serde_json::Value) -> BTreeMap<String, Vec<String>> {
+    base_properties(base)
+        .into_iter()
+        .filter_map(|(key, prop)| {
+            let values: Vec<String> = prop
+                .get("enum")?
+                .as_array()?
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            (!values.is_empty()).then(|| (key.to_string(), values))
+        })
+        .collect()
+}
+
+/// Render one property as `` `key` — description (one of: a, b) ``.
+///
+/// The enum values come from the caller's already-computed map rather than the property, because
+/// `enum_fields` has the null-filtering rule (`temper-mode` is `[plan, build, null]` in the schema
+/// and `[plan, build]` to a caller) and re-deriving it here would be a second, divergent copy.
+fn describe_property(
+    key: &str,
+    prop: &serde_json::Value,
+    enums: &BTreeMap<String, Vec<String>>,
+) -> String {
+    let mut rendered = format!("`{key}`");
+    if let Some(desc) = prop.get("description").and_then(|d| d.as_str()) {
+        rendered.push_str(&format!(" — {desc}"));
+    }
+    match enums.get(key) {
+        Some(values) => rendered.push_str(&format!(
+            " (one of: {})",
+            values
+                .iter()
+                .map(|v| format!("`{v}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        None => {
+            if let Some(label) = prop.get("type").and_then(json_scalar_type_label) {
+                rendered.push_str(&format!(" ({label})"));
+            }
+        }
+    }
+    rendered
+}
+
+/// A human label for a JSON Schema `type` node, skipping the uninformative bare `"string"`.
+fn json_scalar_type_label(type_node: &serde_json::Value) -> Option<String> {
+    match type_node.as_str() {
+        Some("string") => None,
+        Some(other) => Some(other.to_string()),
+        None => None,
+    }
+}
+
+/// A shape label for an open_meta property, which may use `type`, `oneOf`, or neither.
+fn json_type_label(prop: &serde_json::Value) -> String {
+    if let Some(t) = prop.get("type").and_then(|t| t.as_str()) {
+        return t.to_string();
+    }
+    if prop.get("oneOf").is_some() || prop.get("anyOf").is_some() {
+        return "string or array".to_string();
+    }
+    "any".to_string()
+}
+
 /// Generate the reference.md content from clap's command tree.
 pub fn generate_reference() -> String {
     let cmd = Cli::command();
@@ -475,6 +766,80 @@ pub fn generate_skill_files(config: &Config) -> Result<HashMap<String, String>> 
 /// Returns the generated reference.md content for stdout preview.
 pub fn generate(_config: &Config) -> Result<String> {
     Ok(generate_reference())
+}
+
+// ── The MCP surface: a committed projection ──────────────────────────────────
+
+/// Generate the `agent-skills/` tree as a map of relative_path → content.
+///
+/// **Config-free, and that is the whole reason this tree can be committed.** The CLI skill bakes a
+/// per-user context list into its router, so its rendered form is one developer's and could never be
+/// checked in; the MCP skill has no such input, so its render is a pure function of this source tree
+/// and a drift gate can pin it the way `openapi.json` and the ts-rs trees are pinned.
+///
+/// Deliberately **not** every file in `agent-skills/`. `knowledge-base.md` and `claude-desktop.md`
+/// are hand-written and stay that way — the first is the MCP tool reference and has no CLI twin to
+/// share with, the second is a setup guide. Emitting over them would be a rewrite, and the gate
+/// only ever compares what appears here.
+pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
+    let mut files = HashMap::new();
+
+    files.insert("SKILL.md".to_string(), MCP_SKILL_MD.to_string());
+    files.insert(
+        "references/frontmatter.md".to_string(),
+        generate_frontmatter_reference()?,
+    );
+    files.insert(
+        "session-lifecycle.md".to_string(),
+        render_session_lifecycle(SURFACE_MCP)?,
+    );
+    files.insert(
+        "outcome-registers.md".to_string(),
+        render_outcome_registers(SURFACE_MCP)?,
+    );
+    // Shipped to both surfaces verbatim: these three name no command on either, so they are the
+    // same bytes in both trees rather than two renders of one template.
+    files.insert(
+        "subagent-guidance.md".to_string(),
+        SUBAGENT_GUIDANCE_MD.to_string(),
+    );
+    files.insert(
+        "plan-verification.md".to_string(),
+        PLAN_VERIFICATION_MD.to_string(),
+    );
+    files.insert(
+        "implementation-grounding.md".to_string(),
+        IMPLEMENTATION_GROUNDING_MD.to_string(),
+    );
+
+    Ok(files)
+}
+
+/// Write the generated `agent-skills/` tree into `dir`, returning the relative paths written.
+///
+/// Every write goes through `write_if_changed`, so re-emitting an up-to-date tree touches no mtimes
+/// — which is what lets the drift gate run this unconditionally and read `git status` afterwards.
+pub fn emit_agent_skills(dir: &Path) -> Result<Vec<String>> {
+    let files = generate_agent_skill_files()?;
+    let mut written: Vec<String> = Vec::new();
+
+    for (rel_path, content) in &files {
+        let dest = dir.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                TemperError::Config(format!(
+                    "cannot create parent dir for {}: {}",
+                    dest.display(),
+                    e
+                ))
+            })?;
+        }
+        write_if_changed(&dest, content)?;
+        written.push(rel_path.clone());
+    }
+
+    written.sort();
+    Ok(written)
 }
 
 /// Report of what changed during `install`.
@@ -728,7 +1093,7 @@ pub fn generate_skill_files_with_hash(
     // pair: `guidance/` is the project's namespace and this is universal, repo-agnostic discipline.
     files.insert(
         "outcome-registers.md".to_string(),
-        OUTCOME_REGISTERS_MD.to_string(),
+        render_outcome_registers(SURFACE_CLI)?,
     );
     files.insert(
         "session-lifecycle.md".to_string(),
@@ -922,6 +1287,203 @@ mod tests {
                 "{name} must show the [title](./uuid) reference form"
             );
         }
+    }
+
+    // ── The MCP projection ───────────────────────────────────────────────────
+
+    #[test]
+    fn agent_skill_files_are_the_expected_set() {
+        let files = generate_agent_skill_files().unwrap();
+        let mut keys: Vec<&str> = files.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "SKILL.md",
+                "implementation-grounding.md",
+                "outcome-registers.md",
+                "plan-verification.md",
+                "references/frontmatter.md",
+                "session-lifecycle.md",
+                "subagent-guidance.md",
+            ],
+            "the emitted set moved — the drift gate only ever compares what appears here, so a file \
+             dropped from this map silently stops being checked"
+        );
+        // Hand-written siblings are NOT emitted. Asserted as an ABSENCE because the failure mode is
+        // someone folding them in, which would overwrite maintained prose on every regeneration.
+        for hand_written in ["knowledge-base.md", "claude-desktop.md"] {
+            assert!(
+                !files.contains_key(hand_written),
+                "{hand_written} is hand-maintained; emitting it would clobber it"
+            );
+        }
+    }
+
+    /// The projection must be a pure function of the source tree — no config, no environment, no
+    /// home directory. That is the whole reason it can be committed and gated, where the CLI skill
+    /// (which bakes a per-user context list) cannot.
+    #[test]
+    fn agent_skill_files_are_config_free_and_deterministic() {
+        let first = generate_agent_skill_files().unwrap();
+        let second = generate_agent_skill_files().unwrap();
+        assert_eq!(first, second, "the emit is not deterministic");
+    }
+
+    /// **The specific thing that stops Ticket/Milestone recurring.**
+    ///
+    /// The predecessor to this tree documented `Ticket` and `Milestone` schemas long after temper
+    /// stopped having either. This asserts the generated reference names every real doc type and
+    /// that the tree names no retired one — the failure is a re-add, so both halves are needed.
+    #[test]
+    fn the_mcp_tree_names_every_real_doc_type_and_no_retired_one() {
+        let files = generate_agent_skill_files().unwrap();
+        let frontmatter = files.get("references/frontmatter.md").unwrap();
+
+        for doc_type in temper_workflow::schema::DOC_TYPE_NAMES {
+            assert!(
+                frontmatter.contains(&format!("`{doc_type}`")),
+                "the generated frontmatter reference never names the `{doc_type}` doc type"
+            );
+        }
+
+        // The primitives the hand-written tree taught, none of which temper has ever shipped.
+        let whole_tree: String = files.values().cloned().collect::<Vec<_>>().join("\n");
+        for retired in [
+            "ticket",
+            "Ticket",
+            "milestone",
+            "Milestone",
+            "Epic Workflow",
+        ] {
+            assert!(
+                !whole_tree.contains(retired),
+                "the MCP skill names `{retired}`, which is not a temper primitive"
+            );
+        }
+    }
+
+    /// The MCP surface has its own field names, and getting one wrong is a rejected write rather
+    /// than a cosmetic slip. `context_name` is an OUTPUT field on a read; every write and list
+    /// input spells it `context_ref` — and the shipped MCP prose got this wrong once.
+    #[test]
+    fn the_mcp_tree_addresses_contexts_by_ref_never_by_name() {
+        let files = generate_agent_skill_files().unwrap();
+        for (path, body) in &files {
+            assert!(
+                !body.contains("\"context_name\""),
+                "{path} sends `context_name` as an input; the input field is `context_ref`, and a \
+                 bare name is rejected"
+            );
+        }
+    }
+
+    /// Both surfaces render, and each speaks its own dialect rather than the other's. A template
+    /// whose conditional silently stopped switching would otherwise ship CLI commands to a client
+    /// that has no CLI.
+    #[test]
+    fn shared_templates_render_a_distinct_dialect_per_surface() {
+        /// One shared template's renderer, paired with the filename it lands as.
+        type SurfaceRenderer = (fn(&str) -> Result<String>, &'static str);
+
+        let renderers: [SurfaceRenderer; 2] = [
+            (render_session_lifecycle, "session-lifecycle.md"),
+            (render_outcome_registers, "outcome-registers.md"),
+        ];
+        for (render, name) in renderers {
+            let cli = render(SURFACE_CLI).unwrap();
+            let mcp = render(SURFACE_MCP).unwrap();
+
+            assert_ne!(cli, mcp, "{name} renders identically on both surfaces");
+            assert!(
+                cli.contains("temper resource"),
+                "{name} on the CLI surface names no `temper resource` command"
+            );
+            assert!(
+                !mcp.contains("temper resource"),
+                "{name} on the MCP surface names a CLI command; that client has no CLI"
+            );
+            assert!(
+                mcp.contains("Tool:"),
+                "{name} on the MCP surface shows no tool call"
+            );
+            // Both must end with exactly one newline, or a gate diffing renders against committed
+            // files reads as permanent, uncloseable drift.
+            for (surface, body) in [("cli", &cli), ("mcp", &mcp)] {
+                assert!(
+                    body.ends_with('\n') && !body.ends_with("\n\n"),
+                    "{name} ({surface}) does not end with exactly one newline"
+                );
+            }
+        }
+    }
+
+    /// The referencing convention is why documents stop citing unresolvable id prefixes. It has to
+    /// reach the MCP surface too — that surface writes the same reference-dense session notes.
+    #[test]
+    fn the_mcp_skill_carries_the_reference_convention() {
+        let files = generate_agent_skill_files().unwrap();
+        let skill_md = files.get("SKILL.md").unwrap();
+        assert!(
+            skill_md.contains("A UUID is not a SHA"),
+            "the MCP SKILL.md must state that UUIDs are never abbreviated"
+        );
+        assert!(
+            skill_md.contains("](./<full-uuidv7>)"),
+            "the MCP SKILL.md must show the [title](./uuid) reference form"
+        );
+    }
+
+    /// The MCP router must name every file the emit ships, for the same reason the CLI one must:
+    /// a supporting file the router never mentions is dead content, and it fails silently.
+    #[test]
+    fn the_mcp_router_names_every_file_it_ships() {
+        let files = generate_agent_skill_files().unwrap();
+        let skill_md = files.get("SKILL.md").unwrap();
+        for path in files.keys() {
+            if path == "SKILL.md" {
+                continue;
+            }
+            assert!(
+                skill_md.contains(path.as_str()),
+                "the MCP SKILL.md never mentions `{path}`, so no session will read it"
+            );
+        }
+    }
+
+    /// `managed_meta`'s wire vocabulary is `ManagedMeta`, not "every `temper-*` key in the JSON
+    /// Schema" — the schema describes frontmatter on disk, which carries identity keys that
+    /// `deny_unknown_fields` rejects on the wire. Documenting the schema's set would tell an agent
+    /// to send a key that hard-fails.
+    #[test]
+    fn the_frontmatter_reference_documents_the_wire_vocabulary_not_the_disk_schema() {
+        let reference = generate_frontmatter_reference().unwrap();
+
+        // Present: a real Property key from the closed vocabulary.
+        assert!(reference.contains("`temper-stage`"));
+        // Absent: schema properties that are NOT sendable managed keys.
+        for rejected in ["`temper-title`", "`temper-id`", "`temper-context`"] {
+            let in_managed_section = reference
+                .split("## Server-managed fields")
+                .next()
+                .unwrap()
+                .contains(rejected);
+            assert!(
+                !in_managed_section,
+                "{rejected} is presented as a settable managed key, but the wire type rejects it"
+            );
+        }
+    }
+
+    /// A schema-required key the server defaults is not required *of a caller*. Reporting it as
+    /// flatly required sends agents hunting for a value the server supplies.
+    #[test]
+    fn a_defaulted_required_key_is_reported_as_optional() {
+        let reference = generate_frontmatter_reference().unwrap();
+        assert!(
+            reference.contains("`temper-stage` — optional, defaults to `backlog`"),
+            "temper-stage is schema-required AND auto-defaulted; the reference must say so"
+        );
     }
 
     #[test]

@@ -1792,6 +1792,16 @@ pub enum SkillAction {
     },
     /// Check skill status
     Check,
+    /// Emit the MCP (`agent-skills/`) projection into a directory.
+    ///
+    /// Config-free by construction — unlike `install`, this reads no config and bakes in no
+    /// per-user state, which is what makes the emitted tree committable and pinnable by a drift
+    /// gate. Writes only the generated files; hand-written siblings in the directory are untouched.
+    Emit {
+        /// Directory to write the tree into (e.g. `agent-skills`)
+        #[arg(long)]
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]

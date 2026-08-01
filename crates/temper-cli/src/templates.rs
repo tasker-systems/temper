@@ -87,3 +87,13 @@ pub struct CommandWrapperTemplate<'a> {
 pub struct SessionLifecycleTemplate<'a> {
     pub surface: &'a str,
 }
+
+/// The outcome-register discipline. Shared prose; the worked examples in *Doing it with the …
+/// you have* and *Three things that will bite you today* are the only regions that diverge —
+/// the flag spellings differ, and so do the page caps (`list` is 20/50, `list_resources` is
+/// 50/200), which is the kind of number a hand-maintained second copy gets wrong.
+#[derive(Template)]
+#[template(path = "shared/outcome-registers.md")]
+pub struct OutcomeRegistersTemplate<'a> {
+    pub surface: &'a str,
+}
