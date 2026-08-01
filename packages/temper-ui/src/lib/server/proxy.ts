@@ -20,8 +20,9 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { env } from '$env/dynamic/private';
 import { error, type RequestEvent } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
+import { activeTraceparent } from './telemetry/context';
 
 /** Path roots forwarded to the upstream API/MCP host. */
 const PROXIED_ROOTS = ['/mcp', '/oauth', '/.well-known', '/api'];
@@ -87,7 +88,9 @@ export interface ForwardOptions {
 
 /** True for the undici timeout we raise via `AbortController`, so it can map to 504 not 502. */
 function isTimeout(err: unknown): boolean {
-	return typeof err === 'object' && err !== null && (err as { name?: string }).name === 'AbortError';
+	return (
+		typeof err === 'object' && err !== null && (err as { name?: string }).name === 'AbortError'
+	);
 }
 
 const TRACEPARENT = 'traceparent';
@@ -106,14 +109,13 @@ const TRACEPARENT = 'traceparent';
  * as the steward owns a real span at that id). When absent, we mint a fresh
  * version-00, sampled id.
  *
- * Interim honesty, until the UI exports its own spans (the UI half of Tier 2 /
- * `@vercel/otel`): a *generated* id names no span this process records, so the
- * Rust side's post-auth span *link* to it dangles — exactly the case
- * `temper-telemetry`'s `propagate.rs` avoids for its own outbound headers. That
- * is acceptable here because (a) the dominant caller, the steward, sends its own
- * real id, and (b) nothing is exported at all until Tier 2 lands, at which point
- * UI span export closes the gap. The id is a correlation handle first; a
- * navigable span reference only once the UI exports.
+ * This is now the **fallback** path. When span export is enabled (an OTLP endpoint
+ * is configured), `forwardRequest` prefers `activeTraceparent()` — the id of the UI
+ * server span opened in `hooks.server.ts`, which is a child of any inbound parent and
+ * is actually exported — so the Rust side's post-auth span *link* resolves to a real
+ * span instead of dangling. `resolveTraceparent` still runs when export is disabled
+ * (local dev, endpoint-less installs), where the id is a correlation handle for logs
+ * rather than a navigable span reference. Closes the "internal dangle" (task `019fbf24`).
  */
 function resolveTraceparent(request: Request): string {
 	const inbound = request.headers.get(TRACEPARENT);
@@ -148,7 +150,7 @@ async function forwardOnce(
 	target: string,
 	request: Request,
 	traceparent: string,
-	timeoutMs: number
+	timeoutMs: number,
 ): Promise<Response> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -160,7 +162,7 @@ async function forwardOnce(
 	try {
 		upstream = await fetch(outbound, {
 			redirect: 'manual',
-			signal: controller.signal
+			signal: controller.signal,
 		});
 	} finally {
 		clearTimeout(timer);
@@ -171,7 +173,7 @@ async function forwardOnce(
 	return new Response(upstream.body, {
 		status: upstream.status,
 		statusText: upstream.statusText,
-		headers
+		headers,
 	});
 }
 
@@ -193,11 +195,13 @@ export async function forwardRequest(
 	pathname: string,
 	search: string,
 	request: Request,
-	options: ForwardOptions = {}
+	options: ForwardOptions = {},
 ): Promise<Response> {
 	const target = buildUpstreamUrl(upstreamBase, pathname, search);
 	const timeoutMs = options.connectTimeoutMs ?? UPSTREAM_CONNECT_TIMEOUT_MS;
-	const traceparent = resolveTraceparent(request);
+	// Prefer the active UI span's id (exported, so a receiver's link resolves) over a
+	// forwarded/minted one; fall back to `resolveTraceparent` when export is disabled.
+	const traceparent = activeTraceparent() ?? resolveTraceparent(request);
 	const retries = RETRYABLE_METHODS.has(request.method.toUpperCase())
 		? (options.maxRetries ?? 1)
 		: 0;
@@ -218,7 +222,7 @@ export async function forwardRequest(
 					method: request.method,
 					status: response.status,
 					traceparent,
-					upstreamId: response.headers.get('x-vercel-id') ?? undefined
+					upstreamId: response.headers.get('x-vercel-id') ?? undefined,
 				});
 			}
 			return response;
@@ -239,15 +243,15 @@ export async function forwardRequest(
 		traceparent,
 		attempts: retries + 1,
 		timedOut,
-		error: lastErr instanceof Error ? lastErr.message : String(lastErr)
+		error: lastErr instanceof Error ? lastErr.message : String(lastErr),
 	});
 	return new Response(
 		JSON.stringify({
 			message: timedOut
 				? 'Gateway Timeout: upstream API did not respond in time'
-				: 'Bad Gateway: upstream API unreachable'
+				: 'Bad Gateway: upstream API unreachable',
 		}),
-		{ status: timedOut ? 504 : 502, headers: { 'content-type': 'application/json' } }
+		{ status: timedOut ? 504 : 502, headers: { 'content-type': 'application/json' } },
 	);
 }
 
@@ -261,7 +265,7 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 		throw error(
 			500,
 			`Proxy upstream (API_BASE_URL=${upstream}) resolves to this same origin (${event.url.host}); ` +
-				`set API_BASE_URL to the API backend's own origin, not the UI origin.`
+				`set API_BASE_URL to the API backend's own origin, not the UI origin.`,
 		);
 	}
 	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);

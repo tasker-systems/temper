@@ -25,15 +25,27 @@
  * /auth/login or /request-access as appropriate.
  */
 
+// Register OTLP span export before anything else runs. Side-effecting by design;
+// a no-op when no OTLP endpoint is configured (local dev, endpoint-less installs).
+import '$lib/server/telemetry/register';
+
 import { type Handle, text } from '@sveltejs/kit';
-import { readSession, writeSession, clearSession } from '$lib/server/session';
-import { refreshAccessToken, REFRESH_THRESHOLD_SECONDS } from '$lib/server/oidc';
-import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
+import { ApiError, apiGet } from '$lib/server/api';
 import { CSRF_FORBIDDEN_MESSAGE, isForbiddenCrossOriginFormPost } from '$lib/server/csrf';
-import { apiGet, ApiError } from '$lib/server/api';
+import { REFRESH_THRESHOLD_SECONDS, refreshAccessToken } from '$lib/server/oidc';
+import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
+import { clearSession, readSession, writeSession } from '$lib/server/session';
+import { traceRequest } from '$lib/server/telemetry/request-span';
 import type { ProfileWithEntitlements } from '$lib/types';
 
-export const handle: Handle = async ({ event, resolve }) => {
+// The exported hook wraps the whole request in a server span (parented on the inbound
+// `traceparent`) and runs the body inside its active context, so every outbound fetch —
+// the reverse proxy AND the SSR data loaders — propagates the span. The span is opened
+// around `handleRequest` in its entirety, before the proxy short-circuit, because the
+// browser→ui→api acceptance hop returns early from the proxy and never reaches `resolve`.
+export const handle: Handle = (input) => traceRequest(input.event, () => handleRequest(input));
+
+const handleRequest = async ({ event, resolve }: Parameters<Handle>[0]): Promise<Response> => {
 	// Reverse-proxy the API/MCP/OAuth/discovery surface to the upstream host
 	// before any SvelteKit handling. These paths are not UI routes. This
 	// includes the SAML ACS (`/oauth/saml/acs`), which by design takes a
@@ -78,7 +90,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				accessToken,
 				refreshToken,
 				idTokenClaims,
-				expiresAt
+				expiresAt,
 			});
 		} catch (err) {
 			console.error('OIDC token refresh failed; clearing session', err);
@@ -92,14 +104,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 		sub: idTokenClaims.sub,
 		email: idTokenClaims.email ?? null,
 		name: idTokenClaims.name ?? null,
-		picture: idTokenClaims.picture ?? null
+		picture: idTokenClaims.picture ?? null,
 	};
 
 	try {
-		const profileResponse = await apiGet<ProfileWithEntitlements>(
-			'/api/profile',
-			accessToken
-		);
+		const profileResponse = await apiGet<ProfileWithEntitlements>('/api/profile', accessToken);
 		const { entitlements, ...profile } = profileResponse;
 		event.locals.profile = profile;
 		event.locals.entitlements = entitlements;
