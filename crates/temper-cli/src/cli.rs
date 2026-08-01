@@ -1819,6 +1819,35 @@ pub enum MemoryAction {
         #[arg(long)]
         path: Option<String>,
     },
+    /// Move local memory files into Temper, reconciling rather than blind-creating.
+    ///
+    /// Searches the target context before each write and surfaces near-matches for you to judge —
+    /// it never resolves an overlap itself. Interactive by default; with no terminal attached it
+    /// refuses to write unless `--unattended` explicitly authorizes a run that skips every
+    /// collision. `--dry-run` is always permitted and writes nothing.
+    ///
+    /// Titles come from the link text in the hand-written `MEMORY.md`, which is the only place a
+    /// human-readable title for each memory exists. A file no link names is skipped, never given
+    /// a title invented from its filename.
+    Migrate {
+        /// Which cohort to migrate, by the files' frontmatter `type` (e.g. `feedback`).
+        #[arg(long, default_value = "feedback")]
+        cohort: String,
+        /// Target context ref. Defaults to the first `shared_contexts` entry for the
+        /// cross-project cohort, else the first `project_contexts` entry.
+        #[arg(long)]
+        context: Option<String>,
+        /// Plan and print; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Authorize a write run with no terminal attached. Every collision is skipped, never
+        /// resolved.
+        #[arg(long)]
+        unattended: bool,
+        /// How many near-matches a collision surfaces.
+        #[arg(long, default_value_t = 3)]
+        collision_limit: usize,
+    },
     /// Check whether the on-disk index matches a fresh render — the LOCAL drift gate.
     ///
     /// The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can
