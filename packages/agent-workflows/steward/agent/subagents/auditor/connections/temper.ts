@@ -2,6 +2,7 @@ import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
 import { AUDITOR_CREDENTIALS, mintAuditorM2mToken, requireEnv } from "../../../lib/temper-auth.js";
+import { makeTraceparent } from "../../../lib/trace.js";
 import { AUDITOR_TOOLS } from "../../../lib/tool-allowlists.js";
 
 /**
@@ -44,6 +45,12 @@ export default defineMcpClientConnection({
   auth: process.env[AUDITOR_CREDENTIALS.clientId]
     ? { getToken: mintAuditorM2mToken }
     : { getToken: async () => ({ token: requireEnv(AUDITOR_CREDENTIALS.staticToken) }) },
+  // A W3C `traceparent` on every MCP call — the auditor's own session trace,
+  // under its own credential. This is the path the 2026-08-01 incident ran on
+  // (auditor flow → temperkb.io/mcp). See `../../../lib/trace`.
+  headers: {
+    traceparent: (ctx) => makeTraceparent(ctx.session.id),
+  },
   approval: never(),
   tools: {
     allow: [...AUDITOR_TOOLS],
