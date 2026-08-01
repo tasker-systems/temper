@@ -14,6 +14,7 @@ Copied verbatim from `docs/superpowers/specs/2026-08-01-memories-in-temper-desig
 
 - **"No `[memory]` section means the feature is off and `emit` is a no-op that says why."**
 - **"`emit` fails loudly on any `memory` resource missing either key, or carrying a value outside its vocabulary."** (`open_meta.status` ∈ {`active`, `superseded`}; `open_meta.verified` an ISO date.) This is the enforcement point that substitutes for write-time validation.
+- **`open_meta.source_file` is OPTIONAL and must never be required.** It records the memory file a resource was migrated from, and is how `status` matches local files to Temper resources. A memory authored natively in Temper has none; its absence is ordinary, never a defect. `emit` must not reject on it.
 - **"An old date means unexamined, never false, and the render must not blur the two."**
 - **"Reach is a property of which configs list a context, never of a field on the memory itself."**
 - **"The MCP skill tree is config-free"** — it may describe the convention and the doc type, and must **never** name a user's contexts. Adding a config-derived value removes that tree's ability to be gated.

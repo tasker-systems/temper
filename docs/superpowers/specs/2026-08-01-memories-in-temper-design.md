@@ -55,6 +55,25 @@ rather than overloading `concept` (66 in `@me/temper`) or `decision` (23).
 | `[[wikilinks]]` | `open_meta.relates_to`; a real edge where the relationship is load-bearing |
 | *(nothing today)* | `open_meta.status`: `active` \| `superseded` |
 | *(nothing today)* | `open_meta.verified`: ISO date the claim was last checked against the system |
+| the filename itself | `open_meta.source_file`: **optional** — the memory file this was migrated from |
+
+### `source_file`, and why it is optional
+
+`status` must report *which local files have no counterpart in Temper*. There is no field that can
+answer that by inference: `ResourceRow` carries `context_slug` but **no resource-level slug**
+(`crates/temper-workflow/src/types/resource.rs:18-78`), and `ManagedMeta` excludes identity keys by
+design. Matching a filename stem against a human-readable title fails on every real memory —
+`feedback_a_clause_cannot_retire_its_own_goal` is not "a clause cannot retire its own goal" — which
+would make the report 100% false positives on exactly the adopted machine it exists to serve.
+
+So a migrated memory **records the file it came from**, and `status` matches on that exactly, with no
+sluggify guesswork. It doubles as provenance: "where did this come from" stays answerable.
+
+**It is optional, and that is load-bearing.** A memory authored natively in Temper — from a session,
+from Desktop, from anywhere that never had a file — has no source file, and its absence must never be
+a defect. `emit` therefore requires `status` and `verified` and **must not require `source_file`**.
+A machine's local files that match nothing are reported; a Temper memory matching no local file is
+ordinary, not an error.
 
 ### The open-tier cost, stated rather than hidden
 
