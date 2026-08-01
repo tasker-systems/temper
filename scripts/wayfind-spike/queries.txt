@@ -1,0 +1,20 @@
+what picks the map that a routing query gets sent to
+who gets recorded as having graded a citation
+what is an outcome register
+what does the additive-only migration gate do
+how does temper decide which resources a principal can see
+what is a cognitive map telos
+why are machine principals registered rather than discovered
+what makes evidential standing three axes instead of one number
+what prevents a refusal from naming the subject it refused
+what is the difference between a context and a cognitive map
+why does wayfind emit no ledger event
+how are act span fields recorded for write commands
+how do I run the integration tests
+what changed in the context rename design
+how does the vault projection cache work
+what is the sqlx query cache regeneration ritual
+how do I set up docker postgres locally
+explain eigenvalues and eigenvectors
+how does storyteller model narrative agents
+what is the tasker orchestration actor model
