@@ -2,8 +2,8 @@
 //!
 //! `emit` is the enforcement point for `open_meta.status` / `open_meta.verified`,
 //! because those keys live in the OPEN tier and nothing validates them at write
-//! time. A missing or malformed key is therefore a DEFECT that fails the command —
-//! never a value that quietly defaults.
+//! time (design §"The open-tier cost"). A missing or malformed key is therefore a
+//! DEFECT that fails the command — never a value that quietly defaults.
 
 use chrono::NaiveDate;
 use uuid::Uuid;
