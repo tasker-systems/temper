@@ -315,6 +315,7 @@ scopes        = ["openid"]
             cloud: CloudSection::default(),
             llm: Default::default(),
             cli: Default::default(),
+            memory: None,
         };
         let err = oauth_config(&config).unwrap_err();
         let msg = err.to_string();
@@ -341,6 +342,7 @@ scopes        = ["openid"]
             cloud: CloudSection::default(),
             llm: Default::default(),
             cli: Default::default(),
+            memory: None,
         };
         let err = oauth_config(&config).unwrap_err();
         let msg = err.to_string();

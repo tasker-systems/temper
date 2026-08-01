@@ -108,6 +108,48 @@ impl Default for SkillConfig {
     }
 }
 
+/// Claude Code memory projection. **Absent means the feature is off** — this is
+/// `Option` rather than `#[serde(default)]` precisely so "not configured" and
+/// "configured empty" stay distinguishable.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[validate(schema(function = "validate_has_a_context"))]
+pub struct MemoryConfig {
+    /// Contexts whose memories reach EVERY project on this machine.
+    #[serde(default)]
+    pub shared_contexts: Vec<String>,
+    /// Contexts for this project. A list — a project may legitimately span contexts.
+    #[serde(default)]
+    pub project_contexts: Vec<String>,
+    /// Where the rendered index is written.
+    #[validate(length(min = 1, message = "memory index_path cannot be empty"))]
+    pub index_path: String,
+    /// Days after which a memory's `verified` date is rendered as UNEXAMINED.
+    #[serde(default = "default_stale_after_days")]
+    pub stale_after_days: u32,
+}
+
+fn default_stale_after_days() -> u32 {
+    90
+}
+
+impl MemoryConfig {
+    /// Every context this machine renders for this project, shared first.
+    pub fn all_contexts(&self) -> Vec<&str> {
+        self.shared_contexts
+            .iter()
+            .chain(self.project_contexts.iter())
+            .map(String::as_str)
+            .collect()
+    }
+}
+
+fn validate_has_a_context(cfg: &MemoryConfig) -> Result<(), validator::ValidationError> {
+    if cfg.shared_contexts.is_empty() && cfg.project_contexts.is_empty() {
+        return Err(validator::ValidationError::new("memory_no_contexts"));
+    }
+    Ok(())
+}
+
 /// A single auth provider entry. Stored in `[[auth.providers]]` arrays in TOML.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AuthProvider {
@@ -328,6 +370,10 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub cli: CliSection,
+    /// Claude Code memory projection. `None` = feature off.
+    #[serde(default)]
+    #[validate(nested)]
+    pub memory: Option<MemoryConfig>,
 }
 
 impl Default for TemperConfig {
@@ -342,6 +388,7 @@ impl Default for TemperConfig {
             cloud: Default::default(),
             llm: Default::default(),
             cli: Default::default(),
+            memory: None,
         }
     }
 }
@@ -702,5 +749,60 @@ path = "~/vault"
             scopes: vec![],
         });
         assert!(cfg.validate().is_err());
+    }
+
+    // --- memory section ---
+
+    #[test]
+    fn memory_section_is_absent_by_default() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+        "#,
+        )
+        .expect("parses");
+        assert!(
+            cfg.memory.is_none(),
+            "absent [memory] must mean the feature is OFF, not defaulted on"
+        );
+    }
+
+    #[test]
+    fn memory_section_parses_context_lists() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            shared_contexts = ["@me/working-agreements"]
+            project_contexts = ["@me/temper", "@me/knowledge"]
+            index_path = "~/.claude/projects/p/memory/MEMORY.md"
+        "#,
+        )
+        .expect("parses");
+        let m = cfg.memory.expect("present");
+        assert_eq!(m.shared_contexts, vec!["@me/working-agreements"]);
+        assert_eq!(m.project_contexts, vec!["@me/temper", "@me/knowledge"]);
+        assert_eq!(m.stale_after_days, 90, "default staleness threshold");
+    }
+
+    #[test]
+    fn memory_section_requires_at_least_one_context() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            shared_contexts = []
+            project_contexts = []
+            index_path = "~/x/MEMORY.md"
+        "#,
+        )
+        .expect("parses");
+        assert!(
+            cfg.validate().is_err(),
+            "an opted-in section naming no context renders an empty index silently"
+        );
     }
 }
