@@ -60,7 +60,7 @@ pub struct MemoryStatus {
 /// cleanly via [`parse_entry`] — a memory with a malformed `status`/`verified` is still a real
 /// migrated file and should still vouch for its local counterpart; that a memory contributes a
 /// defect and that it contributes provenance are orthogonal facts about it.
-fn source_file_of(row: &ResourceDetail) -> Option<String> {
+pub(super) fn source_file_of(row: &ResourceDetail) -> Option<String> {
     row.open_meta
         .as_ref()?
         .get("source_file")?
