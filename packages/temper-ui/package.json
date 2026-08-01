@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
+    "build:dep": "npm --prefix ../../clients/temper-telemetry-ts ci && npm --prefix ../../clients/temper-telemetry-ts run build",
+    "prebuild": "npm run build:dep",
     "build": "vite build",
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
+    "precheck": "npm run build:dep",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "format": "biome format --write",
     "format:check": "biome format",
@@ -15,6 +18,7 @@
     "lint:fix": "biome lint --fix",
     "biome": "biome check",
     "biome:fix": "biome check --fix",
+    "pretest": "npm run build:dep",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -40,13 +44,6 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/context-async-hooks": "^2.10.0",
-    "@opentelemetry/core": "^2.10.0",
-    "@opentelemetry/exporter-trace-otlp-proto": "^0.221.0",
-    "@opentelemetry/resources": "^2.10.0",
-    "@opentelemetry/sdk-trace-base": "^2.10.0",
-    "@opentelemetry/sdk-trace-node": "^2.10.0",
-    "@opentelemetry/semantic-conventions": "^1.43.0",
     "@vercel/functions": "^3.7.6",
     "d3-force": "^3",
     "d3-hierarchy": "^3",
@@ -57,6 +54,7 @@
     "jose": "^6.2.2",
     "marked": "^18.0.0",
     "postgres": "^3",
+    "temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
     "wx-svelte-grid": "^2.6.1"
   }
 }

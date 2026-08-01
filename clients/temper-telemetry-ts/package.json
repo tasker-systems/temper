@@ -1,0 +1,41 @@
+{
+  "name": "temper-telemetry-ts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared OpenTelemetry span-export bootstrap + W3C trace-context helpers for Temper's Node hops (temper-ui, eve agents). The TS analog of the Rust temper-telemetry crate.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.10.0",
+    "@opentelemetry/core": "^2.10.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.221.0",
+    "@opentelemetry/instrumentation": "^0.221.0",
+    "@opentelemetry/instrumentation-undici": "^0.18.0",
+    "@opentelemetry/resources": "^2.10.0",
+    "@opentelemetry/sdk-trace-base": "^2.10.0",
+    "@opentelemetry/sdk-trace-node": "^2.10.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "typescript": "^5.8",
+    "vitest": "^3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

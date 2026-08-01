@@ -56,6 +56,38 @@ jobs:
       - name: Run tests
         run: npm test
 
+  temper-telemetry-ts:
+    name: temper-telemetry-ts (typecheck, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: clients/temper-telemetry-ts
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # npm, not bun: like temper-ts, this package is deliberately NOT a bun workspace
+      # member (the root list is exactly temper-cloud + temper-ui), and a root install
+      # would inherit the root's overrides. It ships compiled `dist/` and is consumed as
+      # a `file:` dependency by temper-ui (and, in a later PR, the eve agents), whose own
+      # jobs build it via their `build:dep` step.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
   steward:
     name: steward agent (typecheck, vitest)
     runs-on: ubuntu-latest

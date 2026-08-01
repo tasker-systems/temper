@@ -21,8 +21,8 @@
 
 import { randomBytes } from 'node:crypto';
 import { error, type RequestEvent } from '@sveltejs/kit';
+import { activeTraceparent } from 'temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
-import { activeTraceparent } from './telemetry/context';
 
 /** Path roots forwarded to the upstream API/MCP host. */
 const PROXIED_ROOTS = ['/mcp', '/oauth', '/.well-known', '/api'];

@@ -1,5 +1,5 @@
+import { activeTraceparent } from 'temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
-import { activeTraceparent } from './telemetry/context';
 
 // Read at runtime (not build-inlined) so the upstream API origin is configured
 // purely through env, consistent with the reverse proxy in `proxy.ts`. Both read
@@ -11,7 +11,7 @@ const API_BASE_URL = env.API_BASE_URL ?? '';
  * Merge the active UI request span's `traceparent` into an outbound header set, so the
  * server-side data loaders propagate the span to temper-api. This is the SSR half of
  * closing the "internal dangle": unlike the reverse proxy, these loader fetches carried
- * no trace context at all. No-op when span export is disabled. See `./telemetry/context`
+ * no trace context at all. No-op when span export is disabled. See `temper-telemetry-ts`
  * and task `019fbf24`.
  */
 function traced(headers: Record<string, string>): Record<string, string> {

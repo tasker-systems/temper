@@ -2,8 +2,8 @@ import { context, propagation, TraceFlags, trace } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { activeTraceparent, extractContext } from './context';
-import { initTelemetry, isTelemetryEnabled } from './otel';
+import { activeTraceparent, extractContext } from '../src/context.js';
+import { initTelemetry, isTelemetryEnabled } from '../src/otel.js';
 
 const TRACE_ID = '0af7651916cd43dd8448eb211c80319c';
 const SPAN_ID = 'b7ad6b7169203331';
@@ -31,7 +31,7 @@ describe('activeTraceparent', () => {
 			traceId: TRACE_ID,
 			spanId: SPAN_ID,
 			traceFlags: TraceFlags.SAMPLED,
-			isRemote: false,
+			isRemote: false
 		});
 		const tp = context.with(trace.setSpan(context.active(), span), () => activeTraceparent());
 		expect(tp).toBe(`00-${TRACE_ID}-${SPAN_ID}-01`);
@@ -42,7 +42,7 @@ describe('activeTraceparent', () => {
 			traceId: TRACE_ID,
 			spanId: SPAN_ID,
 			traceFlags: TraceFlags.NONE,
-			isRemote: false,
+			isRemote: false
 		});
 		const tp = context.with(trace.setSpan(context.active(), span), () => activeTraceparent());
 		expect(tp).toBe(`00-${TRACE_ID}-${SPAN_ID}-00`);
@@ -76,7 +76,7 @@ describe('initTelemetry', () => {
 		const prev = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 		delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 		try {
-			expect(() => initTelemetry()).not.toThrow();
+			expect(() => initTelemetry({ serviceName: 'test-service' })).not.toThrow();
 			expect(isTelemetryEnabled()).toBe(false);
 		} finally {
 			if (prev !== undefined) process.env.OTEL_EXPORTER_OTLP_ENDPOINT = prev;
