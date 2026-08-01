@@ -58,8 +58,40 @@ export function isSelfReferentialUpstream(upstreamBase: string, requestHost: str
 }
 
 /**
- * Forward a request to `upstreamBase`, preserving method, headers (incl.
- * cookies/authorization), body, and query, and relaying the upstream response.
+ * Time budget for the upstream to *begin* responding (send headers). The body
+ * that follows is deliberately NOT bounded by this — an MCP streamed response
+ * can hold the connection open well past it, and cutting the stream would be a
+ * worse failure than the slow start we are guarding against. See `forwardOnce`.
+ */
+export const UPSTREAM_CONNECT_TIMEOUT_MS = 20_000;
+
+/**
+ * Methods safe to replay after a connection-level failure. A `TypeError: fetch
+ * failed` (undici, no HTTP status) can mean the request never reached the
+ * upstream OR that a response was lost in flight, and the proxy cannot tell
+ * which. Replaying a write could double-apply it — this proxy carries
+ * `PATCH /api/resources` and `POST /api/auditor/.../complete`, both
+ * non-idempotent — so only idempotent, effectively-bodyless methods are
+ * retried; everything else surfaces the failure as 502.
+ */
+const RETRYABLE_METHODS = new Set(['GET', 'HEAD']);
+
+/** Options for {@link forwardRequest}; defaulted in production, overridden in tests. */
+export interface ForwardOptions {
+	/** Header/connect timeout in ms. Default {@link UPSTREAM_CONNECT_TIMEOUT_MS}. */
+	connectTimeoutMs?: number;
+	/** Retries beyond the first attempt, applied only to {@link RETRYABLE_METHODS}. Default 1. */
+	maxRetries?: number;
+}
+
+/** True for the undici timeout we raise via `AbortController`, so it can map to 504 not 502. */
+function isTimeout(err: unknown): boolean {
+	return typeof err === 'object' && err !== null && (err as { name?: string }).name === 'AbortError';
+}
+
+/**
+ * A single forward attempt: relay method/headers/body to `target` and hand back
+ * the upstream response.
  *
  * Two details the platform-level rewrite used to handle for us, now ours:
  *   - `redirect: 'manual'` so an upstream 3xx is relayed to the browser rather
@@ -72,15 +104,23 @@ export function isSelfReferentialUpstream(upstreamBase: string, requestHost: str
  *
  * `new Request(target, request)` copies the method/headers/body stream and lets
  * fetch manage the `Host` header for the new target URL.
+ *
+ * The connect timeout is armed before the fetch and cleared the instant headers
+ * arrive, so it bounds time-to-first-byte only and leaves the response body
+ * stream to run for as long as it needs.
  */
-export async function forwardRequest(
-	upstreamBase: string,
-	pathname: string,
-	search: string,
-	request: Request
-): Promise<Response> {
-	const target = buildUpstreamUrl(upstreamBase, pathname, search);
-	const upstream = await fetch(new Request(target, request), { redirect: 'manual' });
+async function forwardOnce(target: string, request: Request, timeoutMs: number): Promise<Response> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	let upstream: Response;
+	try {
+		upstream = await fetch(new Request(target, request), {
+			redirect: 'manual',
+			signal: controller.signal
+		});
+	} finally {
+		clearTimeout(timer);
+	}
 	const headers = new Headers(upstream.headers);
 	headers.delete('content-encoding');
 	headers.delete('content-length');
@@ -89,6 +129,66 @@ export async function forwardRequest(
 		statusText: upstream.statusText,
 		headers
 	});
+}
+
+/**
+ * Forward a request to `upstreamBase`, preserving method, headers (incl.
+ * cookies/authorization), body, and query, and relaying the upstream response.
+ *
+ * When the upstream cannot be reached, this returns a **502** (connection
+ * failure) or **504** (connect timeout) rather than letting the `fetch`
+ * rejection bubble into SvelteKit's generic `500 {"message":"Internal Error"}`.
+ * The distinction is not cosmetic: temper-ui is a reverse proxy, so an upstream
+ * blip is a *gateway* failure, not an application bug. Collapsing it into a 500
+ * is what made a burst of transient proxy failures fire an error-anomaly alert
+ * that looked like the UI had crashed (see the 2026-08-01 incident, where the
+ * upstream API logged zero errors across the same window).
+ */
+export async function forwardRequest(
+	upstreamBase: string,
+	pathname: string,
+	search: string,
+	request: Request,
+	options: ForwardOptions = {}
+): Promise<Response> {
+	const target = buildUpstreamUrl(upstreamBase, pathname, search);
+	const timeoutMs = options.connectTimeoutMs ?? UPSTREAM_CONNECT_TIMEOUT_MS;
+	const retries = RETRYABLE_METHODS.has(request.method.toUpperCase())
+		? (options.maxRetries ?? 1)
+		: 0;
+
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= retries; attempt++) {
+		try {
+			return await forwardOnce(target, request, timeoutMs);
+		} catch (err) {
+			lastErr = err;
+		}
+	}
+
+	// Every attempt failed at the connection layer. Relay as a gateway error and
+	// log enough to line the blip up against the upstream's own logs — the
+	// inbound `traceparent` if the caller sent one (the Rust API links trusted
+	// callers by it), plus the target and method. There is no upstream response
+	// to read an `x-vercel-id` from here, precisely because the fetch never
+	// completed.
+	const timedOut = isTimeout(lastErr);
+	console.error('proxy: upstream unreachable', {
+		target,
+		method: request.method,
+		traceparent: request.headers.get('traceparent') ?? undefined,
+		attempts: retries + 1,
+		timedOut,
+		error: lastErr instanceof Error ? lastErr.message : String(lastErr)
+	});
+	return new Response(
+		JSON.stringify({
+			message: timedOut
+				? 'Gateway Timeout: upstream API did not respond in time'
+				: 'Bad Gateway: upstream API unreachable'
+		}),
+		{ status: timedOut ? 504 : 502, headers: { 'content-type': 'application/json' } }
+	);
 }
 
 /** Forward the inbound SvelteKit request to the operator-configured upstream. */
