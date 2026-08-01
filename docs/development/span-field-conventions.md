@@ -87,6 +87,29 @@ Established by `profile_id` in `crates/temper-api/src/middleware/auth.rs`, and n
 field in the table above. It is what lets a span carry a value that does not exist yet when the span
 opens — which is true of every identifier worth correlating on.
 
+### End-user identifiers: `profile_id`, never the raw OAuth `sub`
+
+The identifier that correlates a human across our spans is `profile_id`. The raw OAuth `sub` is
+**not** emitted onto spans or span events. Decided 2026-08-01 (task
+`019fbea1-97b9-7170-8a19-59b8d95174ba` §5), for two reasons that outlived "PII is bad":
+
+- **Cross-system linkability.** Auth0's `google-oauth2|…` `user_id` embeds the Google account id, so
+  a raw `sub` in an exported trace joins us to the same person in unrelated systems. A `profile_id`
+  is meaningless outside temper's boundary — that asymmetry is the whole argument.
+- **The read surface widened.** "Who can read traces" now includes the vendor's UI *and* MCP clients
+  and the models behind them; a `sub` has already been read by an LLM into a chat transcript during
+  triage.
+
+At the ordinary emission points a profile has already resolved, so `sub` is redundant there and is
+simply dropped (`temper-mcp`'s `Profile resolved` / `MCP session initialized`). There is one window
+where a *valid* token maps to no profile yet, so `profile_id` does not exist — the human sites in
+`temper_services::auth` / `profile_service`. §5 left the choice there to the implementer between a
+salted-hash `enduser.id` and emitting nothing; **nothing** is emitted (those events stay correlatable
+to their request through the root span's trace context). If an end-user identifier is ever emitted on
+such a path, name it **`enduser.id`** per OTel semconv — it is the attribute flagged sensitive and the
+one downstream redaction processors look for. Machine principals are exempt: a `client_id@clients`
+subject is our own identifier, not cross-linkable to a person, so machine-token rejections keep it.
+
 ### Naming: `http_request` is already overloaded
 
 temper-api's root span is `http_request`; temper-mcp's is `mcp_request`, not a second one, for exactly

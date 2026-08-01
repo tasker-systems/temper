@@ -180,6 +180,36 @@ pub fn log_resolution() {
 /// builds one, to express something that is a process singleton either way.
 static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
+/// The `service.name` this process claims for itself, set once at startup before the exporter builds.
+///
+/// ## Why this is set in code, overriding `OTEL_SERVICE_NAME`
+///
+/// `service.name` was left to `OTEL_SERVICE_NAME` on the reasoning that the operator — one Vercel
+/// project at a time — is its right owner. That held until temper-cloud turned out to run **eleven**
+/// runtimes in one project: three Rust executables (`api/axum.rs`, `api/mcp.rs`, `api/internal.rs`)
+/// and eight Node lambdas, all reading the *same* project-scoped `OTEL_SERVICE_NAME`. Once the Node
+/// half exports via `@vercel/otel`, one project env var cannot name both halves distinctly — whatever
+/// it is set to, the Rust spans and the Node spans collide under a single `service.name`, and the
+/// Tier-2 waterfall cannot tell an API hop from its own project's Node hop.
+///
+/// So each Rust binary names *itself* here, via [`set_service_name`]. The OTel Rust SDK ranks
+/// code-based configuration above environment variables — a `with_service_name` on the resource
+/// builder wins over the `EnvResourceDetector` — which is precisely what frees the project's
+/// `OTEL_SERVICE_NAME` to name the Node half without touching the Rust side. Set once, read once in
+/// [`build_provider`].
+static SERVICE_NAME: OnceLock<&'static str> = OnceLock::new();
+
+/// Claim `name` as this process's `service.name` in exported spans, overriding any `OTEL_SERVICE_NAME`.
+///
+/// Call once, **before** [`init`](crate::init) installs the subscriber — the name is read while the
+/// exporter is built, so a later call cannot affect a provider that already exists (and a second call
+/// is ignored: `service.name` is a per-process constant, not a setting). A binary that never calls
+/// this keeps the SDK's env-driven `service.name`, which is the right default for the CLI and for
+/// local runs that set `OTEL_SERVICE_NAME` themselves.
+pub fn set_service_name(name: &'static str) {
+    let _ = SERVICE_NAME.set(name);
+}
+
 /// True when `OTEL_SDK_DISABLED` is set to `true` (case-insensitive), per the spec.
 ///
 /// Any other value — including `1`, `yes`, and typos — leaves telemetry **on**. The spec names
@@ -227,13 +257,17 @@ fn configured_endpoint() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// Resource attributes describing *which deployment* emitted a span.
+/// Resource attributes describing *which deployment* emitted a span, plus the process's own
+/// `service.name` when a binary has claimed one.
 ///
-/// `service.name` is deliberately absent: the SDK fills it from `OTEL_SERVICE_NAME`, and setting it
-/// here would override the operator's choice with ours. What we add is the Vercel identity the SDK
-/// cannot know — and `VERCEL_DEPLOYMENT_ID` in particular is the bridge between a trace and a
-/// `dpl_…`, which is how the last production measurement under this goal was correlated at all.
-fn deployment_resource() -> Resource {
+/// `service_name` is `Some` for the Rust server binaries — each names itself, see [`SERVICE_NAME`] —
+/// and `None` for the CLI and local runs, which keep the SDK's env-driven `service.name`. A `Some`
+/// value overrides `OTEL_SERVICE_NAME` (code beats env in the SDK's precedence), which is the whole
+/// point: it frees that project env var to name the Node half. Beyond `service.name` we add the
+/// Vercel identity the SDK cannot know — and `VERCEL_DEPLOYMENT_ID` in particular is the bridge
+/// between a trace and a `dpl_…`, which is how the last production measurement under this goal was
+/// correlated at all.
+fn deployment_resource(service_name: Option<&'static str>) -> Resource {
     let mut attrs = Vec::new();
 
     if let Ok(env) = std::env::var("VERCEL_ENV") {
@@ -248,7 +282,11 @@ fn deployment_resource() -> Resource {
     }
     attrs.push(KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")));
 
-    Resource::builder().with_attributes(attrs).build()
+    let mut builder = Resource::builder();
+    if let Some(name) = service_name {
+        builder = builder.with_service_name(name);
+    }
+    builder.with_attributes(attrs).build()
 }
 
 /// Build the tracer provider, or `None` when export is off or cannot be set up.
@@ -286,7 +324,7 @@ fn build_provider() -> Option<SdkTracerProvider> {
 
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
-        .with_resource(deployment_resource())
+        .with_resource(deployment_resource(SERVICE_NAME.get().copied()))
         .build();
 
     // A telemetry init should state what it resolved — otherwise "why are there no spans" is
@@ -618,23 +656,43 @@ mod tests {
         );
     }
 
-    /// `service.name` must be the operator's, from `OTEL_SERVICE_NAME`.
+    fn service_name(resource: &Resource) -> Option<String> {
+        resource
+            .get(&opentelemetry::Key::from_static_str("service.name"))
+            .map(|v| v.to_string())
+    }
+
+    /// A binary that claims a name owns its `service.name`, **overriding** `OTEL_SERVICE_NAME`.
     ///
-    /// `Resource::builder()` — as opposed to `builder_empty()` — merges the SDK's own detectors,
-    /// which is how the operator's value arrives without us reading the variable at all. The thing
-    /// worth pinning is that we never *overwrite* it: each Vercel project sets its own service name
-    /// so the three surfaces are distinguishable, and a hardcoded name here would collapse them
-    /// into one and make "which deployable emitted this" unanswerable.
+    /// This is the collision fix (work item 2b): temper-cloud runs three Rust executables and eight
+    /// Node lambdas in one Vercel project, so the project's `OTEL_SERVICE_NAME` cannot name both
+    /// halves distinctly. Naming the Rust side in code frees that env var for the Node half — and
+    /// only works because code beats env in the SDK's precedence, which is exactly what this pins:
+    /// the env value is present and deliberately *different*, and the code value still wins.
     #[test]
-    fn the_service_name_is_the_operators_not_ours() {
-        temp_env::with_var("OTEL_SERVICE_NAME", Some("temper-mcp-under-test"), || {
-            let resource = deployment_resource();
+    fn a_claimed_service_name_overrides_the_env_var() {
+        temp_env::with_var("OTEL_SERVICE_NAME", Some("would-collide-with-node"), || {
+            let resource = deployment_resource(Some("temper-mcp"));
             assert_eq!(
-                resource
-                    .get(&opentelemetry::Key::from_static_str("service.name"))
-                    .map(|v| v.to_string())
-                    .as_deref(),
-                Some("temper-mcp-under-test"),
+                service_name(&resource).as_deref(),
+                Some("temper-mcp"),
+                "a code-set service.name must beat OTEL_SERVICE_NAME, or the project env var cannot \
+                 be freed to name the Node half",
+            );
+        });
+    }
+
+    /// When a binary claims *no* name — the CLI, and local runs — `service.name` still comes from
+    /// `OTEL_SERVICE_NAME`, unchanged from before 2b. `Resource::builder()` (not `builder_empty()`)
+    /// merges the SDK's own detectors, which is how the operator's value arrives without us reading
+    /// the variable at all.
+    #[test]
+    fn without_a_claimed_name_the_service_name_is_the_operators() {
+        temp_env::with_var("OTEL_SERVICE_NAME", Some("temper-cli-under-test"), || {
+            let resource = deployment_resource(None);
+            assert_eq!(
+                service_name(&resource).as_deref(),
+                Some("temper-cli-under-test"),
             );
         });
     }
@@ -650,7 +708,7 @@ mod tests {
                 ("VERCEL_DEPLOYMENT_ID", Some("dpl_test123")),
             ],
             || {
-                let resource = deployment_resource();
+                let resource = deployment_resource(None);
                 let get = |k: &'static str| {
                     resource
                         .get(&opentelemetry::Key::from_static_str(k))
@@ -678,7 +736,7 @@ mod tests {
                 ("VERCEL_DEPLOYMENT_ID", None),
             ],
             || {
-                let resource = deployment_resource();
+                let resource = deployment_resource(None);
                 for absent in [
                     DEPLOYMENT_ENVIRONMENT_NAME,
                     CLOUD_REGION,

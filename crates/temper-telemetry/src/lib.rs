@@ -86,7 +86,7 @@ pub mod propagate;
 pub mod redact;
 pub mod request_span;
 
-pub use export::{force_flush_spans, shutdown_telemetry};
+pub use export::{force_flush_spans, set_service_name, shutdown_telemetry};
 #[cfg(feature = "test-support")]
 pub use init::init_server_logging_with_writer;
 pub use init::{init_cli_logging, init_server_logging};

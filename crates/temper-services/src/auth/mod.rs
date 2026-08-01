@@ -126,6 +126,10 @@ async fn claims_from_token(
     match classify(raw) {
         Principal::Machine(machine) => Ok(machine),
         Principal::Refuse(why) => {
+            // `sub` is KEPT here, unlike the human sites: `classify` only returns `Refuse` for a
+            // machine-*shaped* token (an `@clients` subject / M2M grant that is incoherent), so this
+            // `sub` is a machine client identifier, not the human OAuth `sub` §5 targets. It is not
+            // cross-linkable to a person and is the one identifier this rejection has to point at.
             tracing::warn!(sub = %raw.sub, why, "rejected: unclassifiable machine-shaped token");
             Err(AuthzError::Refused(why))
         }
@@ -171,7 +175,15 @@ pub async fn authenticate_token_existing_only(
         .await
         .map_err(AuthzError::ProfileResolution)?
         .ok_or_else(|| {
-            tracing::info!(sub = %raw.sub, "slack link: refused (no existing temper profile)");
+            // The raw OAuth `sub` is deliberately NOT emitted, even though this is the one window §5
+            // flags where `sub` is the *only* identifier that exists — a valid token that maps to no
+            // temper profile, so there is no `profile_id` to carry instead. §5 left the choice
+            // between a salted-hash `enduser.id` and emitting nothing to the implementer; nothing is
+            // chosen here. A `google-oauth2|…` value would join our exported traces to the same
+            // person in unrelated systems, and this is a narrow account-link refusal, not a hot path:
+            // it stays correlatable to its request through the root span's trace context, and the
+            // Slack side identifies the caller for the rare triage that needs it. Decided 2026-08-01.
+            tracing::info!("slack link: refused (no existing temper profile)");
             AuthzError::Refused("no existing temper profile for this identity")
         })?;
 

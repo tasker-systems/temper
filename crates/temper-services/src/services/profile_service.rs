@@ -123,6 +123,10 @@ fn reject_machine_shaped(claims: &AuthClaims, door: &str) -> ApiResult<()> {
     let machine_provider = claims.provider == crate::auth::MACHINE_PROVIDER_TAG;
     let machine_shaped_id = claims.external_user_id.ends_with("@clients");
     if machine_provider || machine_shaped_id {
+        // `external_user_id` is KEPT here, unlike the human sites: this branch is reached only for a
+        // machine-shaped identity (machine provider tag or an `@clients` subject), so the value is a
+        // machine client identifier, not the human OAuth `sub` §5 targets — not cross-linkable to a
+        // person, and the one identifier this rejection has to name.
         tracing::warn!(
             external_user_id = %claims.external_user_id,
             provider = %claims.provider,
@@ -336,9 +340,13 @@ async fn refresh_link_verification(
 /// new-profile creation).
 async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Option<Profile>> {
     if claims.email_verified != Some(true) {
+        // `external_user_id` — the raw OAuth `sub` on the human path — is deliberately NOT emitted.
+        // The machine-shape guard has already run, so this is a human identity in the pre-resolution
+        // window; a `google-oauth2|…` value would join our exported traces to the same person in
+        // unrelated systems. `provider` is not an end-user identifier and stays; the event remains
+        // correlatable to its request through the root span's trace context. Decided 2026-08-01 (§5).
         tracing::warn!(
             provider = %claims.provider,
-            external_user_id = %claims.external_user_id,
             "Skipping email reconciliation: email_verified is not true"
         );
         return Ok(None);

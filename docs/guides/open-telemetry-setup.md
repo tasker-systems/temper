@@ -158,7 +158,7 @@ temper-specific variable, and no vendor name, appears anywhere in our code.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Where spans go — **the base**, to which the SDK appends `/v1/traces`. Use this one; the vendor examples below assume it. |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The trace endpoint **verbatim** — nothing is appended. Copying a vendor's base URL into this variable POSTs to `/` and 404s. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | `key=value,key=value`. **This is where vendor auth lives** — which is what makes the setup vendor-agnostic. |
-| `OTEL_SERVICE_NAME` | Which deployable this is. Set it per Vercel project; the surfaces are separate functions and want separate names. |
+| `OTEL_SERVICE_NAME` | Which deployable this is — for the **Node** hops. The Rust functions now name themselves in code (`temper-api` / `temper-mcp` / `temper-internal`, via `temper_telemetry::set_service_name`), which the SDK ranks above this variable, so on a project that also runs Node lambdas (temper-cloud) this is free to name the Node half without colliding with the Rust spans. See below. |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling, from our config only. |
 | `OTEL_SDK_DISABLED` | Turn the exporter off without a deploy. |
 
@@ -225,7 +225,7 @@ Two CLI-specific behaviours follow from a CLI being a process that actually exit
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT="https://otlp-gateway-<region>.grafana.net/otlp"
 OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64 of instanceID:token>"
-OTEL_SERVICE_NAME="temper-api"
+OTEL_SERVICE_NAME="temper-ui"   # Rust functions self-name in code; this names the Node half
 ```
 
 Worth preferring if the metrics-taxonomy work (task `019f943d-f2f0`) lands next: traces, metrics,
@@ -236,7 +236,7 @@ and logs all arrive through one OTLP endpoint, so metrics do not reopen the dest
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT="https://api.honeycomb.io"
 OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=<ingest key>"
-OTEL_SERVICE_NAME="temper-api"
+OTEL_SERVICE_NAME="temper-ui"   # Rust functions self-name in code; this names the Node half
 ```
 
 Worth preferring for trace query ergonomics. Traces-first, so metrics would likely need a second
@@ -246,22 +246,34 @@ destination.
 
 Each running site is an independent Vercel project (see [DEPLOYING.md](../../DEPLOYING.md)), and each
 Rust surface is a separate **function** within it — `api/axum.rs`, `api/mcp.rs`, `api/internal.rs`.
-Environment variables are per project, so all three functions in one project share them; give each
-*project* its own `OTEL_SERVICE_NAME`.
+Environment variables are per project, so all functions in one project share them.
 
 ```bash
 vercel env add OTEL_EXPORTER_OTLP_ENDPOINT production
 vercel env add OTEL_EXPORTER_OTLP_HEADERS production   # secret — the ingest key lives here
-vercel env add OTEL_SERVICE_NAME production
+vercel env add OTEL_SERVICE_NAME production            # names the Node half only (see below)
 ```
+
+**`service.name` for the Rust functions is set in code, not by `OTEL_SERVICE_NAME`.** The temper-cloud
+project runs eleven runtimes in one project — three Rust executables (`api/axum.rs`, `api/mcp.rs`,
+`api/internal.rs`) and eight Node lambdas — all reading the same project-scoped `OTEL_SERVICE_NAME`.
+One env var cannot name both halves distinctly, so once the Node half exports via `@vercel/otel` its
+spans would collide with the Rust API's under a single `service.name` and the cross-service waterfall
+could not tell an API hop from its own project's Node hop. Each Rust binary therefore claims its own
+name via `temper_telemetry::set_service_name` (`temper-api` / `temper-mcp` / `temper-internal`), and
+the OTel Rust SDK ranks that code-set value above `OTEL_SERVICE_NAME`. The net effect: set
+`OTEL_SERVICE_NAME` to whatever the **Node** half should be called; it does not touch the Rust spans.
+On a Rust-only project the variable is simply overridden and can be left unset.
 
 ## Local development
 
 Nothing about the export path is Vercel-aware, so local is the same binary reading the same
 variables. Two options:
 
-- **Point straight at the vendor.** Set the same three variables with a separate
-  `OTEL_SERVICE_NAME` (e.g. `temper-api-local`) so local spans are filterable. Simplest, and it
+- **Point straight at the vendor.** Set the endpoint and headers. Note that the local `temper-api`
+  binary self-names `temper-api` in code (like its Vercel twin), so `OTEL_SERVICE_NAME` will **not**
+  override that — local spans land under `temper-api`. To filter local from production, lean on the
+  `deployment.environment.name` / `service.instance.id` resource attributes instead. Simplest, and it
   exercises the exact production path.
 - **Run a collector locally.** The sibling `tasker-core` repo has working Grafana/Tempo compose
   files to borrow. Better when iterating on span shape, since you are not filling a vendor account
