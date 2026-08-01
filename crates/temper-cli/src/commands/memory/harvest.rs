@@ -129,8 +129,17 @@ pub fn plan_harvest(
         actions.push(HarvestAction {
             filename: file.filename.clone(),
             title: title.clone(),
-            // A stated `modified` is a fact someone wrote; an mtime is one the filesystem
-            // inferred. Only the absence of the former is filled, and never the reverse.
+            // Fill only the absence, never overwrite. `modified` is NOT a hand-written date —
+            // measured 2026-08-01, the Claude Code memory subsystem stamps it on any file it
+            // writes — so this is not "a stated fact beats an inferred one". It is that
+            // `modified` survives a copy, a `touch` and a restore-from-backup where an mtime does
+            // not, so the durable record of when the file was last written wins over the fragile
+            // one. Neither is evidence anybody re-checked the claim; see the module doc.
+            //
+            // The same measurement sharpens a known hazard: because the harness re-stamps
+            // `modified` in the file's own bytes, a formatting-only edit advances the date
+            // `migrate` will use as `verified` even on a file that carries one — so the exposure
+            // is not limited to the mtime-fallback files.
             pin_modified: match parsed.modified {
                 Some(_) => None,
                 None => Some(file.mtime),
