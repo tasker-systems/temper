@@ -17,9 +17,9 @@ bun run dev
 # open http://localhost:5173/dev/atlas
 ```
 
-Pick a **scenario** (home / nodeNeighborhood / nodeSelected / nodeSelectedContext /
-cogmapPanorama / leafBare / regionDrill / regionDrillUnion / contextPanorama /
-contextDrill) and a **viewport** preset (or type w/h).
+Pick a **scenario** and a **viewport** preset (or type w/h). The scenario buttons are derived
+from the bundle's own keys, so adding a scenario to the fixtures adds its button — see
+[What the scenarios cover](#what-the-scenarios-cover) for what each one pins.
 The frame clips like a real bounded viewport and is drag-resizable from its corner.
 On a fresh checkout the harness runs against the committed synthetic fixtures — no
 local capture required.
@@ -34,11 +34,10 @@ local capture required.
   `home: 'cogmap'` (circle) nodes so both cross-home mark shapes render under the
   inverted radial.
 
-Unlike the other eight scenarios, these two were **hand-authored** synthetically
-(exactly conforming to `AtlasViewData` / `ContextPanorama` / `AtlasSubgraph`), **not
-captured** from prod: the context door predates any deployed instance of it, so there
-was nothing live to capture. Regenerate them by editing the committed bundle directly
-(the capture console script below has no context-door path).
+These two were originally **hand-authored** synthetically, because the context door predated
+any deployed instance of it and there was nothing live to capture. **No longer** — as of the
+2026-08-01 refresh every scenario in the bundle is captured from a real database through the
+real reads, the context door included. Nothing here is hand-shaped.
 
 ## Fixtures
 
@@ -58,14 +57,54 @@ precedence order:
 
 ### Regenerating fixtures
 
-Two steps: **capture** a raw bundle from prod into the local override, then
+Two steps: **capture** a raw bundle from a live database into the local override, then
 **sanitize** it into the committed default.
 
-**1. Capture** from the live app's SvelteKit data endpoint (`__data.json`), which carries
-the exact page-load output. From a logged-in `temperkb.io/graph/@me` browser tab, paste
-this into the devtools console. It auto-derives every id (picks your richest research
-cogmap, finds a region with a context-homed composition node, and a low-degree leaf), so
-there is nothing to fill in by hand:
+**1. Capture** with `crates/temper-api/examples/capture_atlas_fixtures.rs`. It calls the same
+`graph_service` / `context_graph_service` functions the HTTP handlers call and serializes their
+real return types, so the payloads are the wire DTOs **by construction** — there is no
+hand-transform step that could drift. Read that file's header beside this section; each
+`capture_*` in it names the handler it mirrors.
+
+```bash
+# From the repo root. SQLX_OFFLINE is NOT optional — see below.
+SQLX_OFFLINE=true \
+DATABASE_URL="$(neonctl connection-string main \
+    --project-id crimson-fog-23541670 --org-id org-wild-snow-32921543 \
+    --role-name neondb_owner --database-name neondb 2>/dev/null | tail -1)" \
+  cargo run -p temper-api --example capture_atlas_fixtures -- \
+    --handle <your-profile-handle> \
+    --out packages/temper-ui/static/dev/atlas-fixtures.local.json
+```
+
+Four things worth knowing before you run it:
+
+- **`SQLX_OFFLINE=true` is required.** `sqlx`'s compile-time `query!` macros read
+  `DATABASE_URL`, so without it the *build* verifies every macro in the dependency tree
+  against production instead of the committed `.sqlx` cache — slow, and it fails outright
+  whenever prod's schema and `migrations/` have not converged. `cargo make` sets this
+  globally, which is why the hazard only appears on a bare `cargo run`.
+- **The session is read-only** (`default_transaction_read_only = on`), set on connect rather
+  than trusted to the call sites.
+- **Anchors are discovered, never hardcoded.** The tool picks the densest cogmap, a cogmap with
+  material and no regions, the densest context, a context with no containers, and an empty one
+  — then derives every region and node id from the payload it just read. Region ids are
+  ephemeral (the steward re-sweeps clusters and folds the old rows); a hardcoded one previously
+  produced a hard 500.
+- **It reports its picks to stderr**, including region / singleton / orphan counts per anchor.
+  That output is the record of which real places the bundle stands on. When a scenario's shape
+  has vanished from the corpus it prints a `warning:` and skips it rather than emitting
+  something that no longer means what the scenario name claims — at which point
+  `fixtures.test.ts` fails on the missing scenario. Skipping is never silent.
+
+<details>
+<summary>Superseded: the browser-console capture (kept for reference)</summary>
+
+The predecessor recipe drove a logged-in browser and captured SvelteKit's `__data.json`,
+because the `/api/graph/*` reads are server-side and never touch the browser network tab. It
+worked, but it needed a human to paste a script into devtools — so it was not reproducible by
+anyone who was not in the session, and automated downloads throttled. It also had no
+context-door path. Superseded by the Rust capture above.
 
 ```js
 (async () => {
@@ -135,17 +174,84 @@ there is nothing to fill in by hand:
 
 (If Chrome blocks the download — a "multiple downloads" prompt in the omnibox — click Allow.)
 
-**2. Sanitize** — move the raw capture into place as the (gitignored) local override,
-then generate the committed, personal-data-free default from it:
+</details>
+
+**2. Sanitize** — the capture is raw (real titles, handles, excerpts, ids) and this repository
+is **public**, so the committed bundle is always the sanitized one:
 
 ```bash
-mv ~/Downloads/atlas-fixtures.local.json packages/temper-ui/static/dev/atlas-fixtures.local.json
 cd packages/temper-ui
 node scripts/sanitize-atlas-fixtures.mjs   # → static/dev/atlas-fixtures.json (commit this)
 bun run test src/lib/graph/atlas/fixtures.test.ts   # verify the committed bundle is clean
 ```
 
-The sanitizer remaps every UUID and replaces sensitive free-text (titles, names,
-handles, slugs) with deterministic synthetic values while preserving the exact
-structure — so the committed bundle stays schema-honest but carries no personal data.
-Keep the raw `.local.json` around locally; the loader prefers it when present.
+The sanitizer remaps every UUID and replaces sensitive free-text with deterministic synthetic
+values while preserving the exact structure — so the committed bundle stays schema-honest but
+carries no personal data. Keep the raw `.local.json` around locally; the loader prefers it when
+present.
+
+Three of its rules are load-bearing and easy to break by "simplifying":
+
+- **Replacement preserves the original's LENGTH** (to the nearest word). The harness exists to
+  check legibility at the sizes the corpus actually reaches, and a label's rendered width is the
+  thing being checked — so a 90-character region label must not sanitize down to two words, or
+  the harness reports a layout as legible that production truncates.
+- **`label` is two different fields under one key.** An *edge* label is relationship grammar
+  (`derived_from`, `advances`) and must survive; the legend renders it. A *territory* label is
+  not — `graph_cogmap_territories` computes it as `COALESCE(reg.label, seen.rep_title)`, so an
+  unlabelled region borrows a member's resource **title**, and a container's label *is* its
+  goal's title. The rule is path-scoped, not key-scoped.
+- **The leak guard is positive, not a denylist.** `fixtures.test.ts` asserts every free-text
+  value is built from the sanitizer's own word bank. A denylist only catches strings someone
+  thought to list, and the Rust capture opened three surfaces the browser capture never had:
+  `excerpt` (real first-paragraph prose), `actor_name` (real display names), and territory
+  labels. Both guards are kept — they fail on different things.
+
+### What the scenarios cover
+
+The bundle is a corpus-shape suite, not a screenshot set. Each entry below is a shape measured
+on prod **2026-08-01**; the pre-refresh bundle (captured 2026-07-09) could express none of the
+last four, so a design validated against it was validated against a corpus that no longer
+exists.
+
+| Scenario | Shape it pins |
+|---|---|
+| `home` | **Concentration, not average** — one enormous anchor and a tail of near-empty ones |
+| `cogmapPanorama` | **Singleton-dominated** — 64.5% of live cogmap regions hold exactly one member |
+| `regionDrill` / `regionDrillUnion` | Region composition; one region, and a `~`-joined union |
+| `nodeNeighborhood` / `nodeSelected` / `nodeSelectedContext` / `leafBare` | Node tiers, both homes, and the neighbour-less leaf |
+| `contextPanorama` / `contextDrill` | **A genuinely clustered anchor** — containers with real multi-member spread |
+| `coldStartCogmap` | **Material, zero live regions.** 6 of 11 non-empty anchors, incl. the L0 kernel |
+| `coldStartContext` | Volume with **no container structure** — every resource in the residual tray |
+| `residualDrill` | **Region-less material is reachable** — 22.6% of active resources are in no live region |
+| `emptyAnchor` | A wholly empty anchor renders as a view, not a failure |
+
+**Live vs folded.** `kb_cogmap_regions` retains superseded rows under `is_folded`, and folded
+rows are **84%** of the table. Every consumer that matters filters `NOT is_folded`. The capture
+tool inherits this for free by going through the service layer; a dump-based transform that
+forgot it would inflate every region count ~6× and produce fixtures no surface would ever
+receive.
+
+#### Known gap: context regions are not capturable
+
+There is no scenario for *"a context's own regions"* and this is a substrate limit, not an
+omission. `graph_cogmap_territories` filters `WHERE reg.cogmap_id = p_cogmap`
+(`migrations/20260713000050_region_visible_member_count.sql`), and a context region carries
+`cogmap_id IS NULL` — so the read is structurally blind to them, exactly as
+`20260713000010_anchor_orientation_reads.sql`'s own header says. `TerritoryKind::Cogmap` has no
+producer at all. The context door draws **goal-rooted containers plus a residual tray**, not
+regions.
+
+This matters because the two-kinds-of-region contrast — a cogmap region is a connected clump of
+the *declared* graph (`w_cos = 0`), a context region is a *semantic neighbourhood*
+(`w_cos = 1`) — is a finding the design has to answer, and only one half of it is reachable
+through the API today. `contextPanorama` shows the container panorama, which is a different
+object. Recorded as design-phase input.
+
+A consequence worth stating so it is not mistaken for sloppiness: **`coldStartCogmap` and
+`coldStartContext` are cold in two different senses**, because the two doors read different
+things. A cogmap panorama draws *regions*, so its cold case is "zero live regions". A context
+panorama draws *goal-rooted containers*, so its cold case is "zero containers" — the context
+door cannot see whether the context has regions at all. Both are the real thing a reader
+arriving at that door encounters with nothing derived to organize by; neither is a
+substitute for the other.
