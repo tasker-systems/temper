@@ -89,7 +89,13 @@ impl<'a> SearchClient<'a> {
             .await?;
 
         // Parse the diagnostics header before consuming the body. `from_utf8` (not `to_str`) so a
-        // hint with non-ASCII (em dashes) decodes; any parse miss degrades to `None`.
+        // non-ASCII byte does not fail the parse outright; any parse miss degrades to `None`.
+        //
+        // NOT a full UTF-8 round-trip in production: the deployed platform percent-encodes non-ASCII
+        // header bytes before they reach here (measured on prod 2026-08-01), so what arrives is
+        // already `%E2%80%94` rather than an em dash. This is deliberately NOT percent-decoded — a
+        // hint may legitimately contain a `%`, and decoding would corrupt it. The server keeps hint
+        // text ASCII instead (`search_hint`, guarded by `every_emitted_hint_is_ascii`).
         let diagnostics = resp
             .headers()
             .get(SEARCH_DIAGNOSTICS_HEADER)

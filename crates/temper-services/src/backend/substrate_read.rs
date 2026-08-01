@@ -712,6 +712,23 @@ fn classify_scope(params: &SearchParams) -> SearchScope {
 /// Build the agent-facing one-liner for a search's [`SearchDiagnostics`] (issue #360). Pure — no DB —
 /// so it is unit-testable. Returns `None` only when the result set is unremarkable (`Ok` reason and
 /// no degraded signal); otherwise it explains the shape and suggests a concrete next step.
+///
+/// # Every emitted string must be ASCII
+///
+/// This text ships to the caller inside the `x-temper-search-diagnostics` **response header**, and
+/// on the deployed platform a non-ASCII byte does not survive that trip: it arrives percent-encoded,
+/// so an em dash reaches the user as a literal `%E2%80%94` in the middle of a sentence. Both Rust
+/// sides are innocent — the handler writes raw UTF-8 with `HeaderValue::from_bytes` and the client
+/// reads it back with `str::from_utf8` — and both carried comments asserting the round-trip was
+/// therefore safe. It is safe against a bare Axum server, which is exactly what the e2e drives; the
+/// encoding is introduced further out, at the serverless adapter boundary the tests never cross.
+/// `[observed on prod — 2026-08-01]`, in a hint shipped by #360 and unnoticed until a later hint
+/// started firing on the common path.
+///
+/// So: **plain ASCII punctuation only in these strings.** `every_emitted_hint_is_ascii` enumerates
+/// the arms and fails on any non-ASCII byte, because "remember not to type an em dash" is not a
+/// property anyone can hold. Prose in this function is a wire value, not commentary — the comments
+/// around it are free to use whatever punctuation reads best.
 fn search_hint(
     scope: SearchScope,
     reason: SearchReason,
@@ -733,7 +750,7 @@ fn search_hint(
                 .to_string(),
         ),
         (SearchScope::Cogmap, SearchReason::OutOfScope) => parts.push(
-            "this cogmap admits 0 resources you can see — check the cogmap ref, or try \
+            "this cogmap admits 0 resources you can see: check the cogmap ref, or try \
              `--context <ref>`."
                 .to_string(),
         ),
@@ -742,7 +759,7 @@ fn search_hint(
                 .map(|n| format!("{n} candidate resource(s) in scope; "))
                 .unwrap_or_default();
             parts.push(format!(
-                "{prefix}nothing matched the query — try rephrasing or a broader scope."
+                "{prefix}nothing matched the query: try rephrasing or a broader scope."
             ));
         }
         // `Ok` (any scope) and the impossible `OutOfScope` for Global/Context need no reason hint.
@@ -773,8 +790,8 @@ fn search_hint(
         // that would change nothing is its own species of misleading control.
         let bound = if r.anchors_selected == r.regions_effective {
             format!(
-                " — region width {} bounds this (one region per map per round); raise it with \
-                 `--regions N`",
+                " (region width {} bounds this, one region per map per round; raise it with \
+                 `--regions N`)",
                 r.regions_effective
             )
         } else {
@@ -786,7 +803,7 @@ fn search_hint(
         let wholesale = r.anchors_reached - r.anchors_selected;
         let also = if wholesale > 0 {
             format!(
-                " {wholesale} further anchor(s) were admitted wholesale, having no regions — that is \
+                " {wholesale} further anchor(s) were admitted wholesale, having no regions; that is \
                  not query relevance."
             )
         } else {
@@ -1355,6 +1372,67 @@ mod clamp_tests {
             anchors_selected: selected,
             regions_effective: width,
         }
+    }
+
+    /// EVERY hint this function can emit must be pure ASCII, because it ships in a response HEADER
+    /// and the deployed platform percent-encodes non-ASCII on the way out — an em dash reaches the
+    /// user as `%E2%80%94` mid-sentence. Two hints shipped that way in #360 and nobody saw it for
+    /// months, because the e2e drives a bare Axum server and the encoding happens further out.
+    ///
+    /// This enumerates the full cross product of arms rather than sampling: scope x reason x
+    /// reach-shape x degraded. A test that checked only the hints someone thought to list would go
+    /// green on the next one added, which is the precise way the original defect survived.
+    #[test]
+    fn every_emitted_hint_is_ascii() {
+        let scopes = [
+            SearchScope::Global,
+            SearchScope::Context,
+            SearchScope::Cogmap,
+            SearchScope::Wayfind,
+        ];
+        let reasons = [
+            SearchReason::Ok,
+            SearchReason::NoMatch,
+            SearchReason::OutOfScope,
+        ];
+        // Reach shapes chosen to reach every branch inside the narrowed-selection arm: absent, full,
+        // single-anchor, width-binding, width-not-binding, and zero-selection.
+        let reaches = [
+            None,
+            Some(reach(4, 4, 4, 3)),
+            Some(reach(1, 1, 1, 3)),
+            Some(reach(9, 3, 3, 3)),
+            Some(reach(9, 5, 2, 3)),
+            Some(reach(10, 7, 1, 3)),
+            Some(reach(10, 6, 0, 3)),
+        ];
+        let mut emitted = 0usize;
+        for scope in scopes {
+            for reason in reasons {
+                for r in &reaches {
+                    for degraded in [false, true] {
+                        for size in [None, Some(0), Some(7)] {
+                            let Some(h) = search_hint(scope, reason, size, r.as_ref(), degraded)
+                            else {
+                                continue;
+                            };
+                            emitted += 1;
+                            assert!(
+                                h.is_ascii(),
+                                "hint carries non-ASCII and will reach the caller \
+                                 percent-encoded: {h:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // A cross product that produced no hints would pass this vacuously — the failure mode this
+        // whole test exists to prevent, one level up.
+        assert!(
+            emitted > 20,
+            "the cross product must actually exercise the hint arms; only {emitted} hints emitted"
+        );
     }
 
     /// The load-bearing case: a perfectly healthy-looking `Ok` in which one anchor won everything.
