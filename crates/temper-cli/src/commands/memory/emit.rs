@@ -21,21 +21,13 @@ use std::path::PathBuf;
 
 use chrono::{NaiveDate, Utc};
 
-use temper_client::TemperClient;
 use temper_core::types::config::{expand_tilde, MemoryConfig, TemperConfig};
-use temper_workflow::types::resource::{ResourceDetail, ResourceListParams};
+use temper_workflow::types::resource::ResourceDetail;
 
+use super::fetch::fetch_context_rows;
 use super::render::{parse_entry, render_index, MemoryDefect};
-use crate::actions::runtime::{build_config_store_and_client, client_err_to_temper};
+use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
-
-const MEMORY_DOC_TYPE: &str = "memory";
-
-/// Page size for the `list_meta` walk in [`fetch_context_rows`] — mirrors
-/// `status::STATUS_PAGE_SIZE`. Reproduced here (not imported) because that constant and its
-/// paging function are private to `status.rs`; the pattern — page to the true `total` rather
-/// than accept a capped page — is what's shared, not the code.
-const EMIT_PAGE_SIZE: i64 = 200;
 
 /// The outcome of checking whether `[memory]` is configured — decided purely, before any I/O, so
 /// the CLI dispatch can short-circuit to a no-op-that-explains-itself without ever touching the
@@ -93,36 +85,25 @@ pub fn build_index(
     Ok(render_index(&entries, today, cfg.stale_after_days))
 }
 
-/// Fetch every `memory`-typed resource in `context_ref`, paging through the full result set.
-/// See `status::fetch_context_rows` for why paging to `total` matters — a capped first page
-/// would silently drop memories once a context holds more than one page's worth.
-async fn fetch_context_rows(
-    client: &TemperClient,
-    context_ref: &str,
-) -> Result<Vec<ResourceDetail>> {
-    let mut rows = Vec::new();
-    let mut offset: i64 = 0;
-    loop {
-        let params = ResourceListParams {
-            doc_type_name: Some(MEMORY_DOC_TYPE.to_string()),
-            context_ref: Some(context_ref.to_string()),
-            limit: Some(EMIT_PAGE_SIZE),
-            offset: Some(offset),
-            ..Default::default()
-        };
-        let response = client
-            .resources()
-            .list_meta(&params)
-            .await
-            .map_err(client_err_to_temper)?;
-        let fetched = response.rows.len() as i64;
-        rows.extend(response.rows);
-        offset += fetched;
-        if fetched == 0 || offset >= response.total {
-            break;
-        }
+/// Resolve the write path (`path_override`, or `mem.index_path` tilde-expanded), create any
+/// missing parent directories, and write `rendered` to it.
+///
+/// Synchronous and network-free by construction — split out from [`emit`] specifically so the
+/// half of this command whose entire job is putting bytes on disk is testable with a real
+/// filesystem (`tempfile`) without standing up or mocking a client, mirroring
+/// `commands/status.rs`'s `count_projected_md_files` tests.
+fn resolve_and_write(
+    mem: &MemoryConfig,
+    path_override: Option<&str>,
+    rendered: &str,
+) -> Result<PathBuf> {
+    let path_str = path_override.unwrap_or(mem.index_path.as_str());
+    let path = expand_tilde(path_str);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
-    Ok(rows)
+    std::fs::write(&path, rendered)?;
+    Ok(path)
 }
 
 /// The async I/O shell. Assumes the caller has already checked [`emit_outcome`] (the CLI
@@ -145,14 +126,7 @@ pub async fn emit(config: &TemperConfig, path_override: Option<&str>) -> Result<
     let today = Utc::now().date_naive();
     let rendered = build_index(mem, &rows, today)?;
 
-    let path_str = path_override.unwrap_or(mem.index_path.as_str());
-    let path = expand_tilde(path_str);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, rendered)?;
-
-    Ok(path)
+    resolve_and_write(mem, path_override, &rendered)
 }
 
 #[cfg(test)]
@@ -239,6 +213,13 @@ mod tests {
         row(title, context_ref, Some("active"), None)
     }
 
+    /// A memory authored natively in Temper (from a session, from Desktop) never had a
+    /// `source_file` — `row()` deliberately doesn't set one. Mirrors
+    /// `status::tests::meta_row_titled` / `a_memory_without_a_source_file_is_ordinary_not_a_defect`.
+    fn meta_row_native(title: &str, context_ref: &str) -> ResourceDetail {
+        row(title, context_ref, Some("active"), Some("2026-08-01"))
+    }
+
     #[test]
     fn emit_refuses_when_any_memory_is_malformed() {
         let rows = vec![meta_row_missing_status("feedback_x", "@me/temper")];
@@ -269,6 +250,65 @@ mod tests {
         assert!(
             matches!(outcome, EmitOutcome::NotConfigured { .. }),
             "absent [memory] means OFF, and the command must say why rather than erroring"
+        );
+    }
+
+    /// `open_meta.source_file` is OPTIONAL and must NEVER be required — a memory authored
+    /// natively in Temper never had one. This guards the constraint directly: a row with valid
+    /// `status`/`verified` and no `source_file` must still build successfully. Without this test
+    /// nothing in the suite calls `build_index` on a row that actually succeeds (every existing
+    /// row is deliberately defective on `status`/`verified`), so a future change that
+    /// re-introduces a `source_file` requirement would pass every other test in this file.
+    #[test]
+    fn build_index_succeeds_for_a_memory_with_no_source_file() {
+        let rows = vec![meta_row_native("a native memory", "@me/temper")];
+        let out = build_index(&cfg(), &rows, d("2026-08-01"))
+            .expect("a memory with no source_file must build cleanly, never be a defect");
+        assert!(out.contains("a native memory"));
+    }
+
+    #[test]
+    fn resolve_and_write_creates_parent_dirs_and_writes_to_index_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join("nested/deeper/MEMORY.md");
+        let mut c = cfg();
+        c.index_path = index_path.to_string_lossy().to_string();
+
+        let written = resolve_and_write(&c, None, "hello index").unwrap();
+
+        assert_eq!(written, index_path);
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), "hello index");
+    }
+
+    #[test]
+    fn resolve_and_write_honors_path_override_over_configured_index_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let override_path = dir.path().join("override/OTHER.md");
+        let c = cfg();
+
+        let written = resolve_and_write(&c, Some(override_path.to_str().unwrap()), "hi").unwrap();
+
+        assert_eq!(
+            written, override_path,
+            "an explicit --path must win over the configured index_path"
+        );
+        assert_eq!(std::fs::read_to_string(&override_path).unwrap(), "hi");
+    }
+
+    #[test]
+    fn resolve_and_write_overwrites_an_existing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join("MEMORY.md");
+        std::fs::write(&index_path, "stale content").unwrap();
+        let mut c = cfg();
+        c.index_path = index_path.to_string_lossy().to_string();
+
+        resolve_and_write(&c, None, "fresh content").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&index_path).unwrap(),
+            "fresh content",
+            "emit re-renders the whole index every run; a stale file must not survive"
         );
     }
 }

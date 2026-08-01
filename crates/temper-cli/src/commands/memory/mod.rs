@@ -2,6 +2,7 @@
 //! `memory`-typed Temper resources.
 
 pub mod emit;
+mod fetch;
 pub mod render;
 pub mod status;
 

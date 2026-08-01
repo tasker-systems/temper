@@ -14,23 +14,15 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use temper_client::TemperClient;
 use temper_core::types::config::{expand_tilde, MemoryConfig, TemperConfig};
-use temper_workflow::types::resource::{ResourceDetail, ResourceListParams};
+use temper_workflow::types::resource::ResourceDetail;
 
+use super::fetch::fetch_context_rows;
 use super::render::parse_entry;
-use crate::actions::runtime::{build_config_store_and_client, client_err_to_temper};
+use crate::actions::runtime::build_config_store_and_client;
 use crate::error::Result;
 use crate::format::{self, OutputFormat};
 use crate::output;
-
-const MEMORY_DOC_TYPE: &str = "memory";
-
-/// Page size for the `list_meta` walk in [`fetch_context_rows`]. Larger than the CLI's own
-/// browsing default (`DEFAULT_META_LIST_LIMIT`, 50, in `commands/resource.rs`) because this
-/// walk exists to produce an accurate total for the report, not a page to browse — see the
-/// pagination note on `fetch_context_rows`.
-const STATUS_PAGE_SIZE: i64 = 200;
 
 /// One `.md` file found in the directory that holds the rendered index (`index_path`'s parent).
 /// Carries only the filename — matching against Temper is against `open_meta.source_file`
@@ -168,42 +160,6 @@ pub async fn status(config: &TemperConfig, output_format: OutputFormat) -> Resul
     let rendered = format::render(&report, output_format)?;
     println!("{rendered}");
     Ok(())
-}
-
-/// Fetch every `memory`-typed resource in `context_ref`, paging through the full result set.
-///
-/// `list_meta` returns a capped page (`ResourceMetaListResponse { rows, total, .. }`).
-/// Reporting `rows.len()` as the whole count would silently understate `in_temper` and
-/// misclassify locally-orphaned files the moment a context holds more memories than one page —
-/// status exists to answer "what do I actually have", so it pages to the true total rather than
-/// surfacing a partial count as if it were complete.
-async fn fetch_context_rows(
-    client: &TemperClient,
-    context_ref: &str,
-) -> Result<Vec<ResourceDetail>> {
-    let mut rows = Vec::new();
-    let mut offset: i64 = 0;
-    loop {
-        let params = ResourceListParams {
-            doc_type_name: Some(MEMORY_DOC_TYPE.to_string()),
-            context_ref: Some(context_ref.to_string()),
-            limit: Some(STATUS_PAGE_SIZE),
-            offset: Some(offset),
-            ..Default::default()
-        };
-        let response = client
-            .resources()
-            .list_meta(&params)
-            .await
-            .map_err(client_err_to_temper)?;
-        let fetched = response.rows.len() as i64;
-        rows.extend(response.rows);
-        offset += fetched;
-        if fetched == 0 || offset >= response.total {
-            break;
-        }
-    }
-    Ok(rows)
 }
 
 /// List `.md` files in the directory containing `index_path`, excluding the index file itself.
