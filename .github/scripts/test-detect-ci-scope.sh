@@ -208,6 +208,10 @@ run_test "steward change runs the TS SDK + agent job" \
     "packages/agent-workflows/steward/agent/agent.ts" \
     "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
 
+run_test "temper-telemetry-ts change runs the TS SDK + agent job" \
+    "clients/temper-telemetry-ts/src/otel.ts" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
 run_test "contract change runs the TS SDK + agent job (temper-ts asserts it)" \
     "tests/contracts/m2m-token-request.json" \
     "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"

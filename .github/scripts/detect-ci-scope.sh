@@ -178,8 +178,14 @@ fi
 # both cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit
 # two-entry `workspaces` list), so no Rust or TS change can reach them except
 # through a contract, which is in the trigger set.
+#
+# clients/temper-telemetry-ts is here too: it is the shared OTel bootstrap package the
+# eve agents (and temper-ui) consume as a `file:` dependency, and it carries its own
+# typecheck+vitest job in this workflow. temper-ui rebuilds against it through the
+# always-on test-typescript job (RUN_TEST_TYPESCRIPT fires on any non-docs change), so
+# no separate key is needed there.
 HAS_AGENTS_TS=false
-if changes_match '^clients/temper-ts/|^packages/agent-workflows/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-agents-ts\.yml$|^\.github/scripts/(generate-temper-ts|check-temper-ts-drift)\.sh$|^__force_full_ci__$'; then
+if changes_match '^clients/temper-ts/|^clients/temper-telemetry-ts/|^packages/agent-workflows/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-agents-ts\.yml$|^\.github/scripts/(generate-temper-ts|check-temper-ts-drift)\.sh$|^__force_full_ci__$'; then
     HAS_AGENTS_TS=true
 fi
 

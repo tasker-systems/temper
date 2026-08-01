@@ -6,6 +6,9 @@
  * in place before the first request is handled.
  */
 
-import { initTelemetry } from './otel';
+import { initTelemetry } from 'temper-telemetry-ts';
 
-initTelemetry();
+// temper-ui injects trace context at its own known call sites (proxy + SSR loaders),
+// so it does not need HTTP auto-instrumentation (instrumentHttp stays off). The eve
+// agents flip that on — their outbound MCP fetch is internal to the framework.
+initTelemetry({ serviceName: 'temper-ui' });

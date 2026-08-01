@@ -8,8 +8,7 @@
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import type { RequestEvent } from '@sveltejs/kit';
 import { waitUntil } from '@vercel/functions';
-import { extractContext } from './context';
-import { forceFlush, getTracer, isTelemetryEnabled } from './otel';
+import { extractContext, forceFlush, getTracer, isTelemetryEnabled } from 'temper-telemetry-ts';
 
 /**
  * Wrap the whole `handle` body in a SERVER span whose parent is the inbound
