@@ -1,0 +1,43 @@
+# The 24-query probe set, reconstructed verbatim from research
+# 019fbb52-80de-76c0-bec3-0d21d12a90de, Appendix A.
+#
+# It was cited as "fixed and re-runnable" by that research, by research
+# 019fbb76-1a15-7e70-8ca9-74b23a0772a9, and by task 019fbb78-657b-7380-9063-212727cfe390 —
+# but it existed only as prose in that appendix. `queries.txt` in this directory is a
+# DIFFERENT, 20-query set belonging to the earlier spike (task 019fb55b). The two are not
+# interchangeable and results across them are not comparable.
+#
+# Four families, six each. Family assignment is the research author's judgement, carried
+# verbatim so the M/C/S/N decomposition stays comparable across runs.
+
+# --- M: a distilled map squarely answers ---
+what is an outcome register
+who gets recorded as having graded a citation
+what picks the map that a routing query gets sent to
+what is a cognitive map and how does it differ from a context
+what does it mean for evidential standing to have three axes
+what is a telos charter for
+
+# --- C: only raw working material answers ---
+what port does the local docker postgres listen on
+which cargo make task runs the embedded e2e tests
+why does nextest hang when a bin target is in scope
+what do I clean after editing a migration file
+which crate owns the migration chain and why is its dependency list short
+what does the additive-only migration gate do at deploy time
+
+# --- S: the small storyteller maps ---
+how does a story world model its characters
+what is the design of the storyteller system
+how are scenes structured in the storyteller
+what does a narrative arc look like as a graph
+how does storyteller represent point of view
+what are the components of the storyteller architecture
+
+# --- N: unclaimed control ---
+explain eigenvalues and eigenvectors
+what is the capital of Portugal
+how do I bake sourdough bread
+what is the offside rule in football
+how does photosynthesis work
+what year did the Berlin Wall fall

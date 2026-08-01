@@ -77,6 +77,55 @@ classify come back `unknown`.
 - There is no `kb_doc_types` table; `doc_type` lives in `kb_properties`, which is how
   `unified_search`'s `corpus` CTE reads it.
 
+## The region-formation arms (task `019fbb78`, research `019fbbc0`)
+
+A second question re-used this directory: whether re-forming a cogmap's regions makes its content
+reachable. That one **cannot be answered read-only** — `salience` and `centroid` are computed by the
+producer during materialize — so it needs writes, and writes never touch prod.
+
+**Two probe sets live here and they are NOT interchangeable.** `queries.txt` is the original
+20-query set for the spike above. `queries-24.txt` is the 24-query set (6 each M/C/S/N) that
+research `019fbb52` and `019fbb76` both cite as "fixed and re-runnable" — it had never actually been
+a file, only prose in `019fbb52`'s Appendix A, which is why it is committed now. Results across the
+two are not comparable; say which you used.
+
+```bash
+# 1. query vectors, from the same embed_text the CLI uses
+TEMPER_ONNX_MODEL_PATH=crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx \
+  cargo run --release -p temper-ingest --no-default-features --features embed-download \
+  --example query_vectors < queries-24.txt > vectors-24.tsv
+
+# 2. probes (generated — vectors-24.tsv, reach.sql, returned.sql are artifacts, not sources)
+python3 gen_reach.py    vectors-24.tsv 'Temper — self-cognition' > reach.sql      # scope level
+python3 gen_returned.py vectors-24.tsv 'Temper — self-cognition' > returned.sql   # returned rows
+
+# 3. reference on prod, read-only; then the same probe on a branch, which MUST agree
+./prod-readonly.sh reach.sql
+./branch-readonly.sh <branch-id> reach.sql
+
+# 4. arms — the only writes in this tree
+./branch-write.sh <branch-id> none            # incumbent; validates the producer is reproducible
+./branch-write.sh <branch-id> resolution-0.2  # declared-only granularity
+./branch-write.sh <branch-id> w-cos-1.0       # admits similarity
+./branch-write.sh <branch-id> workflow-default
+```
+
+**Writing to prod is impossible, not merely discouraged.** `region_materialize_arms` requires
+`--expect-host` and refuses unless it matches the host it actually connected to (an allowlist, so a
+stale string fails closed), and refuses prod `main`'s endpoint unconditionally on top — including
+when you deliberately name prod in `--expect-host`. `DATABASE_URL` is never exported.
+
+**Gotchas paid for once, here too:**
+
+- `wayfind_region_scores` is **not lens-scoped** — its candidate CTE is `WHERE NOT r.is_folded` with
+  no lens predicate; `p_lens` only supplies the `s_*` blend weights. Materializing a second lens
+  leaves both partitions live in one candidate pool. Keep one `lens_id` across arms.
+- `default_transaction_read_only = on` forbids **temp tables** as well as views, so a multi-block
+  probe must be one statement over `MATERIALIZED` CTEs.
+- **Scope is not returned rows, and the two disagree on which arm wins.** Run both.
+- Region id turnover depends on the **previous partition**, not the arm: re-running the incumbent
+  from its own state minted 0 of 385; from another arm's state it minted 338 of 385.
+
 ## Scope of what these measure
 
 The funnel is `wayfind_region_scores` (Stage-1 region selection) → `wayfind_scope_reach` (scope
