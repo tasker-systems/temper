@@ -85,6 +85,15 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # dist/ is committed (see this package's README for why bun's file:-dependency
+      # copy semantics force that). Rebuild and fail on any drift, so a src/ change that
+      # forgot to regenerate dist/ cannot ship stale compiled output to the consumers.
+      - name: Build and verify committed dist is current
+        run: |
+          npm run build
+          git diff --exit-code -- dist \
+            || { echo "::error::dist/ is stale — run 'npm ci && npm run build' in clients/temper-telemetry-ts and commit the result"; exit 1; }
+
       - name: Run tests
         run: npm test
 

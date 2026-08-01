@@ -5,12 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build:dep": "npm --prefix ../../clients/temper-telemetry-ts ci && npm --prefix ../../clients/temper-telemetry-ts run build",
-    "prebuild": "npm run build:dep",
     "build": "vite build",
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
-    "precheck": "npm run build:dep",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "format": "biome format --write",
     "format:check": "biome format",
@@ -18,7 +15,6 @@
     "lint:fix": "biome lint --fix",
     "biome": "biome check",
     "biome:fix": "biome check --fix",
-    "pretest": "npm run build:dep",
     "test": "vitest run",
     "test:watch": "vitest"
   },
