@@ -1182,6 +1182,29 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 })?;
                 rt.block_on(temper_cli::commands::memory::status(&config, output_format))
             }
+            MemoryAction::Emit { path } => {
+                let config = temper_cli::config::load_global_config()?;
+                match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {
+                    temper_cli::commands::memory::emit::EmitOutcome::NotConfigured { reason } => {
+                        temper_cli::output::warning(reason);
+                        Ok(())
+                    }
+                    temper_cli::commands::memory::emit::EmitOutcome::Configured => {
+                        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                            temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
+                        })?;
+                        let written = rt.block_on(temper_cli::commands::memory::emit(
+                            &config,
+                            path.as_deref(),
+                        ))?;
+                        temper_cli::output::success(format!(
+                            "Memory index written: {}",
+                            written.display()
+                        ));
+                        Ok(())
+                    }
+                }
+            }
         },
         Commands::Pull { context } => commands::pull::run(&context),
         Commands::Config { action } => match action {

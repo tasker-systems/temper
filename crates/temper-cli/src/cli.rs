@@ -1813,6 +1813,12 @@ pub enum SkillAction {
 pub enum MemoryAction {
     /// Report this machine's memory state — works whether or not you have opted in
     Status,
+    /// Render the index from Temper and write it
+    Emit {
+        /// Override the configured index_path (for a machine mid-adoption)
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
