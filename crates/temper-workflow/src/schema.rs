@@ -451,6 +451,21 @@ pub fn schema_value(doc_type: &str) -> Result<serde_json::Value> {
         .map_err(|e| TemperError::Config(format!("{doc_type} schema JSON parse error: {e}")))
 }
 
+/// Return the embedded **base** schema as a JSON value.
+///
+/// Every doc-type schema pulls this in via `allOf` / `$ref`, so its properties are the fields that
+/// exist on *every* resource regardless of type. [`schema_value`] deliberately does not merge it —
+/// that merge happens inside the compiled validator — so a caller that wants to describe the whole
+/// field surface (rather than validate against it) needs both halves and this is the second one.
+///
+/// # Errors
+/// Returns [`TemperError::Config`] if the embedded schema fails to parse (a programming error —
+/// the schema ships with the binary).
+pub fn base_schema_value() -> Result<serde_json::Value> {
+    serde_json::from_str(BASE_SCHEMA)
+        .map_err(|e| TemperError::Config(format!("base schema JSON parse error: {e}")))
+}
+
 /// Return the embedded open_meta recognized-conventions schema as a JSON value.
 ///
 /// This is the self-describing dump behind `temper resource describe-open-meta` and the MCP

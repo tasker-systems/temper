@@ -10,8 +10,8 @@ A register exists to give confidence about four things, and nothing else:
 3. We have **clarity on what success looks like**.
 4. We have clarity on **what must not be true at the end**, so regression is not accidental.
 
-**It stands alone.** Everything here works against the CLI you already have — a body you write and
-two `open_meta` keys. It needs no schema change, no query, and no server feature. Where a richer
+**It stands alone.** Everything here works against the surface you already have — a body you write
+and two `open_meta` keys. It needs no schema change, no query, and no server feature. Where a richer
 mechanism would help, this file says so and tells you what to do without it.
 
 ## Altitude — scale the register to a goal's blast radius, not its effort
@@ -318,29 +318,38 @@ the code repo — flagging clause bodies with imperative/mechanism language, wit
 goal body, and EXTEND/AMEND without a citation. The doc names the check; the owner decides whether to
 mechanize it (enclosure of responsibility again).
 
-## Doing it with the CLI you have
+## Doing it with the tools you have
 
-The register itself is **the goal's body** — write it as markdown sections. `resource create --type
-goal --show-template` prints the section skeleton.
+The register itself is **the goal's body** — write it as markdown sections. There is no
+section-skeleton tool on this surface: `describe_doc_type` returns the frontmatter JSON Schema and
+an `example_managed_meta`, which is metadata, not an outline. Take the headings from *The eight
+elements* above.
 
-```bash
+```
 # 1. Open — what is in force
-temper resource list --type goal --context @me/<ctx> --status active --all
-temper resource show <goal-ref>            # the register; --meta-only to skip the body
+Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<ctx>",
+                                "status": "active", "limit": 200 }
+Tool: get_resource     Input: { "id": "<goal uuid>", "include_content": true }   // the register
 
 # 2. Author or amend. The register is the body, so a body rewrite is the edit.
-#    `show` prints a serialized RECORD, not the markdown body — json or toon depending on the
-#    format in force. Neither is the body, so extract `content` explicitly; a bare redirect of
-#    `show` into a file and back would write the serialized record as the body.
-temper resource show <goal-ref> --format json | jq -r .content > register.md
-cat register.md | temper resource update <goal-ref>
+#    `content` REPLACES the body. Send the whole amended register, never a fragment — a partial
+#    body is a silent truncation of the goal, not an append.
+Tool: update_resource  Input: { "id": "<goal uuid>", "content": "<the amended register>" }
 
 # 5. During the build, a task declares what it is doing for the goal.
-temper resource create --type task --title "…" --context @me/<ctx> \
-  --mode build --effort small --goal <goal-ref> \
-  --open-meta '{"witnesses":{"goal":"<goal-uuid>","clauses":["clause-name"]},
-                "witness":{"id":"W1","mode":"executable","clause":"clause-name",
-                           "floor":"…","bites_against":"…"}}'
+Tool: create_resource
+Input: {
+  "context_ref": "@me/<ctx>",
+  "doc_type_name": "task",
+  "title": "…",
+  "goal": "<goal ref>",
+  "managed_meta": { "temper-mode": "build", "temper-effort": "small" },
+  "open_meta": {
+    "witnesses": { "goal": "<goal uuid>", "clauses": ["clause-name"] },
+    "witness": { "id": "W1", "mode": "executable", "clause": "clause-name",
+                 "floor": "…", "bites_against": "…" }
+  }
+}
 ```
 
 **A task declares `witnesses` *or* `enables`, never both.**
@@ -361,22 +370,23 @@ downstream reader is that reader.
 
 ### Three things that will bite you today
 
-- **Goal membership has two spellings and nothing ties them.** `--goal <ref>` projects an `advances`
-  **edge**, which is the only thing `resource list --type task --goal <ref>` filters on.
-  `open_meta.witnesses.goal` is a **citation**. A task can carry one without the other — one does, and
-  a clause migration built from `list --goal` silently missed it. **Pass `--goal` *and* write the
-  citation**, and when you enumerate a goal's tasks, do not trust either spelling alone.
-
-  `scripts/register-coverage.py <goal-ref>` reads the citation and compares the two, so you no longer
-  have to eyeball it. Note what the divergence usually *is*: not a missing edge, but an edge pointing
-  at a **different** goal, because a task may advance one goal while evidencing a clause of another —
-  and a resource gets only one `advances`→goal edge.
-- **`--open-meta` on `update` is a per-key PATCH, and the key is the unit.** Keys you do not supply
-  are untouched, but a key you do supply is **replaced whole** — sending `{"witness":{"mode":"judged"}}`
-  drops every other field of `witness`. Send the complete key value.
-- **`resource list` is capped and will lie by omission.** Default page is 20 rows (50 with
-  `--meta-only`). Check `truncated` in the response, and reach for `--all` before you conclude a
-  clause has no tasks, or that a set is complete.
+- **Goal membership has two spellings and nothing ties them.** `create_resource`'s / `update_resource`'s
+  `goal` field projects an `advances` **edge**, which is the only thing `list_resources`' `goal` filter
+  reads. `open_meta.witnesses.goal` is a **citation**. A task can carry one without the other — one
+  does, and a clause migration built from the edge filter silently missed it. **Send `goal` *and* write
+  the citation**, and when you enumerate a goal's tasks, do not trust either spelling alone. There is
+  no tool that reconciles them, so the comparison is yours to make: list by the `goal` filter, then
+  read `open_meta.witnesses.goal` off the same set and diff the two by hand. The divergence is usually
+  not a missing edge but an edge pointing at a **different** goal, because a task may advance one goal
+  while evidencing a clause of another — and a resource gets only one `advances`→goal edge.
+- **`open_meta` on a write is a per-key PATCH, and the key is the unit.** Keys you do not supply are
+  untouched, but a key you do supply is **replaced whole** — sending
+  `{"witness":{"mode":"judged"}}` drops every other field of `witness`. Send the complete key value.
+  (`update_resource`'s `open_meta_add` is the narrow exception: it unions **array**-valued keys rather
+  than replacing them. It cannot express a partial object update, so it does not help here.)
+- **`list_resources` is capped and will lie by omission.** Default page is 50 rows, `limit` maxes at
+  200. Compare `rows.len()` against the response's `total` before you conclude a clause has no tasks,
+  or that a set is complete, and page with `offset` when it is short.
 
 ### Declaring coverage without a query
 

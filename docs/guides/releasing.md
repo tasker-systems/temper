@@ -72,6 +72,35 @@ Archive contents (flat layout — no versioned top-level directory):
 
 The installer scripts in [scripts/install/](../../scripts/install/) fetch the latest release via the GitHub API, download the matching archive plus checksum, verify, extract into `~/.local/share/temper/` (mac/linux) or `%LOCALAPPDATA%\Programs\temper\` (Windows), and symlink or PATH-update as appropriate.
 
+### The Agent Skill bundle
+
+Alongside the three CLI archives, each release publishes **one** architecture-independent artifact:
+
+| Artifact | Checksum |
+|---|---|
+| `temper-skill-v<X.Y.Z>.zip` | `...zip.sha256` |
+
+It is the MCP packaging of the temper skill, uploaded by a user to Claude Desktop / claude.ai via
+**Customize → Skills → +**. Built by the `build-skill-bundle` job from the committed
+`agent-skills/temper-knowledge-base/` tree, attested like every other published artifact, and
+reproducible locally with `cargo make skill-package`. See
+[claude-desktop-setup.md](claude-desktop-setup.md) for the user-facing side.
+
+**Two things about it are deliberate and easy to "tidy" into breakage.**
+
+*It carries no per-file manifest.* Manifests exist so `install.sh` can verify each extracted file
+before an atomic swap. Nothing installs this bundle — a human uploads it — so there is no swap to
+gate, and the sha256 sidecar plus the provenance attestation are the whole integrity story.
+
+*Its name is `temper-skill-v<ver>.zip`, not `temper-v<ver>-skill.zip`.* `create-github-release.sh`
+derives the set of archives that **must** ship a manifest from the glob
+`temper-v<ver>-*.{tar.gz,zip}`. The second spelling matches that glob and would fail the release for
+lacking a manifest it should not have; the first misses it while still matching the upload globs
+(`temper-*.zip`, `temper-*.sha256`), so the bundle rides the existing publish loop untouched. Both
+halves are pinned by a case in `test-create-github-release.sh` — the failure direction is safe
+(a rename fails the release loudly rather than publishing something wrong), but it fails at release
+time, which is late.
+
 ## What the attestation does and does not prove
 
 A successful attestation check establishes something precise, and it is worth

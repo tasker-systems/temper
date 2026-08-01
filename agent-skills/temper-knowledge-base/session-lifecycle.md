@@ -9,50 +9,43 @@ confidently misleading: several sessions run concurrently, and "the last session
 someone else's.
 
 1. Read what is in force:
-   ```bash
-   temper resource list --type goal --context @me/<current> --status active --all
-   temper resource show <goal-ref>          # the register: clauses, negative face, coverage state
+   ```
+   Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<current>" }
+   Tool: get_resource     Input: { "id": "<goal uuid>" }   // the register: clauses, negative face, coverage
    ```
    Note which criteria hold, which are superseded, and which are **declared uncovered** — a declared
    hole is information, not an omission to fix. See `outcome-registers.md` if you will author or
    amend a goal this session.
 2. Check what is open:
-   ```bash
-   temper resource list --type task --context @me/<current> --stage in-progress --all
    ```
+   Tool: list_resources   Input: { "doc_type_name": "task", "context_ref": "@me/<current>" }
+   ```
+   The tool returns a page. Read `total` / `returned` / `truncated` before concluding a task is
+   absent, and narrow or page rather than asserting from one call.
 3. Check recent sessions **by title** for the current context — enough to recognise which arc is
    yours, then read that one deliberately:
-   ```bash
-   temper resource list --type session --context @me/<current> --fields ref,title,updated
+   ```
+   Tool: list_resources   Input: { "doc_type_name": "session", "context_ref": "@me/<current>" }
    ```
 4. Search for relevant context:
-   ```bash
-   temper search "<topic>"
    ```
-5. If starting via `task start <slug>` (skill command), load the task and route by mode/effort.
+   Tool: search   Input: { "query": "<topic>" }
+   ```
+5. If the user named a task, load it with `get_resource` and route by its `mode` / `effort`.
 
 ## Session End
 
-Always pipe content via stdin. Without stdin, `resource create --type session` creates
-placeholder boilerplate that must be edited manually.
+The whole note goes in `content` on one `create_resource` call. There is no placeholder path and
+no second step — the server chunks and embeds inline and returns the finished resource.
 
-```bash
-cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
-## Goal
-What we set out to do
-
-## What Happened
-Key actions, decisions, and outcomes
-
-## Decisions
-Choices made and why
-
-## Connections
-Related tasks, concepts, or contexts touched
-
-## Next Steps
-What to pick up next session
-EOF
+```
+Tool: create_resource
+Input: {
+  "context_ref": "@me/<ctx>",
+  "doc_type_name": "session",
+  "title": "<title>",
+  "content": "## Goal\nWhat we set out to do\n\n## What Happened\nKey actions, decisions, and outcomes\n\n## Decisions\nChoices made and why\n\n## Connections\nRelated tasks, concepts, or contexts touched\n\n## Next Steps\nWhat to pick up next session"
+}
 ```
 
 > **Every resource a session note names goes in as `[title](./<full-uuidv7>)`.** Session notes are
@@ -62,8 +55,10 @@ EOF
 > whichever of them the reader guesses. See *Referencing Other Resources* in `SKILL.md`.
 
 Link the session to a task by updating the task's stage after saving:
-```bash
-temper resource update <ref> --stage done
+```
+Tool: update_resource_meta
+Input: { "id": "<task uuid>", "managed_meta": { "temper-stage": "done" }, "open_meta": {} }
+// Both tiers are required fields. Each is a per-key patch, so `"open_meta": {}` touches nothing.
 ```
 
 **If the session moved a goal's criteria, close on them too.** Update the goal's *Exercise status*
@@ -71,15 +66,13 @@ and its declared coverage state — what now runs as distinct from what merely m
 criteria are still uncovered and why. Coverage is never inferred from absence, so a hole that has
 not been closed must still be **stated**. The register is the goal's body, so this is a body rewrite:
 
-```bash
-# `show` prints a serialized record, not the markdown body — json or toon depending on the format
-# in force (`--format` → TEMPER_FORMAT → `[cli]` config → toon on a TTY, json otherwise). NEITHER
-# is the body, so pin the format and extract `content`; a bare `show > file` piped back would
-# write the serialized record as the body.
-temper resource show <goal-ref> --format json | jq -r .content > register.md
-# edit register.md, then:
-cat register.md | temper resource update <goal-ref>
 ```
+Tool: get_resource      Input: { "id": "<goal uuid>" }        // read `content`, edit it whole
+Tool: update_resource   Input: { "id": "<goal uuid>", "content": "<the amended register>" }
+```
+
+`update_resource`'s `content` **replaces** the body. Send the whole amended register, never a
+fragment — a partial body is a silent truncation of the goal, not an append.
 
 ## Closing Notes Carry a Status, or They Don't Ship
 
@@ -126,8 +119,10 @@ Watch for mismatches between assigned mode/effort and actual work:
 | Software task hitting non-software questions | Domain mismatch | Pause, reassess scope |
 
 On confirmation, update the task:
-```bash
-temper resource update <ref> --mode <new> --effort <new>
+```
+Tool: update_resource_meta
+Input: { "id": "<task uuid>", "open_meta": {},
+         "managed_meta": { "temper-mode": "<new>", "temper-effort": "<new>" } }
 ```
 
 ## Checkpoint Pattern

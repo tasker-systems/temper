@@ -75,3 +75,25 @@ pub struct SkillTemplate<'a> {
 pub struct CommandWrapperTemplate<'a> {
     pub config_hash: &'a str,
 }
+
+/// Discipline documents whose prose is shared between the CLI skill and the MCP skill, and whose
+/// *examples* are not. `surface` is `"cli"` or `"mcp"`.
+///
+/// Only documents that genuinely diverge live here. `implementation-grounding.md`,
+/// `plan-verification.md` and `subagent-guidance.md` name no command at all, so they ship to both
+/// surfaces as plain files — templating them would add a seam with nothing on either side of it.
+#[derive(Template)]
+#[template(path = "shared/session-lifecycle.md")]
+pub struct SessionLifecycleTemplate<'a> {
+    pub surface: &'a str,
+}
+
+/// The outcome-register discipline. Shared prose; the worked examples in *Doing it with the …
+/// you have* and *Three things that will bite you today* are the only regions that diverge —
+/// the flag spellings differ, and so do the page caps (`list` is 20/50, `list_resources` is
+/// 50/200), which is the kind of number a hand-maintained second copy gets wrong.
+#[derive(Template)]
+#[template(path = "shared/outcome-registers.md")]
+pub struct OutcomeRegistersTemplate<'a> {
+    pub surface: &'a str,
+}

@@ -107,3 +107,29 @@ grep -q "no archives for v9.9.9" "$TMP/empty.log" \
 [ ! -s "$CALLS_EMPTY" ] || fail "an empty artifact dir still invoked gh"
 
 echo "PASS: an artifact dir with no archives is refused"
+
+# --- 4. The skill bundle publishes WITHOUT a manifest of its own --------------
+# `temper-skill-v<ver>.zip` is an Agent Skill bundle a human uploads to Claude. Nothing
+# installs it, so the per-file manifest — which exists for install.sh's pre-swap verification —
+# is meaningless for it, and it correctly ships without one.
+#
+# Whether that works at all is decided PURELY BY ITS FILE NAME: the guard's archive glob is
+# `temper-v<ver>-*.{tar.gz,zip}`, which `temper-skill-v<ver>.zip` misses, while the upload globs
+# `temper-*.zip` / `temper-*.sha256` still match it. Both halves are asserted, because getting
+# either wrong is silent in the direction that matters — a bundle renamed into the manifest glob
+# fails the whole release, and one that misses the upload glob is simply never published while
+# everything stays green.
+stage_artifacts "$TMP/skill" "$ALL_THREE" "${TRIPLES[@]}"
+printf 'zip' > "$TMP/skill/temper-skill-v9.9.9.zip"
+printf 'sha  file\n' > "$TMP/skill/temper-skill-v9.9.9.zip.sha256"
+CALLS_SKILL="$TMP/calls-skill"; : > "$CALLS_SKILL"
+run_target "$TMP/skill" "$CALLS_SKILL" > "$TMP/skill.log" 2>&1 \
+    || fail "a set including the skill bundle was refused: $(cat "$TMP/skill.log")"
+grep -q "temper-skill-v9.9.9.zip has no per-file manifest" "$TMP/skill.log" \
+    && fail "the skill bundle was held to the manifest rule — check its name against the archive glob"
+grep -q "release upload .*temper-skill-v9.9.9.zip" "$CALLS_SKILL" \
+    || fail "the skill bundle was never uploaded: $(cat "$CALLS_SKILL")"
+grep -q "release upload .*temper-skill-v9.9.9.zip.sha256" "$CALLS_SKILL" \
+    || fail "the skill bundle's sha256 sidecar was never uploaded: $(cat "$CALLS_SKILL")"
+
+echo "PASS: the skill bundle publishes without a manifest, and its sidecar rides along"

@@ -1117,43 +1117,63 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 })
             }),
         },
-        Commands::Skill { action } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            match action {
-                SkillAction::Generate => {
-                    let content = temper_cli::commands::skill::generate(&config)?;
-                    print!("{}", content);
-                    Ok(())
+        // Config is loaded per-arm rather than once above the match, so that `emit` provably
+        // never touches it. The MCP projection is config-free by design — that is what makes it
+        // committable — and `config::load` ERRORS when ~/.config/temper/config.toml is absent, so
+        // a shared load would make the drift gate depend on a developer's local config existing.
+        // CI has none. Structural, not a comment: there is no config in scope in that arm.
+        Commands::Skill { action } => match action {
+            SkillAction::Emit { path } => {
+                let dir = std::path::PathBuf::from(path);
+                let written = temper_cli::commands::skill::emit_agent_skills(&dir)?;
+                temper_cli::output::success(format!(
+                    "Emitted {} agent-skill files: {}",
+                    written.len(),
+                    dir.display()
+                ));
+                for rel in &written {
+                    temper_cli::output::item(rel);
                 }
-                SkillAction::Install { path } => {
-                    let skill_dir = if let Some(p) = path {
-                        std::path::PathBuf::from(p)
-                    } else {
-                        config.skill_output.clone()
-                    };
-                    let report = temper_cli::commands::skill::install(&config, &skill_dir)?;
-                    if report.is_no_op() {
-                        temper_cli::output::success(format!(
-                            "Skill already up to date ({} files): {}",
-                            report.total,
-                            skill_dir.display()
-                        ));
-                    } else {
-                        temper_cli::output::success(format!(
-                            "Skill installed: {} ({} of {} files updated)",
-                            skill_dir.display(),
-                            report.changed.len(),
-                            report.total
-                        ));
-                        for path in &report.changed {
-                            temper_cli::output::item(path);
-                        }
-                    }
-                    Ok(())
-                }
-                SkillAction::Check => temper_cli::commands::skill::check(&config),
+                Ok(())
             }
-        }
+            SkillAction::Generate => {
+                let config = temper_cli::config::load(cli.vault.as_deref())?;
+                let content = temper_cli::commands::skill::generate(&config)?;
+                print!("{}", content);
+                Ok(())
+            }
+            SkillAction::Install { path } => {
+                let config = temper_cli::config::load(cli.vault.as_deref())?;
+                let skill_dir = if let Some(p) = path {
+                    std::path::PathBuf::from(p)
+                } else {
+                    config.skill_output.clone()
+                };
+                let report = temper_cli::commands::skill::install(&config, &skill_dir)?;
+                if report.is_no_op() {
+                    temper_cli::output::success(format!(
+                        "Skill already up to date ({} files): {}",
+                        report.total,
+                        skill_dir.display()
+                    ));
+                } else {
+                    temper_cli::output::success(format!(
+                        "Skill installed: {} ({} of {} files updated)",
+                        skill_dir.display(),
+                        report.changed.len(),
+                        report.total
+                    ));
+                    for path in &report.changed {
+                        temper_cli::output::item(path);
+                    }
+                }
+                Ok(())
+            }
+            SkillAction::Check => {
+                let config = temper_cli::config::load(cli.vault.as_deref())?;
+                temper_cli::commands::skill::check(&config)
+            }
+        },
         Commands::Pull { context } => commands::pull::run(&context),
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
