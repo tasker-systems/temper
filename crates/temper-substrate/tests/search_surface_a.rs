@@ -112,7 +112,7 @@ async fn fts_candidates_normalized_and_scoped(pool: sqlx::PgPool) {
     let score = got.iter().find(|(id, _)| *id == hit).unwrap().1;
     assert!(
         score > 0.0 && score < 1.0,
-        "ts_rank|32 normalizes into [0,1): got {score}"
+        "ts_rank|33 keeps 32's rank/(rank+1), so it normalizes into [0,1): got {score}"
     );
 
     // Empty query → zero rows (term-zero path).
@@ -1133,5 +1133,265 @@ async fn explicit_seed_surfaces_without_hop0_self_score(pool: sqlx::PgPool) {
     assert_eq!(
         hit.combined_score, 0.0,
         "no signal at all ⇒ combined 0; present but unboosted"
+    );
+}
+
+// ── Stage-2 length subsidy, removed kind-blind ────────────────────────────────────────────────────
+// Witnesses for goal 019fb559 / task 019fbb8d. Each FAILS against the pre-change formula — that is
+// what makes it a witness rather than a restatement. Neither test mentions anchor kind anywhere: the
+// corrections are kind-blind, so the property under test is about LENGTH, and a distilled node
+// benefits only insofar as it is short. Both resources below are context-homed (raw) for exactly that
+// reason — if these passed only for cogmap-homed rows, the fix would be the per-kind preference that
+// `cross-kind-outcome-is-earned` forbids.
+
+/// A unit vector whose cosine similarity to `unit(0)` is exactly `c` (so `<=>` distance is `1 - c`).
+fn at_cos(c: f32) -> Vec<f32> {
+    let mut e = vec![0.0_f32; 768];
+    e[0] = c;
+    e[1] = (1.0 - c * c).sqrt();
+    e
+}
+
+/// One block carrying N chunks with caller-chosen embeddings (ONNX-free — structural).
+fn block_with_chunk_embeddings(embs: Vec<Vec<f32>>) -> PreparedBlock {
+    PreparedBlock {
+        incorporated: vec![],
+        raw_text: None,
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq: 0,
+        role: None,
+        chunks: embs
+            .into_iter()
+            .enumerate()
+            .map(|(i, emb)| PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
+                chunk_index: i as i32,
+                content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+                content: format!("chunk {i}"),
+                embedding: Some(emb),
+                embedded_with: None,
+                header_path: None,
+                heading_depth: None,
+            })
+            .collect(),
+    }
+}
+
+async fn mk_chunks(
+    pool: &sqlx::PgPool,
+    home: ContextId,
+    owner: ProfileId,
+    emitter: EntityId,
+    title: &str,
+    uri: &str,
+    embs: Vec<Vec<f32>>,
+) -> ResourceId {
+    let blocks = vec![block_with_chunk_embeddings(embs)];
+    let mut tx = pool.begin().await.unwrap();
+    let id = fire(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title,
+            origin_uri: uri,
+            resource_id: None,
+            home: AnchorRef::context(home),
+            owner,
+            originator: None,
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter,
+            segmented: false,
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+/// CHANNEL 2 — `vec_norm`'s best-of-N is an order statistic, so chunk count buys score that content
+/// did not earn. `long` is *better on its single best chunk* than `short` (dist 0.28 vs 0.30) and
+/// overwhelmingly worse everywhere else (19 chunks at 0.60).
+///
+/// **The bite:** under the shipped `1 - MIN/2`, `long` scores 0.860 and `short` 0.850, so `long`
+/// wins on volume alone and this assertion FAILS. Under the shrunk statistic `long` falls to ~0.742
+/// while `short` is untouched, because the correction `(1 - 1/sqrt(N))` is exactly 0 at N = 1.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vec_norm_does_not_pay_for_chunk_count(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "veclen").await;
+
+    let short = mk_chunks(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "short",
+        "temper://veclen/short",
+        vec![at_cos(0.70)],
+    )
+    .await;
+
+    let mut many = vec![at_cos(0.72)];
+    many.extend(std::iter::repeat_n(at_cos(0.40), 19));
+    let long = mk_chunks(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "long",
+        "temper://veclen/long",
+        many,
+    )
+    .await;
+
+    let got = vector_candidates(&pool, owner.uuid(), &unit(0), 100).await;
+    let s = got
+        .iter()
+        .find(|(id, _)| *id == short.uuid())
+        .expect("short is a candidate")
+        .1;
+    let l = got
+        .iter()
+        .find(|(id, _)| *id == long.uuid())
+        .expect("long is a candidate")
+        .1;
+
+    // The N = 1 identity: a single-chunk resource is scored EXACTLY as before this change.
+    assert!(
+        (s - 0.85).abs() < 1e-4,
+        "at N=1 the shrinkage factor is 0, so vec_norm is still 1 - dist/2 = 0.85; got {s}"
+    );
+    assert!(
+        s > l,
+        "a resource that is worse on 19 of 20 chunks must not out-score a short one on the strength \
+         of its best draw alone: short={s} long={l}"
+    );
+}
+
+/// CHANNEL 2, UNSCOPED BRANCH — the aggregate must be taken over the resource's FULL current chunk
+/// set, never over `ann`. `ann` is the global top-k, so aggregating there conditions on the chunks
+/// that WON a slot, and conditioning on winners cannot correct a selection effect when the selection
+/// *is* the bias being corrected.
+///
+/// Same fixture as above, but with `p_k = 2` so the top-k admits only `long`'s single best chunk
+/// (0.28) and `short`'s only chunk (0.30) — `long`'s 19 poor chunks are cut.
+///
+/// **The bite:** aggregating over `ann` gives `long` n = 1, where the shrinkage factor is 0 AND
+/// `AVG` equals `MIN` identically — so the correction is a no-op twice over and `long` keeps its
+/// unpenalized 0.86 against `short`'s 0.85. Re-deriving over all 20 of `long`'s current chunks
+/// restores the penalty. This is the case the tiny-corpus witness above cannot see, because there
+/// `p_k = 100` admits every chunk and nothing is ever cut.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vec_norm_aggregates_over_full_chunk_set_not_the_admitted_slice(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "vectopk").await;
+
+    let short = mk_chunks(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "short",
+        "temper://vectopk/short",
+        vec![at_cos(0.70)],
+    )
+    .await;
+
+    let mut many = vec![at_cos(0.72)];
+    many.extend(std::iter::repeat_n(at_cos(0.40), 19));
+    let long = mk_chunks(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "long",
+        "temper://vectopk/long",
+        many,
+    )
+    .await;
+
+    // p_k = 2: only long's best chunk and short's single chunk are admitted.
+    let got = vector_candidates(&pool, owner.uuid(), &unit(0), 2).await;
+    let s = got
+        .iter()
+        .find(|(id, _)| *id == short.uuid())
+        .expect("short is admitted by the top-k")
+        .1;
+    let l = got
+        .iter()
+        .find(|(id, _)| *id == long.uuid())
+        .expect("long is admitted by the top-k")
+        .1;
+
+    assert!(
+        s > l,
+        "the shrinkage must be computed over all 20 of long's chunks, not the 1 that won a top-k \
+         slot — otherwise the correction is a no-op on exactly its target case: short={s} long={l}"
+    );
+}
+
+/// CHANNEL 1 — `ts_rank` flag 32 applies NO length normalization, so two documents containing the
+/// query term the same number of times score identically however much unrelated material one of them
+/// carries. Length then decides the blend, because `fts_norm` enters `unified_search` raw at
+/// `w_fts = 1.0`.
+///
+/// **The bite:** under the shipped flag `32` both documents receive the SAME `ts_rank` (one match
+/// each, same weight), so `short > long` FAILS on equality. Flag `33` adds `|1` — divide by
+/// `1 + log(document length)` — and separates them by length alone.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fts_norm_is_length_normalized(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ftslen").await;
+
+    // Both bodies contain "tempering" exactly once. Only their length differs.
+    let filler: String = (0..300).map(|i| format!("filler{i} ")).collect::<String>();
+
+    let short = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "short",
+        "tempering steel",
+        "temper://ftslen/short",
+    )
+    .await;
+    let long = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "long",
+        &format!("tempering steel {filler}"),
+        "temper://ftslen/long",
+    )
+    .await;
+
+    let got = fts_candidates(&pool, owner.uuid(), "tempering").await;
+    let s = got
+        .iter()
+        .find(|(id, _)| *id == short)
+        .expect("short matches")
+        .1;
+    let l = got
+        .iter()
+        .find(|(id, _)| *id == long)
+        .expect("long matches")
+        .1;
+
+    assert!(
+        s > l,
+        "one match in a short document must out-rank one match buried in a long one; \
+         short={s} long={l}"
+    );
+    assert!(
+        s > 0.0 && s < 1.0,
+        "flag 33 retains 32's rank/(rank+1), so the score stays in [0,1): got {s}"
     );
 }
