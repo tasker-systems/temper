@@ -241,6 +241,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillAction,
     },
+    /// Manage the Claude Code memory projection
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
     /// Authenticate with temper cloud
     #[command(name = "auth")]
     Auth {
@@ -1802,6 +1807,12 @@ pub enum SkillAction {
         #[arg(long)]
         path: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemoryAction {
+    /// Report this machine's memory state — works whether or not you have opted in
+    Status,
 }
 
 #[derive(Subcommand)]

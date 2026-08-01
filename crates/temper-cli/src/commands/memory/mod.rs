@@ -2,3 +2,6 @@
 //! `memory`-typed Temper resources.
 
 pub mod render;
+pub mod status;
+
+pub use status::status;

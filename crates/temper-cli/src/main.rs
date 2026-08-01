@@ -2,7 +2,7 @@ use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
     AdminSlackAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    InvocationCmd, ResourceAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    InvocationCmd, MemoryAction, ResourceAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -1172,6 +1172,15 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             SkillAction::Check => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 temper_cli::commands::skill::check(&config)
+            }
+        },
+        Commands::Memory { action } => match action {
+            MemoryAction::Status => {
+                let config = temper_cli::config::load_global_config()?;
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
+                })?;
+                rt.block_on(temper_cli::commands::memory::status(&config, output_format))
             }
         },
         Commands::Pull { context } => commands::pull::run(&context),
