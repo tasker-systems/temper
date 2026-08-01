@@ -132,61 +132,95 @@ The ordinary **one-shot create mints a fresh id every time** (`writes.rs:193-246
 `resource_id: None` → "mint a fresh id"), and `origin_uri` is documented repeatedly as "loose,
 non-unique attribution, NEVER a key." So `create` has, by design, no natural key to reconcile
 against — which is the whole reason a blind retry duplicates. Memory-migrate's trick works because a
-migration *has* a natural key (the source filename); a fresh authored `create` does not. That gap is
-what a **synthetic** idempotency key fills.
+migration *has* a natural key (the source filename); a fresh authored `create` does not. The fix is
+not a *synthetic* key bolted on, but the **stable id the reconcile path already uses** — see the two
+sections below, where the resumable-upload path turns out to have solved all of this except the
+id-minting step.
 
 > Prose-defect noted in passing (belongs to *Prose is a defect surface*, not this spike): the
 > OpenAPI doc on `POST /api/ingest` already advertises "(or existing on dedup)"
 > (`handlers/ingest.rs:50`), but the one-shot create path does **not** dedup. The string is only
 > truthful for the reconcile/kernel path.
 
-## Should writes carry a client-supplied idempotency key?
+## The resumable-upload path already implements reconcile-then-resume — and only one step isn't idempotent
 
-**Recommendation: yes — and the wire cost is near-zero because the carrier already exists end to
-end.** `ActInput` already flattens a caller-minted `correlation_id` onto **every** write DTO
-(`crates/temper-core/src/types/authorship.rs:115-139`), threads it through `into_act_context` →
-substrate `EventContext` → `kb_events.correlation_id` (`events.rs:594-639`), and it is reachable
-from the CLI, the API, and every MCP write tool today. It is explicitly *not* an idempotency key —
-"a correlation aid, NEVER authorization … nothing gates on it"
-(`authorship.rs:14-16`; migration `20260709000050`) — and `kb_events.correlation_id` is a **plain,
-non-unique** index (`canonical_schema.sql:472,491`). So the *plumbing* is done; what is missing is
-(a) a dedup semantic and (b) a decision about whether to reuse `correlation_id` or add a dedicated
-`idempotency_key`.
+The segmented (multi-block) ingest path is not just an example of natural-key idempotency — it is a
+**complete, in-production implementation of the reconcile-then-resume pattern this spike argues for**,
+and reading it collapses the design question. Its steps:
+
+- **`block_append`** (`POST /api/resources/{id}/blocks`) is idempotent on `(resource_id, seq, block
+  merkle)`: a re-append of the same segment returns the existing block id as a no-op, and a same-seq
+  **different-content** append *raises* (`migrations/20260708000012_streaming_ingest.sql`, the
+  `v_existing_hash IS DISTINCT FROM v_incoming_hash` arm). A lost ack on an append is therefore safe
+  to blind-retry.
+- **`resource_finalize`** (`POST /api/resources/{id}/finalize`) validates `expected_blocks` +
+  `expected_body_hash` + `expected_content_hash` before flipping `in_progress → complete`
+  (`streaming_ingest.sql`; `finalize_ingest` at `writes.rs:1317-1335`). It is a deterministic
+  *convergence check*, not a trust-the-ack — re-finalizing an unchanged set re-passes.
+- **`list_blocks`** (`GET /api/resources/{id}/blocks`, `ingest.rs:89-97`) is the built-in reconcile
+  read: "the currently landed segment set (resume/progress read)." See what landed, skip it.
+- The **`ingest_state` `in_progress`/`complete` lifecycle** keeps a half-finished upload
+  addressable-but-hidden precisely so it *can* be resumed rather than orphaned.
+
+**The realization this forces:** every one of those steps is safe to retry *because it targets a
+resource id that already exists*. The **only non-idempotent write in the whole system is the
+id-minting step** — one-shot `create` **and** segmented `begin`, both of which reach
+`create_resource_impl` with `resource_id: None` → *"mint a fresh id"* (`writes.rs:212-218`). That
+single step is the entire duplication hazard #581 describes. Everything downstream of a known id
+already dedups on natural keys, today, with no idempotency key.
+
+## Should writes carry a client-supplied idempotency key? — yes, and the resource id *is* the key
+
+The fix for that one step **already exists in the codebase, just not wired to authored create.** The
+reconcile/kernel path mints under a caller-supplied stable id:
+
+```rust
+// crates/temper-substrate/src/writes.rs:763-765
+// Mint under the caller's STABLE landmark id (the diff key) — so a
+// duplicate create is a primary-key conflict, never a silent twin.
+resource_id: Some(ResourceId::from(p.resource_id)),
+```
+
+So `SeedAction::ResourceCreate` already accepts a supplied id; authored `create` merely passes
+`None`. This reframes the recommendation away from a synthetic-token-plus-dedup-table design:
+
+- **The resource id, minted client-side (UUIDv7), *is* the idempotency key.** A retry carries the
+  same id. No `kb_idempotency_keys` table, and `correlation_id` need not be overloaded (its docs
+  promise it gates nothing — `authorship.rs:14-16`; migration `20260709000050` — and
+  `kb_events.correlation_id` is a plain, non-unique index at `canonical_schema.sql:472,491`; leave
+  that contract intact).
+- **The substrate already supports minting-under-a-supplied-id** (the reconcile path above).
+- **The one thing to add is the graceful arm.** A duplicate id must *return the existing resource*
+  rather than raise a PK conflict — and `block_append`'s merkle no-op (return existing on identical
+  content, raise on divergent content) is the exact template. `begin`'s `in_progress` model is the
+  same idea one level up.
 
 ### Cost across every write surface
 
-| surface | DTO / entry point | wire change | dedup change |
-|---|---|---|---|
-| `POST /api/ingest` | `IngestPayload` (+ flattened `ActInput`) → `CreateResource` (`handlers/ingest.rs:55-166`) | none if reusing `correlation_id`; one optional field if dedicated | server-side: dedup on key before mint |
-| `PATCH /api/resources/{id}` | `ResourceUpdateRequest` (+ `ActInput`) → `UpdateResource` (`handlers/resources.rs:286-367`) | as above | update is *closer* to idempotent already; key makes re-apply a no-op returning current state |
-| `POST /api/resources` | `ResourceCreateRequest` (+ `ActInput`) (`resources.rs:223-268`) | as above | as ingest |
-| MCP `create_resource` / `update_resource` / `update_resource_meta` | `*Input` structs each flatten `ActInput` (`tools/resources.rs:65,218` …) | inherited via `ActInput` | inherited via `CreateResource`/`UpdateResource` |
-| MCP `ingest_begin` (+ append/finalize/blocks) | `IngestBeginInput` flattens `CreateResourceInput` → `ActInput` (`tools/ingest.rs:63-65`) | inherited | append/finalize already natural-key idempotent |
+The wire change is one optional `resource_id` (or `idempotency_key`) that the client mints and
+replays on retry; the server work is **singular, not per-surface** — one "supplied-id → exists?
+return : mint" arm at the `CreateResource` boundary where every surface already converges through
+`DbBackend`.
 
-**The real cost is server-side and singular, not per-surface:** one dedup mechanism at the
-`CreateResource`/`UpdateResource` command boundary (where all surfaces already converge through
-`DbBackend`), plus one uniqueness constraint. Two shapes to choose between:
+| surface | entry point | change |
+|---|---|---|
+| `POST /api/ingest` (one-shot + segmented `begin`) | `IngestPayload` → `CreateResource` (`handlers/ingest.rs:55-166`) | accept a client `resource_id`; mint-under-it with a `block_append`-style exists→return arm |
+| `POST /api/resources` | `ResourceCreateRequest` (`resources.rs:223-268`) | as ingest |
+| `PATCH /api/resources/{id}` | `ResourceUpdateRequest` → `UpdateResource` (`handlers/resources.rs:286-367`) | already targets a known id — **not** the duplication hazard; confirm a re-applied body revise converges to the same block hash (see open questions) |
+| MCP `create_resource` / `update_resource` | `*Input` structs flatten `ActInput` (`tools/resources.rs:65,218`) | inherited via `CreateResource`/`UpdateResource` |
+| MCP `ingest_begin` / `append` / `finalize` / `blocks` | `tools/ingest.rs:63-65,120-237` | `begin` inherits the create fix; `append`/`finalize` are **already** natural-key idempotent |
 
-- **Reuse `correlation_id` as the dedup key.** Zero wire change; every surface already carries it.
-  Cost: it stops being purely provenance — a partial UNIQUE index (e.g. `UNIQUE (author_profile,
-  correlation_id) WHERE kind = 'resource_created'`) changes its contract, and callers that reuse one
-  `correlation_id` across *distinct intended writes* (legal today, since it is act-grain and
-  provenance-only) would suddenly collide. This overloads a field whose docs promise it gates
-  nothing.
-- **Add a dedicated `idempotency_key` on `ActInput`** (recommended). Keeps `correlation_id`'s
-  contract intact; the key means exactly "these two requests are the same write, return the first
-  result." Cost: one nullable field on `ActInput`, one column on the dedup table (or a dedicated
-  `kb_idempotency_keys(key, author, first_result_ref, created)` with a UNIQUE on `(author, key)`),
-  and the create/update commands consult it before minting. When present and seen, return the
-  existing resource (the "(or existing on dedup)" contract, made real); when absent, today's
-  behaviour exactly (self-roots, mints fresh) — so it is strictly additive and safe on `main`.
+**A second reusable primitive rides in finalize.** Its `expected_body_hash`/`expected_content_hash`
+let the server *confirm convergence* rather than the client trusting an ack ("verify, don't trust the
+ack"). Generalized, a keyed create/update could optionally carry its expected post-state so a
+resumed write is validated, not assumed — the same discipline `resource_finalize` already enforces.
 
-**With an idempotency key, both modes collapse to "retry" and the whole distinction stops
-mattering** at the client: a retry with the same key is a no-op returning the committed resource in
-the lost-ack case, and a fresh apply in the never-dispatched case. It also unlocks *proxy-level*
-retry for keyed writes — the `RETRYABLE_METHODS` restriction exists solely because replay could
-double-apply, so a keyed `PATCH`/`POST` becomes retryable and the 2026-08-01 write failures (7 of
-42) would have self-healed transparently at the proxy.
+**With the resource id as the key, both modes collapse to "retry" and the distinction stops
+mattering** at the client: a retry with the same id returns the committed resource in the lost-ack
+case and mints fresh in the never-dispatched case. It also unlocks *proxy-level* retry for keyed
+writes — `RETRYABLE_METHODS` is restricted solely because replay could double-apply, so a keyed
+`PATCH`/`POST` becomes retryable and the 2026-08-01 write failures (7 of 42) would have self-healed
+at the proxy.
 
 ## Recommendation
 
@@ -210,12 +244,15 @@ Ordered by value-per-cost. None of this is implemented by this spike.
    failures are advertised as retry-safe; the ambiguous remainder defaults to reconcile. It closes
    most of the client-side gap without an idempotency key and needs no schema change.
 
-3. **Add a dedicated `idempotency_key` on `ActInput`, deduped server-side at the
-   `CreateResource`/`UpdateResource` boundary (the complete fix).** Strictly additive; absent-key
-   behaviour is unchanged. Makes both modes collapse to "retry," makes the OpenAPI dedup contract
-   true, and unlocks keyed proxy/CLI retry for writes. This is the acceptance-criterion answer #581
-   asks for. Prefer a dedicated key over overloading `correlation_id`, whose provenance-only
-   contract callers already rely on.
+3. **Generalize the stable-id create the resumable path already proves — the complete fix.** Accept a
+   **client-minted `resource_id` (UUIDv7) as the idempotency key** on the id-minting step (one-shot
+   `create` and segmented `begin`), and add a `block_append`-style *exists → return existing* arm so a
+   replay converges instead of raising a PK conflict. The substrate already mints under a supplied id
+   (`writes.rs:763-765`); only authored `create` passes `None`. Strictly additive — absent id ⇒
+   today's behaviour (mint fresh). This is the load-bearing one: it makes both modes collapse to
+   "retry," makes the OpenAPI dedup contract true, and unlocks keyed proxy/CLI retry. Prefer the
+   resource id over a synthetic `idempotency_key` + dedup table, and over overloading
+   `correlation_id` — the machinery, and the no-op template, already exist for the resource id.
 
 Do **1** immediately (it is a doc/hint fix, not production write behaviour). Do **2** alongside the
 sibling TypeScript-telemetry work (it is the same "make the failed hop legible" theme and shares the
@@ -248,9 +285,19 @@ sibling TypeScript-telemetry work (it is the same "make the failed hop legible" 
   unambiguously pre-dispatch; `ECONNRESET`/`UND_ERR_SOCKET` may need "were request bytes written?"
   context the current single-`fetch` shape does not track. The safe design treats only the
   unambiguous codes as retry-safe.
-- **Should `idempotency_key` reuse or replace `correlation_id`?** This spike recommends a dedicated
-  key to preserve `correlation_id`'s provenance-only contract, but the trade-off (one more field vs
-  overloading an existing one) is a design decision, not settled here.
+- **Does a re-applied `update` (PATCH) converge to the same block hash?** Update already targets a
+  known id, so it is not the duplication hazard — but unlike `block_append` its body-revise carries no
+  merkle no-op. Property re-assertion is convergent; a second body revise re-chunks/re-embeds and
+  *should* land identical content, but this needs a controlled confirm before update is called
+  retry-safe.
+- **`resource_finalize` fires `resource_finalized` with no uniqueness guard,** so a re-finalize
+  appends a duplicate (harmless, projection-less) event — idempotent in effect, not strictly once.
+  Whether to guard it (a `UNIQUE (resource_id)` on the finalize event, matching `block_append`'s
+  no-op discipline) is open.
+- **Key shape: client-minted `resource_id` vs a separate `idempotency_key`.** This spike now
+  recommends the resource id (the machinery and the exists→return template already exist), but if a
+  future write needs an idempotency key *without* an addressable id, the dedicated-key design is the
+  fallback — noted, not built.
 - **The stale-response sub-hazard in #581** (a *successful* update returning a body that does not
   reflect the mutation; three candidate mechanisms — pre-write projection, read-after-write delay,
   combined-flag partial application) is a **separate phenomenon** from the failed-write modes and is
