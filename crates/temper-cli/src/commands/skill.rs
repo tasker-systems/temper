@@ -1336,41 +1336,18 @@ mod tests {
     }
 
     // ── Memory-convention discovery (both audiences) ─────────────────────────
-
-    /// The two packagings this repo ships. Distinct from `SURFACE_CLI`/`SURFACE_MCP` (the `&str`
-    /// constants used elsewhere) — this enum exists only to give the tests below a typed,
-    /// unambiguous caller.
-    enum Surface {
-        Cli,
-        Mcp,
-    }
-
-    /// A minimal config for surface-rendering tests. An alias for `test_config()` rather than a
-    /// second literal, so the two never drift apart.
-    fn fixture_config() -> Config {
-        test_config()
-    }
-
-    /// Returns **only** the memory-discovery copy for a surface — not the whole tree.
-    ///
-    /// This matters: the full MCP tree already contains `@me/<ctx>` placeholders throughout
-    /// (`session-lifecycle.md`, `outcome-registers.md`, `SKILL.md` all use it as generic
-    /// addressing syntax), so a whole-tree render would fail
-    /// `the_mcp_skill_describes_the_convention_without_naming_a_context`'s negative assertions for
-    /// reasons that have nothing to do with the memory copy itself. Scoping to the one const under
-    /// test is what makes the assertion mean what it says. `_config` is accepted and unused: the
-    /// copy needs no interpolation, but keeping the parameter means a future config-derived value
-    /// (if one is ever needed here) has somewhere to land without changing every call site.
-    fn render_skill_for(surface: Surface, _config: &Config) -> String {
-        match surface {
-            Surface::Cli => MEMORIES_CLI_MD.to_string(),
-            Surface::Mcp => MEMORIES_MCP_MD.to_string(),
-        }
-    }
+    //
+    // These tests read `MEMORIES_CLI_MD`/`MEMORIES_MCP_MD` directly — not the whole rendered
+    // tree. The full MCP tree already contains `@me/<ctx>` placeholders throughout
+    // (`session-lifecycle.md`, `outcome-registers.md`, `SKILL.md` all use it as generic
+    // addressing syntax), so a whole-tree render would fail
+    // `the_mcp_skill_describes_the_convention_without_naming_a_context`'s negative assertions for
+    // reasons that have nothing to do with the memory copy itself. Scoping to the one const under
+    // test is what makes the assertion mean what it says.
 
     #[test]
     fn the_cli_skill_points_at_memory_status() {
-        let rendered = render_skill_for(Surface::Cli, &fixture_config());
+        let rendered = MEMORIES_CLI_MD;
         assert!(
             rendered.contains("temper memory status"),
             "an unadopted machine learns the feature exists from the CLI skill"
@@ -1379,7 +1356,7 @@ mod tests {
 
     #[test]
     fn the_mcp_skill_describes_the_convention_without_naming_a_context() {
-        let rendered = render_skill_for(Surface::Mcp, &fixture_config());
+        let rendered = MEMORIES_MCP_MD;
         assert!(
             rendered.contains("type `memory`"),
             "Desktop needs to know the doc type"

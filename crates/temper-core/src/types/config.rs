@@ -133,12 +133,17 @@ fn default_stale_after_days() -> u32 {
 }
 
 impl MemoryConfig {
-    /// Every context this machine renders for this project, shared first.
+    /// Every context this machine renders for this project, shared first, deduped — a context
+    /// named in both `shared_contexts` and `project_contexts` is fetched and rendered exactly
+    /// once. Order is preserved (shared first, then project) so which list "wins" a duplicate is
+    /// always the shared entry.
     pub fn all_contexts(&self) -> Vec<&str> {
+        let mut seen = std::collections::HashSet::new();
         self.shared_contexts
             .iter()
             .chain(self.project_contexts.iter())
             .map(String::as_str)
+            .filter(|ctx| seen.insert(*ctx))
             .collect()
     }
 }
@@ -785,6 +790,24 @@ path = "~/vault"
         assert_eq!(m.shared_contexts, vec!["@me/working-agreements"]);
         assert_eq!(m.project_contexts, vec!["@me/temper", "@me/knowledge"]);
         assert_eq!(m.stale_after_days, 90, "default staleness threshold");
+    }
+
+    #[test]
+    fn all_contexts_dedupes_a_context_named_in_both_lists_preserving_order() {
+        let cfg = MemoryConfig {
+            shared_contexts: vec![
+                "@me/working-agreements".to_string(),
+                "@me/temper".to_string(),
+            ],
+            project_contexts: vec!["@me/temper".to_string(), "@me/knowledge".to_string()],
+            index_path: "~/x/MEMORY.md".to_string(),
+            stale_after_days: 90,
+        };
+        assert_eq!(
+            cfg.all_contexts(),
+            vec!["@me/working-agreements", "@me/temper", "@me/knowledge"],
+            "a context named in both lists must be fetched/rendered once, shared-first order preserved"
+        );
     }
 
     #[test]

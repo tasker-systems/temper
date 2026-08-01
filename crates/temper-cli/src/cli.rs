@@ -1824,7 +1824,12 @@ pub enum MemoryAction {
     /// The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can
     /// diff it — this is the command a person or a hook runs instead, gating on the exit code.
     /// Exits non-zero when the on-disk index has drifted from Temper.
-    Check,
+    Check {
+        /// Override the configured index_path — must match whatever `emit --path` last wrote,
+        /// or this checks a different file than the one that was written.
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

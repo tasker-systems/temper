@@ -1205,7 +1205,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     }
                 }
             }
-            MemoryAction::Check => {
+            MemoryAction::Check { path } => {
                 let config = temper_cli::config::load_global_config()?;
                 match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {
                     temper_cli::commands::memory::emit::EmitOutcome::NotConfigured { reason } => {
@@ -1216,7 +1216,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         let rt = tokio::runtime::Runtime::new().map_err(|e| {
                             temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
                         })?;
-                        match rt.block_on(temper_cli::commands::memory::check(&config))? {
+                        match rt.block_on(temper_cli::commands::memory::check(
+                            &config,
+                            path.as_deref(),
+                        ))? {
                             temper_cli::commands::memory::check::DriftVerdict::Match => {
                                 temper_cli::output::success("Memory index is up to date.");
                                 Ok(())

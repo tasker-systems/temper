@@ -133,8 +133,12 @@ Renders one line per **active** memory across the configured contexts, grouped b
 - [server embed is a fallback; client-side is prod](temper://019f…)  [verified 2026-06-12 — UNVERIFIED 50d]
 ```
 
-The gate re-emits and diffs against the committed file, failing on any difference — so a
-hand-edited index is a build failure rather than a slow divergence.
+**The gate cannot be a CI job.** The index lives at `~/.claude/projects/<project>/memory/MEMORY.md`
+— outside the repo, and per-machine — so there is no committed file for CI to diff against, unlike
+the `agent-skills/` projection's `.github/scripts/check-skills-drift.sh`. The gate is instead
+`temper memory check`: a local command that re-emits, diffs against what's on disk, and exits
+non-zero on drift — so a hand-edited index is a failure a person or a hook catches by running it,
+rather than a slow divergence.
 
 **`emit` is a Claude Code concern, not a universal one.** Desktop, mobile and web read memories from
 Temper natively; they need no index. This matters for scoping: the known MCP lag bites on
@@ -161,11 +165,16 @@ project_contexts = ["@me/temper"]
 index_path       = "~/.claude/projects/-Users-.../memory/MEMORY.md"
 ```
 
-`emit` renders the union of both lists, grouped by context. The two keys are not merely two halves
-of that union — **they differ on the write side**: a new cross-project memory defaults to the first
-`shared_contexts` entry, a project-specific one to the first `project_contexts` entry. Without that
-distinction the split is conventional only, and a convention nothing enforces is how the reach
-problem comes back.
+`emit` renders the union of both lists, grouped by context — Phase 1's `all_contexts()` chains
+`shared_contexts` then `project_contexts` and treats them identically; both are read-only inputs to
+the render.
+
+**Phase 2 (not built):** the two keys are meant to differ on the write side too — a new
+cross-project memory defaulting to the first `shared_contexts` entry, a project-specific one to the
+first `project_contexts` entry. Without that distinction the split is conventional only, and a
+convention nothing enforces is how the reach problem comes back. Phase 1 has no write path for
+memories at all (there are zero `memory` resources yet), so this has no consumer today — noted here
+so it is read as planned, not shipped.
 
 **Discovery is a read command that works whether or not you have opted in:**
 

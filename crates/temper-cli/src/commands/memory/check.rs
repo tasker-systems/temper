@@ -14,11 +14,12 @@
 //! the only enforcement point for `open_meta.status`/`open_meta.verified`, and `check` renders
 //! through that same gate rather than growing a second one.
 
-use temper_core::types::config::{expand_tilde, TemperConfig};
+use temper_core::types::config::TemperConfig;
 use temper_workflow::types::resource::ResourceDetail;
 
 use super::emit::build_index;
 use super::fetch::fetch_context_rows;
+use super::resolve_index_path;
 use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
 
@@ -56,7 +57,12 @@ pub fn compare_index(rendered: &str, on_disk: Option<&str>) -> DriftVerdict {
 /// The async I/O shell. Assumes the caller has already checked `[memory]` is configured (the CLI
 /// dispatch does, mirroring `emit`'s `EmitOutcome` gate), but re-checks defensively rather than
 /// trusting the caller silently — same posture as `emit`.
-pub async fn check(config: &TemperConfig) -> Result<DriftVerdict> {
+///
+/// `path_override` mirrors `emit`'s `--path`: a machine mid-adoption that ran
+/// `emit --path <p>` must be able to gate on that same file, not the configured `index_path` —
+/// otherwise the exit code (`main.rs` maps `Drifted` to `process::exit(1)`) is a verdict about a
+/// different file than the one that was written.
+pub async fn check(config: &TemperConfig, path_override: Option<&str>) -> Result<DriftVerdict> {
     let mem = config.memory.as_ref().ok_or_else(|| {
         TemperError::Config(
             "no [memory] section in config.toml — the memory projection is off".to_string(),
@@ -74,7 +80,7 @@ pub async fn check(config: &TemperConfig) -> Result<DriftVerdict> {
     let today = chrono::Utc::now().date_naive();
     let rendered = build_index(mem, &rows, today)?;
 
-    let path = expand_tilde(&mem.index_path);
+    let path = resolve_index_path(mem, path_override);
     let on_disk = std::fs::read_to_string(&path).ok();
 
     Ok(compare_index(&rendered, on_disk.as_deref()))
