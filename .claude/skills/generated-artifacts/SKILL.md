@@ -90,15 +90,16 @@ tags: those live in temper-api, which has no ts-rs (task
 
 ## `agent-skills/` is a committed projection of the shared skill templates
 
-`agent-skills/` is the installable skill for **MCP-only clients** (Claude Desktop and
-anything else with no CLI). It is not hand-maintained: `temper skill emit --path
-agent-skills` regenerates it from `crates/temper-cli/templates/shared/*` (surface-
+`agent-skills/temper-knowledge-base/` is the installable skill for **MCP-only clients** (Claude
+Desktop, claude.ai). It is not hand-maintained: `temper skill emit --path
+agent-skills/temper-knowledge-base` regenerates it from `crates/temper-cli/templates/shared/*` (surface-
 parameterized, `cli` vs `mcp`), `crates/temper-cli/skill-content/mcp/SKILL.md`, and — for
 `references/frontmatter.md` — `temper_workflow`'s embedded JSON Schemas plus the
 `ManagedMeta` wire type.
 
 ```bash
-cargo run -p temper-cli -- skill emit --path agent-skills
+cargo run -p temper-cli -- skill emit --path agent-skills/temper-knowledge-base
+cargo make skill-package   # …and wrap it as dist/temper-skill-v<ver>.zip
 ```
 
 Gated by `skills-drift` (`check-skills-drift.sh`, in `cargo make check` and the
@@ -113,10 +114,12 @@ Gated by `skills-drift` (`check-skills-drift.sh`, in `cargo make check` and the
   *stale* installed CLI for parity validation, so a gate shelling out to it would compare
   the committed projection against whatever is on PATH. Do not "simplify" it to `temper
   skill emit`.
-- **Only the GENERATED files are covered.** `agent-skills/knowledge-base.md` (the MCP tool
-  reference) and `agent-skills/claude-desktop.md` (setup) are hand-written by design — the
-  emit never touches them, so a false statement in either is invisible to this gate. A
-  green run means "the generated part matches its source", not "the MCP skill is correct".
+- **Only the GENERATED files are covered.** `knowledge-base.md` (the MCP tool reference) is
+  hand-written by design — the emit never touches it, so a false statement in it is invisible to
+  this gate. A green run means "the generated part matches its source", not "the MCP skill is
+  correct". The tool-NAME half of that gap is closed from the other side, by
+  `temper-mcp`'s `every_tool_the_shipped_skill_names_exists_in_the_router` — the router is the
+  authority and temper-cli does not depend on temper-mcp.
 
 **Why the CLI skill is not projected too.** `temper skill install` bakes a per-user context
 list into its router, so its render is one developer's and could never be committed. The MCP
@@ -131,3 +134,23 @@ ship to both trees as the same bytes rather than as two renders of one template.
 nothing on either side of it is cost without benefit. Conversely `cognitive-maps.md` and
 `teams.md` are CLI-shaped throughout — they are **declared absent** from the MCP tree in its
 SKILL.md rather than shipped wrong.
+
+### Packaging it for upload
+
+`cargo make skill-package` → `dist/temper-skill-v<ver>.zip` (gitignored; the release publishes it,
+nothing commits it). Shared with the release workflow via
+`.github/scripts/release/package-skill.sh`, the same one-definition pattern as
+`generate-temper-rb.sh`. Its harness is `test-package-skill.sh` in `guard-tests`.
+
+Three constraints the packager enforces because they fail late and unhelpfully otherwise:
+
+- **The skill folder is the archive root** (`x.zip` → `temper-knowledge-base/` → `SKILL.md`).
+  Files at the archive root are rejected by the uploader.
+- **The folder name must equal SKILL.md's `name:`.** They live in two files, so a half-done rename
+  uploads a skill whose folder and identity disagree.
+- **The version is stamped at packaging time**, into the archive name and a `VERSION` file inside
+  the bundle — never into the source tree. `update-version.sh` regenerates nothing, so a
+  version-carrying tree would go stale on every `release-prepare` and red the drift gate.
+
+Read [docs/guides/releasing.md](../../../docs/guides/releasing.md#the-agent-skill-bundle) before
+touching the artifact's NAME: it is what keeps the bundle out of the manifest guard's glob.

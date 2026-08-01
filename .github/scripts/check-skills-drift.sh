@@ -28,10 +28,11 @@
 #
 # ## What it does NOT cover
 #
-# Only the GENERATED files. `agent-skills/knowledge-base.md` and `agent-skills/claude-desktop.md`
-# are hand-written and intentionally so — the emit never writes them, so a stale statement in either
-# is invisible here. Do not read a green run as "the MCP skill is correct"; read it as "the
-# generated part of the MCP skill matches its source".
+# Only the GENERATED files. `knowledge-base.md` — the hand-written MCP tool reference — is
+# intentionally not emitted, so a stale statement in it is invisible here. Do not read a green run
+# as "the MCP skill is correct"; read it as "the generated part of the MCP skill matches its
+# source". The tool-NAME half of that gap is closed separately, by a test in temper-mcp that
+# checks every tool this tree names against the live router.
 #
 # Usage: bash .github/scripts/check-skills-drift.sh
 #
@@ -43,7 +44,7 @@ set -euo pipefail
 
 DEFAULT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="${SKILLS_DRIFT_REPO_ROOT:-$DEFAULT_ROOT}"
-TREE="${SKILLS_DRIFT_TREE:-agent-skills}"
+TREE="${SKILLS_DRIFT_TREE:-agent-skills/temper-knowledge-base}"
 EMIT_CMD="${SKILLS_DRIFT_EMIT_CMD:-cargo run -q -p temper-cli -- skill emit --path $TREE}"
 
 # The tree must have something TRACKED before we regenerate into it. `git status` over a path git

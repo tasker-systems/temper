@@ -293,6 +293,13 @@ jobs:
       - name: Guard test — check-skills-drift
         run: bash .github/scripts/test-check-skills-drift.sh
 
+      # The skill BUNDLE packager. Its output is consumed by two things that fail late and
+      # unhelpfully — Claude's Skills uploader (exact archive layout) and create-github-release.sh
+      # (whose manifest guard keys on the FILE NAME) — so the cheap checks live here rather than
+      # being discovered in a release job or by a user's failed upload.
+      - name: Guard test — package-skill
+        run: bash .github/scripts/test-package-skill.sh
+
       # Release-integrity harnesses. emit-manifest produces the per-file manifest the CLI parses;
       # test-install drives install.sh with a locally-built archive. Both are pure bash and belong
       # here for the same reason as the rest: a manifest generator that silently emitted constant

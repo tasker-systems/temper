@@ -29,3 +29,6 @@ crates/*/bindings/
 # buildCommand exists demands an output directory, and this project has no static
 # output. Never committed; it exists only for the duration of a build.
 /public/
+
+# Release artifacts built by package-skill.sh (published to the GitHub Release, never committed)
+/dist/

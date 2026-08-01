@@ -34,10 +34,10 @@ trap 'rm -rf "$WORK"' EXIT
 make_repo() {
     local root="$1"
     rm -rf "$root"
-    mkdir -p "$root/agent-skills/references"
-    echo "# skill" >"$root/agent-skills/SKILL.md"
-    echo "# frontmatter" >"$root/agent-skills/references/frontmatter.md"
-    echo "# hand-written tool reference" >"$root/agent-skills/knowledge-base.md"
+    mkdir -p "$root/agent-skills/temper-knowledge-base/references"
+    echo "# skill" >"$root/agent-skills/temper-knowledge-base/SKILL.md"
+    echo "# frontmatter" >"$root/agent-skills/temper-knowledge-base/references/frontmatter.md"
+    echo "# hand-written tool reference" >"$root/agent-skills/temper-knowledge-base/knowledge-base.md"
     git -C "$root" init -q
     git -C "$root" config user.email t@t.invalid
     git -C "$root" config user.name t
@@ -47,7 +47,7 @@ make_repo() {
 
 # A stub emit that reproduces the committed tree — the shape of a clean run. Takes the repo root.
 clean_emit() {
-    echo "printf '# skill\n' > $1/agent-skills/SKILL.md; echo 'Emitted 2 agent-skill files'"
+    echo "printf '# skill\n' > $1/agent-skills/temper-knowledge-base/SKILL.md; echo 'Emitted 2 agent-skill files'"
 }
 
 # run_case NAME REPO EMIT_CMD EXPECTED_EXIT [EXPECTED_SUBSTRING]
@@ -88,7 +88,7 @@ run_case "clean tree passes" "$WORK/a" "$(clean_emit "$WORK/a")" 0
 #     the templates emit. This is the template-edited-but-tree-not-re-emitted case.
 make_repo "$WORK/b"
 run_case "MODIFIED generated file fails" "$WORK/b" \
-    "echo '# skill CHANGED' > $WORK/b/agent-skills/SKILL.md; echo 'Emitted 2 agent-skill files'" \
+    "echo '# skill CHANGED' > $WORK/b/agent-skills/temper-knowledge-base/SKILL.md; echo 'Emitted 2 agent-skill files'" \
     1 "out of date"
 
 # (c) The case a plain `git diff --exit-code` MISSES, and the reason this gate uses `git status`.
@@ -97,20 +97,20 @@ run_case "MODIFIED generated file fails" "$WORK/b" \
 #     without a file its own router names.
 make_repo "$WORK/c"
 run_case "UNTRACKED new generated file fails" "$WORK/c" \
-    "echo '# teams' > $WORK/c/agent-skills/teams.md; echo 'Emitted 3 agent-skill files'" \
+    "echo '# teams' > $WORK/c/agent-skills/temper-knowledge-base/teams.md; echo 'Emitted 3 agent-skill files'" \
     1 "out of date"
 
 # (d) A deleted generated file is drift too — a file the router still names but nothing emits.
 make_repo "$WORK/d"
 run_case "DELETED generated file fails" "$WORK/d" \
-    "rm $WORK/d/agent-skills/references/frontmatter.md; echo 'Emitted 1 agent-skill files'" \
+    "rm $WORK/d/agent-skills/temper-knowledge-base/references/frontmatter.md; echo 'Emitted 1 agent-skill files'" \
     1 "out of date"
 
 # (e) THE LOAD-BEARING CASE: a tree that exists but has nothing tracked in it. `git status` over an
 #     untracked path is silent, so without an explicit tracked-check the gate would pass forever
 #     while checking nothing — green, and blind.
 make_repo "$WORK/e"
-git -C "$WORK/e" rm -q -r --cached agent-skills
+git -C "$WORK/e" rm -q -r --cached agent-skills/temper-knowledge-base
 git -C "$WORK/e" commit -qm "untrack the tree"
 run_case "a tree with nothing tracked fails loudly" "$WORK/e" "$(clean_emit "$WORK/e")" \
     1 "nothing to diff against"
@@ -128,7 +128,7 @@ run_case "an emit that writes NOTHING fails" "$WORK/f" "echo 'Emitted 0 agent-sk
 #     clean and the ONLY thing standing between this and a false green is the count check.
 make_repo "$WORK/g"
 run_case "an unreadable emit report fails rather than passing" "$WORK/g" \
-    "printf '# skill\n' > $WORK/g/agent-skills/SKILL.md; echo 'wrote some files, who knows how many'" \
+    "printf '# skill\n' > $WORK/g/agent-skills/temper-knowledge-base/SKILL.md; echo 'wrote some files, who knows how many'" \
     1 "reported no files written"
 
 # (h) A FAILING emit must fail the gate. The emit is a cargo build, and the most ordinary way for it
@@ -145,10 +145,10 @@ make_repo "$WORK/i"
 run_case "a failing emit's OUTPUT reaches the operator" "$WORK/i" \
     "echo i-am-the-emit-error; exit 3" 3 "i-am-the-emit-error"
 
-# (j) The hand-written siblings are NOT regenerated, and the gate must not demand that they be.
-#     `knowledge-base.md` and `claude-desktop.md` are deliberately hand-maintained; an emit that
-#     leaves them alone is correct, and a gate that reddened over them would force them into
-#     generation. This pins the boundary the gate's header states.
+# (j) The hand-written sibling is NOT regenerated, and the gate must not demand that they be.
+#     `knowledge-base.md` is deliberately hand-maintained; an emit that leaves it alone is correct,
+#     and a gate that reddened over it would force it into generation. This pins the boundary the
+#     gate's header states.
 make_repo "$WORK/j"
 run_case "an emit that leaves hand-written files alone passes" "$WORK/j" \
     "$(clean_emit "$WORK/j")" 0

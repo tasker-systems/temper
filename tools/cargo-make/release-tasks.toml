@@ -36,3 +36,14 @@ category = "Release"
 script = [
     "./tools/scripts/release/release-prepare.sh --bump major"
 ]
+
+[tasks.skill-package]
+description = "Package the MCP skill tree as an uploadable Agent Skill bundle (dist/temper-skill-v<ver>.zip)"
+category = "Release"
+# Same script the release workflow runs, for the same reason `generate-temper-rb.sh` is shared by
+# cargo-make and CI: one definition of what the artifact is. Re-emits first, so packaging a stale
+# tree is not possible — the emit is cheap and idempotent.
+script = [
+    "cargo run -q -p temper-cli -- skill emit --path agent-skills/temper-knowledge-base",
+    "VERSION=$(cat ${CARGO_MAKE_WORKING_DIRECTORY}/VERSION) bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/release/package-skill.sh"
+]

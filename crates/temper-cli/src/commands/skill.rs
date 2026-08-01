@@ -64,7 +64,8 @@ static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
-static KNOWLEDGE_BASE_MD: &str = include_str!("../../../../agent-skills/knowledge-base.md");
+static KNOWLEDGE_BASE_MD: &str =
+    include_str!("../../../../agent-skills/temper-knowledge-base/knowledge-base.md");
 static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
 static WF_BUILD_MEDIUM: &str = include_str!("../../skill-content/workflows/build-medium.md");
 static WF_BUILD_LARGE: &str = include_str!("../../skill-content/workflows/build-large.md");
@@ -777,10 +778,10 @@ pub fn generate(_config: &Config) -> Result<String> {
 /// checked in; the MCP skill has no such input, so its render is a pure function of this source tree
 /// and a drift gate can pin it the way `openapi.json` and the ts-rs trees are pinned.
 ///
-/// Deliberately **not** every file in `agent-skills/`. `knowledge-base.md` and `claude-desktop.md`
-/// are hand-written and stay that way — the first is the MCP tool reference and has no CLI twin to
-/// share with, the second is a setup guide. Emitting over them would be a rewrite, and the gate
-/// only ever compares what appears here.
+/// Deliberately **not** every file in the bundle. `knowledge-base.md` is hand-written and stays
+/// that way — it is the MCP tool reference and has no CLI twin to share with, so emitting over it
+/// would be a rewrite. The gate only ever compares what appears here; the tool-NAME half of that
+/// gap is covered by a test in temper-mcp, which is where the router lives.
 pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
     let mut files = HashMap::new();
 
@@ -1310,14 +1311,13 @@ mod tests {
             "the emitted set moved — the drift gate only ever compares what appears here, so a file \
              dropped from this map silently stops being checked"
         );
-        // Hand-written siblings are NOT emitted. Asserted as an ABSENCE because the failure mode is
-        // someone folding them in, which would overwrite maintained prose on every regeneration.
-        for hand_written in ["knowledge-base.md", "claude-desktop.md"] {
-            assert!(
-                !files.contains_key(hand_written),
-                "{hand_written} is hand-maintained; emitting it would clobber it"
-            );
-        }
+        // The hand-written tool reference is NOT emitted. Asserted as an ABSENCE because the
+        // failure mode is someone folding it in, which would overwrite maintained prose on every
+        // regeneration.
+        assert!(
+            !files.contains_key("knowledge-base.md"),
+            "knowledge-base.md is hand-maintained; emitting it would clobber it"
+        );
     }
 
     /// The projection must be a pure function of the source tree — no config, no environment, no

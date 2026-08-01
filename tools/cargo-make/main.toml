@@ -41,11 +41,11 @@ dependencies = [
 
 [tasks.skills-drift]
 description = "Fail if the committed agent-skills/ projection has drifted from the templates that produce it"
-# `agent-skills/` is an installable skill for MCP-only clients, and it is now a committed PROJECTION
-# of shared templates plus schema-derived content rather than a hand-maintained copy. Hand-maintained
-# it drifted past staleness into being wrong about the system — teaching Tickets, Milestones and an
-# Epic Workflow that temper has never shipped — and nothing could notice, because nothing connected
-# the prose to the thing it described.
+# `agent-skills/temper-knowledge-base/` is an installable skill for MCP-only clients, and it is now
+# a committed PROJECTION of shared templates plus schema-derived content rather than a
+# hand-maintained copy. Hand-maintained it drifted past staleness into being wrong about the system
+# — teaching primitives temper has never shipped — and nothing could notice, because nothing
+# connected the prose to the thing it described.
 #
 # Like ts-rs-drift, this NEVER skips: it needs only cargo, which every other task in this list
 # already requires. It builds from source rather than shelling out to the installed `temper`, which

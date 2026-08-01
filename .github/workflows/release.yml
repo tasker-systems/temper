@@ -70,11 +70,77 @@ jobs:
     with:
       version: ${{ needs.determine-version.outputs.version }}
 
+  # The Agent Skill bundle a user uploads to Claude (Customize > Skills). Deliberately its OWN job
+  # rather than a step in build-cli-binaries: that workflow is a matrix over three target triples,
+  # and this artifact is architecture-independent, so building it there would produce three
+  # identical zips racing for the same name.
+  #
+  # It carries a sha256 sidecar and a provenance attestation like every other published artifact.
+  # It does NOT carry a per-file manifest, and correctly so: manifests exist so `install.sh` can
+  # verify each extracted file before an atomic swap, and nothing installs this — a human uploads
+  # it. `package-skill.sh`'s header explains why its FILE NAME is what keeps it out of the
+  # manifest guard's glob in create-github-release.sh.
+  build-skill-bundle:
+    name: Build Skill Bundle
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    needs: determine-version
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Re-emit rather than trusting the committed tree. The drift gate already proves the two
+      # agree on every PR, so this is belt-and-braces — but a release is the wrong place to
+      # discover that someone pushed to a release branch without re-emitting.
+      - name: Re-emit the skill projection
+        run: cargo run -q -p temper-cli -- skill emit --path agent-skills/temper-knowledge-base
+
+      # A release must not quietly ship a bundle that differs from what reviewers saw on main.
+      - name: Fail if the emitted tree differs from what is committed
+        run: |
+          if [ -n "$(git status --porcelain -- agent-skills)" ]; then
+            echo "::error::the committed skill tree is stale — re-emit and commit before tagging"
+            git status --porcelain -- agent-skills
+            exit 1
+          fi
+
+      - name: Package the skill bundle
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash .github/scripts/release/package-skill.sh dist
+
+      - name: Attest build provenance
+        # SHA-pinned for the same reason as build-cli-binaries.yml's copy: this job holds
+        # `attestations: write`, so anything it runs can obtain a genuine Sigstore signature.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          # Named `cli-v<version>-skill` so it is picked up by release-summary's existing
+          # `pattern: cli-v<version>-*` download. The prefix is about which download step collects
+          # it, not about what it contains.
+          name: cli-v${{ needs.determine-version.outputs.version }}-skill
+          path: |
+            dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip
+            dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip.sha256
+          retention-days: 7
+          if-no-files-found: error
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [determine-version, build-cli-binaries]
+    needs: [determine-version, build-cli-binaries, build-skill-bundle]
     if: always()
     permissions:
       contents: write
@@ -82,8 +148,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Download CLI binary artifacts
-        if: needs.build-cli-binaries.result == 'success'
+      # One download, both producers: the skill bundle uploads under the same
+      # `cli-v<version>-*` artifact-name prefix, so this pattern collects it too.
+      - name: Download release artifacts
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
         uses: actions/download-artifact@v8
         with:
           pattern: cli-v${{ needs.determine-version.outputs.version }}-*
@@ -94,32 +162,39 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
           BUILD_RESULT: ${{ needs.build-cli-binaries.result }}
+          SKILL_RESULT: ${{ needs.build-skill-bundle.result }}
         run: |
-          case "$BUILD_RESULT" in
-            success)   ICON="✅" ;;
-            failure)   ICON="❌" ;;
-            cancelled) ICON="⏹️" ;;
-            skipped)   ICON="⏭️" ;;
-            *)         ICON="❓" ;;
-          esac
+          icon_for() {
+            case "$1" in
+              success)   echo "✅" ;;
+              failure)   echo "❌" ;;
+              cancelled) echo "⏹️" ;;
+              skipped)   echo "⏭️" ;;
+              *)         echo "❓" ;;
+            esac
+          }
           {
             echo "## Release v${VERSION}"
             echo ""
-            echo "| Build matrix | Result |"
+            echo "| Artifact | Result |"
             echo "|---|---|"
-            echo "| all platforms (darwin-arm64 / linux-x64 / windows-x64) | ${ICON} ${BUILD_RESULT} |"
+            echo "| CLI binaries (darwin-arm64 / linux-x64 / windows-x64) | $(icon_for "$BUILD_RESULT") ${BUILD_RESULT} |"
+            echo "| Agent Skill bundle (temper-skill-v${VERSION}.zip) | $(icon_for "$SKILL_RESULT") ${SKILL_RESULT} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Gated on BOTH producers. A release missing the skill bundle would publish silently and
+      # look complete — the same "absence is indistinguishable from never-had-it" failure the
+      # manifest guard inside this script exists to prevent, one artifact over.
       - name: Create GitHub Release
-        if: needs.build-cli-binaries.result == 'success'
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
           ARTIFACT_DIR: cli-artifacts
         run: ./.github/scripts/release/create-github-release.sh
 
-      - name: Fail the job if build did not succeed
-        if: needs.build-cli-binaries.result != 'success'
+      - name: Fail the job if either producer did not succeed
+        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success'
         run: |
-          echo "::error::build-cli-binaries result: ${{ needs.build-cli-binaries.result }} — release not published."
+          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }} — release not published."
           exit 1

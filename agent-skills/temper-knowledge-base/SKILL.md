@@ -1,11 +1,8 @@
 ---
 name: temper-knowledge-base
-description: >
-  Work with a Temper knowledge base over MCP — goals, tasks, sessions, research, decisions and the
-  rest of the doc types, plus semantic search, contexts, and cognitive maps. Use this skill whenever
-  the user mentions their knowledge base, their temper contexts, session notes, a goal or its
-  criteria, or wants to look something up or store something across conversations. Requires a
-  configured Temper MCP server; it needs no CLI and no local files.
+description: Work with a Temper knowledge base over MCP — goals, tasks, sessions,
+  research, decisions, search and contexts. Use when the user mentions their knowledge
+  base, contexts, session notes, or a goal.
 ---
 
 # Temper — Knowledge Base Workflow (MCP)
@@ -45,7 +42,6 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `plan-verification.md` | Before acting on a written plan's claims about code |
 | `implementation-grounding.md` | Writing a plan, or writing code from one — including yourself |
 | `outcome-registers.md` | **Authoring or amending a goal**, or deciding whether a criterion belongs on one |
-| `claude-desktop.md` | Setting up or troubleshooting the MCP connection |
 
 > **Read these as principles, not checklists.** Each carries a worked example from the incident that
 > produced it. The example is **evidence for** the principle, never the **scope of** it. So the
