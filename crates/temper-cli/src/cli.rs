@@ -1819,6 +1819,12 @@ pub enum MemoryAction {
         #[arg(long)]
         path: Option<String>,
     },
+    /// Check whether the on-disk index matches a fresh render — the LOCAL drift gate.
+    ///
+    /// The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can
+    /// diff it — this is the command a person or a hook runs instead, gating on the exit code.
+    /// Exits non-zero when the on-disk index has drifted from Temper.
+    Check,
 }
 
 #[derive(Subcommand)]

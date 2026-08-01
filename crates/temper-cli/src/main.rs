@@ -1205,6 +1205,37 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     }
                 }
             }
+            MemoryAction::Check => {
+                let config = temper_cli::config::load_global_config()?;
+                match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {
+                    temper_cli::commands::memory::emit::EmitOutcome::NotConfigured { reason } => {
+                        temper_cli::output::warning(reason);
+                        Ok(())
+                    }
+                    temper_cli::commands::memory::emit::EmitOutcome::Configured => {
+                        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                            temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
+                        })?;
+                        match rt.block_on(temper_cli::commands::memory::check(&config))? {
+                            temper_cli::commands::memory::check::DriftVerdict::Match => {
+                                temper_cli::output::success("Memory index is up to date.");
+                                Ok(())
+                            }
+                            temper_cli::commands::memory::check::DriftVerdict::Absent => {
+                                temper_cli::output::warning(
+                                    "No memory index on disk yet — run `temper memory emit`.",
+                                );
+                                Ok(())
+                            }
+                            temper_cli::commands::memory::check::DriftVerdict::Drifted { diff } => {
+                                temper_cli::output::error("Memory index has drifted from Temper:");
+                                temper_cli::output::plain(diff);
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                }
+            }
         },
         Commands::Pull { context } => commands::pull::run(&context),
         Commands::Config { action } => match action {

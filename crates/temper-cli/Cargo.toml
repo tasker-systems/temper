@@ -38,6 +38,7 @@ shell-words = "1"
 sigstore-trust-root = "0.11"
 sigstore-types = "0.11"
 sigstore-verify = "0.11"
+similar = "2"
 temper-client = { path = "../temper-client" }
 temper-core = { path = "../temper-core" }
 temper-principal = { path = "../temper-principal" }
