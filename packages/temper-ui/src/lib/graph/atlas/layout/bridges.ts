@@ -15,7 +15,7 @@ export interface BridgeLine {
  */
 export function bridgeGeometry(
 	bridges: Bridge[],
-	positions: Map<string, { x: number; y: number }>
+	positions: Map<string, { x: number; y: number }>,
 ): BridgeLine[] {
 	const lines: BridgeLine[] = [];
 	for (const b of bridges) {

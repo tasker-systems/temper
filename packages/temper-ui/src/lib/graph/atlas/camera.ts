@@ -5,7 +5,7 @@
  * handle with destroy() to unwire on component teardown.
  */
 import { select } from 'd3-selection';
-import { zoom, type ZoomBehavior } from 'd3-zoom';
+import { type ZoomBehavior, zoom } from 'd3-zoom';
 
 export interface Camera {
 	destroy(): void;
@@ -14,7 +14,7 @@ export interface Camera {
 export function attachCamera(
 	svgEl: SVGSVGElement,
 	viewportEl: SVGGElement,
-	opts: { min: number; max: number }
+	opts: { min: number; max: number },
 ): Camera {
 	const svg = select(svgEl);
 	const viewport = select(viewportEl);
@@ -30,6 +30,6 @@ export function attachCamera(
 	return {
 		destroy() {
 			svg.on('.zoom', null);
-		}
+		},
 	};
 }

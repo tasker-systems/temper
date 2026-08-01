@@ -1,6 +1,5 @@
 // +page.server.ts
 import { redirect } from '@sveltejs/kit';
-import type { PageServerLoad } from './$types';
 import type { GraphFilters } from '$lib/graph/atlas/nav';
 import {
 	buildPanoramaUrl,
@@ -11,12 +10,11 @@ import {
 	parseFocusPath,
 	parseScopeFilter,
 	selectedElement,
-	territoryIds
+	territoryIds,
 } from '$lib/graph/atlas/nav';
-import type { EdgeKind } from '$lib/types/generated/graph';
-import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import { ApiError } from '$lib/server/api';
 import {
+	type CompositionTarget,
 	readAtlasHome,
 	readCogmapNeighborhood,
 	readCogmapPanorama,
@@ -25,8 +23,10 @@ import {
 	readRegionComposition,
 	readResourceRow,
 	readTrail,
-	type CompositionTarget
 } from '$lib/server/graph-reads';
+import type { EdgeKind } from '$lib/types/generated/graph';
+import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+import type { PageServerLoad } from './$types';
 
 const NEIGHBORHOOD_DEPTH = 2;
 
@@ -44,7 +44,7 @@ const isNotFound = (e: unknown): boolean => e instanceof ApiError && e.status ==
 async function compositionOrPanorama(
 	token: string,
 	ids: string[],
-	url: URL
+	url: URL,
 ): Promise<AtlasSubgraph> {
 	try {
 		return await readRegionComposition(token, ids, 1);
@@ -74,7 +74,7 @@ async function contextCompositionOrPanorama(
 	token: string,
 	ref: string,
 	target: CompositionTarget,
-	url: URL
+	url: URL,
 ): Promise<AtlasSubgraph> {
 	try {
 		return await readContextComposition(token, ref, target);
@@ -116,7 +116,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			tier === 0 ? readContextPanorama(token, contextRef) : Promise.resolve(null),
 			drillTarget
 				? contextCompositionOrPanorama(token, contextRef, drillTarget, url)
-				: Promise.resolve(null)
+				: Promise.resolve(null),
 		]);
 
 		// R5 trail + resource row are profile-scoped, not scope-gated (same as the cogmap
@@ -148,7 +148,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			filters: defaultFilters,
 			focusPath,
 			crumbTerritory: null,
-			scopeFilter
+			scopeFilter,
 		};
 	}
 
@@ -174,9 +174,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 					? readCogmapNeighborhood(token, cogmapId, {
 							seeds: [focus.id],
 							depth: NEIGHBORHOOD_DEPTH,
-							edge_kinds: [] as EdgeKind[]
+							edge_kinds: [] as EdgeKind[],
 						})
-					: Promise.resolve(null)
+					: Promise.resolve(null),
 		]);
 		const cogmapName = home.research.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
 		// Union size comes from the territory SEGMENT, not the leaf focus — at tier 2
@@ -194,7 +194,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				: selection.kind === 'node'
 					? await readTrail(token, 'node', selection.id)
 					: null;
-		const resourceRow = selection.kind === 'node' ? await readResourceRow(token, selection.id) : null;
+		const resourceRow =
+			selection.kind === 'node' ? await readResourceRow(token, selection.id) : null;
 
 		return {
 			owner: params.owner,
@@ -213,7 +214,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			filters: defaultFilters,
 			focusPath,
 			crumbTerritory,
-			scopeFilter
+			scopeFilter,
 		};
 	}
 
@@ -236,6 +237,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		filters: defaultFilters,
 		focusPath,
 		crumbTerritory: null,
-		scopeFilter
+		scopeFilter,
 	};
 };

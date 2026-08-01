@@ -1,8 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { forceTerritories } from './forceTerritories';
 
 const T = (id: string, salience: number) =>
-	({ id, kind: 'region' as const, label: null, member_count: 1, salience, anchor_id: 'c' }) as unknown as import('$lib/types/generated/graph_territory').Territory;
+	({
+		id,
+		kind: 'region' as const,
+		label: null,
+		member_count: 1,
+		salience,
+		anchor_id: 'c',
+	}) as unknown as import('$lib/types/generated/graph_territory').Territory;
 
 describe('forceTerritories', () => {
 	const terr = [T('a', 1.5), T('b', 0.4), T('c', 0.9)];

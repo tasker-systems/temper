@@ -6,12 +6,13 @@
  * shell from the exact same data shape, so layout/legibility fixes are verified in
  * the harness and ship to the live page with no drift.
  */
-import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+
 import type { EventTrail } from '$lib/types/generated/element_trail';
-import type { AtlasHome } from '$lib/types/generated/graph_home';
+import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { ContextPanorama } from '$lib/types/generated/graph_context';
-import type { ResourceRow } from '$lib/types/generated/resource';
+import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
+import type { ResourceRow } from '$lib/types/generated/resource';
 import type { Focus, GraphFilters, SelectedElement } from './nav';
 
 /** Breadcrumb label for the focused territory hop (see `crumbTerritory` in load).

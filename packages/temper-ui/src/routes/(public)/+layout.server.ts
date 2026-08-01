@@ -13,9 +13,9 @@
  * pages, so gating the group removes them too.
  */
 
-import type { LayoutServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { storefrontEnabled } from '$lib/server/storefront';
+import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = () => {
 	if (!storefrontEnabled()) {

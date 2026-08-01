@@ -17,7 +17,7 @@ export function buildLensTerritories(home: AtlasHome): Territory[] {
 		member_count: c.resource_count,
 		salience: null,
 		coherence: null,
-		anchor_id: c.id
+		anchor_id: c.id,
 	}));
 }
 
@@ -29,14 +29,14 @@ export function researchLensTerritories(home: AtlasHome): Territory[] {
 		member_count: m.region_count,
 		salience: null,
 		coherence: null,
-		anchor_id: m.id
+		anchor_id: m.id,
 	}));
 }
 
 /** Named seam over `forceTerritories` (one lens at a time). Deterministic. */
 export function layoutHomeLens(
 	territories: Territory[],
-	size: { width: number; height: number }
+	size: { width: number; height: number },
 ): PositionedTerritory[] {
 	return forceTerritories(territories, size);
 }

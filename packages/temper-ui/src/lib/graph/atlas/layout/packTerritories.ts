@@ -26,20 +26,19 @@ interface PackDatum {
 
 export function packTerritories(
 	territories: Territory[],
-	size: { width: number; height: number }
+	size: { width: number; height: number },
 ): PositionedTerritory[] {
 	if (territories.length === 0) return [];
 
 	const root = hierarchy<PackDatum>({
-		children: territories.map((t) => ({ territory: t }))
-	})
-		.sum((d) => {
-			if (!d.territory) return 0;
-			const t = d.territory;
-			return t.kind === 'region'
-				? Math.max(1, Math.round((t.salience ?? 0) * 100))
-				: Math.max(1, t.member_count);
-		});
+		children: territories.map((t) => ({ territory: t })),
+	}).sum((d) => {
+		if (!d.territory) return 0;
+		const t = d.territory;
+		return t.kind === 'region'
+			? Math.max(1, Math.round((t.salience ?? 0) * 100))
+			: Math.max(1, t.member_count);
+	});
 
 	const layout = pack<PackDatum>().size([size.width, size.height]).padding(6);
 	const packed = layout(root);
@@ -55,7 +54,7 @@ export function packTerritories(
 			y: leaf.y,
 			r: leaf.r,
 			salience: t.salience,
-			member_count: t.member_count
+			member_count: t.member_count,
 		};
 	});
 }

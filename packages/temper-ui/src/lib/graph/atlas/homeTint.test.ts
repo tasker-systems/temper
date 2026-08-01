@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from 'vitest';
-import { intensityFor, buildTint, researchTint, recencyGlow } from './homeTint';
+import { buildTint, intensityFor, recencyGlow, researchTint } from './homeTint';
 
 describe('intensityFor', () => {
 	test('a zero member count floors at 0.3', () => {
@@ -61,6 +61,8 @@ describe('recencyGlow', () => {
 		expect(recencyGlow('2026-07-07T00:00:00Z', now)).toBeGreaterThan(0.9);
 	});
 	it('decays for old activity', () => {
-		expect(recencyGlow('2026-01-01T00:00:00Z', now)).toBeLessThan(recencyGlow('2026-07-01T00:00:00Z', now));
+		expect(recencyGlow('2026-01-01T00:00:00Z', now)).toBeLessThan(
+			recencyGlow('2026-07-01T00:00:00Z', now),
+		);
 	});
 });

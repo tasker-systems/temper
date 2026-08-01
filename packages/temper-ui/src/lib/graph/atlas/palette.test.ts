@@ -1,21 +1,21 @@
 // palette.test.ts
 import { describe, expect, it } from 'vitest';
+import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
 import {
 	AUTHORED_DOC_TYPES,
 	CANVAS_BG,
 	DOC_TYPE_HUES,
-	EDGE_COLORS,
-	FALLBACK_HUE,
-	TERRITORY_TINTS,
 	docTypeHue,
+	EDGE_COLORS,
 	edgeStyle,
+	FALLBACK_HUE,
 	isAuthored,
 	isDocTypeDimmed,
 	nodeMark,
 	paletteStyleVars,
-	salienceOpacity
+	salienceOpacity,
+	TERRITORY_TINTS,
 } from './palette';
-import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
 
 describe('DOC_TYPE_HUES', () => {
 	it('defines all 14 doc-types with the locked Vivid Cartographer hexes', () => {
@@ -98,7 +98,7 @@ const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({
 	polarity: 'forward',
 	label: null,
 	weight: 1,
-	...o
+	...o,
 });
 
 describe('edgeStyle', () => {
@@ -125,8 +125,14 @@ describe('edgeStyle', () => {
 		expect(edgeStyle(edge({ weight: 99 })).width).toBe(5);
 	});
 	it('polarity → arrowhead; near is symmetric (no marker)', () => {
-		expect(edgeStyle(edge({ polarity: 'forward' }))).toMatchObject({ markerEnd: true, markerStart: false });
-		expect(edgeStyle(edge({ polarity: 'inverse' }))).toMatchObject({ markerEnd: false, markerStart: true });
+		expect(edgeStyle(edge({ polarity: 'forward' }))).toMatchObject({
+			markerEnd: true,
+			markerStart: false,
+		});
+		expect(edgeStyle(edge({ polarity: 'inverse' }))).toMatchObject({
+			markerEnd: false,
+			markerStart: true,
+		});
 		const n = edgeStyle(edge({ edge_kind: 'near', polarity: 'forward' }));
 		expect(n.markerStart).toBe(false);
 		expect(n.markerEnd).toBe(false);

@@ -1,6 +1,6 @@
-import type { PageServerLoad } from './$types';
 import { apiGet } from '$lib/server/api';
 import type { ResourceListResponse } from '$lib/types';
+import type { PageServerLoad } from './$types';
 
 const DEFAULT_LIMIT = 50;
 
@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals, url, params: routeParams })
 	if (!params.has('limit')) params.set('limit', String(DEFAULT_LIMIT));
 	const resources = await apiGet<ResourceListResponse>(
 		`/api/resources?${params}`,
-		locals.accessToken!
+		locals.accessToken!,
 	);
 
 	return {
@@ -21,7 +21,7 @@ export const load: PageServerLoad = async ({ locals, url, params: routeParams })
 		limit: Number(params.get('limit')),
 		offset: Number(params.get('offset') ?? 0),
 		facets: Object.fromEntries(
-			Object.entries(resources.facets.doc_type).map(([k, v]) => [k, Number(v ?? 0)])
-		) as Record<string, number>
+			Object.entries(resources.facets.doc_type).map(([k, v]) => [k, Number(v ?? 0)]),
+		) as Record<string, number>,
 	};
 };

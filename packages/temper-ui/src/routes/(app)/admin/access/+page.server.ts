@@ -13,10 +13,10 @@
  *   - reject  → PATCH /api/access/admin/requests/{id} { status: "rejected", decision_note }
  */
 
-import type { PageServerLoad, Actions } from './$types';
-import { fail, redirect, error } from '@sveltejs/kit';
-import { apiGet, apiPatch, ApiError } from '$lib/server/api';
+import { error, fail, redirect } from '@sveltejs/kit';
+import { ApiError, apiGet, apiPatch } from '$lib/server/api';
 import type { JoinRequest, JoinRequestWithProfile } from '$lib/types';
+import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.entitlements?.is_admin) {
@@ -25,7 +25,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const requests = await apiGet<JoinRequestWithProfile[]>(
 		'/api/access/admin/requests',
-		locals.accessToken!
+		locals.accessToken!,
 	);
 
 	return { requests };
@@ -35,7 +35,7 @@ async function review(
 	accessToken: string | null,
 	requestId: string,
 	status: 'approved' | 'rejected',
-	decisionNote: string | null
+	decisionNote: string | null,
 ) {
 	if (!accessToken) {
 		throw redirect(303, '/auth/login?returnTo=/admin/access');
@@ -43,7 +43,7 @@ async function review(
 
 	await apiPatch<JoinRequest>(`/api/access/admin/requests/${requestId}`, accessToken, {
 		status,
-		decision_note: decisionNote
+		decision_note: decisionNote,
 	});
 }
 
@@ -77,5 +77,5 @@ export const actions: Actions = {
 		}
 
 		throw redirect(303, '/admin/access');
-	}
+	},
 };

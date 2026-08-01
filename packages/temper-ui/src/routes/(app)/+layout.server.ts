@@ -10,10 +10,10 @@
  * layout component (and to all child page loads via `parent()`).
  */
 
-import type { LayoutServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { apiGet } from '$lib/server/api';
 import type { ContextRowWithCounts, PublicSystemSettings } from '$lib/types';
+import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user || !locals.accessToken) {
@@ -36,9 +36,9 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	// value (or a failed fetch) falls back to the default wordmark in the shell.
 	const [contexts, settings] = await Promise.all([
 		apiGet<ContextRowWithCounts[]>('/api/contexts', locals.accessToken!).catch(
-			() => [] as ContextRowWithCounts[]
+			() => [] as ContextRowWithCounts[],
 		),
-		apiGet<PublicSystemSettings>('/api/access/settings', locals.accessToken!).catch(() => null)
+		apiGet<PublicSystemSettings>('/api/access/settings', locals.accessToken!).catch(() => null),
 	]);
 
 	return {
@@ -46,6 +46,6 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		profile: locals.profile,
 		entitlements: locals.entitlements,
 		contexts,
-		instanceName: settings?.instance_name ?? null
+		instanceName: settings?.instance_name ?? null,
 	};
 };

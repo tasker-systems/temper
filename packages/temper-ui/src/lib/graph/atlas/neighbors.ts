@@ -1,5 +1,5 @@
 // neighbors.ts
-import type { AtlasNode, AtlasEdge } from '$lib/types/generated/graph_atlas';
+import type { AtlasEdge, AtlasNode } from '$lib/types/generated/graph_atlas';
 
 export interface AtlasNeighbor {
 	dir: '→' | '←';
@@ -10,7 +10,11 @@ export interface AtlasNeighbor {
 /** Atlas-native neighbors of `focusId` from a loaded slice. Unlike the old
  *  peek.ts builder, this is typed on AtlasNode/AtlasEdge, coalesces the nullable
  *  edge label to its edge_kind, and sorts by (label, title) — no aggregator sort. */
-export function atlasNeighbors(focusId: string, nodes: AtlasNode[], edges: AtlasEdge[]): AtlasNeighbor[] {
+export function atlasNeighbors(
+	focusId: string,
+	nodes: AtlasNode[],
+	edges: AtlasEdge[],
+): AtlasNeighbor[] {
 	const byId = new Map(nodes.map((n) => [n.id, n] as const));
 	const out: AtlasNeighbor[] = [];
 	for (const e of edges) {

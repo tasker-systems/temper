@@ -10,8 +10,9 @@
 //   2. `static/dev/atlas-fixtures.json` — the committed, synthetic, personal-data-free
 //      bundle. The default; drives the harness on a fresh checkout and in tests.
 // See README.md for capture + sanitize workflow.
-import { dev } from '$app/environment';
+
 import { error } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { AtlasViewData } from '$lib/graph/atlas/viewData';
 import type { PageLoad } from './$types';
 
@@ -37,7 +38,7 @@ export const load: PageLoad = async ({ fetch }) => {
 	if (!res.ok) {
 		throw error(
 			500,
-			'Atlas fixtures missing at static/dev/atlas-fixtures.json — the committed bundle should always exist (see src/routes/dev/atlas/README.md).'
+			'Atlas fixtures missing at static/dev/atlas-fixtures.json — the committed bundle should always exist (see src/routes/dev/atlas/README.md).',
 		);
 	}
 	const fixtures = (await res.json()) as AtlasFixtureBundle;

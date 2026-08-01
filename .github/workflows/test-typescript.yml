@@ -65,6 +65,9 @@ jobs:
       - name: Type-check (svelte-check)
         run: cd packages/temper-ui && bun run check
 
+      - name: Lint & format (Biome)
+        run: cd packages/temper-ui && bun run biome
+
       - name: Run tests
         run: cd packages/temper-ui && bun run test
 

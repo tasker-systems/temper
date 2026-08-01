@@ -5,7 +5,7 @@
 export function summarizeEvent(
 	kind: string,
 	payload: unknown,
-	nodesById?: Map<string, { title: string }>
+	nodesById?: Map<string, { title: string }>,
 ): string | null {
 	if (payload === null || typeof payload !== 'object') return null;
 	const p = payload as Record<string, unknown>;

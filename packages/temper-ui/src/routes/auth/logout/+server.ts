@@ -7,10 +7,10 @@
  * registered post-logout redirect URI (e.g. Auth0's Allowed Logout URLs).
  */
 
-import type { RequestHandler } from './$types';
 import { redirect } from '@sveltejs/kit';
-import { logoutUrl, APP_BASE_URL } from '$lib/server/oidc';
+import { APP_BASE_URL, logoutUrl } from '$lib/server/oidc';
 import { clearSession } from '$lib/server/session';
+import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ cookies }) => {
 	clearSession(cookies);

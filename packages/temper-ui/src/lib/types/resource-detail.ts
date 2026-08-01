@@ -1,5 +1,5 @@
-import type { ResourceRow } from './generated/resource';
 import type { ManagedMeta } from './generated/managed_meta';
+import type { ResourceRow } from './generated/resource';
 import type { JsonValue } from './generated/serde_json/JsonValue';
 
 /**

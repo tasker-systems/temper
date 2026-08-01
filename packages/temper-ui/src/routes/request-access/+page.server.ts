@@ -15,10 +15,10 @@
  *   - `withdraw`       → DELETE /api/access/requests/me
  */
 
-import type { PageServerLoad, Actions } from './$types';
 import { fail, redirect } from '@sveltejs/kit';
-import { apiGet, apiPost, apiDelete, ApiError } from '$lib/server/api';
+import { ApiError, apiDelete, apiGet, apiPost } from '$lib/server/api';
 import type { JoinRequest, PublicSystemSettings } from '$lib/types';
+import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user || !locals.accessToken) {
@@ -35,21 +35,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			(err: unknown) => {
 				if (err instanceof ApiError) return null;
 				throw err;
-			}
+			},
 		),
 		apiGet<PublicSystemSettings>('/api/access/settings', locals.accessToken).catch(
 			(err: unknown) => {
 				if (err instanceof ApiError) return null;
 				throw err;
-			}
-		)
+			},
+		),
 	]);
 
 	return {
 		user: locals.user,
 		profile: locals.profile,
 		ownRequest,
-		settings
+		settings,
 	};
 };
 
@@ -72,13 +72,13 @@ export const actions: Actions = {
 			await apiPost<JoinRequest>('/api/access/requests', locals.accessToken, {
 				message: message || null,
 				source: 'web',
-				accepted_terms_version: termsVersion || null
+				accepted_terms_version: termsVersion || null,
 			});
 		} catch (err) {
 			if (err instanceof ApiError) {
 				return fail(err.status, {
 					error: err.message,
-					message
+					message,
 				});
 			}
 			throw err;
@@ -104,5 +104,5 @@ export const actions: Actions = {
 		}
 
 		throw redirect(303, '/request-access');
-	}
+	},
 };

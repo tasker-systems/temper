@@ -30,5 +30,5 @@ export const sidebarCollapsed = {
 	initFor(pathname: string) {
 		const stored = load();
 		collapsed = stored === null ? defaultCollapsed(pathname) : stored;
-	}
+	},
 };

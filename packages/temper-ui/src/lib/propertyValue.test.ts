@@ -21,9 +21,9 @@ describe('classifyValue', () => {
 			kind: 'object',
 			entries: [
 				['node_label', 'question'],
-				['status', 'resolved']
+				['status', 'resolved'],
 			],
-			summary: '{2 keys}'
+			summary: '{2 keys}',
 		});
 	});
 
@@ -35,7 +35,7 @@ describe('classifyValue', () => {
 		expect(classifyValue(['a', 'b'])).toEqual({
 			kind: 'array',
 			items: ['a', 'b'],
-			summary: '[2]'
+			summary: '[2]',
 		});
 	});
 
@@ -49,8 +49,8 @@ describe('classifyValue', () => {
 		expect(classifyValue(v)).toMatchObject({
 			entries: [
 				['zebra', 1],
-				['alpha', 2]
-			]
+				['alpha', 2],
+			],
 		});
 	});
 
@@ -60,14 +60,14 @@ describe('classifyValue', () => {
 			status: 'active',
 			priority: 'high',
 			slices_shipped: ['T1 team read', 'T2 invitations'],
-			next_slice: 'T3 resource ownership transfer'
+			next_slice: 'T3 resource ownership transfer',
 		};
 		const got = classifyValue(facet);
 		expect(got).toMatchObject({ kind: 'object', summary: '{5 keys}' });
 		// the nested array is left raw — the component recurses into it
 		expect(classifyValue((got as { entries: [string, unknown][] }).entries[3][1])).toMatchObject({
 			kind: 'array',
-			summary: '[2]'
+			summary: '[2]',
 		});
 	});
 });

@@ -28,7 +28,7 @@ export const MANAGED_KEY_ORDER = [
 	'temper-llm-run',
 	'temper-provenance',
 	'temper-branch',
-	'temper-pr'
+	'temper-pr',
 ] as const;
 
 const MANAGED_RANK = new Map<string, number>(MANAGED_KEY_ORDER.map((k, i) => [k, i]));
@@ -42,7 +42,7 @@ const MANAGED_RANK = new Map<string, number>(MANAGED_KEY_ORDER.map((k, i) => [k,
 export function mergeProperties(
 	managed: Record<string, unknown> | null | undefined,
 	open: Record<string, unknown> | null | undefined,
-	docType: string
+	docType: string,
 ): PropertyRow[] {
 	const managedRows: PropertyRow[] = [];
 	const openRows: PropertyRow[] = [];

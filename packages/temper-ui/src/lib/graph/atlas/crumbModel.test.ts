@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { crumbModel } from './crumbModel';
 
 describe('crumbModel', () => {
@@ -9,7 +9,7 @@ describe('crumbModel', () => {
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.map((s) => [s.kind, s.label])).toEqual([['home', '⌂ Atlas']]);
 	});
@@ -20,11 +20,11 @@ describe('crumbModel', () => {
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: '+tasker'
+			scopeFilter: '+tasker',
 		});
 		expect(segs.map((s) => [s.kind, s.label])).toEqual([
 			['home', '⌂ Atlas'],
-			['scope', '+tasker']
+			['scope', '+tasker'],
 		]);
 	});
 	it('a scope filter is suppressed once a cogmap is entered', () => {
@@ -34,7 +34,7 @@ describe('crumbModel', () => {
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: '+tasker'
+			scopeFilter: '+tasker',
 		});
 		expect(segs.map((s) => s.kind)).toEqual(['home', 'cogmap']);
 	});
@@ -45,11 +45,11 @@ describe('crumbModel', () => {
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.map((s) => [s.kind, s.label])).toEqual([
 			['home', '⌂ Atlas'],
-			['cogmap', 'Team self-model']
+			['cogmap', 'Team self-model'],
 		]);
 	});
 	it('context door, no focus → Atlas / <slug>', () => {
@@ -59,11 +59,11 @@ describe('crumbModel', () => {
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.map((s) => [s.kind, s.label])).toEqual([
 			['home', '⌂ Atlas'],
-			['context', 'temper']
+			['context', 'temper'],
 		]);
 	});
 	it('a scope filter is suppressed by an active context door', () => {
@@ -73,7 +73,7 @@ describe('crumbModel', () => {
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: '+tasker'
+			scopeFilter: '+tasker',
 		});
 		expect(segs.map((s) => s.kind)).toEqual(['home', 'context']);
 	});
@@ -84,12 +84,12 @@ describe('crumbModel', () => {
 			focusPath: [{ kind: 'container', id: 'G' }],
 			crumbTerritory: null,
 			seedTitle: 'Ship Beat E',
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.map((s) => [s.kind, s.label])).toEqual([
 			['home', '⌂ Atlas'],
 			['context', 'temper'],
-			['container', 'Ship Beat E']
+			['container', 'Ship Beat E'],
 		]);
 		expect(segs.at(-1)?.focusPath).toBe('container:G');
 	});
@@ -100,9 +100,13 @@ describe('crumbModel', () => {
 			focusPath: [{ kind: 'container', id: 'G' }],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
-		expect(segs.at(-1)).toEqual({ kind: 'container', label: 'Container', focusPath: 'container:G' });
+		expect(segs.at(-1)).toEqual({
+			kind: 'container',
+			label: 'Container',
+			focusPath: 'container:G',
+		});
 	});
 	it('a bucket drill leafs with "Unfiled · <value>", labelled from the value', () => {
 		const segs = crumbModel({
@@ -111,12 +115,12 @@ describe('crumbModel', () => {
 			focusPath: [{ kind: 'bucket', groupKey: 'doc_type', value: 'session' }],
 			crumbTerritory: null,
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.at(-1)).toEqual({
 			kind: 'bucket',
 			label: 'Unfiled · session',
-			focusPath: 'bucket:doc_type:session'
+			focusPath: 'bucket:doc_type:session',
 		});
 	});
 	it('territory focus adds the labeled territory hop', () => {
@@ -126,7 +130,7 @@ describe('crumbModel', () => {
 			focusPath: [{ kind: 'territory', id: 'R' }],
 			crumbTerritory: { id: 'R', label: 'Runbooks' },
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.at(-1)).toEqual({ kind: 'territory', label: 'Runbooks', focusPath: 'territory:R' });
 	});
@@ -136,15 +140,15 @@ describe('crumbModel', () => {
 			contextSlug: null,
 			focusPath: [
 				{ kind: 'territory', id: 'R' },
-				{ kind: 'node', id: 'N' }
+				{ kind: 'node', id: 'N' },
 			],
 			crumbTerritory: { id: 'R', label: 'Runbooks' },
 			seedTitle: 'Deploy pipeline',
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.slice(-2).map((s) => [s.kind, s.label, s.focusPath])).toEqual([
 			['territory', 'Runbooks', 'territory:R'],
-			['node', 'Deploy pipeline', 'territory:R,node:N']
+			['node', 'Deploy pipeline', 'territory:R,node:N'],
 		]);
 	});
 	it('node drilled straight from panorama has no territory hop', () => {
@@ -154,7 +158,7 @@ describe('crumbModel', () => {
 			focusPath: [{ kind: 'node', id: 'N' }],
 			crumbTerritory: null,
 			seedTitle: 'Orphan doc',
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.map((s) => s.kind)).toEqual(['home', 'cogmap', 'node']);
 		expect(segs.at(-1)).toEqual({ kind: 'node', label: 'Orphan doc', focusPath: 'node:N' });
@@ -166,7 +170,7 @@ describe('crumbModel', () => {
 			focusPath: [{ kind: 'territory', id: 'R' }],
 			crumbTerritory: { id: 'R', label: null },
 			seedTitle: null,
-			scopeFilter: null
+			scopeFilter: null,
 		});
 		expect(segs.at(-1)?.label).toBe('Region');
 	});

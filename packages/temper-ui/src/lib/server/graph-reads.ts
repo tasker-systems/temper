@@ -5,16 +5,17 @@
  * ONLY from `.server.ts` / `+server.ts`. Path builders are pure and unit-tested;
  * the async wrappers are thin pass-throughs.
  */
+
+import type { Focus } from '$lib/graph/atlas/nav';
 import { apiGet, apiPost } from '$lib/server/api';
-import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
+import type { ElementKind, EventTrail } from '$lib/types/generated/element_trail';
 import type { GraphEdgeRow } from '$lib/types/generated/graph';
-import type { EventTrail, ElementKind } from '$lib/types/generated/element_trail';
-import type { AtlasHome } from '$lib/types/generated/graph_home';
+import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
 import type { ContextPanorama } from '$lib/types/generated/graph_context';
-import type { TeamRow } from '$lib/types/generated/team';
+import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 import type { ResourceRow } from '$lib/types/generated/resource';
-import type { Focus } from '$lib/graph/atlas/nav';
+import type { TeamRow } from '$lib/types/generated/team';
 
 export const atlasHomePath = (): string => '/api/graph/home';
 
@@ -62,20 +63,21 @@ export const readAtlasHome = (token: string): Promise<AtlasHome> =>
 export const readCogmapPanorama = (
 	token: string,
 	id: string,
-	lensId?: string
+	lensId?: string,
 ): Promise<TerritoryOverview> => apiGet<TerritoryOverview>(cogmapPanoramaPath(id, lensId), token);
 
 export const readRegionComposition = (
 	token: string,
 	ids: string[],
-	depth = 1
+	depth = 1,
 ): Promise<AtlasSubgraph> => apiGet<AtlasSubgraph>(regionCompositionPath(ids, depth), token);
 
 export const readCogmapNeighborhood = (
 	token: string,
 	cogmapId: string,
-	req: SliceRequest
-): Promise<AtlasSubgraph> => apiPost<AtlasSubgraph>(cogmapNeighborhoodSlicePath(cogmapId), token, req);
+	req: SliceRequest,
+): Promise<AtlasSubgraph> =>
+	apiPost<AtlasSubgraph>(cogmapNeighborhoodSlicePath(cogmapId), token, req);
 
 export const readTrail = (token: string, kind: ElementKind, id: string): Promise<EventTrail> =>
 	apiGet<EventTrail>(trailPath(kind, id), token);
@@ -109,12 +111,12 @@ export const contextCompositionPath = (ref: string, t: CompositionTarget, depth 
 export const readContextPanorama = (
 	token: string,
 	ref: string,
-	groupBy = 'doc_type'
+	groupBy = 'doc_type',
 ): Promise<ContextPanorama> => apiGet<ContextPanorama>(contextPanoramaPath(ref, groupBy), token);
 
 export const readContextComposition = (
 	token: string,
 	ref: string,
 	t: CompositionTarget,
-	depth = 1
+	depth = 1,
 ): Promise<AtlasSubgraph> => apiGet<AtlasSubgraph>(contextCompositionPath(ref, t, depth), token);

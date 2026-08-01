@@ -27,20 +27,20 @@
 
 import { env } from '$env/dynamic/private';
 import {
-	resolveOidcConfig,
-	parseDiscovery,
 	buildAuthorizeUrl,
 	buildLogoutUrl,
 	decodeIdToken,
 	identityClaimsFromTokens,
 	type OidcConfig,
 	type OidcEndpoints,
+	type OidcIdTokenClaims,
 	type OidcTokenResponse,
-	type OidcIdTokenClaims
+	parseDiscovery,
+	resolveOidcConfig,
 } from './oidc-core';
 
+export type { OidcIdTokenClaims, OidcTokenResponse };
 export { decodeIdToken, identityClaimsFromTokens };
-export type { OidcTokenResponse, OidcIdTokenClaims };
 
 export const REFRESH_THRESHOLD_SECONDS = 60;
 
@@ -83,7 +83,7 @@ export async function authorizeUrl(state: string, codeChallenge: string): Promis
 		authorization_endpoint,
 		{ clientId: config.clientId, redirectUri: OIDC_REDIRECT_URI, audience: config.audience },
 		state,
-		codeChallenge
+		codeChallenge,
 	);
 }
 
@@ -102,10 +102,7 @@ export async function logoutUrl(returnTo: string, idToken?: string): Promise<str
  * `codeVerifier` must be the plaintext PKCE verifier that produced the
  * `code_challenge` originally sent to /authorize.
  */
-export async function exchangeCode(
-	code: string,
-	codeVerifier: string
-): Promise<OidcTokenResponse> {
+export async function exchangeCode(code: string, codeVerifier: string): Promise<OidcTokenResponse> {
 	const { token_endpoint } = await discovery();
 	return tokenRequest(token_endpoint, {
 		grant_type: 'authorization_code',
@@ -113,7 +110,7 @@ export async function exchangeCode(
 		...(config.clientSecret ? { client_secret: config.clientSecret } : {}),
 		code,
 		redirect_uri: OIDC_REDIRECT_URI,
-		code_verifier: codeVerifier
+		code_verifier: codeVerifier,
 	});
 }
 
@@ -128,18 +125,18 @@ export async function refreshAccessToken(refreshToken: string): Promise<OidcToke
 		grant_type: 'refresh_token',
 		client_id: config.clientId,
 		...(config.clientSecret ? { client_secret: config.clientSecret } : {}),
-		refresh_token: refreshToken
+		refresh_token: refreshToken,
 	});
 }
 
 async function tokenRequest(
 	endpoint: string,
-	body: Record<string, string>
+	body: Record<string, string>,
 ): Promise<OidcTokenResponse> {
 	const res = await fetch(endpoint, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: new URLSearchParams(body)
+		body: new URLSearchParams(body),
 	});
 	if (!res.ok) {
 		const detail = await res.text().catch(() => '');

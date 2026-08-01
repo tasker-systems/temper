@@ -12,8 +12,11 @@ describe('trayModel', () => {
 
 	it('sizes cells by share but never below a legible minimum', () => {
 		const cells = trayModel(
-			[{ value: 'session', count: 395 }, { value: 'decision', count: 9 }],
-			900
+			[
+				{ value: 'session', count: 395 },
+				{ value: 'decision', count: 9 },
+			],
+			900,
 		);
 		expect(cells).toHaveLength(2);
 		expect(cells[0].width).toBeGreaterThan(cells[1].width);
@@ -30,9 +33,9 @@ describe('trayModel', () => {
 				{ value: 'session', count: 395 },
 				{ value: 'decision', count: 24 },
 				{ value: 'note', count: 11 },
-				{ value: 'fact', count: 4 }
+				{ value: 'fact', count: 4 },
 			],
-			1280
+			1280,
 		);
 		expect(cells).toHaveLength(4);
 		expect(railWidth(cells)).toBeLessThanOrEqual(1280);
@@ -49,8 +52,11 @@ describe('trayModel', () => {
 
 	it('orders by count descending regardless of input order', () => {
 		const cells = trayModel(
-			[{ value: 'decision', count: 9 }, { value: 'session', count: 395 }],
-			900
+			[
+				{ value: 'decision', count: 9 },
+				{ value: 'session', count: 395 },
+			],
+			900,
 		);
 		expect(cells.map((c) => c.value)).toEqual(['session', 'decision']);
 	});

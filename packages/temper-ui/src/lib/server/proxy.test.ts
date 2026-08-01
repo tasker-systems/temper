@@ -1,12 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-	isProxiedPath,
 	buildUpstreamUrl,
 	forwardRequest,
-	isSelfReferentialUpstream
+	isProxiedPath,
+	isSelfReferentialUpstream,
 } from './proxy';
 
 describe('isProxiedPath', () => {
@@ -40,19 +40,19 @@ describe('isProxiedPath', () => {
 describe('buildUpstreamUrl', () => {
 	it('joins the upstream base with the request path and query', () => {
 		expect(buildUpstreamUrl('https://api.example.com', '/api/profile', '?q=x')).toBe(
-			'https://api.example.com/api/profile?q=x'
+			'https://api.example.com/api/profile?q=x',
 		);
 	});
 
 	it('preserves an empty query string', () => {
 		expect(buildUpstreamUrl('https://api.example.com', '/mcp', '')).toBe(
-			'https://api.example.com/mcp'
+			'https://api.example.com/mcp',
 		);
 	});
 
 	it('tolerates a trailing slash on the upstream base', () => {
 		expect(buildUpstreamUrl('https://api.example.com/', '/oauth/token', '')).toBe(
-			'https://api.example.com/oauth/token'
+			'https://api.example.com/oauth/token',
 		);
 	});
 });
@@ -65,9 +65,7 @@ describe('isSelfReferentialUpstream', () => {
 	});
 
 	it('allows an upstream on a different host (the correct config)', () => {
-		expect(isSelfReferentialUpstream('https://temper-cloud.vercel.app', 'temperkb.io')).toBe(
-			false
-		);
+		expect(isSelfReferentialUpstream('https://temper-cloud.vercel.app', 'temperkb.io')).toBe(false);
 	});
 
 	it('does not throw on a malformed upstream base', () => {
@@ -98,7 +96,7 @@ describe('forwardRequest (passthrough)', () => {
 					url: req.url ?? '',
 					body: Buffer.concat(chunks).toString('utf-8'),
 					auth: req.headers.authorization,
-					traceparent: req.headers.traceparent as string | undefined
+					traceparent: req.headers.traceparent as string | undefined,
 				};
 
 				if (req.url?.startsWith('/redirect')) {
@@ -111,7 +109,7 @@ describe('forwardRequest (passthrough)', () => {
 					res.writeHead(200, {
 						'content-type': 'application/json',
 						'content-encoding': 'gzip',
-						'content-length': String(payload.byteLength)
+						'content-length': String(payload.byteLength),
 					});
 					res.end(payload);
 					return;
@@ -137,8 +135,8 @@ describe('forwardRequest (passthrough)', () => {
 			new Request('http://ui.local/api/resources?q=x', {
 				method: 'POST',
 				headers: { authorization: 'Bearer tok', 'content-type': 'application/json' },
-				body: JSON.stringify({ a: 1 })
-			})
+				body: JSON.stringify({ a: 1 }),
+			}),
 		);
 		expect(res.status).toBe(200);
 		expect(lastRequest.method).toBe('POST');
@@ -154,8 +152,8 @@ describe('forwardRequest (passthrough)', () => {
 			'/gzip',
 			'',
 			new Request('http://ui.local/gzip', {
-				headers: { 'accept-encoding': 'gzip, br' }
-			})
+				headers: { 'accept-encoding': 'gzip, br' },
+			}),
 		);
 		// undici already decoded the body; the relayed response must not still
 		// claim gzip (or carry the now-wrong compressed length) or the browser
@@ -170,7 +168,7 @@ describe('forwardRequest (passthrough)', () => {
 			base,
 			'/redirect',
 			'',
-			new Request('http://ui.local/redirect')
+			new Request('http://ui.local/redirect'),
 		);
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe('/landed');
@@ -182,7 +180,7 @@ describe('forwardRequest (passthrough)', () => {
 			base,
 			'/api/x',
 			'',
-			new Request('http://ui.local/api/x', { headers: { traceparent: tp } })
+			new Request('http://ui.local/api/x', { headers: { traceparent: tp } }),
 		);
 		expect(lastRequest.traceparent).toBe(tp);
 	});
@@ -204,7 +202,7 @@ describe('forwardRequest (upstream failure handling)', () => {
 			unreachable,
 			'/api/profile',
 			'',
-			new Request('http://ui.local/api/profile')
+			new Request('http://ui.local/api/profile'),
 		);
 		expect(res.status).toBe(502);
 		expect(await res.json()).toMatchObject({ message: expect.stringContaining('unreachable') });
@@ -224,10 +222,12 @@ describe('forwardRequest (upstream failure handling)', () => {
 				'/api/profile',
 				'',
 				new Request('http://ui.local/api/profile'),
-				{ connectTimeoutMs: 50 }
+				{ connectTimeoutMs: 50 },
 			);
 			expect(res.status).toBe(504);
-			expect(await res.json()).toMatchObject({ message: expect.stringContaining('did not respond') });
+			expect(await res.json()).toMatchObject({
+				message: expect.stringContaining('did not respond'),
+			});
 		} finally {
 			hung.close();
 		}
@@ -251,7 +251,7 @@ describe('forwardRequest (upstream failure handling)', () => {
 				`http://127.0.0.1:${port}`,
 				'/api/profile',
 				'',
-				new Request('http://ui.local/api/profile')
+				new Request('http://ui.local/api/profile'),
 			);
 			expect(res.status).toBe(200);
 			expect(hits).toBe(2); // failed once, retried once
@@ -275,8 +275,8 @@ describe('forwardRequest (upstream failure handling)', () => {
 				'',
 				new Request('http://ui.local/api/resources/abc', {
 					method: 'POST',
-					body: JSON.stringify({ a: 1 })
-				})
+					body: JSON.stringify({ a: 1 }),
+				}),
 			);
 			expect(res.status).toBe(502);
 			expect(hits).toBe(1); // exactly one attempt — the write was not replayed

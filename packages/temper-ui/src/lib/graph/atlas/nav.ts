@@ -62,14 +62,20 @@ function parseFocusToken(tok: string): Focus | null {
 export function parseFocusPath(url: URL): Focus[] {
 	const raw = url.searchParams.get('focus');
 	if (!raw) return [];
-	return raw.split(',').map(parseFocusToken).filter((f): f is Focus => f !== null);
+	return raw
+		.split(',')
+		.map(parseFocusToken)
+		.filter((f): f is Focus => f !== null);
 }
 
 /** The active focus = the leaf (last) segment; drives tier + neighborhood seeding. */
 export function parseFocus(params: URLSearchParams): Focus {
 	const raw = params.get('focus');
 	if (!raw) return { kind: 'none' };
-	const segs = raw.split(',').map(parseFocusToken).filter((f): f is Focus => f !== null);
+	const segs = raw
+		.split(',')
+		.map(parseFocusToken)
+		.filter((f): f is Focus => f !== null);
 	return segs.length ? segs[segs.length - 1] : { kind: 'none' };
 }
 
@@ -136,7 +142,11 @@ export function parseFilters(params: URLSearchParams): GraphFilters {
 		const v = params.get(k);
 		return v ? v.split(',').filter(Boolean) : [];
 	};
-	return { lensId: params.get('lens_id'), edgeKinds: csv('edge_kinds'), docTypes: csv('doc_types') };
+	return {
+		lensId: params.get('lens_id'),
+		edgeKinds: csv('edge_kinds'),
+		docTypes: csv('doc_types'),
+	};
 }
 
 /** Count of active (non-default) filter dimensions — drives the popover badge. */
@@ -147,7 +157,7 @@ export function activeFilterCount(url: URL): number {
 
 export function buildFiltersUrl(
 	base: URL,
-	patch: Partial<{ lensId: string | null; edgeKinds: string[]; docTypes: string[] }>
+	patch: Partial<{ lensId: string | null; edgeKinds: string[]; docTypes: string[] }>,
 ): string {
 	return withParams(base, (p) => {
 		if ('lensId' in patch) {
@@ -229,7 +239,7 @@ export function territoryIds(focus: Focus): string[] {
 export function buildDrillTerritoryUrl(
 	base: URL,
 	territoryId: string,
-	opts?: { add?: boolean }
+	opts?: { add?: boolean },
 ): string {
 	// A territory is the first drill hop from the panorama. `add` (shift-click)
 	// unions the region into the current territory leaf: `territory:A` → `territory:A~B`.

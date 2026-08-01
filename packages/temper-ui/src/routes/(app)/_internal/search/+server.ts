@@ -11,7 +11,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	try {
 		const result = await apiGet(
 			`/api/resources?q=${encodeURIComponent(q)}&limit=10`,
-			locals.accessToken!
+			locals.accessToken!,
 		);
 		return json(result);
 	} catch {

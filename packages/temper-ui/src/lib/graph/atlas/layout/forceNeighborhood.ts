@@ -11,9 +11,14 @@ import {
 	forceManyBody,
 	forceRadial,
 	forceSimulation,
-	type SimulationNodeDatum
+	type SimulationNodeDatum,
 } from 'd3-force';
-import type { AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome } from '$lib/types/generated/graph_atlas';
+import type {
+	AtlasEdge,
+	AtlasNode,
+	AtlasSubgraph,
+	NodeHome,
+} from '$lib/types/generated/graph_atlas';
 
 export interface ForceNode extends SimulationNodeDatum {
 	id: string;
@@ -59,7 +64,7 @@ export interface ForceOptions {
 export function forceNeighborhood(
 	subgraph: AtlasSubgraph,
 	seeds: string[],
-	size: ForceOptions
+	size: ForceOptions,
 ): ForceGraph {
 	const seedSet = new Set(seeds);
 	const nodeCount = subgraph.nodes.length;
@@ -72,7 +77,7 @@ export function forceNeighborhood(
 		isSeed: seedSet.has(n.id),
 		excerpt: n.excerpt,
 		x: size.width / 2 + Math.cos((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120,
-		y: size.height / 2 + Math.sin((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120
+		y: size.height / 2 + Math.sin((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120,
 	}));
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 
@@ -100,15 +105,22 @@ export function forceNeighborhood(
 			// pull documents outward; same-home links keep their structure.
 			forceLink(links.map((l) => ({ source: l.source, target: l.target })))
 				.distance((_l, i) => (links[i].source.home !== links[i].target.home ? 150 : 80))
-				.strength((_l, i) => (links[i].source.home !== links[i].target.home ? 0.15 : 0.6))
+				.strength((_l, i) => (links[i].source.home !== links[i].target.home ? 0.15 : 0.6)),
 		)
 		.force('charge', forceManyBody().strength(-260))
 		.force('center', forceCenter(size.width / 2, size.height / 2))
 		.force(
 			'radial',
-			forceRadial<ForceNode>((n) => (n.home === core ? rInner : rOuter), size.width / 2, size.height / 2).strength(0.6)
+			forceRadial<ForceNode>(
+				(n) => (n.home === core ? rInner : rOuter),
+				size.width / 2,
+				size.height / 2,
+			).strength(0.6),
 		)
-		.force('collide', forceCollide<ForceNode>().radius((n) => 12 + Math.min(10, n.degree)))
+		.force(
+			'collide',
+			forceCollide<ForceNode>().radius((n) => 12 + Math.min(10, n.degree)),
+		)
 		.stop();
 
 	for (let i = 0; i < TICKS; i++) sim.tick();
