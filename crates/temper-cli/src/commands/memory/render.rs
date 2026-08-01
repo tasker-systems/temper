@@ -15,7 +15,6 @@ pub struct MemoryEntry {
     pub id: Uuid,
     pub title: String,
     pub context_ref: String,
-    pub descriptor: Option<String>,
     pub status: String,
     pub verified: NaiveDate,
 }
@@ -115,7 +114,6 @@ pub fn parse_entry(
             (Some(owner), Some(slug)) => format!("{owner}/{slug}"),
             _ => String::new(),
         },
-        descriptor: open_str(&om, "descriptor"),
         status,
         verified,
     })
@@ -141,7 +139,6 @@ pub fn render_index(entries: &[MemoryEntry], today: NaiveDate, stale_after_days:
             .iter()
             .filter(|e| e.status == "active" && e.context_ref == ctx)
         {
-            let hook = e.descriptor.as_deref().unwrap_or("");
             let age = (today - e.verified).num_days();
             // UNEXAMINED, never STALE/WRONG: an old date means nobody has checked,
             // which is not evidence the claim is false.
@@ -150,11 +147,13 @@ pub fn render_index(entries: &[MemoryEntry], today: NaiveDate, stale_after_days:
             } else {
                 format!("[verified {}]", e.verified)
             };
-            let sep = if hook.is_empty() { "" } else { " — " };
-            out.push_str(&format!(
-                "- [{}](temper://{}){}{}  {}\n",
-                e.title, e.id, sep, hook, mark
-            ));
+            // The TITLE is the hook this index carries, and nothing else is. `descriptor` is
+            // deliberately absent: its job is FTS weight-D searchability on the resource, and
+            // printing it here paid for that job twice — measured on the real corpus, ~279 bytes
+            // per line against ~120, i.e. ~49 KB for the full set where the hand-written file it
+            // replaces was 19.3 KB. This file is loaded every session; every byte is paid 178
+            // times. (`[decided — 2026-08-01, Pete]`)
+            out.push_str(&format!("- [{}](temper://{})  {}\n", e.title, e.id, mark));
         }
     }
     out
@@ -177,7 +176,6 @@ mod tests {
             id: Uuid::nil(),
             title: title.to_string(),
             context_ref: "@me/temper".to_string(),
-            descriptor: Some("hook text".to_string()),
             status: status.to_string(),
             verified: d(verified),
         }
@@ -263,6 +261,29 @@ mod tests {
                 "must not imply the claim is false, found {word}"
             );
         }
+    }
+
+    /// The index is loaded into context every session, so every byte on a line is paid for 178
+    /// times. `open_meta.descriptor`'s job is FTS weight-D searchability — printing it here pays
+    /// for that job a second time and, measured against the real corpus on 2026-08-01, took the
+    /// mean line from ~120 to 279 bytes: ~49 KB for the full set against a hand-written file of
+    /// 19.3 KB. The descriptor stays on the resource and stays searchable; it just stops being
+    /// rendered.
+    #[test]
+    fn the_index_does_not_print_the_descriptor() {
+        let out = render_index(
+            &[entry("a title", "active", "2026-07-20")],
+            d("2026-08-01"),
+            90,
+        );
+        assert!(
+            !out.contains("hook text"),
+            "the descriptor is searchable on the resource; the index carries the title: {out}"
+        );
+        assert!(
+            out.contains("a title"),
+            "the title is the hook the index carries"
+        );
     }
 
     #[test]

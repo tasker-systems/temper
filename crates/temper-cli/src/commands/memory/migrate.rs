@@ -921,8 +921,16 @@ Never ship code with \"for now\".
             .expect("emit's gate must accept what migrate writes");
         assert_eq!(entry.status, "active");
         assert_eq!(entry.verified, d("2026-07-27"));
+    }
+
+    /// The descriptor is no longer rendered into the index, so nothing downstream of `emit` would
+    /// notice if `migrate` stopped writing it. It still has a job — FTS weight-D searchability on
+    /// the resource — and this is now the only thing that holds the writer to it.
+    #[test]
+    fn the_descriptor_is_still_written_even_though_the_index_no_longer_prints_it() {
+        let om = proposal_open_meta(&proposal());
         assert_eq!(
-            entry.descriptor.as_deref(),
+            om.get("descriptor").and_then(serde_json::Value::as_str),
             Some("the recall-relevance line")
         );
     }
