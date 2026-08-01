@@ -1229,7 +1229,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             }
                             temper_cli::commands::memory::check::DriftVerdict::Drifted { diff } => {
                                 temper_cli::output::error("Memory index has drifted from Temper:");
-                                temper_cli::output::plain(diff);
+                                temper_cli::output::plain_err(diff);
+                                // Drain here too: `process::exit` runs no destructors, and this
+                                // arm is one of the counted exits, not an uncounted fifth.
+                                temper_telemetry::shutdown_telemetry();
                                 std::process::exit(1);
                             }
                         }
