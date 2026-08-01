@@ -295,7 +295,13 @@ pub enum Commands {
         /// Lens ref (UUID or decorated) overriding wayfind region selection (requires --wayfind).
         #[arg(long)]
         lens: Option<String>,
-        /// Top-N regions to scope into for --wayfind (default and ceiling are server-side).
+        /// Top-N regions to scope into for --wayfind — this also bounds how many maps you reach.
+        ///
+        /// Region selection admits at most one region per map per round, so a width of N can reach
+        /// at most N of your visible maps. The default and the ceiling are server-side; the width
+        /// actually applied comes back as `diagnostics.regions_effective`, alongside
+        /// `anchors_reached` / `anchors_visible`. This is a scope-width knob, not an output rollup —
+        /// results are resources, and no response carries a region list.
         #[arg(long)]
         regions: Option<i64>,
         /// Filter by document type

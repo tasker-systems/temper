@@ -52,7 +52,7 @@ module Temper::Generated
     # Plain-text query for full-text search.
     attr_accessor :query
 
-    # Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless `wayfind`.
+    # Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless `wayfind`.  **Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per anchor per round, so a width of N reaches at most N maps/contexts. The width actually applied is reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a scope-width knob, not an output rollup — no response carries a region list.
     attr_accessor :regions
 
     # Postgres text-search configuration (default \"english\").  NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates` (Beat 1 kept multilingual storage-only); this param does not affect results yet.

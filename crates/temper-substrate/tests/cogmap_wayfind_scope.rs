@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use sqlx::PgPool;
 use temper_core::types::ids::{LensId, ProfileId};
 use temper_substrate::readback::{
-    wayfind_region_diagnostics, wayfind_scope_ids, WayfindScopeQuery,
+    wayfind_region_diagnostics, wayfind_scope_ids, wayfind_scope_reach, WayfindScopeQuery,
 };
 use uuid::Uuid;
 
@@ -792,4 +792,243 @@ async fn diagnostics_report_the_real_stage1_scores(pool: PgPool) {
 
     // Rows come back highest-score first.
     assert_eq!(diag.first().map(|r| r.region_id), Some(a), "winner first");
+}
+
+// ---------------------------------------------------------------------------
+// REACH LEGIBILITY (issue #585, Task 4) — `wayfind_scope_reach`.
+//
+// `scope_size` counts RESOURCES, so a wayfind confined to one map and one spread across many report
+// the same healthy-looking figure. These pin the signal that can tell them apart.
+// ---------------------------------------------------------------------------
+
+/// Probe helper: the reach scalars for a query, so a test reads as an assertion about reach rather
+/// than about struct plumbing.
+async fn reach_at(
+    pool: &PgPool,
+    fx: &Fx,
+    regions: Option<i32>,
+    q: &[f32],
+) -> temper_substrate::readback::WayfindScopeReach {
+    wayfind_scope_reach(
+        pool,
+        WayfindScopeQuery {
+            principal: ProfileId::from(fx.p1),
+            lens_id: None,
+            embedding: Some(q),
+            regions,
+            anchor: None,
+        },
+    )
+    .await
+    .expect("wayfind scope reach")
+}
+
+// 9. THE TASK-4 WITNESS: a narrow wayfind is legible AS narrow. With `regions=1` a single map wins the
+//    only region slot, so the result is single-map by construction — and `scope_size` cannot say so.
+//    `anchors_reached` against `anchors_visible` can. This fails against the pre-Task-4 surface
+//    vacuously (the fields did not exist) and, more usefully, would fail against any implementation
+//    that reported a resource count under a reach-shaped name.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn reach_distinguishes_a_narrow_wayfind_from_a_broad_one(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let map_b = add_visible_map(&pool, fx.p1, "wayfind-reach-b", "Wayfind Reach B").await;
+    let map_c = add_visible_map(&pool, fx.p1, "wayfind-reach-c", "Wayfind Reach C").await;
+    let hi = vec768(&[(0, 1.0)]);
+    // Each map gets a region with SEVERAL members, so the resource count stays large while the number
+    // of anchors actually drawn on varies — the exact confusion `scope_size` cannot resolve.
+    seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["a1", "a2", "a3"]).await;
+    seed_region_on(&pool, &fx, map_b, 0.9, &hi, &["b1", "b2", "b3"]).await;
+    seed_region_on(&pool, &fx, map_c, 0.8, &hi, &["c1", "c2", "c3"]).await;
+    let q = query_axis0();
+
+    let narrow = reach_at(&pool, &fx, Some(1), &q).await;
+    let broad = reach_at(&pool, &fx, Some(3), &q).await;
+
+    // Both see the same anchors — visibility is a property of the principal, not of the query width.
+    assert_eq!(
+        narrow.anchors_visible, broad.anchors_visible,
+        "anchors_visible is the principal's reach ceiling and must not move with the width"
+    );
+    assert!(
+        narrow.anchors_visible >= 3,
+        "fixture invalid: need ≥3 visible anchors to have a reach to miss; got {}",
+        narrow.anchors_visible
+    );
+
+    // THE POINT: the narrow pass draws on strictly fewer anchors than the broad one...
+    assert!(
+        narrow.anchors_reached < broad.anchors_reached,
+        "a width-1 wayfind must be legible as reaching fewer anchors than a width-3 one \
+         (narrow={} broad={})",
+        narrow.anchors_reached,
+        broad.anchors_reached
+    );
+    // ...and neither is honest about it through `scope_size`, which is why this signal exists. The
+    // narrow pass still admits a substantial resource count, so a caller reading only the resource
+    // figure would see health in both.
+    assert!(
+        narrow.scope_ids.len() >= 3,
+        "the narrow pass still looks 'big' by resource count — that is the flattering read this \
+         replaces; got {}",
+        narrow.scope_ids.len()
+    );
+    // The narrow pass genuinely missed anchors it could have reached.
+    assert!(
+        narrow.anchors_reached < narrow.anchors_visible,
+        "width 1 over ≥3 visible anchors must leave some unreached (reached={} visible={})",
+        narrow.anchors_reached,
+        narrow.anchors_visible
+    );
+
+    // And the scope the reach describes IS the scope the funnel uses — one home, not two.
+    let ids: HashSet<Uuid> = wayfind_scope_ids(
+        &pool,
+        WayfindScopeQuery {
+            principal: ProfileId::from(fx.p1),
+            lens_id: None,
+            embedding: Some(&q),
+            regions: Some(1),
+            anchor: None,
+        },
+    )
+    .await
+    .expect("wayfind scope")
+    .into_iter()
+    .collect();
+    assert_eq!(
+        ids,
+        narrow.scope_ids.iter().copied().collect::<HashSet<Uuid>>(),
+        "wayfind_scope_ids is a wrapper over wayfind_scope_reach — the id sets must be identical"
+    );
+}
+
+// 10. THE CLAMP PIN. `wayfind_scope_reach` re-derives the effective width from literals that MUST
+//     track `wayfind_region_scores`' own `k`.default_n / `k`.max_n. Nothing structural ties the two,
+//     so this test does: it compares the REPORTED width against the number of regions the scoring
+//     function actually admits, with enough candidates planted that the clamp is what binds. Change
+//     `default_n` or `max_n` in one place and this goes red.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn wayfind_effective_width_tracks_the_scoring_clamp(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let hi = vec768(&[(0, 1.0)]);
+    // 25 candidate regions on ONE map: more than the ceiling, so at every width below it the cut —
+    // not the candidate supply — is what limits selection. One map keeps round-robin from
+    // interleaving, so admitted-count is exactly the width.
+    for i in 0..25 {
+        let salience = 1.0 - (f64::from(i) * 0.01);
+        seed_region_on(&pool, &fx, fx.cogmap, salience, &hi, &[&format!("r{i}")]).await;
+    }
+    let q = query_axis0();
+
+    // (requested, expected effective) — the default (None), the floor, and the ceiling.
+    for (requested, expected) in [(None, 3), (Some(0), 1), (Some(2), 2), (Some(999), 20)] {
+        let reach = reach_at(&pool, &fx, requested, &q).await;
+        assert_eq!(
+            reach.regions_effective, expected,
+            "reported effective width for requested={requested:?}"
+        );
+        let admitted = wayfind_region_diagnostics(
+            &pool,
+            WayfindScopeQuery {
+                principal: ProfileId::from(fx.p1),
+                lens_id: None,
+                embedding: Some(&q),
+                regions: requested,
+                anchor: None,
+            },
+        )
+        .await
+        .expect("region diagnostics")
+        .iter()
+        .filter(|r| r.in_top_n && r.home_anchor_id == fx.cogmap)
+        .count();
+        assert_eq!(
+            admitted, expected as usize,
+            "the SCORING function admitted {admitted} regions for requested={requested:?} but the \
+             reported effective width says {expected} — the clamp literals in wayfind_scope_reach \
+             have drifted from wayfind_region_scores' `k` CTE"
+        );
+    }
+}
+
+// 11. THE COLD-START ARM. An anchor with no regions contributes its directly-homed resources (§5) and
+//     is therefore REACHED — it just did not get there by winning a region slot. Counting only region
+//     winners would report the fresh, thin anchors as unreached in exactly the case the substrate went
+//     out of its way to reach them, so this pins the arm that is easiest to drop.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_region_less_anchor_reached_by_cold_start_counts_as_reached(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let thin = add_visible_map(&pool, fx.p1, "wayfind-thin", "Wayfind Thin").await;
+    let hi = vec768(&[(0, 1.0)]);
+    // The fat map has the only regions, and enough of them to take every slot at width 1.
+    seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["fat1"]).await;
+    // `thin` gets a homed resource but NO region — the cold-start shape.
+    let thin_member = insert_homed_resource(&pool, thin, fx.sys, "thin-doc").await;
+    let q = query_axis0();
+
+    let reach = reach_at(&pool, &fx, Some(1), &q).await;
+    assert!(
+        reach.scope_ids.contains(&thin_member),
+        "cold-start must still admit the region-less anchor's homed resource: {:?}",
+        reach.scope_ids
+    );
+    // Reach EXCEEDS the width: one region slot, but two anchors contributed. This is why the hint may
+    // not attribute a partial reach to the width whenever `reached < visible`.
+    assert!(
+        reach.anchors_reached > reach.regions_effective,
+        "an anchor reached by cold-start does not consume a region slot, so reach can exceed the \
+         width (reached={} width={})",
+        reach.anchors_reached,
+        reach.regions_effective
+    );
+}
+
+// 12. THE COLD-START FLOOR, and why one reach number could not carry the clause. Reproduces the
+//     production shape: one map holds every live region and wins the whole width, while several
+//     region-less anchors are admitted wholesale on every query. `anchors_reached` is then high and
+//     reads as broad reach; `anchors_selected` is 1 and names the monopoly. Measured on prod
+//     2026-08-01: 6 of 10 visible anchors were region-less, so a total monopoly still reported 7 of
+//     10 reached — this test is that case, shrunk.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn selection_names_a_monopoly_that_the_cold_start_floor_hides(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let hi = vec768(&[(0, 1.0)]);
+    // The fat map holds every live region, so it wins every slot the width offers.
+    for i in 0..6 {
+        let salience = 1.0 - (f64::from(i) * 0.01);
+        seed_region_on(&pool, &fx, fx.cogmap, salience, &hi, &[&format!("fat{i}")]).await;
+    }
+    // Three region-less anchors holding content — the cold-start floor.
+    for n in ["floor-a", "floor-b", "floor-c"] {
+        let thin = add_visible_map(&pool, fx.p1, n, n).await;
+        insert_homed_resource(&pool, thin, fx.sys, &format!("{n}-doc")).await;
+    }
+    let q = query_axis0();
+
+    let reach = reach_at(&pool, &fx, Some(3), &q).await;
+
+    // THE MONOPOLY: one anchor took the entire width.
+    assert_eq!(
+        reach.anchors_selected, 1,
+        "the fat map holds every region, so it must win every slot — selected should be 1, got {}",
+        reach.anchors_selected
+    );
+    // AND THE MASK: reach is materially higher, because the region-less anchors came in regardless.
+    assert!(
+        reach.anchors_reached >= 4,
+        "the three region-less anchors plus the winner must all be 'reached' (got {})",
+        reach.anchors_reached
+    );
+    assert!(
+        reach.anchors_reached > reach.anchors_selected,
+        "this is the whole point: reach ({}) overstates competitive breadth ({}), so a caller \
+         reading reach alone would see health where there is a monopoly",
+        reach.anchors_reached,
+        reach.anchors_selected
+    );
+    // The wholesale count is recoverable, which is what lets a caller discount it.
+    assert!(
+        reach.anchors_reached - reach.anchors_selected >= 3,
+        "reached - selected must expose the unconditional admissions"
+    );
 }

@@ -1505,6 +1505,76 @@ pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Resul
     Ok(ids.into_iter().map(|(id,)| id).collect())
 }
 
+/// A wayfind pass's bounding scope **plus** the reach scalars that make it legible (issue #585
+/// Task 4), as returned by `wayfind_scope_reach`.
+///
+/// [`scope_ids`](Self::scope_ids) is identical to what [`wayfind_scope_ids`] returns — that function
+/// is now a wrapper over the same SQL — so a caller that needs both pays one round-trip and one
+/// Stage-1 scan, not two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WayfindScopeReach {
+    /// The bounding resource-id set fed to `unified_search` as `p_scope_ids`.
+    pub scope_ids: Vec<Uuid>,
+    /// How many region anchors the principal can see, after any single-anchor scoping — the
+    /// denominator "reached" is read against.
+    pub anchors_visible: i32,
+    /// How many of those actually contributed a resource to the scope, by **either** the
+    /// region-winner arm or the cold-start arm. This is the signal `scope_size` cannot give: a
+    /// resource count in the hundreds is compatible with every one of them coming from one anchor.
+    ///
+    /// **Has a floor, and on a real corpus not a small one.** Every region-less anchor holding
+    /// resources is admitted wholesale by cold-start on every query, so it is *always* reached —
+    /// measured at 6 of 10 visible anchors on prod. Read this together with
+    /// [`anchors_selected`](Self::anchors_selected), never alone.
+    pub anchors_reached: i32,
+    /// How many anchors won a region slot — the strictly **competitive** subset of
+    /// [`anchors_reached`](Self::anchors_reached). This is what makes a monopoly visible: one anchor
+    /// holding the whole width is `anchors_selected == 1` however high `anchors_reached` climbs.
+    /// The difference between the two is the count admitted wholesale, without any query relevance.
+    pub anchors_selected: i32,
+    /// The region width actually applied, after the SQL clamp into `[1, max_n]` with the SQL default
+    /// substituted for a `None` request. Reported rather than the constants being copied out of SQL,
+    /// so a caller can observe the default and the ceiling without a second definition of either
+    /// existing to drift.
+    pub regions_effective: i32,
+}
+
+/// Resolve a wayfind pass's bounding scope together with its reach scalars — one round-trip, one
+/// Stage-1 scan. Prefer this over [`wayfind_scope_ids`] anywhere the caller reports diagnostics;
+/// the plain id-set form remains for callers that genuinely only need ids.
+///
+/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
+/// macros (the same established exception as [`wayfind_scope_ids`] / [`unified_search`]). Always one
+/// row: an empty scope is an empty array with zeroed counts, never zero rows, because "nothing was
+/// reached" is the case a caller most needs reported and must not be indistinguishable from a
+/// missing answer. Gate is in the SQL; a principal who can see no anchors gets an empty scope, never
+/// an error.
+pub async fn wayfind_scope_reach(
+    pool: &PgPool,
+    q: WayfindScopeQuery<'_>,
+) -> Result<WayfindScopeReach> {
+    let emb_text = q.embedding.map(format_pgvector);
+    let row: (Vec<Uuid>, i32, i32, i32, i32) = sqlx::query_as(
+        "SELECT scope_ids, anchors_visible, anchors_reached, anchors_selected, regions_effective \
+         FROM wayfind_scope_reach($1, $2, $3::vector, $4, $5, $6)",
+    )
+    .bind(q.principal)
+    .bind(q.lens_id)
+    .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
+    .bind(q.regions)
+    .bind(q.anchor.map(HomeAnchor::table))
+    .bind(q.anchor.map(HomeAnchor::uuid))
+    .fetch_one(pool)
+    .await?;
+    Ok(WayfindScopeReach {
+        scope_ids: row.0,
+        anchors_visible: row.1,
+        anchors_reached: row.2,
+        anchors_selected: row.3,
+        regions_effective: row.4,
+    })
+}
+
 /// One candidate region's Stage-1 wayfind competition signal, as returned by
 /// `wayfind_region_diagnostics` (issue #585). These are the per-region scores `wayfind_scope_ids`
 /// consumes but discards — surfaced here keyed by map so the cross-map competition is observable.

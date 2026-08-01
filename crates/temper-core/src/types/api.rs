@@ -104,7 +104,13 @@ pub struct SearchParams {
     /// `None` ⇒ each region's memoized salience under its own lens.
     #[serde(default)]
     pub lens_id: Option<Uuid>,
-    /// Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless `wayfind`.
+    /// Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless
+    /// `wayfind`.
+    ///
+    /// **Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per
+    /// anchor per round, so a width of N reaches at most N maps/contexts. The width actually applied
+    /// is reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a
+    /// scope-width knob, not an output rollup — no response carries a region list.
     #[serde(default)]
     pub regions: Option<i64>,
 }
@@ -243,8 +249,43 @@ pub struct SearchDiagnostics {
     /// Number of candidate resources the scope selector admitted, when it is cheaply knowable:
     /// the resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose
     /// corpus is not a bounded id-set at scope-resolution time.
+    ///
+    /// **This is a resource count and is not a reach signal.** A wayfind drawn entirely from one map
+    /// and one drawn evenly across ten both report a figure in the hundreds — read
+    /// [`anchors_reached`](Self::anchors_reached) against
+    /// [`anchors_visible`](Self::anchors_visible) for that (issue #585).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope_size: Option<i64>,
+    /// How many region anchors — cognitive maps and contexts alike — the principal could have
+    /// reached on this query, after any single-anchor scoping. The denominator for
+    /// [`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that
+    /// pools across anchors (issue #585).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchors_visible: Option<i64>,
+    /// How many anchors actually contributed a resource to the scope, counting both the region-winner
+    /// arm and the cold-start arm. `Some` only for `wayfind` (issue #585).
+    ///
+    /// **This number has a floor — do not read it as a fairness signal on its own.** An anchor that
+    /// holds resources but no regions is admitted wholesale by cold-start on *every* query, whatever
+    /// was asked, so it is always reached. On the production corpus that floor was measured at 6 of 10
+    /// visible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it
+    /// with [`anchors_selected`](Self::anchors_selected), which carries the competitive sense.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchors_reached: Option<i64>,
+    /// How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the
+    /// field that makes a monopoly visible: one anchor holding the entire region width is
+    /// `anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached -
+    /// anchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only
+    /// for `wayfind` (issue #585).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchors_selected: Option<i64>,
+    /// The region width actually applied after the server-side clamp — what `--regions`/`regions`
+    /// resolved to, including the default substituted when the caller passed nothing. Since Stage-1
+    /// admits at most one region per anchor per round, this **bounds** `anchors_reached`: a caller
+    /// seeing `anchors_reached == regions_effective < anchors_visible` is looking at a width limit,
+    /// not at an irrelevant corpus. `Some` only for `wayfind` (issue #585).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions_effective: Option<i64>,
     /// Number of results returned (post-ranking, post-limit).
     pub matched: i64,
     /// Why the result set is shaped as it is.
