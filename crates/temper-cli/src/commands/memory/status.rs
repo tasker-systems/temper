@@ -33,8 +33,9 @@ const MEMORY_DOC_TYPE: &str = "memory";
 const STATUS_PAGE_SIZE: i64 = 200;
 
 /// One `.md` file found in the directory that holds the rendered index (`index_path`'s parent).
-/// Carries only the filename — matching against Temper is by filename stem, never a full path,
-/// so a report stays legible across machines whose vault lives at different absolute paths.
+/// Carries only the filename — matching against Temper is against `open_meta.source_file`
+/// (an exact filename, never a full path), so a report stays legible across machines whose vault
+/// lives at different absolute paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMemoryFile {
     pub filename: String,
@@ -54,21 +55,38 @@ pub struct MemoryStatus {
     pub defects: Vec<String>,
     /// Count of `.md` files found alongside the index (excluding the index file itself).
     pub local_files: usize,
-    /// Filenames present locally whose stem (filename minus `.md`) matches no successfully
-    /// parsed Temper memory's title. An unadopted machine's local files are all reported here —
-    /// that is the point: discovery must say what this machine is carrying even with nothing to
-    /// compare it against.
+    /// Filenames present locally that no fetched row's `open_meta.source_file` names. An
+    /// unadopted machine's local files are all reported here — that is the point: discovery must
+    /// say what this machine is carrying even with nothing to compare it against. A memory whose
+    /// `source_file` is absent (authored natively in Temper — from a session, from Desktop) is
+    /// ordinary and simply does not contribute a match; it is never itself reported as orphaned,
+    /// since orphaning is a property of local files, not of Temper resources.
     pub local_without_counterpart: Vec<String>,
+}
+
+/// Extract `open_meta.source_file` from a row, if present. Independent of whether the row parses
+/// cleanly via [`parse_entry`] — a memory with a malformed `status`/`verified` is still a real
+/// migrated file and should still vouch for its local counterpart; that a memory contributes a
+/// defect and that it contributes provenance are orthogonal facts about it.
+fn source_file_of(row: &ResourceDetail) -> Option<String> {
+    row.open_meta
+        .as_ref()?
+        .get("source_file")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Pure core of `status`. Takes the memory config (`None` = feature off), every fetched
 /// `memory`-typed row across all configured contexts, and every local `.md` file found next to
 /// the index — and reports, without failing on a malformed row.
 ///
-/// Matching a local file to a Temper memory is by filename stem vs. title: strip the `.md`
-/// extension from the local filename and compare against the title of each row that parsed
-/// cleanly via [`parse_entry`]. A row that fails to parse contributes to `defects`, never to the
-/// matched set — an unparseable memory cannot vouch for a local file's counterpart existing.
+/// Matching a local file to a Temper memory is by exact filename against `open_meta.source_file`
+/// — never a title or a sluggified/derived form. A migrated memory's human-readable title
+/// ("a clause cannot retire its own goal") is never its filename
+/// ("feedback_a_clause_cannot_retire_its_own_goal.md"), so any comparison through title would
+/// misreport every migrated memory's local file as orphaned. `source_file` is optional (a memory
+/// authored natively in Temper never had one), so its absence on a given row simply means that
+/// row contributes no match — never a defect, and never a false orphan for some unrelated file.
 pub fn status_report(
     cfg: Option<&MemoryConfig>,
     rows: &[ResourceDetail],
@@ -80,24 +98,21 @@ pub fn status_report(
 
     let mut in_temper = 0usize;
     let mut defects = Vec::new();
-    let mut known_titles: HashSet<String> = HashSet::new();
+    let mut known_source_files: HashSet<String> = HashSet::new();
 
     for row in rows {
+        if let Some(source_file) = source_file_of(row) {
+            known_source_files.insert(source_file);
+        }
         match parse_entry(row) {
-            Ok(entry) => {
-                in_temper += 1;
-                known_titles.insert(entry.title);
-            }
+            Ok(_) => in_temper += 1,
             Err(defect) => defects.push(defect.to_string()),
         }
     }
 
     let local_without_counterpart = local
         .iter()
-        .filter(|f| {
-            let stem = f.filename.strip_suffix(".md").unwrap_or(&f.filename);
-            !known_titles.contains(stem)
-        })
+        .filter(|f| !known_source_files.contains(&f.filename))
         .map(|f| f.filename.clone())
         .collect();
 
@@ -258,6 +273,7 @@ mod tests {
         context_ref: &str,
         status: Option<&str>,
         verified: Option<&str>,
+        source_file: Option<&str>,
     ) -> ResourceDetail {
         let (owner, slug) = context_ref
             .split_once('/')
@@ -269,6 +285,9 @@ mod tests {
         }
         if let Some(v) = verified {
             open.insert("verified".to_string(), json!(v));
+        }
+        if let Some(sf) = source_file {
+            open.insert("source_file".to_string(), json!(sf));
         }
 
         let row = ResourceRow {
@@ -305,11 +324,25 @@ mod tests {
     }
 
     fn meta_row_titled(title: &str, context_ref: &str) -> ResourceDetail {
-        build_row(title, context_ref, Some("active"), Some("2026-08-01"))
+        build_row(title, context_ref, Some("active"), Some("2026-08-01"), None)
     }
 
     fn meta_row_missing_status(title: &str, context_ref: &str) -> ResourceDetail {
-        build_row(title, context_ref, None, Some("2026-08-01"))
+        build_row(title, context_ref, None, Some("2026-08-01"), None)
+    }
+
+    /// A memory migrated from a local `.md` file — `title` is the human-readable hook, distinct
+    /// from `source_file`, the filename it was migrated from. This is the real-world shape: see
+    /// `status_matches_local_files_by_source_file_not_title` for why a title/filename comparison
+    /// cannot stand in for this.
+    fn meta_row_migrated(title: &str, context_ref: &str, source_file: &str) -> ResourceDetail {
+        build_row(
+            title,
+            context_ref,
+            Some("active"),
+            Some("2026-08-01"),
+            Some(source_file),
+        )
     }
 
     #[test]
@@ -324,16 +357,51 @@ mod tests {
         );
     }
 
+    /// The real-world shape: a migrated memory's title is a human-readable hook
+    /// ("a clause cannot retire its own goal"), never the filename stem
+    /// ("feedback_a_clause_cannot_retire_its_own_goal"). Matching must go through
+    /// `open_meta.source_file` — a title/filename-stem comparison would report BOTH local files
+    /// as orphaned here, not just the genuinely unmatched one.
     #[test]
-    fn status_matches_local_files_to_temper_by_slug() {
-        let rows = vec![meta_row_titled("feedback_x", "@me/temper")];
+    fn status_matches_local_files_by_source_file_not_title() {
+        let rows = vec![meta_row_migrated(
+            "a clause cannot retire its own goal",
+            "@me/temper",
+            "feedback_a_clause_cannot_retire_its_own_goal.md",
+        )];
         let r = status_report(
             Some(&cfg()),
             &rows,
-            &[local("feedback_x.md"), local("feedback_y.md")],
+            &[
+                local("feedback_a_clause_cannot_retire_its_own_goal.md"),
+                local("feedback_y.md"),
+            ],
         );
         assert_eq!(r.in_temper, 1);
-        assert_eq!(r.local_without_counterpart, vec!["feedback_y.md"]);
+        assert_eq!(
+            r.local_without_counterpart,
+            vec!["feedback_y.md"],
+            "matching is by source_file; a migrated memory's title never equals its filename"
+        );
+    }
+
+    /// A memory authored natively in Temper (from a session, from Desktop) never had a source
+    /// file. That absence is ordinary — never a defect, and never grounds to treat some unrelated
+    /// local file as matched or orphaned by accident.
+    #[test]
+    fn a_memory_without_a_source_file_is_ordinary_not_a_defect() {
+        let native = meta_row_titled("a native memory", "@me/temper");
+        let r = status_report(Some(&cfg()), &[native], &[local("feedback_z.md")]);
+        assert_eq!(r.in_temper, 1);
+        assert!(
+            r.defects.is_empty(),
+            "a memory with no source_file must not become a defect"
+        );
+        assert_eq!(
+            r.local_without_counterpart,
+            vec!["feedback_z.md"],
+            "an unrelated local file stays orphaned; a source-file-less memory matches nothing"
+        );
     }
 
     #[test]
