@@ -1205,6 +1205,30 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     }
                 }
             }
+            MemoryAction::Migrate {
+                cohort,
+                context,
+                dry_run,
+                unattended,
+                collision_limit,
+            } => {
+                let global = temper_cli::config::load_global_config()?;
+                let config = temper_cli::config::load(cli.vault.as_deref())?;
+                let report = temper_cli::commands::memory::migrate::migrate(
+                    &global,
+                    &config,
+                    temper_cli::commands::memory::migrate::MigrateArgs {
+                        cohort: &cohort,
+                        context: context.as_deref(),
+                        dry_run,
+                        unattended,
+                        collision_limit,
+                        format: output_format,
+                    },
+                )?;
+                println!("{}", temper_cli::format::render(&report, output_format)?);
+                Ok(())
+            }
             MemoryAction::Check { path } => {
                 let config = temper_cli::config::load_global_config()?;
                 match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {

@@ -8,6 +8,7 @@ use temper_core::types::config::{expand_tilde, MemoryConfig};
 pub mod check;
 pub mod emit;
 mod fetch;
+pub mod migrate;
 pub mod render;
 pub mod status;
 
