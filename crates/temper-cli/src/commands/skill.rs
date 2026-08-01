@@ -10,7 +10,8 @@ use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::templates::{
-    CommandWrapperTemplate, OutcomeRegistersTemplate, SessionLifecycleTemplate, SkillTemplate,
+    CommandWrapperTemplate, MemoriesTemplate, OutcomeRegistersTemplate, SessionLifecycleTemplate,
+    SkillTemplate,
 };
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
@@ -49,6 +50,10 @@ fn render_session_lifecycle(surface: &str) -> Result<String> {
 
 fn render_outcome_registers(surface: &str) -> Result<String> {
     render_md(&OutcomeRegistersTemplate { surface })
+}
+
+fn render_memories(surface: &str) -> Result<String> {
+    render_md(&MemoriesTemplate { surface })
 }
 
 // ── Static content (compiled into the binary) ────────────────────────────────
@@ -798,6 +803,7 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "outcome-registers.md".to_string(),
         render_outcome_registers(SURFACE_MCP)?,
     );
+    files.insert("memories.md".to_string(), render_memories(SURFACE_MCP)?);
     // Shipped to both surfaces verbatim: these three name no command on either, so they are the
     // same bytes in both trees rather than two renders of one template.
     files.insert(
@@ -1100,6 +1106,7 @@ pub fn generate_skill_files_with_hash(
         "session-lifecycle.md".to_string(),
         render_session_lifecycle(SURFACE_CLI)?,
     );
+    files.insert("memories.md".to_string(), render_memories(SURFACE_CLI)?);
     files.insert(
         "cognitive-maps.md".to_string(),
         COGNITIVE_MAPS_MD.to_string(),
@@ -1237,6 +1244,7 @@ mod tests {
         assert!(files.contains_key("implementation-grounding.md"));
         assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("session-lifecycle.md"));
+        assert!(files.contains_key("memories.md"));
         assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("teams.md"));
         assert!(files.contains_key("knowledge-base.md"));
@@ -1302,6 +1310,7 @@ mod tests {
             [
                 "SKILL.md",
                 "implementation-grounding.md",
+                "memories.md",
                 "outcome-registers.md",
                 "plan-verification.md",
                 "references/frontmatter.md",
@@ -1317,6 +1326,83 @@ mod tests {
         assert!(
             !files.contains_key("knowledge-base.md"),
             "knowledge-base.md is hand-maintained; emitting it would clobber it"
+        );
+    }
+
+    // ── Memory-convention discovery (both audiences) ─────────────────────────
+
+    /// The two packagings this repo ships. Distinct from `SURFACE_CLI`/`SURFACE_MCP` (the `&str`
+    /// values `render_memories` actually takes) — this enum exists only to give the tests below a
+    /// typed, unambiguous caller.
+    enum Surface {
+        Cli,
+        Mcp,
+    }
+
+    /// A minimal config for surface-rendering tests. An alias for `test_config()` rather than a
+    /// second literal, so the two never drift apart.
+    fn fixture_config() -> Config {
+        test_config()
+    }
+
+    /// Renders **only** the memory-discovery copy for a surface — not the whole tree.
+    ///
+    /// This matters: the full MCP tree already contains `@me/<ctx>` placeholders throughout
+    /// (`session-lifecycle.md`, `outcome-registers.md`, `SKILL.md` all use it as generic
+    /// addressing syntax), so a whole-tree render would fail
+    /// `the_mcp_skill_describes_the_convention_without_naming_a_context`'s negative assertions for
+    /// reasons that have nothing to do with the memory copy itself. Scoping to the one template
+    /// under test is what makes the assertion mean what it says.
+    fn render_skill_for(surface: Surface, _config: &Config) -> String {
+        let surface_str = match surface {
+            Surface::Cli => SURFACE_CLI,
+            Surface::Mcp => SURFACE_MCP,
+        };
+        render_memories(surface_str).expect("memories template renders")
+    }
+
+    #[test]
+    fn the_cli_skill_points_at_memory_status() {
+        let rendered = render_skill_for(Surface::Cli, &fixture_config());
+        assert!(
+            rendered.contains("temper memory status"),
+            "an unadopted machine learns the feature exists from the CLI skill"
+        );
+    }
+
+    #[test]
+    fn the_mcp_skill_describes_the_convention_without_naming_a_context() {
+        let rendered = render_skill_for(Surface::Mcp, &fixture_config());
+        assert!(
+            rendered.contains("type `memory`"),
+            "Desktop needs to know the doc type"
+        );
+        assert!(
+            !rendered.contains("@me/"),
+            "the MCP tree is config-free; naming a user context removes its ability to be gated"
+        );
+        assert!(
+            !rendered.contains("temper memory"),
+            "Desktop has no CLI; pointing it at a CLI command is a dead end"
+        );
+    }
+
+    /// `memories.md` is shipped in both trees but is dead content unless each surface's router
+    /// names it — the same failure mode `every_shipped_guidance_file_is_named_by_the_router` and
+    /// `the_mcp_router_names_every_file_it_ships` guard against for every other supporting file.
+    #[test]
+    fn memories_md_is_named_by_both_routers() {
+        let cli_config = test_config();
+        let cli_files = generate_skill_files_with_hash(&cli_config, "testhash").unwrap();
+        assert!(
+            cli_files["SKILL.md"].contains("memories.md"),
+            "the CLI SKILL.md never mentions memories.md, so no session will read it"
+        );
+
+        let mcp_files = generate_agent_skill_files().unwrap();
+        assert!(
+            mcp_files["SKILL.md"].contains("memories.md"),
+            "the MCP SKILL.md never mentions memories.md, so no session will read it"
         );
     }
 
