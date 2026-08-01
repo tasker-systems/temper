@@ -44,9 +44,18 @@ pub async fn search(
     )
     .await?;
 
-    // Serialize diagnostics into the additive header. `from_bytes` (not `from_str`) so a hint with
-    // non-ASCII (em dashes) rides as opaque UTF-8 rather than being dropped. Any failure to encode
-    // just omits the header — diagnostics are best-effort metadata, never load-bearing for the body.
+    // Serialize diagnostics into the additive header. `from_bytes` (not `from_str`) so a non-ASCII
+    // byte is not dropped here. Any failure to encode just omits the header — diagnostics are
+    // best-effort metadata, never load-bearing for the body.
+    //
+    // This used to claim that non-ASCII therefore "rides as opaque UTF-8". It does not survive the
+    // trip on the deployed platform: measured on prod 2026-08-01, an em dash arrives at the client
+    // percent-encoded as a literal `%E2%80%94`. Nothing in this handler or in temper-client does
+    // that — the encoding is introduced further out, at the serverless adapter boundary, which the
+    // e2e never crosses because it drives a bare Axum server. So the constraint is upstream of here:
+    // `search_hint` emits ASCII only, guarded by `every_emitted_hint_is_ascii`. Do not "fix" this by
+    // percent-decoding on the client; a hint may legitimately contain a `%`, and decoding would
+    // corrupt it.
     let mut headers = HeaderMap::new();
     if let Some(diag) = response.diagnostics.as_ref() {
         if let Ok(json) = serde_json::to_string(diag) {
