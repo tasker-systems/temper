@@ -36,7 +36,7 @@ construction. The memory directory is a parallel, weaker implementation of it, m
 | Decision | Choice | Why |
 |---|---|---|
 | Index upkeep | **Generated projection + drift gate** | `MEMORY.md` is emitted, never hand-edited. Same pattern as the agent-skills projection shipped in PR #609. A memory's truth lives in one place; the index is a render, so it cannot disagree with what it indexes |
-| Home + scope | **Split by reach: two contexts** | Reach is declared by *where a memory lives*, not by a per-memory field that can be set wrong and that nothing validates |
+| Home + scope | **Split by reach: shared vs project context lists** | Reach is declared by *where a memory lives* and *which configs name that context*, never by a per-memory field that can be set wrong and that nothing validates |
 | Staleness | **`status` + `verified`, both rendered** | Supersession keeps the principle and kills the instance; the verified date makes an unexamined claim visible instead of silent |
 | Migration | **Bounded batch + lazy tail** | The cross-project cohort migrates deliberately; the rest moves when touched. Rationale below |
 
@@ -73,15 +73,21 @@ Promoting both keys into `managed_meta` is the obvious v2 and is **deferred, not
 ## Homes and reach
 
 ```
-@me/working-agreements   ← feedback (69). Read by EVERY project's emit.
-@me/temper               ← project (107) + reference (6), beside the goals they discuss.
+shared_contexts    @me/working-agreements   ← feedback (69). Read by EVERY project's emit.
+project_contexts   @me/temper               ← project (107) + reference (6), beside the goals
+                   (+ any others this project spans)   they discuss.
 
-emit for project X  =  @me/working-agreements  ∪  @me/<X>
+emit for project X  =  ⋃ shared_contexts  ∪  ⋃ project_contexts(X)
 ```
 
-Reach is a property of the home, so a memory cannot claim a reach it does not have. Onboarding a
-second project (`learning-maths` and `storyteller` both exist) is one new context and one line of
-emit configuration — no per-memory rework.
+Reach is a property of **which configs list a context**, never of a field on the memory itself. That
+is the property worth protecting: a memory cannot assert a reach it does not have, because it does
+not carry one. What it does *not* mean is that reach is one-to-one — a project may legitimately span
+contexts (`project_contexts` is a list), and two projects may both list the same one. So a memory in
+a shared research context is read by every project that names it, which is the intent, not a leak.
+
+Onboarding another project (`learning-maths` and `storyteller` both exist) is a config entry — no
+per-memory rework.
 
 **Supersession replaces deletion.** A memory that turns out wrong takes `status: superseded`, keeps
 its body — which is where the *principle* lives, distinct from the instance that expired — and drops
@@ -95,10 +101,11 @@ instances were marked fixed.
 A new CLI command, following `temper skill emit`:
 
 ```
-temper memory emit --project <name> --path ~/.claude/projects/<project>/memory/MEMORY.md
+temper memory emit          # contexts and index_path come from [memory] config
+temper memory emit --path <p>   # override, for a machine mid-adoption
 ```
 
-Renders one line per **active** memory across the two contexts, grouped by section, with the
+Renders one line per **active** memory across the configured contexts, grouped by context, with the
 `verified` date carried through and anything past a staleness threshold marked:
 
 ```markdown
@@ -114,6 +121,86 @@ hand-edited index is a build failure rather than a slow divergence.
 Temper natively; they need no index. This matters for scoping: the known MCP lag bites on
 *authoring* a memory from those environments, not on reading one, so it does not block this work.
 It is named here so its absence from scope reads as a decision.
+
+## Adoption is opt-in, and per machine
+
+Other machines and other projects must be able to *discover* this and evaluate their own memory set
+in the same light — and must be able to decline. A Temper user who wants none of this should never
+have to know it exists.
+
+**Opt-in lives in temper config and is absent by default.** No `[memory]` section means the feature
+is off and `emit` is a no-op that says why.
+
+```toml
+[memory]
+# Contexts whose memories reach EVERY project on this machine.
+shared_contexts  = ["@me/working-agreements"]
+
+# Contexts for this project. A list, because a project legitimately spans contexts.
+project_contexts = ["@me/temper"]
+
+index_path       = "~/.claude/projects/-Users-.../memory/MEMORY.md"
+```
+
+`emit` renders the union of both lists, grouped by context. The two keys are not merely two halves
+of that union — **they differ on the write side**: a new cross-project memory defaults to the first
+`shared_contexts` entry, a project-specific one to the first `project_contexts` entry. Without that
+distinction the split is conventional only, and a convention nothing enforces is how the reach
+problem comes back.
+
+**Discovery is a read command that works whether or not you have opted in:**
+
+```
+temper memory status
+```
+
+For the machine it runs on: local memory files found, memories in Temper, opt-in state, and — the
+part that makes it useful on a machine that has never adopted — **which local files have no
+counterpart in Temper**. It is read-only, so trying it costs nothing.
+
+### Discovery has two audiences, and only one of them has a MEMORY.md
+
+- **Claude Code on another machine** has a memory directory, a config, and the CLI. It learns this
+  exists from the **CLI-packaged skill** (`temper skill install`), runs `temper memory status`, sees
+  its own divergence measured, and opts in when it wants to. This is the audience the section above
+  is written for.
+- **Claude Desktop, mobile, and web have no `MEMORY.md` and no CLI.** Nothing there needs an index or
+  an opt-in — memories are simply `memory`-typed resources they can already read over MCP. What they
+  need is to *know that convention exists*, which the **MCP skill artifact** can now carry: the skill
+  ships as a versioned `temper-skill-v<ver>.zip` for Desktop. For them the guidance is "memories are
+  resources of type `memory`; read them; honour them", not "reconcile your local files".
+
+**One constraint this must not break.** The MCP skill tree is **config-free**, and that is precisely
+what lets it be a committed projection with a drift gate. It must therefore describe the *convention*
+and the *doc type* — never a user's context names. `@me/working-agreements` is a per-user config
+value and belongs in the CLI-side skill only. Baking it into the MCP tree would silently remove that
+tree's ability to be gated.
+
+**And the latency is real:** the MCP skill artifact ships on a release cadence, so Desktop learns
+about this one release behind the CLI, not immediately. Stated rather than discovered later.
+
+### The duplication hazard, and what does not close it
+
+**Two machines migrating independently will duplicate.** Separate machines have been learning the
+same lessons and writing them down separately — different words, different slugs. If both migrate
+into a shared context, Temper holds two memories saying nearly the same thing, the recall path
+cannot tell they are siblings, and **both** render — one of them staler than the other.
+
+Same shape as issue #581, generalized: **reconcile, do not blind-create.** `temper memory migrate`
+searches the target context before each write and surfaces near-matches for a human decision rather
+than resolving them itself. It is interactive by default on a collision and refuses to run
+unattended without an explicit flag.
+
+**This detects overlap; it does not eliminate it.** Semantic near-duplicates phrased differently
+enough will pass the search and land twice. The residue is real and is named here rather than
+claimed closed — a reconciler that silently merged on similarity would be worse, because it would
+destroy one of two accounts that a human might have wanted to compare.
+
+### Sequencing across machines
+
+One machine migrates; the others adopt at their own pace and reconcile against what is already
+there. Two parallel first-migrations is the case the reconciler handles least well, and nothing
+requires it — a later adopter runs a strictly smaller and safer job than the first.
 
 ## Migration
 
@@ -157,6 +244,9 @@ The plan instead:
   means unexamined, never false**, and the render must not blur the two.
 - **The other projects' memory directories** (`learning-maths`, `storyteller`) — the design admits
   them at no extra cost, but migrating them is out of scope here.
+- **Any central registry of which machines have adopted.** Opt-in is per-machine config and nothing
+  aggregates it; `temper memory status` answers for the machine it runs on and no other. A fleet
+  view would need a home for machine identity that does not exist yet.
 
 ## Open, and honestly unbounded
 
