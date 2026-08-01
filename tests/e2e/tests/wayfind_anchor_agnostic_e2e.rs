@@ -171,3 +171,94 @@ async fn unscoped_wayfind_reaches_context_homed_content(pool: sqlx::PgPool) {
         );
     }
 }
+
+/// Reach legibility (issue #585 Task 4) at the **production caller's level**. The substrate tests
+/// prove the SQL computes the reach scalars; this proves they survive the whole chain and land where
+/// a caller reads them.
+///
+/// That distinction is load-bearing here, not ceremonial: search diagnostics do **not** ride the
+/// response body — they travel in the additive `x-temper-search-diagnostics` response header, which
+/// `temper-client` reassembles onto `SearchResponse`. Three new fields could compute perfectly in
+/// Postgres, serialize perfectly in the service, and still never reach the caller if the header path
+/// dropped them. Only a test that goes through the real client can see that.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn wayfind_diagnostics_report_reach_to_the_caller(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+    app.client
+        .contexts()
+        .create("temper", None)
+        .await
+        .expect("context create");
+    ingest_into_context(
+        &app,
+        "zreache2e raw work",
+        "zreache2e-raw",
+        "zreache2e content homed in a context, reachable by an unscoped wayfind.",
+    )
+    .await;
+
+    let params = build_search_params(cli_args("zreache2e", None)).expect("unscoped wayfind builds");
+    let resp = app
+        .client
+        .search()
+        .search_with_params(&params)
+        .await
+        .expect("unscoped wayfind must round-trip");
+
+    let diag = resp
+        .diagnostics
+        .expect("the server always populates diagnostics; `None` is the old-server degrade path");
+    assert_eq!(diag.scope, temper_core::types::api::SearchScope::Wayfind);
+
+    // The three reach fields must ARRIVE — the header path is where they would silently vanish.
+    let visible = diag
+        .anchors_visible
+        .expect("a wayfind must report how many anchors the caller could reach");
+    let reached = diag
+        .anchors_reached
+        .expect("a wayfind must report how many anchors it actually drew on");
+    let selected = diag
+        .anchors_selected
+        .expect("a wayfind must report how many anchors WON a region slot — the competitive sense");
+    let width = diag
+        .regions_effective
+        .expect("a wayfind must report the region width it applied");
+
+    assert!(
+        reached >= 1,
+        "the query matched, so at least one anchor contributed (reached={reached})"
+    );
+    assert!(
+        reached <= visible,
+        "cannot draw on more anchors than are visible (reached={reached} visible={visible})"
+    );
+    // Selection is a strict sub-sense of reach: an anchor cannot win a slot without contributing.
+    // Asserting the ordering is what stops a later change aliasing the two, which would silently
+    // restore the cold-start floor into the field that exists to be free of it.
+    assert!(
+        selected <= reached,
+        "selection is the competitive subset of reach (selected={selected} reached={reached})"
+    );
+    // The width is the SQL default, reported rather than copied into the client. `cli_args` asks for
+    // 10, which is under the ceiling, so it passes through unclamped — this asserts the request
+    // reached the clamp at all, which a hardcoded client-side echo of the number would also satisfy
+    // but a dropped field would not.
+    assert_eq!(
+        width, 10,
+        "the applied width must come back from the server, not be assumed by the caller"
+    );
+
+    // And the field this replaces is still a RESOURCE count — the two must not be conflated. Asserting
+    // they are independent is what stops a later refactor from quietly aliasing one onto the other.
+    let scope_size = diag.scope_size.expect("wayfind reports a scope size");
+    assert!(
+        scope_size >= reached,
+        "scope_size counts resources and reach counts anchors; a resource count below the anchor \
+         count means the two have been crossed (scope_size={scope_size} reached={reached})"
+    );
+}

@@ -36,6 +36,8 @@ pub struct CliSearchArgs<'a> {
     /// Lens ref (UUID or decorated) overriding wayfind region selection. Requires `wayfind`.
     pub lens: Option<&'a str>,
     /// Top-N regions to scope into for wayfind (default/ceiling are server-side). Requires `wayfind`.
+    /// Also bounds anchor reach — Stage-1 admits at most one region per anchor per round — and the
+    /// width actually applied comes back as `diagnostics.regions_effective` (issue #585).
     pub regions: Option<i64>,
     pub doc_type: Option<&'a str>,
     pub limit: Option<i64>,
@@ -493,6 +495,10 @@ mod tests {
             diagnostics: Some(temper_core::types::api::SearchDiagnostics {
                 scope: temper_core::types::api::SearchScope::Global,
                 scope_size: None,
+                anchors_visible: None,
+                anchors_reached: None,
+                anchors_selected: None,
+                regions_effective: None,
                 matched: 1,
                 reason: temper_core::types::api::SearchReason::Ok,
                 degraded: false,
