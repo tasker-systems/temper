@@ -80,7 +80,13 @@ describe('forwardRequest (passthrough)', () => {
 	// behaviors the platform rewrite used to handle: compression and redirects.
 	let server: Server;
 	let base: string;
-	let lastRequest: { method: string; url: string; body: string; auth: string | undefined };
+	let lastRequest: {
+		method: string;
+		url: string;
+		body: string;
+		auth: string | undefined;
+		traceparent: string | undefined;
+	};
 
 	beforeAll(async () => {
 		server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -91,7 +97,8 @@ describe('forwardRequest (passthrough)', () => {
 					method: req.method ?? '',
 					url: req.url ?? '',
 					body: Buffer.concat(chunks).toString('utf-8'),
-					auth: req.headers.authorization
+					auth: req.headers.authorization,
+					traceparent: req.headers.traceparent as string | undefined
 				};
 
 				if (req.url?.startsWith('/redirect')) {
@@ -167,5 +174,114 @@ describe('forwardRequest (passthrough)', () => {
 		);
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe('/landed');
+	});
+
+	it('forwards an inbound traceparent to the upstream unchanged', async () => {
+		const tp = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+		await forwardRequest(
+			base,
+			'/api/x',
+			'',
+			new Request('http://ui.local/api/x', { headers: { traceparent: tp } })
+		);
+		expect(lastRequest.traceparent).toBe(tp);
+	});
+
+	it('generates a well-formed W3C traceparent when the caller sent none', async () => {
+		await forwardRequest(base, '/api/x', '', new Request('http://ui.local/api/x'));
+		// version 00, 32-hex trace-id, 16-hex span-id, sampled.
+		expect(lastRequest.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+	});
+});
+
+describe('forwardRequest (upstream failure handling)', () => {
+	// An address that refuses connections, so `fetch` rejects with the
+	// connection-level `TypeError: fetch failed` this proxy has to absorb.
+	const unreachable = 'http://127.0.0.1:1'; // port 1 is not listenable in practice
+
+	it('returns 502 (not a naked 500) when the upstream is unreachable', async () => {
+		const res = await forwardRequest(
+			unreachable,
+			'/api/profile',
+			'',
+			new Request('http://ui.local/api/profile')
+		);
+		expect(res.status).toBe(502);
+		expect(await res.json()).toMatchObject({ message: expect.stringContaining('unreachable') });
+	});
+
+	it('returns 504 when the upstream does not respond within the connect timeout', async () => {
+		// A server that accepts the connection but never writes a response header,
+		// so only the connect timeout can end the wait.
+		const hung = createServer(() => {
+			/* intentionally never responds */
+		});
+		await new Promise<void>((resolve) => hung.listen(0, '127.0.0.1', resolve));
+		const { port } = hung.address() as AddressInfo;
+		try {
+			const res = await forwardRequest(
+				`http://127.0.0.1:${port}`,
+				'/api/profile',
+				'',
+				new Request('http://ui.local/api/profile'),
+				{ connectTimeoutMs: 50 }
+			);
+			expect(res.status).toBe(504);
+			expect(await res.json()).toMatchObject({ message: expect.stringContaining('did not respond') });
+		} finally {
+			hung.close();
+		}
+	});
+
+	it('retries an idempotent GET once after a dropped connection, then succeeds', async () => {
+		let hits = 0;
+		const flaky = createServer((req: IncomingMessage, res: ServerResponse) => {
+			hits += 1;
+			if (hits === 1) {
+				req.socket.destroy(); // ECONNRESET → undici `fetch failed`
+				return;
+			}
+			res.writeHead(200, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ ok: true }));
+		});
+		await new Promise<void>((resolve) => flaky.listen(0, '127.0.0.1', resolve));
+		const { port } = flaky.address() as AddressInfo;
+		try {
+			const res = await forwardRequest(
+				`http://127.0.0.1:${port}`,
+				'/api/profile',
+				'',
+				new Request('http://ui.local/api/profile')
+			);
+			expect(res.status).toBe(200);
+			expect(hits).toBe(2); // failed once, retried once
+		} finally {
+			flaky.close();
+		}
+	});
+
+	it('does NOT retry a non-idempotent POST — a dropped write surfaces as 502', async () => {
+		let hits = 0;
+		const flaky = createServer((req: IncomingMessage, res: ServerResponse) => {
+			hits += 1;
+			req.socket.destroy();
+		});
+		await new Promise<void>((resolve) => flaky.listen(0, '127.0.0.1', resolve));
+		const { port } = flaky.address() as AddressInfo;
+		try {
+			const res = await forwardRequest(
+				`http://127.0.0.1:${port}`,
+				'/api/resources/abc',
+				'',
+				new Request('http://ui.local/api/resources/abc', {
+					method: 'POST',
+					body: JSON.stringify({ a: 1 })
+				})
+			);
+			expect(res.status).toBe(502);
+			expect(hits).toBe(1); // exactly one attempt — the write was not replayed
+		} finally {
+			flaky.close();
+		}
 	});
 });
