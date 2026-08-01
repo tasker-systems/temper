@@ -13,6 +13,10 @@ use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() -> Result<(), vercel_runtime::Error> {
+    // Name this executable in exported spans before the exporter is built — see api/axum.rs. The MCP
+    // and API executables share a Vercel project, so distinct code-set names are what keep their
+    // spans apart in the Tier-2 waterfall (work item 2b).
+    temper_telemetry::set_service_name("temper-mcp");
     temper_telemetry::init_server_logging();
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry

@@ -8,6 +8,10 @@ use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() {
+    // The public-API surface, whether run here (local / self-hosted) or as the Vercel `api/axum.rs`
+    // executable — same name, so a self-hosted deployment reports `temper-api` exactly as the cloud
+    // one does (work item 2b). Must precede init, which builds the exporter that reads it.
+    temper_telemetry::set_service_name("temper-api");
     temper_telemetry::init_server_logging();
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry

@@ -14,6 +14,11 @@ use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() -> Result<(), vercel_runtime::Error> {
+    // Name this executable in exported spans before the exporter is built. temper-cloud runs three
+    // Rust executables and eight Node lambdas in one Vercel project, so a project-scoped
+    // `OTEL_SERVICE_NAME` cannot name them all distinctly — each Rust binary claims its own name here,
+    // leaving that env var free for the project's Node half (work item 2b).
+    temper_telemetry::set_service_name("temper-api");
     temper_telemetry::init_server_logging();
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry

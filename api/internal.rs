@@ -22,6 +22,11 @@ use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() -> Result<(), vercel_runtime::Error> {
+    // Name this executable in exported spans before the exporter is built — see api/axum.rs. The
+    // internal/system surface shares a Vercel project with the public API and MCP executables, so a
+    // distinct code-set name is what tells its embed-cron and `/internal/*` spans apart from theirs
+    // (work item 2b).
+    temper_telemetry::set_service_name("temper-internal");
     temper_telemetry::init_server_logging();
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry

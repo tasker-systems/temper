@@ -85,7 +85,12 @@ impl TemperMcpService {
         // deferred-field pattern as temper-api's auth middleware.
         tracing::Span::current().record("profile_id", tracing::field::display(authed.profile().id));
 
-        tracing::debug!(profile_id = %authed.profile().id, sub = %claims.sub, "Profile resolved");
+        // `profile_id` is the identifier to carry here — the raw OAuth `sub` is deliberately NOT
+        // emitted. At this point the profile has resolved, so `sub` adds nothing an operator can act
+        // on that `profile_id` does not, while a `google-oauth2|…` value joins our exported traces to
+        // the same person in unrelated systems (Auth0's social-connection `user_id` embeds the Google
+        // account id). A `profile_id` is inert outside temper. Decided 2026-08-01; see the task's §5.
+        tracing::debug!(profile_id = %authed.profile().id, "Profile resolved");
 
         // Level 2: system-access gate (shared seam).
         temper_services::auth::require_system_access(&self.api_state.pool, &authed)
@@ -975,9 +980,13 @@ impl rmcp::ServerHandler for TemperMcpService {
                     .await
                     .map_err(map_authz_error)?;
 
+            // Carry `profile_id` only — never the raw OAuth `sub`. This event was the specific one
+            // that surfaced the decision: it exported `profile_id` *and* `sub: google-oauth2|…`, and
+            // the `sub` was read by an LLM into a chat transcript during triage. The profile has
+            // resolved here, so `sub` is redundant for attribution and its only remaining effect is
+            // cross-boundary linkability. Decided 2026-08-01; see the task's §5.
             tracing::info!(
                 profile_id = %authed.profile().id,
-                sub = %claims.sub,
                 "MCP session initialized"
             );
             let mut guard = self.profile.lock().await;
