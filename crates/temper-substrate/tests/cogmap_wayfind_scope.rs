@@ -982,3 +982,53 @@ async fn a_region_less_anchor_reached_by_cold_start_counts_as_reached(pool: PgPo
         reach.regions_effective
     );
 }
+
+// 12. THE COLD-START FLOOR, and why one reach number could not carry the clause. Reproduces the
+//     production shape: one map holds every live region and wins the whole width, while several
+//     region-less anchors are admitted wholesale on every query. `anchors_reached` is then high and
+//     reads as broad reach; `anchors_selected` is 1 and names the monopoly. Measured on prod
+//     2026-08-01: 6 of 10 visible anchors were region-less, so a total monopoly still reported 7 of
+//     10 reached — this test is that case, shrunk.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn selection_names_a_monopoly_that_the_cold_start_floor_hides(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let hi = vec768(&[(0, 1.0)]);
+    // The fat map holds every live region, so it wins every slot the width offers.
+    for i in 0..6 {
+        let salience = 1.0 - (f64::from(i) * 0.01);
+        seed_region_on(&pool, &fx, fx.cogmap, salience, &hi, &[&format!("fat{i}")]).await;
+    }
+    // Three region-less anchors holding content — the cold-start floor.
+    for n in ["floor-a", "floor-b", "floor-c"] {
+        let thin = add_visible_map(&pool, fx.p1, n, n).await;
+        insert_homed_resource(&pool, thin, fx.sys, &format!("{n}-doc")).await;
+    }
+    let q = query_axis0();
+
+    let reach = reach_at(&pool, &fx, Some(3), &q).await;
+
+    // THE MONOPOLY: one anchor took the entire width.
+    assert_eq!(
+        reach.anchors_selected, 1,
+        "the fat map holds every region, so it must win every slot — selected should be 1, got {}",
+        reach.anchors_selected
+    );
+    // AND THE MASK: reach is materially higher, because the region-less anchors came in regardless.
+    assert!(
+        reach.anchors_reached >= 4,
+        "the three region-less anchors plus the winner must all be 'reached' (got {})",
+        reach.anchors_reached
+    );
+    assert!(
+        reach.anchors_reached > reach.anchors_selected,
+        "this is the whole point: reach ({}) overstates competitive breadth ({}), so a caller \
+         reading reach alone would see health where there is a monopoly",
+        reach.anchors_reached,
+        reach.anchors_selected
+    );
+    // The wholesale count is recoverable, which is what lets a caller discount it.
+    assert!(
+        reach.anchors_reached - reach.anchors_selected >= 3,
+        "reached - selected must expose the unconditional admissions"
+    );
+}

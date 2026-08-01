@@ -497,6 +497,7 @@ mod tests {
                 scope_size: None,
                 anchors_visible: None,
                 anchors_reached: None,
+                anchors_selected: None,
                 regions_effective: None,
                 matched: 1,
                 reason: temper_core::types::api::SearchReason::Ok,

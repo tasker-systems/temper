@@ -754,17 +754,24 @@ fn search_hint(
     // `the-report-never-flatters` clause forbids. Silence here would leave the caller's own output
     // telling them the maps were reached when they were not.
     //
-    // Fires only when the principal had more than one anchor to reach and at least one was missed;
-    // full reach says nothing, and a zero-reach scope is already covered by the `OutOfScope` arm
-    // above (adding this on top would say the same thing twice).
-    if let Some(r) = reach.filter(|r| {
-        r.anchors_visible > 1 && r.anchors_reached >= 1 && r.anchors_reached < r.anchors_visible
-    }) {
-        // Name the width only when it is actually the binding constraint. Reach can legitimately
-        // EXCEED the width — cold-start admits region-less anchors' direct homes without consuming a
-        // region slot — so `<` here would misattribute an ordinary partial reach to the knob and send
-        // the caller to raise a setting that would change nothing.
-        let bound = if r.anchors_reached == r.regions_effective {
+    // The trigger is `anchors_SELECTED`, not `anchors_reached`, and that is the whole point. Reach
+    // counts the cold-start arm, which admits every region-less anchor wholesale on every query — a
+    // floor measured at 6 of 10 visible anchors on the production corpus. Keying the hint on reach
+    // would therefore stay silent on, or actively flatter, exactly the monopoly it exists to expose:
+    // one map taking the entire width still reports "7 of 10 reached". Selection is the competitive
+    // sense, and the only one that can be monopolized.
+    //
+    // Fires when more than one anchor could have won a slot and fewer did. A zero-selection scope is
+    // left to the `OutOfScope` arm above when the scope is empty; when it is non-empty (cold-start
+    // supplied everything and no region won), that IS worth saying, so `>= 1` is deliberately absent.
+    if let Some(r) =
+        reach.filter(|r| r.anchors_visible > 1 && r.anchors_selected < r.anchors_visible)
+    {
+        // Name the width only when it is actually the binding constraint — i.e. when selection used
+        // the whole width. Below it, the width is not what stopped more anchors getting in (there
+        // were not enough competitive regions to go round), and sending the caller to raise a knob
+        // that would change nothing is its own species of misleading control.
+        let bound = if r.anchors_selected == r.regions_effective {
             format!(
                 " — region width {} bounds this (one region per map per round); raise it with \
                  `--regions N`",
@@ -773,9 +780,21 @@ fn search_hint(
         } else {
             String::new()
         };
+        // Report both senses. The wholesale count is what stops the reached figure being read as
+        // fairness: those anchors contributed regardless of the query, so they are not evidence that
+        // routing worked.
+        let wholesale = r.anchors_reached - r.anchors_selected;
+        let also = if wholesale > 0 {
+            format!(
+                " {wholesale} further anchor(s) were admitted wholesale, having no regions — that is \
+                 not query relevance."
+            )
+        } else {
+            String::new()
+        };
         parts.push(format!(
-            "wayfind drew on {} of the {} anchors you can see{bound}.",
-            r.anchors_reached, r.anchors_visible
+            "wayfind selected {} of the {} anchors you can see{bound}.{also}",
+            r.anchors_selected, r.anchors_visible
         ));
     }
     if degraded {
@@ -898,6 +917,7 @@ pub async fn search_select(
             // no meaning to report rather than a zero to report (issue #585 Task 4).
             anchors_visible: reach.as_ref().map(|r| i64::from(r.anchors_visible)),
             anchors_reached: reach.as_ref().map(|r| i64::from(r.anchors_reached)),
+            anchors_selected: reach.as_ref().map(|r| i64::from(r.anchors_selected)),
             regions_effective: reach.as_ref().map(|r| i64::from(r.regions_effective)),
             matched,
             reason,
@@ -1327,21 +1347,22 @@ mod clamp_tests {
 
     // --- Narrowed-reach hint (issue #585 Task 4) -------------------------------------------------
 
-    fn reach(visible: i32, reached: i32, width: i32) -> readback::WayfindScopeReach {
+    fn reach(visible: i32, reached: i32, selected: i32, width: i32) -> readback::WayfindScopeReach {
         readback::WayfindScopeReach {
             scope_ids: Vec::new(),
             anchors_visible: visible,
             anchors_reached: reached,
+            anchors_selected: selected,
             regions_effective: width,
         }
     }
 
-    /// The load-bearing case: a perfectly healthy-looking `Ok` that in fact drew on 1 of 8 anchors.
+    /// The load-bearing case: a perfectly healthy-looking `Ok` in which one anchor won everything.
     /// Every other signal reads as success, so this hint is the only thing standing between the
     /// caller and a flattering report.
     #[test]
-    fn hint_names_narrowed_reach_on_an_otherwise_healthy_ok() {
-        let r = reach(8, 1, 1);
+    fn hint_names_narrowed_selection_on_an_otherwise_healthy_ok() {
+        let r = reach(8, 1, 1, 1);
         let h = search_hint(
             SearchScope::Wayfind,
             SearchReason::Ok,
@@ -1349,7 +1370,7 @@ mod clamp_tests {
             Some(&r),
             false,
         )
-        .expect("a 1-of-8 reach must not pass silently as Ok");
+        .expect("a 1-of-8 selection must not pass silently as Ok");
         assert!(
             h.contains('1') && h.contains('8'),
             "names the ratio; got: {h}"
@@ -1360,11 +1381,42 @@ mod clamp_tests {
         );
     }
 
-    /// Full reach is unremarkable and must stay silent — a hint on every wayfind would train callers
-    /// to ignore the one that matters.
+    /// THE REGRESSION BOUNDARY for the cold-start floor. On the production corpus 6 of 10 visible
+    /// anchors hold no regions and are admitted wholesale on every query, so a total monopoly — one
+    /// map taking the entire width — still leaves `anchors_reached` at 7 of 10. A hint keyed on
+    /// REACH would report that as broad reach and mask the monopoly, which is precisely the
+    /// flattering report `the-report-never-flatters` forbids. Keyed on SELECTION it cannot.
     #[test]
-    fn hint_is_silent_when_every_visible_anchor_was_reached() {
-        let r = reach(4, 4, 20);
+    fn hint_exposes_a_monopoly_that_the_reach_floor_would_have_masked() {
+        let monopoly = reach(10, 7, 1, 3);
+        let h = search_hint(
+            SearchScope::Wayfind,
+            SearchReason::Ok,
+            Some(640),
+            Some(&monopoly),
+            false,
+        )
+        .expect("a 1-anchor selection must report, however high reach climbs");
+        assert!(
+            h.contains("selected 1 of the 10"),
+            "must lead with the competitive sense, not the flattering 7; got: {h}"
+        );
+        assert!(
+            h.contains("wholesale"),
+            "the 6 unconditional anchors must be named as such — they are not query relevance;              got: {h}"
+        );
+        // The specific failure this guards: presenting the reach figure as the headline.
+        assert!(
+            !h.contains("selected 7"),
+            "the reach floor must never be reported as if it were selection; got: {h}"
+        );
+    }
+
+    /// Full selection is unremarkable and must stay silent — a hint on every wayfind would train
+    /// callers to ignore the one that matters.
+    #[test]
+    fn hint_is_silent_when_every_visible_anchor_was_selected() {
+        let r = reach(4, 4, 4, 20);
         assert!(
             search_hint(
                 SearchScope::Wayfind,
@@ -1374,14 +1426,14 @@ mod clamp_tests {
                 false
             )
             .is_none(),
-            "full reach is not worth saying"
+            "full selection is not worth saying"
         );
     }
 
     /// One visible anchor cannot be "narrow" — there is nothing it failed to reach.
     #[test]
     fn hint_is_silent_when_only_one_anchor_is_visible() {
-        let r = reach(1, 1, 3);
+        let r = reach(1, 1, 1, 3);
         assert!(search_hint(
             SearchScope::Wayfind,
             SearchReason::Ok,
@@ -1392,11 +1444,12 @@ mod clamp_tests {
         .is_none());
     }
 
-    /// Cold-start lets reach EXCEED the width, and in that case the width is provably not what
-    /// bounded the result — naming it would send the caller to raise a setting that changes nothing.
+    /// The width is the constraint only when selection consumed all of it. Below that, more anchors
+    /// could have won a slot and did not — raising `--regions` would change nothing, and saying so
+    /// would be its own misleading control.
     #[test]
     fn hint_blames_the_width_only_when_the_width_is_binding() {
-        let binding = reach(9, 3, 3);
+        let binding = reach(9, 3, 3, 3);
         let h = search_hint(
             SearchScope::Wayfind,
             SearchReason::Ok,
@@ -1407,12 +1460,11 @@ mod clamp_tests {
         .expect("hint");
         assert!(
             h.contains("region width"),
-            "reached == width ⇒ the knob is the constraint; got: {h}"
+            "selected == width ⇒ the knob is the constraint; got: {h}"
         );
 
-        // Reach exceeded the width (cold-start admitted extra anchors) — still partial, so the hint
-        // fires, but it must NOT attribute the shortfall to `--regions`.
-        let not_binding = reach(9, 5, 3);
+        // Selection used less than the width — the supply of competitive regions ran out first.
+        let not_binding = reach(9, 5, 2, 3);
         let h2 = search_hint(
             SearchScope::Wayfind,
             SearchReason::Ok,
@@ -1420,10 +1472,10 @@ mod clamp_tests {
             Some(&not_binding),
             false,
         )
-        .expect("a 5-of-9 reach still reports");
+        .expect("a 2-of-9 selection still reports");
         assert!(
             !h2.contains("region width"),
-            "reach exceeded the width, so the width did not bound it; got: {h2}"
+            "selection did not exhaust the width, so the width did not bound it; got: {h2}"
         );
         assert!(
             !h2.contains("--regions"),

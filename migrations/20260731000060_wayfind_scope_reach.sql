@@ -35,6 +35,22 @@
 -- exists to keep reachable — and would report a fresh anchor as unreached in the one case where the
 -- substrate went out of its way to reach it. Both arms count.
 --
+-- WHY ONE REACH NUMBER IS NOT ENOUGH — the floor. The two arms are not comparable evidence, and on the
+-- real corpus the difference is not a rounding detail. Measured on prod 2026-08-01 for a live
+-- principal: of 10 visible anchors, 4 hold live regions and compete, and **6 hold resources but zero
+-- live regions**, so they are admitted wholesale on EVERY query whatever was asked. `anchors_reached`
+-- therefore has a FLOOR of 6 there, and a fully monopolized wayfind — one map taking all 3 slots at the
+-- default width — would report "7 of 10 anchors reached". That reads as broad reach while masking the
+-- monopoly, which is exactly the flattering report this instrumentation exists to prevent. So the
+-- competitive sense is reported SEPARATELY as `anchors_selected`: how many anchors actually won a
+-- region slot. A monopoly is then visible as `anchors_selected = 1` however high `anchors_reached`
+-- climbs, and "admitted wholesale" is `anchors_reached - anchors_selected`.
+--
+-- NOT ADDED, deliberately: an `anchors_competing` count (anchors holding ≥1 live region). It would make
+-- "1 of 4 competing" directly readable, but `anchors_selected` against `regions_effective` already
+-- names the monopoly — one anchor holding a width of 3 IS the finding — and a fifth scalar earns its
+-- place only if a caller cannot act without it.
+--
 -- Deploy safety: purely additive. One new function; one CREATE OR REPLACE of an existing function with
 -- an UNCHANGED signature and unchanged semantics (identical id set — the wrapper's body is the previous
 -- body verbatim, relocated). `additive` per the schema/binary pairing design.
@@ -44,7 +60,7 @@
 --
 -- The assembly CTEs (top_regions / region_ids / vanchors / thin_anchors / direct_ids) are
 -- 20260731000050's wayfind_scope_ids body VERBATIM; what is added is per-anchor attribution
--- (`contributing`) and the three scalars over it. Returns exactly one row, always — an empty scope is
+-- (`contributing`) and the four scalars over it. Returns exactly one row, always — an empty scope is
 -- `{}` with zeroed counts, never zero rows, so a caller can always read the reach figures. That
 -- matters: "no anchors reached" is precisely the case the caller most needs reported, and a function
 -- that returned no rows there would make the honest answer indistinguishable from a missing one.
@@ -56,6 +72,7 @@ RETURNS TABLE(
     scope_ids         uuid[],
     anchors_visible   int,
     anchors_reached   int,
+    anchors_selected  int,
     regions_effective int)
 LANGUAGE sql STABLE AS $$
   WITH
@@ -116,6 +133,12 @@ LANGUAGE sql STABLE AS $$
     COALESCE((SELECT array_agg(resource_id) FROM ids), '{}'::uuid[]),
     (SELECT count(*)::int FROM vanchors),
     (SELECT count(DISTINCT (anchor_table, anchor_id))::int FROM contributing),
+    -- The COMPETITIVE sense: anchors that won a region slot. Taken over top_regions, not region_ids,
+    -- so an anchor whose winning region dereferences to zero VISIBLE members still counts as selected
+    -- — it won the competition; what it then contributed is a visibility question, not a ranking one,
+    -- and folding the two would make a monopoly look like fair selection whenever the loser's members
+    -- happened to be unreadable.
+    (SELECT count(DISTINCT (home_anchor_table, home_anchor_id))::int FROM top_regions),
     (SELECT regions_effective FROM width);
 $$;
 
@@ -125,7 +148,10 @@ COMMENT ON FUNCTION wayfind_scope_reach(uuid, uuid, vector, int, varchar, uuid) 
     'counts, never zero rows. scope_ids is the bounding resource-id set (identical to '
     'wayfind_scope_ids, which is now a wrapper over this); anchors_visible counts the principal''s '
     'visible region anchors after any single-anchor scoping; anchors_reached counts those that actually '
-    'contributed a resource, by EITHER the region-winner or the cold-start arm; regions_effective is '
+    'contributed a resource, by EITHER the region-winner or the cold-start arm; anchors_selected counts '
+    'the strictly COMPETITIVE subset that won a region slot, which is what makes a monopoly visible '
+    '(selected=1) when reach cannot show it — on a corpus with many region-less anchors, reached has a '
+    'high floor and would read as broad reach; regions_effective is '
     'the region width after the SQL clamp, so a caller can observe the default and the ceiling without '
     'the tuning constants being copied out of SQL. Visibility-gated at every stage; deny ⇒ empty scope '
     'and zero counts, never an error.';

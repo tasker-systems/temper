@@ -30,11 +30,23 @@ scope_size: bigint | null,
 anchors_visible: bigint | null, 
 /**
  * How many anchors actually contributed a resource to the scope, counting both the region-winner
- * arm and the cold-start arm. Equal to `anchors_visible` ⇒ every reachable anchor is represented;
- * `1` against a larger `anchors_visible` ⇒ a single-map result however large `scope_size` reads.
- * `Some` only for `wayfind` (issue #585).
+ * arm and the cold-start arm. `Some` only for `wayfind` (issue #585).
+ *
+ * **This number has a floor — do not read it as a fairness signal on its own.** An anchor that
+ * holds resources but no regions is admitted wholesale by cold-start on *every* query, whatever
+ * was asked, so it is always reached. On the production corpus that floor was measured at 6 of 10
+ * visible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it
+ * with [`anchors_selected`](Self::anchors_selected), which carries the competitive sense.
  */
 anchors_reached: bigint | null, 
+/**
+ * How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the
+ * field that makes a monopoly visible: one anchor holding the entire region width is
+ * `anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached -
+ * anchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only
+ * for `wayfind` (issue #585).
+ */
+anchors_selected: bigint | null, 
 /**
  * The region width actually applied after the server-side clamp — what `--regions`/`regions`
  * resolved to, including the default substituted when the caller passed nothing. Since Stage-1

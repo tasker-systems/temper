@@ -11801,7 +11801,15 @@
               "null"
             ],
             "format": "int64",
-            "description": "How many anchors actually contributed a resource to the scope, counting both the region-winner\narm and the cold-start arm. Equal to `anchors_visible` ⇒ every reachable anchor is represented;\n`1` against a larger `anchors_visible` ⇒ a single-map result however large `scope_size` reads.\n`Some` only for `wayfind` (issue #585)."
+            "description": "How many anchors actually contributed a resource to the scope, counting both the region-winner\narm and the cold-start arm. `Some` only for `wayfind` (issue #585).\n\n**This number has a floor — do not read it as a fairness signal on its own.** An anchor that\nholds resources but no regions is admitted wholesale by cold-start on *every* query, whatever\nwas asked, so it is always reached. On the production corpus that floor was measured at 6 of 10\nvisible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it\nwith [`anchors_selected`](Self::anchors_selected), which carries the competitive sense."
+          },
+          "anchors_selected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the\nfield that makes a monopoly visible: one anchor holding the entire region width is\n`anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached -\nanchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only\nfor `wayfind` (issue #585)."
           },
           "anchors_visible": {
             "type": [

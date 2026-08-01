@@ -16,8 +16,11 @@ require 'time'
 module Temper::Generated
   # Scope-stage diagnostics accompanying every search response (issue #360). Machine-readable so agent harnesses can branch programmatically; `hint` is the human/agent-facing one-liner the CLI renders to stderr on a non-`Ok` reason.
   class SearchDiagnostics < ApiModelBase
-    # How many anchors actually contributed a resource to the scope, counting both the region-winner arm and the cold-start arm. Equal to `anchors_visible` ⇒ every reachable anchor is represented; `1` against a larger `anchors_visible` ⇒ a single-map result however large `scope_size` reads. `Some` only for `wayfind` (issue #585).
+    # How many anchors actually contributed a resource to the scope, counting both the region-winner arm and the cold-start arm. `Some` only for `wayfind` (issue #585).  **This number has a floor — do not read it as a fairness signal on its own.** An anchor that holds resources but no regions is admitted wholesale by cold-start on *every* query, whatever was asked, so it is always reached. On the production corpus that floor was measured at 6 of 10 visible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it with [`anchors_selected`](Self::anchors_selected), which carries the competitive sense.
     attr_accessor :anchors_reached
+
+    # How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the field that makes a monopoly visible: one anchor holding the entire region width is `anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached - anchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only for `wayfind` (issue #585).
+    attr_accessor :anchors_selected
 
     # How many region anchors — cognitive maps and contexts alike — the principal could have reached on this query, after any single-anchor scoping. The denominator for [`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that pools across anchors (issue #585).
     attr_accessor :anchors_visible
@@ -69,6 +72,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'anchors_reached' => :'anchors_reached',
+        :'anchors_selected' => :'anchors_selected',
         :'anchors_visible' => :'anchors_visible',
         :'degraded' => :'degraded',
         :'hint' => :'hint',
@@ -94,6 +98,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'anchors_reached' => :'Integer',
+        :'anchors_selected' => :'Integer',
         :'anchors_visible' => :'Integer',
         :'degraded' => :'Boolean',
         :'hint' => :'String',
@@ -109,6 +114,7 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'anchors_reached',
+        :'anchors_selected',
         :'anchors_visible',
         :'hint',
         :'regions_effective',
@@ -134,6 +140,10 @@ module Temper::Generated
 
       if attributes.key?(:'anchors_reached')
         self.anchors_reached = attributes[:'anchors_reached']
+      end
+
+      if attributes.key?(:'anchors_selected')
+        self.anchors_selected = attributes[:'anchors_selected']
       end
 
       if attributes.key?(:'anchors_visible')
@@ -258,6 +268,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           anchors_reached == o.anchors_reached &&
+          anchors_selected == o.anchors_selected &&
           anchors_visible == o.anchors_visible &&
           degraded == o.degraded &&
           hint == o.hint &&
@@ -277,7 +288,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [anchors_reached, anchors_visible, degraded, hint, matched, reason, regions_effective, scope, scope_size].hash
+      [anchors_reached, anchors_selected, anchors_visible, degraded, hint, matched, reason, regions_effective, scope, scope_size].hash
     end
 
     # Builds the object from hash

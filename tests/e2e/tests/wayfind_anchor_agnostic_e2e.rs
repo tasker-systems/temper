@@ -222,6 +222,9 @@ async fn wayfind_diagnostics_report_reach_to_the_caller(pool: sqlx::PgPool) {
     let reached = diag
         .anchors_reached
         .expect("a wayfind must report how many anchors it actually drew on");
+    let selected = diag
+        .anchors_selected
+        .expect("a wayfind must report how many anchors WON a region slot — the competitive sense");
     let width = diag
         .regions_effective
         .expect("a wayfind must report the region width it applied");
@@ -233,6 +236,13 @@ async fn wayfind_diagnostics_report_reach_to_the_caller(pool: sqlx::PgPool) {
     assert!(
         reached <= visible,
         "cannot draw on more anchors than are visible (reached={reached} visible={visible})"
+    );
+    // Selection is a strict sub-sense of reach: an anchor cannot win a slot without contributing.
+    // Asserting the ordering is what stops a later change aliasing the two, which would silently
+    // restore the cold-start floor into the field that exists to be free of it.
+    assert!(
+        selected <= reached,
+        "selection is the competitive subset of reach (selected={selected} reached={reached})"
     );
     // The width is the SQL default, reported rather than copied into the client. `cli_args` asks for
     // 10, which is under the ceiling, so it passes through unclamped — this asserts the request
