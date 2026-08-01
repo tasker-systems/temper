@@ -67,7 +67,6 @@ pub struct DecisionTemplate<'a> {
 #[template(path = "skill.md")]
 pub struct SkillTemplate<'a> {
     pub config_hash: &'a str,
-    pub vault_path: &'a str,
     pub context_list: &'a str,
 }
 

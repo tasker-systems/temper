@@ -143,18 +143,39 @@ deciding whether to read more deeply.
 | `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key `id` is always preserved. Pipe through `jq` for nested projection. |
 | `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
 
-## Vault Projection (local cache)
+## Referencing Other Resources — full UUIDv7, and link it
 
-The vault directory is a **read-only projection cache** of cloud state. To
-refresh missing or stale projected files for a context:
+**A UUID is not a SHA. Never abbreviate one.** A UUIDv7's leading bits are a
+**timestamp**, so resources created near each other share a prefix *by
+construction* — a goal and the task written a minute later routinely agree on
+their first seven characters:
 
-```bash
-temper pull <context>
+```
+019fbb77-72a3-72e1-bbbd-13eb6aa64982   <- a goal
+019fbb78-657b-7380-9063-212727cfe390   <- its task, 62 seconds later
 ```
 
-`rm`'ing a projected file has no server effect — it just creates a local cache
-miss. To actually delete a resource server-side, run `temper resource delete
-<ref> [--force]` (the `<ref>` is the resource's `ref` field from `list`/`show`).
+A prefix is therefore *systematically* ambiguous between exactly the resources
+most likely to be cited together, and resolves to nothing a reader can follow.
+Write the full 36 characters everywhere — prose, tables, `open_meta`, commits.
+
+**When a document refers to another resource, write it as a markdown link:**
+
+```markdown
+[<the resource's exact title>](./<full-uuidv7>)
+```
+
+Resources are addressed **flatly**; there is no directory tree to be relative
+to, so `./<uuid>` is the entire path and it resolves wherever the body renders.
+The reader then sees *what* is cited without a round-trip, and can navigate to
+it instead of copying an id into `resource show`.
+
+Take the title from `resource list`/`show`, not from memory — an approximate
+title inside a link is a citation that looks precise and is not. Escape any
+`[`, `]`, `(` or `)` the title contains, or the link will not render.
+
+To delete a resource server-side, run `temper resource delete <ref> [--force]`
+(the `<ref>` is the resource's `ref` field from `list`/`show`).
 
 ## Context Requirement
 
@@ -629,12 +650,10 @@ pub fn generate_skill_files_with_hash(
     config: &Config,
     hash: &str,
 ) -> Result<HashMap<String, String>> {
-    let vault_path = config.vault_root.display().to_string();
     let context_list = format_context_list(&config.contexts);
 
     let skill_template = SkillTemplate {
         config_hash: hash,
-        vault_path: &vault_path,
         context_list: &context_list,
     };
 
@@ -832,15 +851,44 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_skill_md_contains_vault_and_contexts() {
+    fn test_generate_skill_md_has_contexts_and_no_local_vault_path() {
         let config = test_config();
         let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
         let skill_md = &files["SKILL.md"];
 
-        assert!(skill_md.contains("/tmp/test-vault"));
         assert!(skill_md.contains("alpha"));
         assert!(skill_md.contains("beta"));
         assert!(skill_md.contains("config-hash: testhash"));
+
+        // The skill no longer advertises a local vault directory. Writes are cloud-only and the
+        // on-disk projection is a power-user affordance, so naming a path here taught every agent
+        // to reach for the wrong surface. Asserted as an ABSENCE because the failure mode is a
+        // re-add, not a removal.
+        assert!(
+            !skill_md.contains(&config.vault_root.display().to_string()),
+            "SKILL.md must not name a local vault path"
+        );
+    }
+
+    /// The referencing convention is the reason sessions stop writing unresolvable id prefixes.
+    /// It lives in two places — SKILL.md (read every session) and reference.md — and a silent
+    /// drop from either is invisible until documents start citing nothing again.
+    #[test]
+    fn test_reference_convention_is_stated_in_skill_and_reference() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+
+        for name in ["SKILL.md", "reference.md"] {
+            let body = files.get(name).unwrap_or_else(|| panic!("{name} missing"));
+            assert!(
+                body.contains("A UUID is not a SHA"),
+                "{name} must state that UUIDs are never abbreviated"
+            );
+            assert!(
+                body.contains("](./<full-uuidv7>)"),
+                "{name} must show the [title](./uuid) reference form"
+            );
+        }
     }
 
     #[test]

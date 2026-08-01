@@ -1,12 +1,10 @@
 <!-- config-hash: {{ config_hash }} -->
 ---
 name: temper
-description: Use when managing knowledge vault tasks, sessions, or search — task start/create/done, session save, semantic search, context discovery, or any /temper command invocation
+description: Use when managing knowledge base tasks, sessions, or search — task start/create/done, session save, semantic search, context discovery, or any /temper command invocation
 ---
 
 # Temper Workflow Skill
-
-Vault: {{ vault_path }}
 
 ## Contexts
 {{ context_list }}
@@ -229,18 +227,43 @@ read the body. It is strictly cheaper than a full `show` (no body
 reconstruction) and strictly richer than the default `list` (which omits both
 meta tiers). Fall back to the full `show` only when you actually need the body.
 
-## Vault Projection (local cache)
+## Referencing Other Resources — full UUIDv7, and link it
 
-The vault directory is a **read-only projection cache** of cloud state, not the
-source of truth. To refresh missing or stale projected files:
+**A UUID is not a SHA. Never abbreviate one.** Git teaches everyone that a
+seven-character prefix identifies a commit. That intuition is wrong here and
+actively harmful: a UUIDv7's leading bits are a **timestamp**, so resources
+created near each other share a prefix *by construction*. A goal and the task
+written a minute later routinely agree on their first seven characters:
 
-```bash
-temper pull <context>
+```
+019fbb77-72a3-72e1-bbbd-13eb6aa64982   ← a goal
+019fbb78-657b-7380-9063-212727cfe390   ← its task, 62 seconds later
 ```
 
-Deleting a projected file with `rm` has no server effect — it just creates a
-local cache miss. To actually delete a resource, use `temper resource delete
-<ref> [--force]` (the `<ref>` is the resource's `ref` field from `list`/`show`).
+So a prefix is not merely ambiguous, it is *systematically* ambiguous between
+exactly the resources most likely to be discussed together — and it points at
+nothing a reader can resolve. Write the full 36 characters everywhere: prose,
+tables, `open_meta`, commit messages.
+
+**When a document refers to another resource, write it as a markdown link:**
+
+```markdown
+[<the resource's exact title>](./<full-uuidv7>)
+```
+
+Resources are addressed **flatly** — there is no directory tree to be relative
+to — so `./<uuid>` is the entire path, and it resolves wherever the body is
+rendered. This buys two things a bare id cannot: the reader sees *what* is being
+cited without a round-trip, and the reference is navigable instead of something
+to copy into `resource show`.
+
+Take the title from `resource list`/`show` rather than from memory. Titles carry
+em-dashes and trailing clauses that are easy to approximate, and an approximate
+title inside a link is a citation that looks precise and is not. If a title
+contains `[`, `]`, `(` or `)`, escape them or the link will not render.
+
+To delete a resource, use `temper resource delete <ref> [--force]` — the `<ref>`
+is the `ref` field from `list`/`show`.
 
 ## Editing Frontmatter vs Body — Avoid the stdin Footgun
 
