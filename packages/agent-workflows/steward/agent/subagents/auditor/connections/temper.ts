@@ -2,7 +2,7 @@ import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
 import { AUDITOR_CREDENTIALS, mintAuditorM2mToken, requireEnv } from "../../../lib/temper-auth.js";
-import { makeTraceparent } from "../../../lib/trace.js";
+import { makeTraceparent, otlpExportConfigured } from "../../../lib/trace.js";
 import { AUDITOR_TOOLS } from "../../../lib/tool-allowlists.js";
 
 /**
@@ -45,12 +45,14 @@ export default defineMcpClientConnection({
   auth: process.env[AUDITOR_CREDENTIALS.clientId]
     ? { getToken: mintAuditorM2mToken }
     : { getToken: async () => ({ token: requireEnv(AUDITOR_CREDENTIALS.staticToken) }) },
-  // A W3C `traceparent` on every MCP call — the auditor's own session trace,
-  // under its own credential. This is the path the 2026-08-01 incident ran on
-  // (auditor flow → temperkb.io/mcp). See `../../../lib/trace`.
-  headers: {
-    traceparent: (ctx) => makeTraceparent(ctx.session.id),
-  },
+  // Trace propagation, under the auditor's own credential. When OTLP export is configured,
+  // undici auto-instrumentation (agent/instrumentation.ts, process-wide) injects a per-request
+  // `traceparent` naming a real exported span, so we omit the static one to avoid a second,
+  // ambiguous header (see `otlpExportConfigured`). Without export, keep the session-derived
+  // header as the log-correlation handle — the path the 2026-08-01 incident ran on.
+  ...(otlpExportConfigured()
+    ? {}
+    : { headers: { traceparent: (ctx) => makeTraceparent(ctx.session.id) } }),
   approval: never(),
   tools: {
     allow: [...AUDITOR_TOOLS],
