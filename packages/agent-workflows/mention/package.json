@@ -6,7 +6,7 @@
     "#*": "./agent/*"
   },
   "scripts": {
-    "build:dep": "npm --prefix ../../../clients/temper-telemetry-ts ci",
+    "build:dep": "npm --prefix ../../../clients/temper-telemetry-ts ci && npm --prefix ../../../clients/temper-telemetry-ts run build",
     "prebuild": "npm run build:dep",
     "build": "eve build",
     "dev": "eve dev",

@@ -13,13 +13,17 @@ export default defineAgent({
   description:
     "Team self-cognition steward: distills a team's own temper resources into cogmap-homed nodes and tends the team's cognitive map via the authored-4 (create/assert/facet/fold), audited by the invocation envelope.",
   build: {
-    // `agent/instrumentation.ts` imports `temper-telemetry-ts`, whose dist pulls the native
-    // @opentelemetry SDK. eve keeps that subtree external (never Rolldown-bundled) but only
-    // *ships* an external package into the hosted function when it is named here — otherwise the
-    // deployed index.mjs imports `temper-telemetry-ts` from a node_modules that was never traced,
-    // and the function dies at startup with ERR_MODULE_NOT_FOUND. Its transitive @opentelemetry
-    // deps ride along because `build:dep` runs `npm ci` in the client, so nft can trace the whole
-    // subtree (static + the dynamic instrumentHttp imports) into server/node_modules.
+    // `agent/instrumentation.ts` imports `temper-telemetry-ts` (the OTLP export bootstrap), whose
+    // committed dist pulls the native @opentelemetry SDK. Two facts are load-bearing:
+    //   1. `.vercelignore` strips `dist/` before the build runs, so the committed
+    //      `temper-telemetry-ts` dist is GONE at eve-build time. `build:dep` must `npm run build`
+    //      it back (exactly what the temper-ts client already does) — without the rebuild the
+    //      import cannot resolve and the function dies at startup with
+    //      `ERR_MODULE_NOT_FOUND: temper-telemetry-ts`.
+    //   2. eve keeps the @opentelemetry subtree external (never Rolldown-bundled); an external
+    //      package is only shipped into the hosted function when named here, so nitro traces the
+    //      rebuilt dist + its @opentelemetry deps (static + the dynamic instrumentHttp imports)
+    //      into server/node_modules.
     externalDependencies: ["temper-telemetry-ts"],
   },
 });
