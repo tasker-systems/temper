@@ -131,6 +131,17 @@ macro_rules! root_span {
         let request = &$request;
         let span = $crate::tracing::info_span!(
             $name,
+            // `otel.kind` is a magic field `tracing-opentelemetry` consumes into the OTel span's
+            // `SpanKind` (and strips from the attribute set) rather than a field we carry. Both
+            // surfaces build inbound request spans through this macro, so both are `server`.
+            //
+            // Without this, `tracing-opentelemetry` defaults every span to `SpanKind::Internal`, and
+            // Tempo's span-metrics and service-graph processors derive RED metrics and graph edges
+            // only from `server`/`client` spans — so `http_request` and `mcp_request` were received
+            // and stored fine yet excluded from `traces_spanmetrics_*` and the service graph, while
+            // the surfaces whose entry spans already reported `server` showed up. This is the request
+            // boundary; naming it as one is what puts these services back on the graph.
+            otel.kind = "server",
             method = %request.method(),
             path = %$crate::redact::redact_path(request.uri().path()),
             version = ?request.version(),
@@ -475,5 +486,52 @@ mod tests {
         for field in ["method", "path", "version", "profile_id"] {
             assert!(declared.contains(&field), "root span lost `{field}`");
         }
+    }
+
+    /// The root span must export as `SpanKind::Server`, not the `Internal` default.
+    ///
+    /// Tempo's span-metrics and service-graph processors derive RED metrics and graph edges only
+    /// from `server`/`client` spans, so a root span left at `tracing-opentelemetry`'s `Internal`
+    /// default is received and stored fine yet silently absent from `traces_spanmetrics_*` and the
+    /// service graph — exactly the symptom that took `temper-api` and `temper-mcp` off the graph
+    /// while surfaces whose entry spans already reported `server` stayed on it. `otel.kind` is
+    /// consumed by the OTel layer and stripped from the attribute set, so only an exported span can
+    /// witness it — a `metadata().fields()` check like the one above would pass on a broken span.
+    #[test]
+    fn root_span_exports_as_server_kind() {
+        use opentelemetry::trace::{SpanKind, TracerProvider as _};
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = provider.tracer("temper-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let request = http::Request::builder()
+                .method("GET")
+                .uri("/api/health")
+                .body(())
+                .expect("request builds");
+            // Dropped at the end of the closure, which ends the OTel span and hands it to the
+            // exporter — the same lifetime `request_span` owns in production.
+            drop(crate::root_span!("http_request", request));
+        });
+
+        provider.force_flush().expect("flush");
+        let spans = exporter.get_finished_spans().expect("finished spans");
+        let exported = spans.first().expect("the root span was exported");
+
+        assert_eq!(
+            exported.span_kind,
+            SpanKind::Server,
+            "the root span exported as {:?}, not Server — Tempo's span-metrics and service-graph \
+             processors will exclude it. See the `otel.kind` field in `root_span!`.",
+            exported.span_kind
+        );
     }
 }

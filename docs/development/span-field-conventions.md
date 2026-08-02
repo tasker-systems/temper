@@ -56,6 +56,24 @@ Act spans take the **method name** as the span name (`update_resource`, `set_fac
 uniform `act`, because the command is the most useful thing to see in a trace UI. The gate keys on
 fields, not names, so adding a write command needs no gate edit.
 
+### Span kind is a request boundary, not a field
+
+Both root spans stamp `otel.kind = "server"` in `root_span!`; the outbound client span
+(`http_client_request`, `crates/temper-client/src/http.rs`) stamps `otel.kind = "client"`. This is
+**not** one of the fields above — `otel.kind` is a magic field `tracing-opentelemetry` consumes into
+the OTel span's `SpanKind` and strips from the attribute set, so it never appears as a span field and
+a `metadata().fields()` check cannot witness it; only an exported span can. Left unset,
+`tracing-opentelemetry` defaults every span to `SpanKind::Internal`.
+
+The kind is load-bearing downstream, not decoration. Tempo's span-metrics and service-graph
+processors derive RED metrics (`traces_spanmetrics_*`) and graph edges only from `server` (inbound)
+and `client` (outbound) spans. An `Internal` root span is received and stored fine yet silently
+excluded from both — the failure mode that took `temper-api` and `temper-mcp` off the service graph
+while surfaces whose entry spans already reported `server` stayed on it. Because no span *field*
+witnesses the kind, the assertion lives in `root_span_exports_as_server_kind`
+(`crates/temper-telemetry/src/lib.rs`), which exports a macro-built span and checks its
+`SpanKind`.
+
 ### Inbound trace context
 
 `temper_telemetry::record_inbound_trace_context` reads the request's headers and records five

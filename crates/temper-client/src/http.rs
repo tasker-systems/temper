@@ -266,6 +266,11 @@ impl HttpClient {
             // collision it avoided between two of the three was simply shipped between the other two
             // when this span was promoted to `info` and started being exported.
             "http_client_request",
+            // The `client` mirror of the server root span (`temper_telemetry::root_span!` stamps
+            // `otel.kind = "server"`): an outbound request and the inbound request it becomes are the
+            // same event from two sides, so this is the edge Tempo's service graph draws from. Left at
+            // the default `SpanKind::Internal` it would be excluded, exactly as the server spans were.
+            otel.kind = "client",
             request = %api_req,
             has_auth = api_req.has_auth,
             status = tracing::field::Empty,
