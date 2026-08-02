@@ -384,7 +384,11 @@ struct ManagedValidationParams<'a> {
     /// Identity keys (`temper-title`/`temper-slug`/…) are injected into the validation document by
     /// `assemble_frontmatter_document` from these typed params — the pipeline no longer pre-injects them.
     validator_slug: &'a str,
-    context_name: &'a str,
+    /// Value injected as `temper-context` for schema validation only — never persisted. Must
+    /// satisfy the doc-type schema's slug pattern. See
+    /// [`temper_workflow::operations::ValidateManagedMetaParams::context_token`]: this is a slug
+    /// or a raw home UUID, **never** a context display name.
+    context_token: &'a str,
     /// Validation-document id + created stamp — NOT persisted from here (the substrate mints the
     /// real resource id); they only seed the validation document.
     id: uuid::Uuid,
@@ -412,7 +416,7 @@ fn validate_managed_meta_pipeline(
         managed_meta: Some(&managed),
         slug: params.validator_slug,
         title: params.title,
-        context_name: params.context_name,
+        context_token: params.context_token,
     };
     temper_workflow::operations::validate_managed_meta(&validate_params)?;
     Ok(managed)
@@ -1639,10 +1643,9 @@ impl DbBackend {
             doc_type: &cmd.doctype,
             title: &cmd.title,
             validator_slug: &cmd.slug,
-            // Validation-only placeholder. For a cogmap home this is the raw cogmap UUID, not a
-            // context name — `context_name` is display-only in the validation document (§7-dissolving),
-            // so the mislabel is intentional and never persisted as a name.
-            context_name: &home.id.to_string(),
+            // Validation-only. For a cogmap home there is no context slug, so the raw home UUID
+            // stands in — it satisfies the schema's slug pattern and is never persisted.
+            context_token: &home.id.to_string(),
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
         })?;
@@ -1879,11 +1882,21 @@ impl Backend for DbBackend {
                 .or_else(|| cmd.move_to.as_ref().and_then(|m| m.type_to.as_deref()))
                 .unwrap_or(current.doc_type_name.as_str())
                 .to_owned();
+            // The `temper-context` VALIDATION token — a slug or a raw home UUID, never a display
+            // name. `context_name` is the obvious field to reach for here and is the bug: a
+            // context legally named `working agreements` fails the schema's slug pattern, so every
+            // managed-tier write to every resource in it 400s. Create never saw it because its
+            // token is a UUID, which matches the pattern by accident.
             let effective_context = cmd
                 .move_to
                 .as_ref()
                 .and_then(|m| m.context_to.map(|id| id.to_string()))
-                .or_else(|| current.context_name.clone())
+                .or_else(|| current.context_slug.clone())
+                // A cogmap-homed resource has NO context slug (nor name), so both are `None` and
+                // the token would fall through to `""` — which fails the pattern just as a spaced
+                // name does. Create never hit this either: its token is `home.id`, the cogmap
+                // UUID. Falling back to the same id is what makes the two paths symmetric.
+                .or_else(|| current.cogmap_id.map(|id| id.to_string()))
                 .unwrap_or_default();
             // Effective identity seeds the validation document: `cmd.title` else the current
             // title; `cmd.slug` else the canonical slug derived from the effective title (so the
@@ -1905,7 +1918,7 @@ impl Backend for DbBackend {
                 doc_type: &effective_doc_type,
                 title: &effective_title,
                 validator_slug: &effective_slug,
-                context_name: &effective_context,
+                context_token: &effective_context,
                 id: new_id,
                 created: current.created,
             })?;

@@ -451,7 +451,14 @@ pub struct ValidateManagedMetaParams<'a> {
     pub managed_meta: Option<&'a Value>,
     pub slug: &'a str,
     pub title: &'a str,
-    pub context_name: &'a str,
+    /// Value injected as `temper-context` in the validation document — **validation-only, never
+    /// persisted**. It must satisfy the doc-type schema's slug pattern (`^[a-z0-9][a-z0-9-]*$`).
+    ///
+    /// Deliberately NOT called `context_name`: a context's *display name* may legally contain
+    /// spaces and capitals (`working agreements`), and passing one here 400s every managed-tier
+    /// write to every resource in that context. Callers pass a **slug** (context home) or the raw
+    /// home **UUID** (cogmap home, which has no context slug) — both satisfy the pattern.
+    pub context_token: &'a str,
 }
 
 /// Validate `managed_meta` against the doc-type schema, returning a typed [`temper_core::error::TemperError`] on failure
@@ -477,7 +484,7 @@ pub fn validate_managed_meta(
     let identity = FrontmatterIdentity {
         id: params.id,
         created: params.created,
-        context: params.context_name,
+        context: params.context_token,
         doc_type: params.doc_type,
         title: params.title,
         slug: (!params.slug.is_empty()).then_some(params.slug),
@@ -980,6 +987,55 @@ mod tests {
         assert_eq!(doc["temper-slug"], "my-task");
         // Caller-supplied managed-tier field is preserved.
         assert_eq!(doc["temper-stage"], "in-progress");
+    }
+
+    /// The token that `temper-context` is built from must be slug-shaped, and the two values that
+    /// are NOT slug-shaped are the ones the write paths could plausibly fall through to: a context
+    /// **display name** with a space, and the empty string a cogmap-homed row yields when both
+    /// `context_name` and `context_slug` are `None`.
+    ///
+    /// This is the unit half of the guard. The end-to-end half — a spaced display name not
+    /// blocking a real update — lives in
+    /// `temper-services/tests/context_display_name_not_slug_test.rs`. The cogmap-homed case has
+    /// **no** end-to-end test: seeding a writable cogmap needs system-admin reach that a plain test
+    /// profile does not have, so what is proven here is that an empty token is fatal, combined with
+    /// the documented invariant on `ResourceRowParity` that both context fields are `None` for a
+    /// cogmap home. That is weaker than an executed path and is stated rather than glossed.
+    #[test]
+    fn a_non_slug_shaped_context_token_is_rejected() {
+        for bad in ["working agreements", "", "Working-Agreements"] {
+            let mut ident = sample_identity("research", Some("my-doc"));
+            ident.context = bad;
+            let doc = assemble_frontmatter_document(&json!({}), &ident);
+            let yaml: serde_yaml::Value = serde_yaml::to_value(&doc).unwrap();
+            let issues = crate::schema::validate_frontmatter("research", &yaml).unwrap();
+            assert!(
+                issues.iter().any(|i| i.path.contains("temper-context")),
+                "token {bad:?} must be refused by the schema, got issues: {issues:?}"
+            );
+        }
+    }
+
+    /// The positive control: both shapes the write paths actually pass — a context slug, and a raw
+    /// home UUID for a cogmap home — must validate. Without this, the test above would still pass
+    /// if `temper-context` rejected everything.
+    #[test]
+    fn the_token_shapes_the_write_paths_pass_are_accepted() {
+        for good in [
+            "working-agreements",
+            "temper",
+            "019f2391-e001-7933-b88a-28fb92e56ac1",
+        ] {
+            let mut ident = sample_identity("research", Some("my-doc"));
+            ident.context = good;
+            let doc = assemble_frontmatter_document(&json!({}), &ident);
+            let yaml: serde_yaml::Value = serde_yaml::to_value(&doc).unwrap();
+            let issues = crate::schema::validate_frontmatter("research", &yaml).unwrap();
+            assert!(
+                !issues.iter().any(|i| i.path.contains("temper-context")),
+                "token {good:?} must be accepted, got issues: {issues:?}"
+            );
+        }
     }
 
     #[test]
