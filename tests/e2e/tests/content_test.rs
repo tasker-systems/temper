@@ -35,6 +35,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
     }];
 
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Content Retrieval Doc".to_string(),

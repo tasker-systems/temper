@@ -561,6 +561,7 @@ async fn external_origin_uri_seeds_remote_provenance_by_default(pool: sqlx::PgPo
     let url = "https://Example.com/import/doc-99";
     let body_text = "# Imported Doc\n\nDistilled from an external URL.\n";
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Imported From URL".to_string(),
@@ -645,6 +646,7 @@ async fn explicit_sources_override_the_origin_uri_default(pool: sqlx::PgPool) {
     use temper_core::types::ingest::IngestPayload;
     let url = "https://example.com/should-not-be-cited";
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Explicit Over Origin".to_string(),

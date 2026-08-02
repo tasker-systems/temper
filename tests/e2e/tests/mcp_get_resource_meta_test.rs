@@ -53,6 +53,7 @@ async fn seed_resource(
     app.client
         .ingest()
         .create(&IngestPayload {
+            idempotency_key: None,
             segmented: None,
             goal: None,
             title: slug.to_string(),

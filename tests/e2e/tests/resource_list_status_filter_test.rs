@@ -40,6 +40,7 @@ async fn seed_goal(
     managed.insert("temper-status".to_string(), serde_json::json!(status));
 
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

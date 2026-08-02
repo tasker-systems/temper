@@ -49,6 +49,7 @@ async fn seed_tagged(
     open.insert("tags".to_string(), serde_json::json!(tags));
 
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

@@ -63,6 +63,7 @@ async fn seed_task(
     }
 
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

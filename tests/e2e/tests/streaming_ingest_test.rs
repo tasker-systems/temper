@@ -313,6 +313,7 @@ async fn small_body_stays_one_shot(pool: PgPool) {
 
     let text = "A small body, well under the segment budget — the one-shot path, unchanged.";
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Small One Shot".to_string(),
@@ -511,6 +512,7 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
     // ---- Begin: land segment 0 via begin_segmented ----
     let chunks0 = embed_and_pack_chunks(&segments[0].chunked);
     let begin_payload = IngestPayload {
+        idempotency_key: None,
         segmented: Some(SegmentedBegin {
             total_blocks_hint: Some(segments.len() as u32),
             block_budget: BUDGET as u32,
@@ -693,6 +695,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .client
         .ingest()
         .create(&IngestPayload {
+            idempotency_key: None,
             segmented: None,
             goal: None,
             title: "Complete Neighbour".to_string(),
@@ -734,6 +737,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
     assert!(segments.len() >= 4, "need a multi-segment body");
 
     let begin_payload = IngestPayload {
+        idempotency_key: None,
         segmented: Some(SegmentedBegin {
             total_blocks_hint: Some(segments.len() as u32),
             block_budget: BUDGET as u32,
@@ -963,6 +967,7 @@ async fn cli_discards_a_corrupt_upload_on_integrity_failure(pool: PgPool) {
         .client
         .ingest()
         .begin_segmented(&IngestPayload {
+            idempotency_key: None,
             segmented: Some(SegmentedBegin {
                 total_blocks_hint: Some(segments.len() as u32),
                 block_budget: budget as u32,

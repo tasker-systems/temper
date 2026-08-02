@@ -50,6 +50,7 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
 
     // Begin — POST /api/ingest with `segmented` set.
     let begin_payload = IngestPayload {
+        idempotency_key: None,
         title: "Segmented Doc".to_string(),
         origin_uri: format!("test://segmented-{}", Uuid::new_v4()),
         context_ref: context_id.to_string(),
@@ -167,6 +168,7 @@ async fn finalize_rejects_wrong_content_hash_and_stays_resumable(pool: PgPool) {
 
     // Begin (segment 0 = "first segment").
     let begin_payload = IngestPayload {
+        idempotency_key: None,
         title: "Integrity Doc".to_string(),
         origin_uri: format!("test://integrity-{}", Uuid::new_v4()),
         context_ref: context_id.to_string(),
@@ -322,6 +324,7 @@ async fn finalize_block_count_mismatch_is_conflict_not_500(pool: PgPool) {
     let (token, context_id) = auth(&pool, "count").await;
 
     let begin_payload = IngestPayload {
+        idempotency_key: None,
         title: "Count Doc".to_string(),
         origin_uri: format!("test://count-{}", Uuid::new_v4()),
         context_ref: context_id.to_string(),
@@ -399,6 +402,7 @@ async fn append_on_other_profile_resource_returns_403(pool: PgPool) {
     // P begins a segmented ingest.
     let (token_p, context_p) = auth(&pool, "authp").await;
     let begin_payload = IngestPayload {
+        idempotency_key: None,
         title: "P's Segmented Doc".to_string(),
         origin_uri: format!("test://segmented-authp-{}", Uuid::new_v4()),
         context_ref: context_p.to_string(),

@@ -24,7 +24,9 @@ use temper_workflow::operations::{Surface, SURFACE_HEADER};
 /// the profile's auto-provisioned `default` context. A typed `IngestPayload`, not inline JSON, so a
 /// wire-shape drift is a compile error rather than a silent 400.
 fn probe_payload(title: &str) -> IngestPayload {
+    idempotency_key: None,
     IngestPayload {
+        idempotency_key: None,
         title: title.to_string(),
         origin_uri: format!("test://surface/{title}"),
         context_ref: "@me/default".to_string(),

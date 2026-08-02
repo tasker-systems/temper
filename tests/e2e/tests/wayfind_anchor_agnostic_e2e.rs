@@ -42,6 +42,7 @@ fn cli_args<'a>(query: &'a str, context: Option<&'a str>) -> CliSearchArgs<'a> {
 /// Ingest a context-homed resource — the "raw work" wayfind could not reach before T7.
 async fn ingest_into_context(app: &common::E2eTestApp, title: &str, slug: &str, content: &str) {
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

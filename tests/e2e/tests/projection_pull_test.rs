@@ -33,6 +33,7 @@ async fn seed_resource(
     };
     let slug = title.to_lowercase().replace(' ', "-");
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

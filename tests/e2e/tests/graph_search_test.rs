@@ -21,6 +21,7 @@ use temper_core::types::relationship_requests::AssertRelationshipRequest;
 
 /// Helper: build an IngestPayload with a dummy embedding.
 fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
+    idempotency_key: None,
     let dummy_embedding = vec![0.1_f32; 768];
     let chunks = vec![PackedChunk {
         chunk_index: 0,
@@ -33,6 +34,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
     }];
 
     IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

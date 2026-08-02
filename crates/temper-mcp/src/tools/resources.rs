@@ -110,6 +110,12 @@ pub struct CreateResourceInput {
     #[serde(default)]
     #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: Option<serde_json::Value>,
+    /// Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
+    /// convention): a retried create carrying the same key converges on the already-committed
+    /// resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
+    /// non-idempotent create. The server mints the resource id; the key never supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<uuid::Uuid>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship
     /// (`reasoning`/`confidence`/`rationale`/`persona`/`model`). Flattened as top-level keys;
     /// all optional. `confidence` is required when any other authorship field is supplied.
@@ -648,7 +654,7 @@ pub(crate) async fn build_create_command(
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
     let cmd = CreateResource {
-        idempotency_key: None,
+        idempotency_key: input.idempotency_key,
         slug,
         doctype: input.doc_type_name,
         home,

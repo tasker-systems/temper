@@ -43,6 +43,7 @@ async fn ingest_with_open_meta(
         embedded_with: None,
     };
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),
@@ -291,6 +292,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         embedded_with: None,
     };
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Bad Meta".to_string(),
@@ -326,6 +328,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         embedded_with: None,
     };
     let ok_payload = IngestPayload {
+        idempotency_key: None,
         title: "Good Meta".to_string(),
         origin_uri: "test://fts/good-meta".to_string(),
         content_hash: Some(format!("{:0>64x}", 9)),

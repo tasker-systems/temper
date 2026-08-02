@@ -32,6 +32,12 @@ pub struct IngestPayload {
     /// `"sha256:<hex>"` — server computes if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
+    /// convention): a retried create carrying the same key converges on the already-committed
+    /// resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
+    /// non-idempotent create. The server mints the resource id; the key never supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<uuid::Uuid>,
     /// Full extracted markdown content.
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
