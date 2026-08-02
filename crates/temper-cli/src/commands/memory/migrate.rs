@@ -13,7 +13,7 @@ use serde::Serialize;
 use temper_core::types::config::{MemoryConfig, TemperConfig};
 
 use super::fetch::{fetch_context_rows, MEMORY_DOC_TYPE};
-use crate::actions::runtime::{build_config_store_and_client, client_err_to_temper};
+use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
 use crate::format::OutputFormat;
 use crate::output;
@@ -126,8 +126,6 @@ pub struct MigrateArgs<'a> {
     pub context: Option<&'a str>,
     pub dry_run: bool,
     pub unattended: bool,
-    /// How many near-matches a collision surfaces. A prompt showing forty rows is not a prompt.
-    pub collision_limit: usize,
     pub format: OutputFormat,
 }
 
@@ -140,13 +138,12 @@ pub enum ProposalOutcome {
     /// Written. Carries no id: `resource::create` prints the created resource and returns `()`,
     /// and inventing a placeholder id here would put a value in the report that names nothing.
     Created,
-    /// A collision the run was not authorized to judge (`--unattended`), or that a human declined.
-    /// Never a merge, and never a silent create.
-    SkippedOnCollision,
+    /// A human was shown the batch and said no, so nothing was written. The decision is over the
+    /// whole batch — every proposal in the run reports this, never a subset.
     Declined,
 }
 
-/// One proposal as reported, with the collision search's verdict attached.
+/// One proposal as reported.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProposalReport {
     pub source_file: String,
@@ -154,9 +151,6 @@ pub struct ProposalReport {
     pub descriptor: String,
     pub verified: String,
     pub body_bytes: usize,
-    /// Absent when the pre-write search found nothing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub near_matches: Option<Vec<CollisionCandidate>>,
     #[serde(flatten)]
     pub outcome: ProposalOutcome,
 }
@@ -185,10 +179,11 @@ pub struct SkippedReport {
 
 /// Run the migration.
 ///
-/// Reads are batched ahead of every write: the whole plan, and every collision verdict, is
-/// resolved before the first resource is created. That is deliberate — a reviewed batch is
-/// reviewable only if the reviewer can see all of it, and interleaving would show the human the
-/// first collision before the second one exists.
+/// Reads are batched ahead of every write: the whole plan is resolved before the first resource is
+/// created. That is deliberate on two counts. The already-migrated set is fetched once for the
+/// run, rather than re-read per file against a store this run is itself changing. And the batch
+/// confirmation can only name a count that is complete — interleaving would ask the human to
+/// authorize a batch whose size was still being discovered.
 pub fn migrate(
     global: &TemperConfig,
     config: &crate::config::Config,
@@ -233,7 +228,7 @@ pub fn migrate(
     let scanned = scan_memory_dir(&index_path);
     let titles = harvest_titles(&std::fs::read_to_string(&index_path).unwrap_or_default());
 
-    // Read phase — one runtime, everything the plan and its collisions need, before any write.
+    // Read phase — one runtime, everything the plan needs, before any write.
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
     let (_cfg, _store, client) = build_config_store_and_client()?;
@@ -251,49 +246,23 @@ pub fn migrate(
             }
         }
     }
+    drop(runtime);
 
     let plan = plan_migration(&scanned, &titles, args.cohort, &already_migrated);
 
-    let mut verdicts = Vec::with_capacity(plan.proposals.len());
-    for proposal in &plan.proposals {
-        // Full-text, not vector: FTS returns a row only on real term overlap, so "any hit" is a
-        // signal rather than a cutoff constant nobody has evidence for. It also keeps this path
-        // free of the local embedder.
-        let hits = runtime
-            .block_on(client.search().text_query(
-                &proposal.title,
-                Some(target_context.clone()),
-                Some(MEMORY_DOC_TYPE.to_string()),
-                Some(args.collision_limit as i64),
-            ))
-            .map_err(client_err_to_temper)?;
-        verdicts.push(classify_collision(&hits, args.collision_limit));
-    }
-    drop(runtime);
+    // One question for the whole run, asked after the plan is complete and before anything is
+    // written. Declining is a decision about the batch, so it lands on every proposal in it.
+    let declined = batch_confirmation_required(mode, plan.proposals.len())
+        && !confirm_batch(plan.proposals.len(), &target_context, args.cohort)?;
 
     // Write phase. `resource::create` builds its own runtime, so the read runtime is dropped
     // above rather than held across it.
     let mut proposals = Vec::with_capacity(plan.proposals.len());
-    for (proposal, verdict) in plan.proposals.iter().zip(verdicts) {
-        let near_matches = match &verdict {
-            CollisionVerdict::Clear => None,
-            CollisionVerdict::NeedsDecision(c) => Some(c.clone()),
-        };
-
-        let outcome = match (mode, &verdict) {
+    for proposal in &plan.proposals {
+        let outcome = match (mode, declined) {
             (RunMode::DryRun, _) => ProposalOutcome::Planned,
-            (RunMode::Unattended, CollisionVerdict::NeedsDecision(_)) => {
-                ProposalOutcome::SkippedOnCollision
-            }
-            (RunMode::Interactive, CollisionVerdict::NeedsDecision(candidates)) => {
-                if confirm_over_collision(proposal, candidates)? {
-                    write_proposal(config, &target_context, proposal, args.format)?;
-                    ProposalOutcome::Created
-                } else {
-                    ProposalOutcome::Declined
-                }
-            }
-            (_, CollisionVerdict::Clear) => {
+            (_, true) => ProposalOutcome::Declined,
+            (_, false) => {
                 write_proposal(config, &target_context, proposal, args.format)?;
                 ProposalOutcome::Created
             }
@@ -305,7 +274,6 @@ pub fn migrate(
             descriptor: proposal.descriptor.clone(),
             verified: proposal.verified.format("%Y-%m-%d").to_string(),
             body_bytes: proposal.body.len(),
-            near_matches,
             outcome,
         });
     }
@@ -328,24 +296,40 @@ pub fn migrate(
     })
 }
 
-/// Show the near-matches and ask. The default is **no** — the expensive mistake is a duplicate
-/// that renders forever beside its sibling, not a memory that migrates one run later.
-fn confirm_over_collision(
-    proposal: &MigrationProposal,
-    candidates: &[CollisionCandidate],
-) -> Result<bool> {
-    output::warning(format!(
-        "`{}` may already be in Temper — {} near-match{} in the target context:",
-        proposal.source_file,
-        candidates.len(),
-        if candidates.len() == 1 { "" } else { "es" }
-    ));
-    for c in candidates {
-        output::plain(format!("    {} — {}", c.id, c.title));
+/// Whether this run must ask a human before it writes.
+///
+/// Pure, so the judgment is testable without a terminal. `DryRun` writes nothing, so there is
+/// nothing to confirm; `--unattended` **is** the authorization, and asking a second time would
+/// strand every agent and hook run at a prompt nothing can answer.
+///
+/// An empty batch never asks. Re-running `migrate` once everything has migrated is the ordinary
+/// case, and a confirmation with nothing behind it is exactly the prompt-nobody-reads failure that
+/// retired the per-file gate this replaced.
+pub fn batch_confirmation_required(mode: RunMode, proposal_count: usize) -> bool {
+    match mode {
+        RunMode::DryRun | RunMode::Unattended => false,
+        RunMode::Interactive => proposal_count > 0,
     }
-    output::plain(format!("  would create: \"{}\"", proposal.title));
+}
+
+/// Show what the run would write and ask, once. The default is **no** — the expensive mistake is
+/// the write, not the delay.
+///
+/// The near-duplicate caveat is stated here rather than only in the help text because this is
+/// where an operator actually meets it: nothing in this command compares a proposal against what
+/// the context already holds, so overlap is theirs to adjudicate beforehand.
+fn confirm_batch(proposal_count: usize, context_ref: &str, cohort: &str) -> Result<bool> {
+    let plural = if proposal_count == 1 { "y" } else { "ies" };
+    output::warning(format!(
+        "about to create {proposal_count} memor{plural} in {context_ref} from the `{cohort}` cohort"
+    ));
+    output::plain(
+        "  Near-duplicates are NOT detected: nothing here is checked against what the context \
+         already holds. Adjudicate overlap before migrating — this command will not.",
+    );
+    output::plain("  Re-run with --dry-run to see the per-file plan without writing.");
     dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-        .with_prompt("Create it anyway?")
+        .with_prompt("Create them?")
         .default(false)
         .interact()
         .map_err(|e| TemperError::Config(format!("prompt error: {e}")))
@@ -489,18 +473,20 @@ pub enum RunMode {
     /// Plan and print; write nothing. Always permitted, with or without a terminal — a read-only
     /// run has nothing to be unattended about.
     DryRun,
-    /// A human is attached; a collision stops and asks.
+    /// A human is attached; the whole batch is shown once and confirmed before the first write.
     Interactive,
-    /// Explicitly authorized to run with no human. A collision **skips** — never creates, and
-    /// never resolves the overlap itself.
+    /// Explicitly authorized to run with no human. The flag **is** the confirmation, so the batch
+    /// is written without asking.
     Unattended,
 }
 
 /// Decide the run mode, or refuse.
 ///
-/// The refusal is the point: two machines migrating independently is exactly the case that
-/// produces near-duplicates nothing downstream can tell apart, so a write run with no human and
-/// no explicit authorization does not proceed.
+/// Shared with [`super::harvest`], and the refusal is the point for both: each of them writes —
+/// one creates resources, the other rewrites files on disk — and a write run with no human
+/// attached and no explicit authorization is exactly the case that should not proceed. What a
+/// given command asks before writing, and therefore what `--unattended` waives, belongs in that
+/// command's own help rather than in this shared message.
 pub fn resolve_run_mode(
     dry_run: bool,
     unattended: bool,
@@ -516,66 +502,11 @@ pub fn resolve_run_mode(
         return Ok(RunMode::Interactive);
     }
     Err(
-        "refusing to migrate unattended: no terminal is attached to answer a collision. \
-         Re-run with --dry-run to see the plan, or --unattended to authorize a run that skips \
-         every collision instead of asking."
+        "refusing to write with no terminal attached: there is nobody to confirm the run. \
+         Re-run with --dry-run to see the plan, or --unattended to authorize writing without \
+         a confirmation."
             .to_string(),
     )
-}
-
-/// A memory already in the target context that lexically overlaps a proposal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CollisionCandidate {
-    pub id: uuid::Uuid,
-    pub title: String,
-}
-
-/// What the pre-write search found.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CollisionVerdict {
-    /// Nothing in the target context matches; the write proceeds without asking.
-    Clear,
-    /// Candidates a human must judge. This variant carries no resolution and never will —
-    /// silently merging on similarity would destroy one of two accounts someone may have wanted
-    /// to compare.
-    NeedsDecision(Vec<CollisionCandidate>),
-}
-
-/// Classify the pre-write search hits: a hit is a collision only where terms actually overlap.
-///
-/// **The verdict reads `fts_score`, never `combined_score`, and this was measured rather than
-/// assumed.** `/api/search` blends a full-text arm with a vector arm, and `--text-only` suppresses
-/// only the *client's* embedding — the server still embeds the query, so every row in the scoped
-/// context comes back ranked whatever you asked for. Against `@me/working-agreements` on
-/// 2026-08-01 (one memory, 67 unrelated titles) that meant 67 of 67 proposals flagged a
-/// collision. A reconciler whose prompt always fires is a reconciler nobody reads.
-///
-/// `fts_score` is the arm that discriminates: 0.0 where no term overlaps, above 0 where one does.
-/// So the cutoff is "postgres found a shared lexeme", which is a fact about the two texts — not a
-/// similarity constant this system has no evidence for.
-///
-/// **This detects overlap; it does not eliminate it.** Near-duplicates phrased differently enough
-/// share no lexemes, pass the search, and land twice. That residue is named, not solved — a
-/// reconciler that merged on similarity would destroy one of two accounts a human might have
-/// wanted to compare.
-pub fn classify_collision(
-    hits: &[temper_core::types::api::UnifiedSearchResultRow],
-    limit: usize,
-) -> CollisionVerdict {
-    let overlapping: Vec<CollisionCandidate> = hits
-        .iter()
-        .filter(|h| h.fts_score > 0.0)
-        .take(limit)
-        .map(|h| CollisionCandidate {
-            id: h.resource_id,
-            title: h.title.clone(),
-        })
-        .collect();
-
-    if overlapping.is_empty() {
-        return CollisionVerdict::Clear;
-    }
-    CollisionVerdict::NeedsDecision(overlapping)
 }
 
 /// One local `.md` file as the shell found it. `mtime` is the fallback `verified` date for the
@@ -988,96 +919,34 @@ Never ship code with \"for now\".
         assert!(issues.is_empty(), "{issues:?}");
     }
 
-    fn hit_scored(title: &str, fts_score: f32) -> temper_core::types::api::UnifiedSearchResultRow {
-        temper_core::types::api::UnifiedSearchResultRow {
-            resource_id: uuid::Uuid::now_v7(),
-            title: title.to_string(),
-            slug: String::new(),
-            kb_uri: String::new(),
-            origin_uri: String::new(),
-            context: None,
-            doc_type: "memory".to_string(),
-            fts_score,
-            // Measured against prod on 2026-08-01: the vector arm scores every row in the
-            // context regardless of the query, so a hit with no lexical overlap still arrives
-            // carrying ~0.78 here. That is why this is not the field the verdict reads.
-            vector_score: 0.78,
-            graph_score: 0.0,
-            combined_score: 0.78 + fts_score,
-            origin: String::new(),
-            context_slug: None,
-            context_owner_ref: None,
-        }
-    }
-
-    fn hit(title: &str) -> temper_core::types::api::UnifiedSearchResultRow {
-        hit_scored(title, 0.109)
-    }
-
-    /// Measured, not assumed: `--text-only` sends no client embedding but does **not** stop the
-    /// server embedding the query, so `/api/search` returns the ranked corpus rather than only
-    /// term matches. Against `@me/working-agreements` — one memory, 67 unrelated queries — every
-    /// query came back with that one row. Reading "any hit at all" as a collision therefore
-    /// flagged 67 of 67 proposals and would have turned the reconciler into a prompt that always
-    /// fires, which is a prompt nobody reads.
-    ///
-    /// `fts_score` is the field that actually discriminates: 0.0 for "UI last" against that
-    /// memory, 0.109 for its own title.
+    /// The anti-noise property, and the reason this command asks per batch rather than per file:
+    /// re-running `migrate` once everything has migrated plans nothing, and a confirmation with
+    /// nothing behind it teaches an operator to answer prompts without reading them — which is
+    /// how the per-file gate this replaced ended up being routed around.
     #[test]
-    fn a_hit_with_no_lexical_overlap_is_not_a_collision() {
-        let verdict = classify_collision(&[hit_scored("something unrelated", 0.0)], 3);
-        assert_eq!(
-            verdict,
-            CollisionVerdict::Clear,
-            "the vector arm ranks every row in the context; only lexical overlap is a signal"
-        );
+    fn an_empty_batch_is_never_confirmed() {
+        assert!(!batch_confirmation_required(RunMode::Interactive, 0));
     }
 
-    /// The mixed case is the one that matters: a real overlap must survive being returned
-    /// alongside the vector arm's noise, and the noise must not ride in with it.
+    /// The one prompt the command has left: a human is attached and there is something to write.
     #[test]
-    fn only_the_lexically_overlapping_hits_reach_the_human() {
-        let hits = vec![
-            hit_scored("noise the vector arm returned", 0.0),
-            hit_scored("a genuine term overlap", 0.109),
-            hit_scored("more noise", 0.0),
-        ];
-        let CollisionVerdict::NeedsDecision(candidates) = classify_collision(&hits, 3) else {
-            panic!("a lexical overlap must reach the human");
-        };
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].title, "a genuine term overlap");
+    fn an_interactive_run_with_proposals_is_confirmed() {
+        assert!(batch_confirmation_required(RunMode::Interactive, 1));
+        assert!(batch_confirmation_required(RunMode::Interactive, 69));
     }
 
+    /// `--unattended` **is** the authorization. Asking for a second one would hang every agent
+    /// and hook run on a prompt nothing is there to answer.
     #[test]
-    fn no_search_hit_means_the_write_proceeds_without_asking() {
-        assert_eq!(classify_collision(&[], 3), CollisionVerdict::Clear);
+    fn an_unattended_run_is_not_confirmed_because_the_flag_is_the_authorization() {
+        assert!(!batch_confirmation_required(RunMode::Unattended, 69));
     }
 
-    /// The whole premise: a hit is surfaced for a human, never resolved. There is deliberately no
-    /// "close enough, merge it" arm to assert against — its absence is the guarantee.
+    /// A dry run writes nothing, so there is nothing to authorize — and a read-only run that
+    /// stopped to ask would be unusable from an agent or a hook, which is where it is run from.
     #[test]
-    fn a_search_hit_needs_a_human_decision_and_carries_no_resolution() {
-        let verdict = classify_collision(&[hit("an existing memory")], 3);
-        let CollisionVerdict::NeedsDecision(candidates) = verdict else {
-            panic!("a hit must never auto-resolve");
-        };
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].title, "an existing memory");
-    }
-
-    #[test]
-    fn the_candidate_list_is_bounded_by_the_limit() {
-        let hits = vec![hit("a"), hit("b"), hit("c"), hit("d")];
-        let CollisionVerdict::NeedsDecision(candidates) = classify_collision(&hits, 2) else {
-            panic!("hits must need a decision");
-        };
-        assert_eq!(
-            candidates.len(),
-            2,
-            "a prompt showing 40 rows is not a prompt"
-        );
-        assert_eq!(candidates[0].title, "a", "the search's own ranking is kept");
+    fn a_dry_run_is_never_confirmed() {
+        assert!(!batch_confirmation_required(RunMode::DryRun, 69));
     }
 
     /// A dry run writes nothing, so it has nothing to be unattended about — an agent or a hook
@@ -1087,9 +956,10 @@ Never ship code with \"for now\".
         assert_eq!(resolve_run_mode(true, false, false), Ok(RunMode::DryRun));
     }
 
-    /// The refusal the design asks for: writes with no human and no explicit authorization do not
-    /// happen, because two machines migrating independently is what produces the near-duplicates
-    /// nothing downstream can tell apart.
+    /// The refusal the design asks for, and it is shared with `harvest`: both commands write, so
+    /// a write run with no human attached and no explicit authorization does not proceed. The
+    /// message must stay surface-neutral — it is rendered by both — while still naming the two
+    /// ways forward, which is what this asserts.
     #[test]
     fn a_write_run_with_no_terminal_and_no_flag_is_refused() {
         let err = resolve_run_mode(false, false, false).expect_err("must refuse");

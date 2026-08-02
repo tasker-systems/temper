@@ -224,6 +224,31 @@ enough will pass the search and land twice. The residue is real and is named her
 claimed closed — a reconciler that silently merged on similarity would be worse, because it would
 destroy one of two accounts that a human might have wanted to compare.
 
+> **RETIRED — `[decided — 2026-08-02, Pete]`.** The two paragraphs above describe a mechanism that
+> no longer exists. The pre-write search, `--collision-limit` and the per-collision prompt were
+> deleted; `migrate` now confirms the batch once and states at the prompt that it detects nothing.
+>
+> **The measurement that retired it.** On the first run at real scale — the desktop migration,
+> 2026-08-02, against a 184-memory store — the search surfaced **54 collisions, 3 genuinely
+> overlapping**. The 51 false positives matched on *shared project vocabulary*, not on claim
+> (`temper invocation` against `NEVER abbreviate a UUIDv7 to its prefix`). The paragraph above named
+> the wrong residue: the risk was never what the search *missed*, it was that ~94% of what it
+> *caught* was noise, which buried the three real ones and made switching the gate off attractive.
+> On 2026-08-01 the final 23 memories were written with `--collision-limit 0`, under operational
+> pressure from an unrelated failure, by the person who wrote the requirement.
+>
+> **The clause did not retire with the mechanism.** `a-near-duplicate-must-never-be-resolved-without-a-human`
+> still holds; what moved is who forms the candidate set — an agent reading local memories against
+> the store and comparing the **claim** rather than the wording, bringing a short list a human can
+> adjudicate. A compiled-in gate is unskippable and this is not; the trade is defensible only because
+> what was traded away was already being switched off, **not** because guidance is as strong as a
+> gate. Two repairs are **Rejected**, not deferred: tuning the score or swapping full-text for
+> embedding cosine (several of the 51 would score *higher* under embeddings, being genuinely about
+> the same subsystem), and automatic merging above a confidence threshold (which the clause forbids).
+> Tracked as *Retire the FTS collision gate — judgement, not lexical overlap, decides what is a
+> near-duplicate*, resource `019fc062-5481-77f0-a0fa-e092d40759d4`. The operator-facing account is
+> [docs/guides/operational-memory.md](../../guides/operational-memory.md).
+
 ### Sequencing across machines
 
 One machine migrates; the others adopt at their own pace and reconcile against what is already

@@ -1831,10 +1831,13 @@ pub enum MemoryAction {
     },
     /// Move local memory files into Temper, reconciling rather than blind-creating.
     ///
-    /// Searches the target context before each write and surfaces near-matches for you to judge —
-    /// it never resolves an overlap itself. Interactive by default; with no terminal attached it
-    /// refuses to write unless `--unattended` explicitly authorizes a run that skips every
-    /// collision. `--dry-run` is always permitted and writes nothing.
+    /// The reconciliation is by `source_file`: a file some memory already names is skipped, which
+    /// is what makes re-running safe. It does NOT detect near-duplicates — nothing is compared
+    /// against what the target context already holds, so adjudicating overlap is a step to take
+    /// before running this, not something the command does for you. Interactive by default, where
+    /// it confirms the whole batch once (count, target context, cohort) before the first write;
+    /// with no terminal attached it refuses to write unless `--unattended` explicitly authorizes
+    /// an unconfirmed run. `--dry-run` is always permitted and writes nothing.
     ///
     /// Titles come from the link text in the hand-written `MEMORY.md`, which is the only place a
     /// human-readable title for each memory exists. A file no link names is skipped, never given
@@ -1850,13 +1853,10 @@ pub enum MemoryAction {
         /// Plan and print; write nothing.
         #[arg(long)]
         dry_run: bool,
-        /// Authorize a write run with no terminal attached. Every collision is skipped, never
-        /// resolved.
+        /// Authorize a write run with no terminal attached. The batch is written without the
+        /// confirmation prompt — the flag is the authorization.
         #[arg(long)]
         unattended: bool,
-        /// How many near-matches a collision surfaces.
-        #[arg(long, default_value_t = 3)]
-        collision_limit: usize,
     },
     /// Copy each curated title out of the hand-written index into the file it names.
     ///

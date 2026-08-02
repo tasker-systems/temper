@@ -1212,7 +1212,6 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 context,
                 dry_run,
                 unattended,
-                collision_limit,
             } => {
                 let global = temper_cli::config::load_global_config()?;
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
@@ -1224,7 +1223,6 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         context: context.as_deref(),
                         dry_run,
                         unattended,
-                        collision_limit,
                         format: output_format,
                     },
                 )?;
