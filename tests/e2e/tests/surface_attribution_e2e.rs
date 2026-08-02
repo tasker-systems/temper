@@ -25,6 +25,7 @@ use temper_workflow::operations::{Surface, SURFACE_HEADER};
 /// wire-shape drift is a compile error rather than a silent 400.
 fn probe_payload(title: &str) -> IngestPayload {
     IngestPayload {
+        idempotency_key: None,
         title: title.to_string(),
         origin_uri: format!("test://surface/{title}"),
         context_ref: "@me/default".to_string(),

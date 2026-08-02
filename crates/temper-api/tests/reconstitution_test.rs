@@ -74,6 +74,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
     // Ingest via POST /api/ingest
     let origin_uri = format!("test://reconstitution-{}", uuid::Uuid::new_v4());
     let ingest_payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         title: "Reconstitution Test Doc".to_string(),
         origin_uri,

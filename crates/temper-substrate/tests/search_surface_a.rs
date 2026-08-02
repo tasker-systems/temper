@@ -47,6 +47,7 @@ async fn mk(
     writes::create_resource(
         pool,
         writes::CreateParams {
+            idempotency_key: None,
             sources: vec![],
             title,
             origin_uri: uri,

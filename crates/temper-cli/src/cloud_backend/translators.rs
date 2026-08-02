@@ -151,6 +151,10 @@ fn cmd_to_ingest_payload_base(
     };
 
     Ok(IngestPayload {
+        // Owner-scoped create idempotency key (issue #581). The CLI does not yet mint one on this
+        // path, so ordinary (non-idempotent) create is the current behaviour; wiring a client-minted
+        // key through is a later rung.
+        idempotency_key: None,
         segmented: None,
         title: cmd.title.clone(),
         // Forward the command's origin URI (issue #352). A URL `--from` populates it (see
@@ -342,6 +346,7 @@ mod tests {
     // ungated.
     fn sample_cmd() -> CreateResource {
         CreateResource {
+            idempotency_key: None,
             slug: "2026-05-18-test".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(

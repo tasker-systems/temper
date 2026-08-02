@@ -80,6 +80,7 @@ fn machine_parts(client_id: &str) -> axum::http::request::Parts {
 /// per-file convention.
 async fn seed(client: &temper_client::TemperClient, context: &str, slug: &str) -> Uuid {
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         title: format!("Resource facet e2e {slug}"),
         origin_uri: format!("kb://{context}/research/{slug}"),

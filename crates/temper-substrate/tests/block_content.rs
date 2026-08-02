@@ -67,6 +67,7 @@ async fn create_via_chunks_arm(
     create_resource(
         pool,
         CreateParams {
+            idempotency_key: None,
             title: "t",
             origin_uri: "test://t",
             body,
@@ -265,6 +266,7 @@ async fn empty_body_with_real_chunks_is_derived_not_empty_verbatim(pool: sqlx::P
     let id = create_resource(
         &pool,
         CreateParams {
+            idempotency_key: None,
             title: "t",
             origin_uri: "test://empty",
             body: "", // the reconcile sentinel — real content is in the chunk below

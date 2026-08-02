@@ -113,6 +113,7 @@ async fn resources_in_context(pool: &PgPool, context: Uuid) -> i64 {
 
 fn create_cmd(context: Uuid, slug: &str) -> CreateResource {
     CreateResource {
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(ContextId::from(context)),

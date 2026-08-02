@@ -82,6 +82,7 @@ async fn seed_segmented_resource(
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     let created = backend
         .create_resource(CreateResource {
+            idempotency_key: None,
             slug: slug.to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),
@@ -117,6 +118,7 @@ async fn seed_resource_with_body(
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     let created = backend
         .create_resource(CreateResource {
+            idempotency_key: None,
             slug: slug.to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),
@@ -230,6 +232,7 @@ async fn begin_segmented_ingest_lands_block_zero_and_records_the_source(pool: Pg
     let out = backend
         .begin_segmented_ingest(
             CreateResource {
+                idempotency_key: None,
                 slug: "zz-begin-probe".to_string(),
                 doctype: "research".to_string(),
                 home: HomeAnchor::Context(ContextId::from(context)),
@@ -408,6 +411,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
     // means the substrate builds the block from the chunks and never touches ONNX.
     let created = backend
         .create_resource(CreateResource {
+            idempotency_key: None,
             slug: "zz-segmented-probe".to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),
@@ -524,6 +528,7 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
 
     let created = owner_backend
         .create_resource(CreateResource {
+            idempotency_key: None,
             slug: "zz-segmented-auth-probe".to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),

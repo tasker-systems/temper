@@ -9389,6 +9389,14 @@
                 "format": "uuid",
                 "description": "When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`)\nand `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only)."
               },
+              "idempotency_key": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid",
+                "description": "Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by\nconvention): a retried create carrying the same key converges on the already-committed\nresource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,\nnon-idempotent create. The server mints the resource id; the key never supplies one."
+              },
               "managed_meta": {
                 "description": "Managed frontmatter (temper-* fields) as JSON."
               },
@@ -11159,6 +11167,14 @@
               "doc_type": {
                 "type": "string",
                 "description": "Doc-type name (the substrate stores doc-type as a property name; the\nbackend create path passes it straight through to `CreateResource`)."
+              },
+              "idempotency_key": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid",
+                "description": "Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by\nconvention): a retried create carrying the same key converges on the already-committed\nresource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,\nnon-idempotent create. The server mints the resource id; the key never supplies one."
               },
               "kb_context_id": {
                 "type": "string",

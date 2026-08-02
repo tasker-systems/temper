@@ -3177,6 +3177,14 @@ export interface components {
              *     and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).
              */
             home_cogmap_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
+             *     convention): a retried create carrying the same key converges on the already-committed
+             *     resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
+             *     non-idempotent create. The server mints the resource id; the key never supplies one.
+             */
+            idempotency_key?: string | null;
             /** @description Managed frontmatter (temper-* fields) as JSON. */
             managed_meta?: unknown;
             metadata?: unknown;
@@ -4112,6 +4120,14 @@ export interface components {
              *     backend create path passes it straight through to `CreateResource`).
              */
             doc_type: string;
+            /**
+             * Format: uuid
+             * @description Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
+             *     convention): a retried create carrying the same key converges on the already-committed
+             *     resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
+             *     non-idempotent create. The server mints the resource id; the key never supplies one.
+             */
+            idempotency_key?: string | null;
             /**
              * Format: uuid
              * @description Context addressed by UUID. The API wraps this as `ContextRef::Id` and resolves it through

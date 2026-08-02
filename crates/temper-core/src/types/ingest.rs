@@ -32,6 +32,12 @@ pub struct IngestPayload {
     /// `"sha256:<hex>"` — server computes if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
+    /// convention): a retried create carrying the same key converges on the already-committed
+    /// resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
+    /// non-idempotent create. The server mints the resource id; the key never supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<uuid::Uuid>,
     /// Full extracted markdown content.
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -436,6 +442,7 @@ mod tests {
     #[test]
     fn payload_serialization_roundtrip() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -473,6 +480,7 @@ mod tests {
     #[test]
     fn payload_serializes_with_optional_chunks_absent() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -511,6 +519,7 @@ mod tests {
     #[test]
     fn payload_with_chunks_present_roundtrips() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -728,6 +737,7 @@ mod tests {
     #[test]
     fn ingest_payload_segmented_field_round_trips_when_present() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Big Doc".to_owned(),
             origin_uri: "kb://ctx/task/big".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -769,6 +779,7 @@ mod tests {
         assert!(payload.segmented.is_none());
 
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),

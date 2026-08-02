@@ -57,6 +57,9 @@ module Temper::Generated
     # When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`) and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).
     attr_accessor :home_cogmap_id
 
+    # Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by convention): a retried create carrying the same key converges on the already-committed resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary, non-idempotent create. The server mints the resource id; the key never supplies one.
+    attr_accessor :idempotency_key
+
     attr_accessor :managed_meta
 
     attr_accessor :metadata
@@ -112,6 +115,7 @@ module Temper::Generated
         :'doc_type_name' => :'doc_type_name',
         :'goal' => :'goal',
         :'home_cogmap_id' => :'home_cogmap_id',
+        :'idempotency_key' => :'idempotency_key',
         :'managed_meta' => :'managed_meta',
         :'metadata' => :'metadata',
         :'open_meta' => :'open_meta',
@@ -149,6 +153,7 @@ module Temper::Generated
         :'doc_type_name' => :'String',
         :'goal' => :'String',
         :'home_cogmap_id' => :'String',
+        :'idempotency_key' => :'String',
         :'managed_meta' => :'Object',
         :'metadata' => :'Object',
         :'open_meta' => :'Object',
@@ -173,6 +178,7 @@ module Temper::Generated
         :'content_hash',
         :'goal',
         :'home_cogmap_id',
+        :'idempotency_key',
         :'managed_meta',
         :'metadata',
         :'open_meta',
@@ -256,6 +262,10 @@ module Temper::Generated
 
       if attributes.key?(:'home_cogmap_id')
         self.home_cogmap_id = attributes[:'home_cogmap_id']
+      end
+
+      if attributes.key?(:'idempotency_key')
+        self.idempotency_key = attributes[:'idempotency_key']
       end
 
       if attributes.key?(:'managed_meta')
@@ -402,6 +412,7 @@ module Temper::Generated
           doc_type_name == o.doc_type_name &&
           goal == o.goal &&
           home_cogmap_id == o.home_cogmap_id &&
+          idempotency_key == o.idempotency_key &&
           managed_meta == o.managed_meta &&
           metadata == o.metadata &&
           open_meta == o.open_meta &&
@@ -420,7 +431,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, chunks_packed, content, content_hash, context_ref, doc_type_name, goal, home_cogmap_id, managed_meta, metadata, open_meta, origin_uri, segmented, sources, title].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, chunks_packed, content, content_hash, context_ref, doc_type_name, goal, home_cogmap_id, idempotency_key, managed_meta, metadata, open_meta, origin_uri, segmented, sources, title].hash
     end
 
     # Builds the object from hash

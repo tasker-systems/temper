@@ -26,6 +26,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
 
     let request = ResourceCreateRequest {
         kb_context_id: context.id.into(),
+        idempotency_key: None,
         doc_type: "research".to_string(),
         origin_uri: "test://e2e/resource-create-get".to_string(),
         title: "E2E Create & Get Test".to_string(),
@@ -81,6 +82,7 @@ async fn resource_update(pool: sqlx::PgPool) {
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
+            idempotency_key: None,
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/resource-update".to_string(),
             title: "Original Title".to_string(),
@@ -141,6 +143,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
+            idempotency_key: None,
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/resource-delete".to_string(),
             title: "Resource To Delete".to_string(),
@@ -208,6 +211,7 @@ async fn body_only_update_of_a_deleted_resource_is_rejected(pool: sqlx::PgPool) 
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
+            idempotency_key: None,
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/tombstone-write".to_string(),
             title: "Doomed".to_string(),
@@ -265,6 +269,7 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
+            idempotency_key: None,
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/resource-timestamps".to_string(),
             title: "Timestamp Test".to_string(),
@@ -349,6 +354,7 @@ async fn resource_row_native_shape_drops_shim_fields(pool: sqlx::PgPool) {
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
+            idempotency_key: None,
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/native-shape".to_string(),
             title: "Native Shape".to_string(),
@@ -404,6 +410,7 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
             .resources()
             .create(&ResourceCreateRequest {
                 kb_context_id: context.id.into(),
+                idempotency_key: None,
                 doc_type: "research".to_string(),
                 origin_uri: format!("test://e2e/resource-page/{i}"),
                 title: format!("Pagination Resource {i}"),

@@ -1687,6 +1687,9 @@ impl DbBackend {
             properties: &properties,
             chunks: incoming_chunks,
             sources,
+            // Owner-scoped create idempotency (issue #581): the substrate claims `(owner, key)`
+            // atomically with the create and converges a replay on the already-committed resource.
+            idempotency_key: cmd.idempotency_key,
         };
         // Validate the goal BEFORE anything is written. The edge assert below gates the goal
         // too, but only AFTER the resource is committed — no transaction spans both — so an
@@ -1699,9 +1702,21 @@ impl DbBackend {
         }
 
         let mode = writes::CreateMode { defer, segmented };
-        let new_id = writes::create_resource_with_mode(&self.pool, params, act_ctx.clone(), mode)
-            .await
-            .map_err(api_err)?;
+        let (new_id, replayed) =
+            writes::create_resource_with_mode_idempotent(&self.pool, params, act_ctx.clone(), mode)
+                .await
+                .map_err(api_err)?;
+
+        // Idempotent replay (issue #581): the `(owner, idempotency_key)` slot was already claimed, so
+        // the resource already exists and every post-create step below (goal edge, region clocks,
+        // standing memo, embed enqueue) already ran on the original create. Return it as-is — re-running
+        // any of that on a replay is at best wasted work and at worst a double-assert.
+        if replayed {
+            let row =
+                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
+                    .await?;
+            return Ok(CommandOutput::new(row));
+        }
 
         // Project the first-class goal link to a live `advances`→goal edge (issue 019f3d55). The
         // new resource is the source and the edge homes on its anchor. The shared helper authorizes

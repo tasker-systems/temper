@@ -64,6 +64,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         embedded_with: None,
     };
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Heal Me".to_string(),
@@ -171,6 +172,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         embedded_with: None,
     };
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: "Mismatch".to_string(),

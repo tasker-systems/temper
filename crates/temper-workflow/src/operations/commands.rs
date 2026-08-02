@@ -70,6 +70,14 @@ pub struct CreateResource {
     /// authorizes the write — the resource-create authz runs independently.
     #[serde(default, skip_serializing_if = "ActContext::is_empty")]
     pub act: ActContext,
+    /// Owner-scoped create idempotency key — a client-minted opaque token (a UUIDv7 by convention).
+    /// When `Some`, a retried create/begin converges on the already-committed resource (the backend
+    /// returns it) instead of minting a duplicate; when `None` (default), an ordinary create. The
+    /// server mints the resource id; the key only names the caller's create attempt, scoped to the
+    /// caller — so it is not an existence oracle. `#[serde(default)]` keeps existing wire bodies
+    /// deserializing unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<uuid::Uuid>,
     pub origin: Surface,
 }
 
@@ -508,6 +516,7 @@ mod tests {
     #[test]
     fn create_resource_does_not_use_resource_ref() {
         let cmd = CreateResource {
+            idempotency_key: None,
             slug: "new-task".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(

@@ -123,6 +123,7 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
         goal: None,
         context_ref: Some("@me/act-authorship-mcp".to_string()),
         cogmap: None,
+        idempotency_key: None,
         doc_type_name: "research".to_string(),
         title: "Authored via MCP".to_string(),
         content: None,

@@ -69,6 +69,7 @@ async fn make_resource(
     writes::create_resource_with(
         pool,
         CreateParams {
+            idempotency_key: None,
             title,
             origin_uri: uri,
             body: "seed body",
@@ -115,6 +116,7 @@ async fn seed_finding_with_n_provenance(
     let finding = writes::create_resource_with(
         pool,
         CreateParams {
+            idempotency_key: None,
             title: "finding",
             origin_uri: "temper://es/finding",
             body: "the claim under standing",
@@ -738,6 +740,7 @@ async fn a_source_cited_by_two_blocks_counts_once_in_quality(pool: sqlx::PgPool)
     let finding = writes::create_resource_with(
         &pool,
         CreateParams {
+            idempotency_key: None,
             title: "finding",
             origin_uri: "temper://es/q-finding",
             body: "the claim under standing",
@@ -1067,6 +1070,7 @@ async fn an_audit_on_one_finding_does_not_cover_the_same_source_on_another(pool:
             writes::create_resource_with(
                 &pool,
                 CreateParams {
+                    idempotency_key: None,
                     title: tag,
                     origin_uri: &format!("temper://es/shared-{tag}"),
                     body: "a claim resting on the shared source",

@@ -24,6 +24,7 @@ fn seed_payload(context: &str, doc_type: &str, slug: &str, goal: Option<Uuid>) -
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
 
     IngestPayload {
+        idempotency_key: None,
         segmented: None,
         title: format!("Goal e2e {slug}"),
         origin_uri: format!("kb://{context}/{doc_type}/{slug}"),

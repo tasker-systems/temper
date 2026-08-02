@@ -33,6 +33,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
     }];
 
     IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

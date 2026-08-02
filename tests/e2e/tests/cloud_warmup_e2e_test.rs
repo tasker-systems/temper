@@ -81,6 +81,7 @@ async fn seed_session(
     };
 
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),
@@ -120,6 +121,7 @@ async fn seed_task(
         "temper-seq": seq,
     });
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),
@@ -154,6 +156,7 @@ async fn seed_goal(
 ) {
     let managed = serde_json::json!({ "temper-status": status });
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

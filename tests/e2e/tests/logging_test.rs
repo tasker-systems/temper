@@ -93,6 +93,7 @@ async fn unauthenticated_request_logs_warning(pool: sqlx::PgPool) {
 
 fn empty_payload(title: &str, ctx: &str, act: ActInput) -> IngestPayload {
     IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

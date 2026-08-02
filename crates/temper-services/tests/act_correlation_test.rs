@@ -78,6 +78,7 @@ fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
 
 fn create_cmd(slug: &str, context: uuid::Uuid, act: ActContext) -> CreateResource {
     CreateResource {
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(ContextId::from(context)),

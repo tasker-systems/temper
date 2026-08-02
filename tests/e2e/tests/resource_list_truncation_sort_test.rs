@@ -27,6 +27,7 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
 
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

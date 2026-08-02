@@ -38,6 +38,7 @@ fn cloud_env<'a>(
 /// Seed a task via the API client (cloud-only; no vault files written).
 async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &str, title: &str) {
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         goal: None,
         title: title.to_string(),

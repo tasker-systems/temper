@@ -110,6 +110,15 @@ pub struct CreateParams<'a> {
     /// Provenance sources the body was distilled from — applied to the resource's body block and
     /// recorded into `kb_block_provenance`. Empty for an ordinary create with no attribution.
     pub sources: Vec<Incorporation>,
+    /// Owner-scoped create idempotency key (issue #581, spike rung 3). `Some(key)` claims the
+    /// `(owner, key)` slot in `kb_idempotency_keys` **atomically with the create**: the first create
+    /// under a key mints a resource under a server-generated id and records the mapping; a replay of
+    /// the same key returns that already-committed resource instead of minting a twin. `None` ⇒ an
+    /// ordinary, non-idempotent create (today's behaviour). The key is scoped to `owner`, so it is
+    /// **not** an existence oracle — a foreign key is simply absent from your namespace, so you mint
+    /// fresh, exactly as a read cannot distinguish nonexistent from hidden. The client never supplies
+    /// a resource id; the server mints it.
+    pub idempotency_key: Option<Uuid>,
 }
 
 /// How a create is initiated — the two orthogonal switches [`create_resource_with_mode`] branches on.
@@ -172,6 +181,19 @@ pub async fn create_resource_with_mode(
     ctx: EventContext,
     mode: CreateMode,
 ) -> Result<ResourceId> {
+    Ok(create_resource_impl(pool, p, ctx, mode).await?.0)
+}
+
+/// Like [`create_resource_with_mode`], but also reports whether the create was an **idempotent
+/// replay** (the `(owner, idempotency_key)` slot was already claimed, so the already-committed
+/// resource is returned) versus a fresh mint. The backend needs this to skip the post-create work
+/// (goal edge, region clocks, standing) on a replay. `false` whenever `p.idempotency_key` is `None`.
+pub async fn create_resource_with_mode_idempotent(
+    pool: &PgPool,
+    p: CreateParams<'_>,
+    ctx: EventContext,
+    mode: CreateMode,
+) -> Result<(ResourceId, bool)> {
     create_resource_impl(pool, p, ctx, mode).await
 }
 
@@ -195,7 +217,51 @@ async fn create_resource_impl(
     p: CreateParams<'_>,
     ctx: EventContext,
     mode: CreateMode,
-) -> Result<ResourceId> {
+) -> Result<(ResourceId, bool)> {
+    let mut tx = begin_scoped(pool).await?;
+
+    // Owner-scoped idempotency claim (issue #581, spike rung 3) — atomic with the create below. When a
+    // key is supplied, claim the `(owner, key)` slot under a server-minted candidate id; a conflict
+    // means a prior committed create already took it, so return THAT resource without minting a twin —
+    // and without the block prep / inline embed the winning path does, which is why this runs first.
+    // The candidate id we record here is the id the create mints under, so a replay converges on it.
+    // No key ⇒ an ordinary create (mint a fresh id in `fire_with`).
+    let mint_id: Option<ResourceId> = match p.idempotency_key {
+        None => None,
+        Some(key) => {
+            let candidate = Uuid::now_v7();
+            let claimed: Option<Uuid> = sqlx::query_scalar!(
+                "INSERT INTO kb_idempotency_keys (owner_profile_id, idempotency_key, resource_id) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT (owner_profile_id, idempotency_key) DO NOTHING \
+                 RETURNING resource_id",
+                p.owner.uuid(),
+                key,
+                candidate,
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            match claimed {
+                Some(_) => Some(ResourceId::from(candidate)),
+                None => {
+                    // Replay: the slot is already claimed by a committed create. Read its resource id
+                    // and return it — no twin, no post-create work. Scoped to `owner`, so this can
+                    // only ever be the caller's own prior create.
+                    let existing: Uuid = sqlx::query_scalar!(
+                        "SELECT resource_id FROM kb_idempotency_keys \
+                          WHERE owner_profile_id = $1 AND idempotency_key = $2",
+                        p.owner.uuid(),
+                        key,
+                    )
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                    return Ok((ResourceId::from(existing), true));
+                }
+            }
+        }
+    };
+
     let mut block = match (p.chunks, mode.defer) {
         (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
         (None, false) => prepare_block(0, None, p.body)?,
@@ -208,14 +274,14 @@ async fn create_resource_impl(
     // as `incorporated` one line up. `raw_body` maps an empty body ⇒ `None` (see its doc).
     block.raw_text = raw_body(p.body);
     let blocks = [block];
-    let mut tx = begin_scoped(pool).await?;
     let new_id = fire_with(
         &mut tx,
         SeedAction::ResourceCreate {
             title: p.title,
             origin_uri: p.origin_uri,
-            // A genuinely new resource created through the live write path — mint a fresh id.
-            resource_id: None,
+            // Mint under the server-generated candidate id recorded in the idempotency claim above (so
+            // a replay converges on THIS resource), or a fresh id when no key was supplied.
+            resource_id: mint_id,
             home: p.home,
             owner: p.owner,
             originator: Some(p.originator),
@@ -242,7 +308,7 @@ async fn create_resource_impl(
         .await?;
     }
     tx.commit().await?;
-    Ok(new_id)
+    Ok((new_id, false))
 }
 
 /// A partial resource update — only the fields present in the command are written.

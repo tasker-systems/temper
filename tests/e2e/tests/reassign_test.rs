@@ -26,6 +26,7 @@ async fn resource_reassign_moves_ownership(pool: sqlx::PgPool) {
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
+            idempotency_key: None,
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/reassign".to_string(),
             title: "Reassign E2E".to_string(),

@@ -54,6 +54,7 @@ fn sample_authorship() -> AgentAuthorship {
 
 fn create_cmd(context: ContextId, slug: &str, act: ActContext) -> CreateResource {
     CreateResource {
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(context),

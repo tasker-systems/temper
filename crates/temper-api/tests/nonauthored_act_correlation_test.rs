@@ -62,6 +62,7 @@ fn stamped(inv: InvocationId) -> ActContext {
 
 fn create_cmd(context: ContextId, slug: &str) -> CreateResource {
     CreateResource {
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(context),

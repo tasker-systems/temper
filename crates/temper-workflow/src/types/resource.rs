@@ -329,6 +329,12 @@ pub struct ResourceCreateRequest {
     pub doc_type: String,
     pub origin_uri: String,
     pub title: String,
+    /// Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
+    /// convention): a retried create carrying the same key converges on the already-committed
+    /// resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
+    /// non-idempotent create. The server mints the resource id; the key never supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<uuid::Uuid>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the create act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     #[serde(default, flatten)]

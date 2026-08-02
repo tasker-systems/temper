@@ -133,6 +133,7 @@ async fn make_resource(
     writes::create_resource_with(
         pool,
         CreateParams {
+            idempotency_key: None,
             title,
             origin_uri: uri,
             body: "seed body",

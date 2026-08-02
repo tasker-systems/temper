@@ -78,6 +78,7 @@ async fn deleted_resource_leaves_visibility_and_content_surfaces(pool: PgPool) {
         "ad",
     )];
     let payload = IngestPayload {
+        idempotency_key: None,
         segmented: None,
         title: "Soft Delete Floor".to_string(),
         origin_uri: format!("test://soft-delete-floor-{}", Uuid::new_v4()),

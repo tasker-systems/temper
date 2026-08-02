@@ -30,6 +30,7 @@ fn test_client(base_url: &str) -> TemperClient {
 
 fn segmented_payload() -> IngestPayload {
     IngestPayload {
+        idempotency_key: None,
         title: "Big Doc".to_string(),
         origin_uri: "test://big-doc".to_string(),
         context_ref: "@me/temper".to_string(),
