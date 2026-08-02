@@ -12,6 +12,8 @@
 //! names and `emit` renders straight through (`[decided — 2026-08-02, Pete]`). See
 //! [`reinforcement_of`].
 
+use std::collections::HashSet;
+
 use chrono::NaiveDate;
 use uuid::Uuid;
 
@@ -295,17 +297,97 @@ impl LocalIndex {
     }
 }
 
+/// One principle and the memories that evidence it — the grouping the index sections by.
+///
+/// **Membership is read from edges, never from a field on the memory and never from a file anyone
+/// maintains.** The edge is asserted memory → principle (`express`/`evidences`); this is the
+/// principle's side of it, which is where the render reads because there are eight principles and
+/// ~300 memories. Direction of *authoring* and direction of *reading* are deliberately opposite:
+/// asserting from the memory is incidental to writing one, while asserting from the principle
+/// would be filing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrincipleSection {
+    pub id: Uuid,
+    pub title: String,
+    /// The section preamble — see [`statement_of`]. `None` renders a section with no preamble
+    /// rather than a guessed one.
+    pub statement: Option<String>,
+    /// Ids of the memories carrying an `evidences` edge to this principle.
+    pub members: Vec<Uuid>,
+}
+
+/// The preamble a principle contributes: **the first paragraph of its body, never the whole
+/// body.**
+///
+/// Measured on the real corpus (2026-08-02): eight full bodies are 11,853 bytes against an index
+/// of 37,159, so rendering them whole would add ~32% to a file loaded every session. The eight
+/// first paragraphs are **1,706 bytes** — within 4% of the 1,638 the hand-written index spent on
+/// exactly this job, which is the strongest available evidence that the first paragraph *is* the
+/// statement and the rest is elaboration.
+///
+/// It is also not merely a size argument. Each body continues into a list of recurring shapes
+/// whose bullets **are** the memories rendered directly beneath it, so the whole body prints the
+/// section twice in two voices. The elaboration stays one `temper resource show` away.
+///
+/// **A body that does not open with prose yields `None`, never a fragment.** A heading, a list
+/// item, a quote or a table row would render as a piece of structure torn out of its context and
+/// presented as a claim — worse than no preamble, because it reads like one.
+pub fn statement_of(body: &str) -> Option<String> {
+    let first = body.trim_start().split("\n\n").next()?.trim();
+    let opener = first.chars().next()?;
+    if matches!(opener, '#' | '-' | '*' | '>' | '|' | '+' | '=') {
+        return None;
+    }
+    // An ordered-list opener (`1.`, `2)`) is structure too, and is the one that does not announce
+    // itself with a punctuation character.
+    let mut digits = first.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 {
+        if digits > first.len() {
+            digits = first.len();
+        }
+        if matches!(first[digits..].chars().next(), Some('.' | ')')) {
+            return None;
+        }
+    }
+    Some(first.to_string())
+}
+
 /// Render the index.
+///
+/// **Grouping by principle is applied when there is a grouping to apply, and the flat render is
+/// the fallback rather than a legacy path.** With no principles, or none of them carrying a live
+/// member, this renders byte-for-byte what it rendered before principles existed — which is what
+/// makes the feature degrade instead of breaking the one file a cold session depends on.
 ///
 /// The un-migrated section is appended only when there is something local to say. A machine that
 /// has finished migrating renders byte-for-byte what it rendered before the union existed, which
 /// is what keeps this transitional rather than a permanent second code path.
-pub fn render_index(entries: &[MemoryEntry], local: &LocalIndex, policy: RenderPolicy) -> String {
-    let mut out = render_migrated(entries, policy);
+pub fn render_index(
+    entries: &[MemoryEntry],
+    local: &LocalIndex,
+    principles: &[PrincipleSection],
+    policy: RenderPolicy,
+) -> String {
+    let grouped: Vec<&PrincipleSection> = principles
+        .iter()
+        .filter(|p| p.members.iter().any(|id| is_live_member(entries, *id)))
+        .collect();
+
+    let mut out = if grouped.is_empty() {
+        render_migrated(entries, policy)
+    } else {
+        render_by_principle(entries, &grouped, policy)
+    };
     if !local.is_empty() {
         out.push_str(&render_local(local));
     }
     out
+}
+
+/// Does `id` name an entry this render would show? A principle whose every member is superseded
+/// contributes no section — an empty heading with a preamble under it costs bytes to say nothing.
+fn is_live_member(entries: &[MemoryEntry], id: Uuid) -> bool {
+    entries.iter().any(|e| e.id == id && e.status == "active")
 }
 
 /// The un-migrated section: a heading that counts what the machine carries, a preamble stating
@@ -377,7 +459,18 @@ fn split_by_reinforcement(
 ///
 /// Returns `None` for an empty tail rather than rendering "0 more", so a section that collapsed
 /// nothing looks exactly like a section from before the tail existed.
-fn render_tail(collapsed: &[&MemoryEntry], section: &str, reinforced_min: u32) -> Option<String> {
+///
+/// **`route` is a parameter because the section is no longer always a context.** It used to be
+/// composed here as `resource list --context {section}`, which was true while every heading was a
+/// context ref and became false the moment a heading could be a principle — and a route back that
+/// does not resolve is worse than none, since `decay-must-never-make-a-memory-unfindable` is
+/// satisfied by the route *working*, not by a command being printed.
+fn render_tail(
+    collapsed: &[&MemoryEntry],
+    section: &str,
+    route: &str,
+    reinforced_min: u32,
+) -> Option<String> {
     if collapsed.is_empty() {
         return None;
     }
@@ -390,22 +483,154 @@ fn render_tail(collapsed: &[&MemoryEntry], section: &str, reinforced_min: u32) -
         format!("reinforced fewer than {reinforced_min} times")
     };
     Some(format!(
-        "- … {} more in {section}, {why} — demoted, not dropped: \
-         `temper resource list --type memory --context {section} --all`\n",
+        "- … {} more in {section}, {why} — demoted, not dropped: `{route}`\n",
         collapsed.len(),
     ))
 }
 
-fn render_migrated(entries: &[MemoryEntry], policy: RenderPolicy) -> String {
+/// Everything above the first section heading. One definition, so the grouped and flat renders
+/// cannot drift on the preamble a cold session reads first.
+fn index_header() -> String {
+    let mut out = String::from(GENERATED_HEADER);
+    out.push_str("\n\n# Memory index\n\n");
+    out.push_str(READING_GUIDANCE);
+    out
+}
+
+/// One section's entry lines plus its tail, appended to `out`.
+///
+/// Extracted so the two renders emit *the same line*: the per-entry format is the byte budget the
+/// whole index is built around, and two copies of it would drift the first time one was touched.
+fn push_section(
+    out: &mut String,
+    in_section: Vec<&MemoryEntry>,
+    section: &str,
+    route: &str,
+    policy: RenderPolicy,
+) {
     let RenderPolicy {
         today,
         stale_after_days,
         reinforced_min,
     } = policy;
+    let (kept, collapsed) = split_by_reinforcement(in_section, reinforced_min);
+    for e in kept {
+        let age = (today - e.verified).num_days();
+        // UNEXAMINED, never STALE/WRONG: an old date means nobody has checked,
+        // which is not evidence the claim is false.
+        let mark = if age > i64::from(stale_after_days) {
+            format!("[verified {} — UNEXAMINED {}d]", e.verified, age)
+        } else {
+            format!("[verified {}]", e.verified)
+        };
+        // The TITLE is the hook this index carries, and nothing else is. `descriptor` is
+        // deliberately absent: its job is FTS weight-D searchability on the resource, and
+        // printing it here paid for that job twice — measured on the real corpus, ~279 bytes
+        // per line against ~120, i.e. ~49 KB for the full set where the hand-written file it
+        // replaces was 19.3 KB. This file is loaded every session; every byte is paid 178
+        // times. (`[decided — 2026-08-01, Pete]`)
+        //
+        // The link target is the **bare id**, which is what `parse_ref` accepts — so a target
+        // copied out of this file resolves as-is. It previously carried a `temper://` scheme,
+        // which resolved in neither surface a reader has: `parse_ref` rejects it outright, and
+        // MCP's resource URI is `temper://resources/{id}`, not `temper://{id}`. A link that
+        // works nowhere is worse than no link, because it reads as one.
+        out.push_str(&format!("- [{}]({})  {}\n", e.title, e.id, mark));
+    }
+    // `split_by_reinforcement` returns an empty tail for `None`, so this nesting never has to
+    // invent a threshold to describe a collapse that cannot have happened.
+    if let Some(min) = reinforced_min {
+        if let Some(tail) = render_tail(&collapsed, section, route, min) {
+            out.push_str(&tail);
+        }
+    }
+}
 
-    let mut out = String::from(GENERATED_HEADER);
-    out.push_str("\n\n# Memory index\n\n");
-    out.push_str(READING_GUIDANCE);
+/// What the ungrouped section says about itself.
+///
+/// **It is an error surface for the assignment pass, and it says so — it is NOT a cull list.**
+/// That reading was tried and falsified on 2026-08-02: of 46 ungrouped memories, 23 were
+/// assignment errors and 9 had their descriptor destroyed by an unrelated YAML bug, so roughly two
+/// thirds of what lands here is a defect in the *filing*, not a memory that stopped earning its
+/// place. One of the misses stated a claim that is literally one of its principle's named edges.
+/// So this heading measures **attention, never value**, and anything built on top of it that
+/// culled or decayed what is unassigned would delete an author's mistakes rather than the corpus's
+/// dead weight, silently.
+const UNGROUPED_PREAMBLE: &str = "\
+No principle edge yet. This measures what nobody has judged — never what is surplus, and never a \
+list to cull from.\n\
+Assign one with `temper edge assert <memory> <principle> --kind express --label evidences`.\n";
+
+/// Section by principle: preamble from the principle's own body, members from its edges.
+///
+/// **Principles are ordered by title, deliberately not by member count.** Size ordering would
+/// reshuffle the whole file every time an edge landed, turning an ordinary assignment into a
+/// large, meaningless diff in a file whose drift gate is a hand-edit detector.
+///
+/// The context axis is dropped here `[decided — 2026-08-02, Pete]`. Every principle spans both
+/// configured contexts (measured: 7 of 8), so keeping context as a heading would split eight
+/// sections into sixteen; and for a reader of *this* index the axis carries little, because every
+/// configured context reaches this project by construction. The named loss is that the index no
+/// longer says whether a memory is shared across projects or specific to this one.
+fn render_by_principle(
+    entries: &[MemoryEntry],
+    principles: &[&PrincipleSection],
+    policy: RenderPolicy,
+) -> String {
+    let mut out = index_header();
+
+    let mut ordered: Vec<&&PrincipleSection> = principles.iter().collect();
+    ordered.sort_by(|a, b| a.title.cmp(&b.title));
+
+    let mut grouped_ids: HashSet<Uuid> = HashSet::new();
+    for p in ordered {
+        out.push_str(&format!("\n## {}\n\n", p.title));
+        if let Some(statement) = &p.statement {
+            out.push_str(statement);
+            out.push_str("\n\n");
+        }
+        let members: HashSet<Uuid> = p.members.iter().copied().collect();
+        // Entry order is `entries` order, never the edge order — the edges arrive sorted by when
+        // somebody happened to assert them, which is not a property of the memories.
+        let in_section: Vec<&MemoryEntry> = entries
+            .iter()
+            .filter(|e| e.status == "active" && members.contains(&e.id))
+            .collect();
+        for e in &in_section {
+            grouped_ids.insert(e.id);
+        }
+        // The route back is the principle's own edge read: `--context` would name a context this
+        // heading is not.
+        let route = format!("temper resource show {} --edges", p.id);
+        push_section(&mut out, in_section, &p.title, &route, policy);
+    }
+
+    let ungrouped: Vec<&MemoryEntry> = entries
+        .iter()
+        .filter(|e| e.status == "active" && !grouped_ids.contains(&e.id))
+        .collect();
+    if !ungrouped.is_empty() {
+        out.push_str(&format!("\n## Not yet grouped ({})\n\n", ungrouped.len()));
+        out.push_str(UNGROUPED_PREAMBLE);
+        out.push('\n');
+        // No tail here even under a threshold: collapsing the unjudged behind a count would hide
+        // the assignment pass's own errors, which is the one thing this section exists to show.
+        push_section(
+            &mut out,
+            ungrouped,
+            "Not yet grouped",
+            "temper memory status",
+            RenderPolicy {
+                reinforced_min: None,
+                ..policy
+            },
+        );
+    }
+    out
+}
+
+fn render_migrated(entries: &[MemoryEntry], policy: RenderPolicy) -> String {
+    let mut out = index_header();
 
     let mut contexts: Vec<&str> = entries
         .iter()
@@ -421,37 +646,8 @@ fn render_migrated(entries: &[MemoryEntry], policy: RenderPolicy) -> String {
             .iter()
             .filter(|e| e.status == "active" && e.context_ref == ctx)
             .collect();
-        let (kept, collapsed) = split_by_reinforcement(in_section, reinforced_min);
-        for e in kept {
-            let age = (today - e.verified).num_days();
-            // UNEXAMINED, never STALE/WRONG: an old date means nobody has checked,
-            // which is not evidence the claim is false.
-            let mark = if age > i64::from(stale_after_days) {
-                format!("[verified {} — UNEXAMINED {}d]", e.verified, age)
-            } else {
-                format!("[verified {}]", e.verified)
-            };
-            // The TITLE is the hook this index carries, and nothing else is. `descriptor` is
-            // deliberately absent: its job is FTS weight-D searchability on the resource, and
-            // printing it here paid for that job twice — measured on the real corpus, ~279 bytes
-            // per line against ~120, i.e. ~49 KB for the full set where the hand-written file it
-            // replaces was 19.3 KB. This file is loaded every session; every byte is paid 178
-            // times. (`[decided — 2026-08-01, Pete]`)
-            //
-            // The link target is the **bare id**, which is what `parse_ref` accepts — so a target
-            // copied out of this file resolves as-is. It previously carried a `temper://` scheme,
-            // which resolved in neither surface a reader has: `parse_ref` rejects it outright, and
-            // MCP's resource URI is `temper://resources/{id}`, not `temper://{id}`. A link that
-            // works nowhere is worse than no link, because it reads as one.
-            out.push_str(&format!("- [{}]({})  {}\n", e.title, e.id, mark));
-        }
-        // `split_by_reinforcement` returns an empty tail for `None`, so this nesting never has to
-        // invent a threshold to describe a collapse that cannot have happened.
-        if let Some(min) = reinforced_min {
-            if let Some(tail) = render_tail(&collapsed, ctx, min) {
-                out.push_str(&tail);
-            }
-        }
+        let route = format!("temper resource list --type memory --context {ctx} --all");
+        push_section(&mut out, in_section, ctx, &route, policy);
     }
     out
 }
@@ -503,6 +699,16 @@ mod tests {
             .map(|i| d("2026-01-01") + chrono::Duration::days(i as i64))
             .collect();
         e
+    }
+
+    /// The flat, context-sectioned render — [`render_index`] with no principles.
+    ///
+    /// Every test that reaches for this predates principle grouping and is about the flat render,
+    /// so naming that intent once beats twenty-five copies of `&[]` that say nothing. The grouped
+    /// render's own tests call `render_index` directly with real sections, which is what keeps
+    /// this helper from quietly becoming the only way the render is exercised.
+    fn render_flat(entries: &[MemoryEntry], local: &LocalIndex, policy: RenderPolicy) -> String {
+        render_index(entries, local, &[], policy)
     }
 
     /// Build a `ResourceDetail` wrapping a real `ResourceRow`, with `open_meta`
@@ -578,7 +784,7 @@ mod tests {
     /// future `check` report drift on a machine that finished migrating.
     #[test]
     fn an_empty_local_set_renders_exactly_what_it_rendered_before_the_union() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("a memory", "active", "2026-07-20")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -603,7 +809,7 @@ mod tests {
     /// passed on it. Only running the parser the CLI actually uses can catch that class.
     #[test]
     fn every_rendered_link_target_resolves_as_a_resource_ref() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("a memory", "active", "2026-07-20")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -631,7 +837,7 @@ mod tests {
     /// the hand-written index said outright and the render used not to.
     #[test]
     fn the_index_states_how_to_read_itself() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("a memory", "active", "2026-07-20")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -662,7 +868,7 @@ mod tests {
     /// keeps the distinction that the heading alone would have lost.
     #[test]
     fn an_unmigrated_entry_never_looks_migrated() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("migrated one", "active", "2026-07-20")],
             &LocalIndex {
                 entries: vec![local("project_x.md", "local one")],
@@ -702,7 +908,7 @@ mod tests {
     /// goal's `a-claim-must-never-read-as-checked-when-nobody-checked-it` forbids.
     #[test]
     fn an_unmigrated_entry_is_given_no_verified_date_at_all() {
-        let out = render_index(
+        let out = render_flat(
             &[],
             &LocalIndex {
                 entries: vec![local("project_x.md", "local one")],
@@ -725,7 +931,7 @@ mod tests {
     /// a reader must not conclude from their absence that this machine carries nothing else.
     #[test]
     fn files_omitted_for_want_of_a_title_are_counted_never_silently_dropped() {
-        let out = render_index(
+        let out = render_flat(
             &[],
             &LocalIndex {
                 entries: vec![local("project_x.md", "local one")],
@@ -754,7 +960,7 @@ mod tests {
     /// say nothing about why. Observed live on 2026-08-01 with the four files no index link named.
     #[test]
     fn the_migrate_instruction_is_absent_when_nothing_listed_can_be_migrated() {
-        let out = render_index(
+        let out = render_flat(
             &[],
             &LocalIndex {
                 entries: vec![],
@@ -776,7 +982,7 @@ mod tests {
     /// present, `migrate` genuinely moves it and the instruction must survive.
     #[test]
     fn the_migrate_instruction_is_present_when_a_listed_file_can_be_migrated() {
-        let out = render_index(
+        let out = render_flat(
             &[],
             &LocalIndex {
                 entries: vec![local("project_x.md", "a hook")],
@@ -805,7 +1011,7 @@ mod tests {
                 untitled: 0,
             },
         ] {
-            let out = render_index(&[], &local_index, no_threshold("2026-08-01"));
+            let out = render_flat(&[], &local_index, no_threshold("2026-08-01"));
             assert!(
                 !out.contains("\n\n\n"),
                 "no run of blank lines, got:\n{out}"
@@ -825,7 +1031,7 @@ mod tests {
             .map(|i| local(&format!("project_{i}.md"), &format!("local {i}")))
             .collect();
 
-        let out = render_index(
+        let out = render_flat(
             &migrated,
             &LocalIndex {
                 entries: locals,
@@ -849,7 +1055,7 @@ mod tests {
 
     #[test]
     fn superseded_memories_are_absent_from_the_index() {
-        let out = render_index(
+        let out = render_flat(
             &[
                 entry("live one", "active", "2026-08-01"),
                 entry("dead one", "superseded", "2026-08-01"),
@@ -866,7 +1072,7 @@ mod tests {
 
     #[test]
     fn a_stale_entry_is_marked_unexamined_never_false() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("old claim", "active", "2026-01-01")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -891,7 +1097,7 @@ mod tests {
     /// rendered.
     #[test]
     fn the_index_does_not_print_the_descriptor() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("a title", "active", "2026-07-20")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -908,7 +1114,7 @@ mod tests {
 
     #[test]
     fn a_fresh_entry_carries_its_verified_date_and_no_marker() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("fresh", "active", "2026-07-20")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -919,7 +1125,7 @@ mod tests {
 
     #[test]
     fn the_index_declares_itself_generated() {
-        let out = render_index(
+        let out = render_flat(
             &[entry("x", "active", "2026-08-01")],
             &LocalIndex::default(),
             no_threshold("2026-08-01"),
@@ -933,7 +1139,7 @@ mod tests {
         a.context_ref = "@me/temper".into();
         let mut b = entry("from agreements", "active", "2026-08-01");
         b.context_ref = "@me/working-agreements".into();
-        let out = render_index(&[a, b], &LocalIndex::default(), no_threshold("2026-08-01"));
+        let out = render_flat(&[a, b], &LocalIndex::default(), no_threshold("2026-08-01"));
         assert!(out.contains("## @me/temper"));
         assert!(out.contains("## @me/working-agreements"));
     }
@@ -960,7 +1166,7 @@ mod tests {
         let mut e = entry("a memory", "active", "2026-07-20");
         e.reinforced = vec![d("2026-05-14"), d("2026-06-02")];
 
-        let out = render_index(&[e], &LocalIndex::default(), no_threshold("2026-08-01"));
+        let out = render_flat(&[e], &LocalIndex::default(), no_threshold("2026-08-01"));
         assert_eq!(
             out,
             format!(
@@ -991,8 +1197,8 @@ mod tests {
             .collect();
 
         assert_eq!(
-            render_index(&reinforced, &LocalIndex::default(), policy),
-            render_index(&unreinforced, &LocalIndex::default(), policy),
+            render_flat(&reinforced, &LocalIndex::default(), policy),
+            render_flat(&unreinforced, &LocalIndex::default(), policy),
             "with no threshold, a heavily-reinforced corpus and an untouched one must render the \
              same bytes — order included"
         );
@@ -1005,7 +1211,7 @@ mod tests {
     /// reader there would replace one truncation with another.
     #[test]
     fn a_collapsed_memory_is_counted_and_routed_to_never_silently_dropped() {
-        let out = render_index(
+        let out = render_flat(
             &[
                 reinforced_entry("load-bearing", 2),
                 reinforced_entry("quiet one", 0),
@@ -1047,7 +1253,7 @@ mod tests {
     /// no "0 more" line, which would be noise on the common case once a threshold is finally set.
     #[test]
     fn a_section_that_collapsed_nothing_renders_no_tail_line() {
-        let out = render_index(
+        let out = render_flat(
             &[reinforced_entry("a", 3), reinforced_entry("b", 3)],
             &LocalIndex::default(),
             threshold("2026-08-01", 2),
@@ -1070,7 +1276,7 @@ mod tests {
         let mut c = reinforced_entry("also quiet in agreements", 0);
         c.context_ref = "@me/working-agreements".into();
 
-        let out = render_index(
+        let out = render_flat(
             &[a, b, c],
             &LocalIndex::default(),
             threshold("2026-08-01", 1),
@@ -1095,7 +1301,7 @@ mod tests {
     /// describes, which is the same class of error as a `verified` date that reads as checked.
     #[test]
     fn the_tail_states_a_reason_that_is_true_at_the_threshold_in_force() {
-        let at_one = render_index(
+        let at_one = render_flat(
             &[reinforced_entry("quiet", 0)],
             &LocalIndex::default(),
             threshold("2026-08-01", 1),
@@ -1105,7 +1311,7 @@ mod tests {
             "at a threshold of 1 the plain word is accurate: {at_one}"
         );
 
-        let at_two = render_index(
+        let at_two = render_flat(
             &[reinforced_entry("once", 1)],
             &LocalIndex::default(),
             threshold("2026-08-01", 2),
@@ -1125,7 +1331,7 @@ mod tests {
     /// permanent drift on any machine that set one.
     #[test]
     fn the_threshold_filters_without_reordering_what_survives() {
-        let out = render_index(
+        let out = render_flat(
             &[
                 reinforced_entry("first", 5),
                 reinforced_entry("collapsed", 0),
@@ -1267,5 +1473,354 @@ mod tests {
             parse_entry(&row),
             Err(MemoryDefect::BadVerified { .. })
         ));
+    }
+
+    // ---- grouping by principle ------------------------------------------------------------
+
+    /// An entry with a distinct id. The shared [`entry`] helper gives every memory `Uuid::nil()`,
+    /// which was harmless while the render sectioned on `context_ref` and is fatal here: grouping
+    /// is entirely id-joined, so nil ids would make every memory a member of everything.
+    fn identified(title: &str, id: u128) -> MemoryEntry {
+        MemoryEntry {
+            id: Uuid::from_u128(id),
+            ..entry(title, "active", "2026-07-20")
+        }
+    }
+
+    fn principle(
+        id: u128,
+        title: &str,
+        statement: Option<&str>,
+        members: &[u128],
+    ) -> PrincipleSection {
+        PrincipleSection {
+            id: Uuid::from_u128(id),
+            title: title.to_string(),
+            statement: statement.map(str::to_string),
+            members: members.iter().copied().map(Uuid::from_u128).collect(),
+        }
+    }
+
+    #[test]
+    fn the_index_sections_by_principle_and_renders_its_statement_as_the_preamble() {
+        let entries = [identified("a memory", 1), identified("another", 2)];
+        let p = principle(
+            0xF1,
+            "The system is the authority",
+            Some("Your model of the system is a hypothesis."),
+            &[1, 2],
+        );
+
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[p],
+            no_threshold("2026-08-01"),
+        );
+
+        assert!(
+            out.contains(
+                "## The system is the authority\n\nYour model of the system is a hypothesis.\n\n"
+            ),
+            "the principle's own statement must be the section preamble, directly under its \
+             heading: {out}"
+        );
+        assert!(
+            !out.contains("## @me/temper"),
+            "grouping replaces the context heading, it does not render alongside it: {out}"
+        );
+        for title in ["a memory", "another"] {
+            assert!(
+                out.contains(title),
+                "{title} must render in the section: {out}"
+            );
+        }
+    }
+
+    /// **The fallback criterion, mutated at the feature rather than at a detail.** Emptying every
+    /// membership set is what "the grouping went away" means to this render — the principles are
+    /// still fetched, still titled, still carry statements, and none of them groups anything. The
+    /// index must then be *exactly* the flat render: not similar, not "still fine", byte-identical,
+    /// because the whole point is that a session loading this file cold notices nothing.
+    #[test]
+    fn dropping_every_edge_falls_back_to_the_flat_render_byte_for_byte() {
+        let entries = [identified("a memory", 1), identified("another", 2)];
+        let policy = no_threshold("2026-08-01");
+        let flat = render_flat(&entries, &LocalIndex::default(), policy);
+
+        let grouped_away = [
+            principle(
+                0xF1,
+                "The system is the authority",
+                Some("A statement."),
+                &[],
+            ),
+            principle(0xF2, "Write for a partner", Some("Another."), &[]),
+        ];
+        let out = render_index(&entries, &LocalIndex::default(), &grouped_away, policy);
+
+        assert_eq!(
+            out, flat,
+            "with nothing grouped the index must be byte-identical to the render that existed \
+             before principles did"
+        );
+
+        // The control: with the edges restored the two must DIFFER, or the assertion above would
+        // pass for a render that never groups at all.
+        let grouped = [principle(
+            0xF1,
+            "The system is the authority",
+            Some("A statement."),
+            &[1, 2],
+        )];
+        assert_ne!(
+            render_index(&entries, &LocalIndex::default(), &grouped, policy),
+            flat,
+            "grouping must actually change the render, or the fallback test proves nothing"
+        );
+    }
+
+    #[test]
+    fn a_memory_with_no_principle_edge_is_in_the_index_under_a_heading_that_states_the_count() {
+        let entries = [
+            identified("grouped", 1),
+            identified("unjudged", 2),
+            identified("also unjudged", 3),
+        ];
+        let p = principle(0xF1, "A principle", Some("A statement."), &[1]);
+
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[p],
+            no_threshold("2026-08-01"),
+        );
+
+        assert!(
+            out.contains("## Not yet grouped (2)\n"),
+            "the heading must state the count rather than silently omitting them: {out}"
+        );
+        for title in ["unjudged", "also unjudged"] {
+            assert!(
+                out.contains(title),
+                "{title} must still be IN the index — absence from a section is never absence \
+                 from the record: {out}"
+            );
+        }
+        assert!(
+            out.contains("never what is surplus"),
+            "the section must say it measures attention rather than value, because two thirds of \
+             what lands here is an assignment error: {out}"
+        );
+    }
+
+    /// The ungrouped section must not be collapsible by the reinforcement threshold. Its entries
+    /// are the ones nobody has judged; hiding them behind a count would conceal the assignment
+    /// pass's own errors, which is the one thing the section exists to show.
+    #[test]
+    fn a_threshold_never_collapses_the_ungrouped_section() {
+        let entries = [
+            reinforced_and_identified("grouped", 1, 3),
+            identified("unjudged", 2),
+        ];
+        let p = principle(0xF1, "A principle", None, &[1]);
+
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[p],
+            threshold("2026-08-01", 2),
+        );
+
+        assert!(
+            out.contains("- [unjudged]"),
+            "an unreinforced, unjudged memory must render on its own line even under a \
+             threshold: {out}"
+        );
+    }
+
+    fn reinforced_and_identified(title: &str, id: u128, n: usize) -> MemoryEntry {
+        MemoryEntry {
+            id: Uuid::from_u128(id),
+            ..reinforced_entry(title, n)
+        }
+    }
+
+    /// **The route back must resolve.** `render_tail` used to compose
+    /// `resource list --context {section}` from the section name, which was true while every
+    /// heading was a context ref. Under a principle heading that command names a context that does
+    /// not exist, so `decay-must-never-make-a-memory-unfindable` would be satisfied by a printed
+    /// command that goes nowhere — the exact failure the `temper://` link shipped with.
+    #[test]
+    fn a_principle_sections_tail_routes_through_the_principle_not_a_context() {
+        let entries = [
+            reinforced_and_identified("kept", 1, 3),
+            identified("demoted", 2),
+        ];
+        let p = principle(0xF1, "A principle", None, &[1, 2]);
+
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[p],
+            threshold("2026-08-01", 2),
+        );
+
+        let tail = out
+            .lines()
+            .find(|l| l.contains("more in"))
+            .unwrap_or_else(|| panic!("a tail line must render: {out}"));
+        assert!(
+            tail.contains(&format!(
+                "temper resource show {} --edges",
+                Uuid::from_u128(0xF1)
+            )),
+            "the route back must be the principle's own edge read: {tail}"
+        );
+        assert!(
+            !tail.contains("--context A principle"),
+            "the tail must not compose a --context from a heading that is not a context: {tail}"
+        );
+    }
+
+    #[test]
+    fn a_principle_with_no_live_member_contributes_no_section() {
+        let entries = [MemoryEntry {
+            status: "superseded".to_string(),
+            ..identified("superseded one", 1)
+        }];
+        let p = principle(0xF1, "An unevidenced principle", Some("A statement."), &[1]);
+
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[p],
+            no_threshold("2026-08-01"),
+        );
+
+        assert!(
+            !out.contains("## An unevidenced principle"),
+            "a heading with a preamble and nothing under it costs bytes to say nothing: {out}"
+        );
+    }
+
+    /// The byte-budget criterion: a preamble is paid once per SECTION, never once per entry.
+    #[test]
+    fn the_preamble_is_paid_once_per_section_however_many_entries_it_holds() {
+        let statement = "A statement that would be expensive to repeat.";
+        let one = render_index(
+            &[identified("a", 1)],
+            &LocalIndex::default(),
+            &[principle(0xF1, "P", Some(statement), &[1])],
+            no_threshold("2026-08-01"),
+        );
+        let three = render_index(
+            &[identified("a", 1), identified("b", 2), identified("c", 3)],
+            &LocalIndex::default(),
+            &[principle(0xF1, "P", Some(statement), &[1, 2, 3])],
+            no_threshold("2026-08-01"),
+        );
+
+        assert_eq!(one.matches(statement).count(), 1);
+        assert_eq!(
+            three.matches(statement).count(),
+            1,
+            "three entries must not pay for the statement three times"
+        );
+    }
+
+    #[test]
+    fn a_memory_renders_under_every_principle_it_evidences() {
+        let entries = [identified("cited twice", 1)];
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[
+                principle(0xF1, "First", None, &[1]),
+                principle(0xF2, "Second", None, &[1]),
+            ],
+            no_threshold("2026-08-01"),
+        );
+
+        assert_eq!(
+            out.matches("- [cited twice]").count(),
+            2,
+            "rendering under only one would silently hide a real edge: {out}"
+        );
+        assert!(
+            !out.contains("## Not yet grouped"),
+            "a memory under two principles is grouped, not ungrouped: {out}"
+        );
+    }
+
+    /// Principles are ordered by title, not by member count — so an ordinary edge assertion
+    /// produces a small diff instead of reshuffling the whole file under a hand-edit gate.
+    #[test]
+    fn principle_sections_are_ordered_by_title_not_by_size() {
+        let entries = [identified("a", 1), identified("b", 2), identified("c", 3)];
+        let out = render_index(
+            &entries,
+            &LocalIndex::default(),
+            &[
+                principle(0xF1, "Zebra", None, &[1, 2, 3]),
+                principle(0xF2, "Alpha", None, &[1]),
+            ],
+            no_threshold("2026-08-01"),
+        );
+
+        let alpha = out.find("## Alpha").expect("Alpha section");
+        let zebra = out.find("## Zebra").expect("Zebra section");
+        assert!(
+            alpha < zebra,
+            "title order, not the 3-member section first: {out}"
+        );
+    }
+
+    // ---- statement_of ---------------------------------------------------------------------
+
+    #[test]
+    fn a_statement_is_the_first_paragraph_never_the_whole_body() {
+        let body = "The opening claim, which is the statement.\n\n\
+                    - a recurring shape\n- another\n\n\
+                    **How to apply.** Elaboration.";
+        assert_eq!(
+            statement_of(body).as_deref(),
+            Some("The opening claim, which is the statement."),
+            "the elaboration and the shapes list stay one `resource show` away"
+        );
+    }
+
+    #[test]
+    fn a_body_that_does_not_open_with_prose_yields_no_preamble() {
+        for body in [
+            "# A heading\n\nprose after it",
+            "- a list item\n\nprose after it",
+            "> a quote\n\nprose",
+            "| a | table |\n\nprose",
+            "1. an ordered item\n\nprose",
+        ] {
+            assert_eq!(
+                statement_of(body),
+                None,
+                "a fragment of structure presented as a claim is worse than no preamble: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_body_yields_no_preamble_rather_than_an_empty_one() {
+        assert_eq!(statement_of(""), None);
+        assert_eq!(statement_of("   \n\n  "), None);
+    }
+
+    /// A number that opens a sentence is prose, not an ordered list. `1706 bytes is what the eight
+    /// statements cost.` must survive.
+    #[test]
+    fn a_leading_number_that_is_not_a_list_marker_is_still_prose() {
+        let body = "1706 bytes is what the eight statements cost.\n\nmore";
+        assert_eq!(
+            statement_of(body).as_deref(),
+            Some("1706 bytes is what the eight statements cost.")
+        );
     }
 }
