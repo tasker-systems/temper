@@ -1845,6 +1845,7 @@ async fn cloud_update_admits_a_doctype_the_enum_does_not_name(pool: sqlx::PgPool
                     type_to: None,
                     context_to: None,
                     title: None,
+                    open_meta_add: None,
                     // An open-tier flag: needs no doc-type schema, so nothing about this
                     // update requires the type to be one the enum knows.
                     tags: &tags,
