@@ -37,7 +37,24 @@ fn legacy_segmenter_version() -> u32 {
 /// The CLI's local record of a segmented ingest session's progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestManifest {
-    pub resource_id: Uuid,
+    /// Client-minted owner-scoped idempotency key (issue #581, spike rung 3-C) — the stable
+    /// identity of this ingest ATTEMPT, and what a resume keys on. Written *before*
+    /// `begin_segmented` (so it survives a begin whose ack is lost) and replayed on begin across a
+    /// resume, so the server converges on the already-committed resource via `(owner, key)` dedup
+    /// instead of minting a duplicate. On disk the file is named `<idempotency_key>.json` because
+    /// this is known before the server has minted anything.
+    ///
+    /// `None` only for a legacy manifest cut before rung 3-C (named `<resource_id>.json`, no key).
+    /// Such a manifest still resumes — via [`resource_id`](Self::resource_id), which it always has,
+    /// because a pre-rung-3-C manifest was only ever written *after* begin succeeded — it simply
+    /// cannot recover a lost-ack begin, the case the key exists to close.
+    #[serde(default)]
+    pub idempotency_key: Option<Uuid>,
+    /// The server-minted resource id, once `begin` has returned it. `None` in the window between
+    /// writing the pending manifest and the first successful begin response: a resume in that
+    /// window replays begin with [`idempotency_key`](Self::idempotency_key) to (re)learn it.
+    #[serde(default)]
+    pub resource_id: Option<Uuid>,
     /// Raw (unprefixed, 64 hex chars) sha256 of the whole source's bytes — a source-integrity
     /// check. A resume whose freshly-computed source hash disagrees with this means the file
     /// changed since the interrupted attempt: the manifest must not be resumed against.
@@ -52,7 +69,10 @@ pub struct IngestManifest {
     /// segments while still matching on `(source_hash, block_budget)`.
     #[serde(default = "legacy_segmenter_version")]
     pub segmenter_version: u32,
-    pub correlation_id: Uuid,
+    /// Client-side ingest-session id, learned from the begin response. `None` in the pre-begin
+    /// window (see [`resource_id`](Self::resource_id)); a legacy manifest always carries one.
+    #[serde(default)]
+    pub correlation_id: Option<Uuid>,
     /// Landed segments, as last observed (seq + block-merkle `content_hash`, matching
     /// `SegmentInfo`'s wire shape). Always re-verified against a live `list_blocks` call
     /// before being trusted for a resume — this field is a cache, not ground truth.
@@ -60,12 +80,18 @@ pub struct IngestManifest {
     pub finalized: bool,
 }
 
-/// The on-disk path for a resource's ingest manifest: `<vault>/.temper/ingest/<id>.json`.
-pub fn manifest_path(vault: &Path, resource_id: Uuid) -> PathBuf {
+/// The on-disk path for an ingest manifest: `<vault>/.temper/ingest/<id>.json`.
+///
+/// `id` is the client-minted **idempotency key** (rung 3-C), not the resource id: a fresh
+/// segmented attempt writes its pending manifest before the server has minted a resource id, so the
+/// key is the only identity available at that point. Legacy manifests are named by resource id, but
+/// nothing recomputes their path — [`find_resumable`] returns the path it found them at, and the
+/// caller reuses that.
+pub fn manifest_path(vault: &Path, id: Uuid) -> PathBuf {
     vault
         .join(".temper")
         .join("ingest")
-        .join(format!("{resource_id}.json"))
+        .join(format!("{id}.json"))
 }
 
 /// Load a manifest from `path`, if present. `Ok(None)` for a missing file (the ordinary case
@@ -125,11 +151,15 @@ pub fn resume_gap(local: &[SegmentInfo], landed: &[SegmentInfo]) -> Vec<u32> {
 /// not an error — it simply isn't a resume candidate — and is left untouched on disk (an
 /// unrelated in-progress manifest, or one whose source changed since the interrupted attempt,
 /// is someone else's concern; nothing here reaps or deletes it).
+/// Returns the manifest's on-disk **path** alongside it (not its resource id, which may be `None`
+/// for a still-pending begin): the caller reuses that path for every subsequent checkpoint, which
+/// keeps a legacy `<resource_id>.json` manifest updated in place rather than orphaned beside a new
+/// `<idempotency_key>.json`.
 pub fn find_resumable(
     vault: &Path,
     source_hash: &str,
     block_budget: u32,
-) -> Result<Option<(Uuid, IngestManifest)>> {
+) -> Result<Option<(PathBuf, IngestManifest)>> {
     let dir = vault.join(".temper").join("ingest");
     if !dir.is_dir() {
         return Ok(None);
@@ -150,7 +180,7 @@ pub fn find_resumable(
             && manifest.block_budget == block_budget
             && manifest.segmenter_version == SEGMENTER_VERSION
         {
-            return Ok(Some((manifest.resource_id, manifest)));
+            return Ok(Some((path, manifest)));
         }
     }
     Ok(None)
@@ -169,11 +199,12 @@ mod tests {
 
     fn sample_manifest(resource_id: Uuid, source_hash: &str, finalized: bool) -> IngestManifest {
         IngestManifest {
-            resource_id,
+            idempotency_key: Some(Uuid::now_v7()),
+            resource_id: Some(resource_id),
             source_hash: source_hash.to_string(),
             block_budget: 262_144,
             segmenter_version: SEGMENTER_VERSION,
-            correlation_id: Uuid::now_v7(),
+            correlation_id: Some(Uuid::now_v7()),
             blocks: vec![seg(0, "h0"), seg(1, "h1")],
             finalized,
         }
@@ -243,6 +274,7 @@ mod tests {
         store(&path, &manifest).unwrap();
         let loaded = load(&path).unwrap().expect("manifest should load");
 
+        assert_eq!(loaded.idempotency_key, manifest.idempotency_key);
         assert_eq!(loaded.resource_id, manifest.resource_id);
         assert_eq!(loaded.source_hash, manifest.source_hash);
         assert_eq!(loaded.block_budget, manifest.block_budget);
@@ -250,6 +282,30 @@ mod tests {
         assert_eq!(loaded.blocks.len(), 2);
         assert_eq!(loaded.blocks[1].seq, 1);
         assert!(!loaded.finalized);
+    }
+
+    #[test]
+    fn pending_manifest_round_trips_with_no_resource_id() {
+        // Rung 3-C: a manifest written BEFORE begin carries the client key but no resource id yet.
+        // It must round-trip so a resume in that window can replay begin with the persisted key.
+        let dir = tempfile::tempdir().unwrap();
+        let key = Uuid::now_v7();
+        let path = manifest_path(dir.path(), key);
+        let pending = IngestManifest {
+            idempotency_key: Some(key),
+            resource_id: None,
+            source_hash: "a".repeat(64),
+            block_budget: 262_144,
+            segmenter_version: SEGMENTER_VERSION,
+            correlation_id: None,
+            blocks: vec![],
+            finalized: false,
+        };
+        store(&path, &pending).unwrap();
+        let loaded = load(&path).unwrap().expect("pending manifest should load");
+        assert_eq!(loaded.idempotency_key, Some(key));
+        assert!(loaded.resource_id.is_none(), "no resource id before begin");
+        assert!(loaded.correlation_id.is_none());
     }
 
     #[test]
@@ -281,7 +337,9 @@ mod tests {
         let found = find_resumable(dir.path(), &source_hash, 262_144)
             .unwrap()
             .expect("should find the matching manifest");
-        assert_eq!(found.0, resource_id);
+        // `found.0` is now the manifest's on-disk path; the resource id lives on the manifest.
+        assert_eq!(found.0, manifest_path(dir.path(), resource_id));
+        assert_eq!(found.1.resource_id, Some(resource_id));
     }
 
     #[test]
