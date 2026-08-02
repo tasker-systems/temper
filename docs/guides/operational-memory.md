@@ -237,7 +237,7 @@ Two things that file says about itself, both deliberate:
 of the index resolves as-is. It is not a `temper://` URI: that form resolves in neither surface a
 reader has, since the CLI's ref parser rejects it and MCP's resource URI is `temper://resources/{id}`.
 
-**The preamble is the one place the index explains itself**, and it costs its three lines once rather
+**The preamble is the one place the index explains itself**, and it costs its two lines once rather
 than per entry. What a line is (a hook, not the memory), how to resolve one, and what an old date
 does *not* mean are exactly the things a session loading this file cold would otherwise have to
 infer.
