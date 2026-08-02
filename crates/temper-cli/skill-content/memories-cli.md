@@ -138,6 +138,32 @@ memory says.
 Amending a memory's body is **not** re-checking its claim, so it does not advance `verified`. Those
 are separate judgments and only one of them is about whether the claim still holds.
 
+### What the index does with it — and what it does today, which is nothing
+
+`reinforced_min` in `[memory]` is the number of distinct dates a memory needs to keep its own line
+in the index. **It has no default and is absent everywhere**, so today every memory renders
+individually exactly as it always has. A threshold can only be chosen from months of real
+reinforcement data; until then, reinforcing a memory changes what `temper memory status` reports and
+nothing about the file.
+
+Once one is set, below-threshold memories collapse into a per-section tail line:
+
+```
+- … 47 more in @me/temper, unreinforced — demoted, not dropped: `temper resource list --type memory --context @me/temper --all`
+```
+
+**Demotion, never deletion.** A collapsed memory is still in the record, still addressable, still
+searchable — it has stopped occupying a line in a file that is loaded every session. If you are
+looking for a memory you remember and cannot see, the tail line is where it went, and the command
+on it lists that section's memories, collapsed ones included.
+
+A malformed `reinforced` is a **soft** report: `temper memory status` names it under
+`reinforcement.malformed` and the index renders straight through, treating that memory as
+unreinforced. This is deliberately unlike `status`/`verified`, which fail the whole index — those
+hold up claims the render makes, `reinforced` only orders the list. The accepted cost is that one
+mistyped date demotes a memory into the tail without announcing itself in the index; `status` is
+where it announces itself, and demotion is recoverable because nothing was deleted.
+
 ## Rendering and gating the index
 
 ```bash
@@ -148,7 +174,7 @@ temper memory check         # exits non-zero when the on-disk index has drifted
 `emit` **refuses to overwrite a file it did not write** — an existing hand-written `MEMORY.md`
 survives until someone deliberately moves it aside — and it refuses the whole index rather than
 render a memory whose `status` or `verified` is malformed. That refusal is the takeover gate, so
-take it only once `harvest` has run.
+take it only once `harvest` has run. `reinforced` is deliberately **not** in that set — see above.
 
 The index lives outside any repo, so nothing in git can diff it; `check` is what a person or a hook
 runs instead, gating on the exit code.

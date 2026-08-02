@@ -25,6 +25,7 @@ past the sharing section.
 > | Migration of an existing local corpus | **exercised** — 182 local files accounted for, 183 memories in Temper on one machine |
 > | Title harvest before the takeover | **exercised** — 110 titles stamped |
 > | The takeover (`emit` over the hand-written index) | **taken, 2026-08-02** — 181 entries, 19,339 bytes, `check` clean |
+> | The collapsed tail (`reinforced_min`) | **shipped dormant** — the mechanism works and no machine has set a threshold, because none has the months of data one would have to be chosen from |
 > | A second machine | **not exercised** |
 > | Two people writing into one shared context | **not exercised** — the sharing section below describes an intended mechanism, not an observed one |
 > | Reading memories from Desktop / mobile / web | **not exercised** — believed to work by construction |
@@ -87,6 +88,7 @@ index_path = "~/.claude/projects/<project-dir>/memory/MEMORY.md"
 | `project_contexts` | rendered for this project only. Both lists are read shared-first and deduped, so a context named in both is fetched and rendered once |
 | `index_path` | where the rendered index is written, and the directory scanned for local files |
 | `stale_after_days` | how old a `verified` date must be before the index marks it `UNEXAMINED`. Defaults to **90**; omit it unless you want a different number |
+| `reinforced_min` | how many distinct `open_meta.reinforced` dates a memory needs to keep its own line in the index. **No default, and leaving it out is the right answer today** — see [The collapsed tail](#the-collapsed-tail--demotion-never-deletion) |
 
 The section is `Option`, not defaulted, precisely so *"not configured"* and *"configured empty"* stay
 distinguishable — and at least one context is required, so an empty `[memory]` block is rejected
@@ -291,6 +293,91 @@ what a machine that has migrated but not yet taken the index over will see, sinc
 file and a fresh render are not the same document. Gate a hook or a CI step on the exit code. If you
 emitted with `--path`, check with the same `--path`, or you are checking a different file than the
 one that was written.
+
+## The collapsed tail — demotion, never deletion
+
+An index bounded by hand stops being bounded the moment nobody trims it. `open_meta.reinforced` —
+the dates a memory did work, written with `--open-meta-add` (see
+[the rationale](#where-the-rationale-lives)) — is what lets the index bound itself by evidence
+instead. `reinforced_min` is the number of distinct dates a memory needs to keep its own line.
+
+**It has no default, and on every machine in existence it is absent.** That is not a soft default
+dressed up as an absence: the key is `Option` with no `#[serde(default)]`, and a test at the
+deserializer fails if anyone ever gives it one. A threshold can only honestly be chosen from months
+of real reinforcement data, and guessing one now would put a constant with no evidence behind it
+into every reader's index.
+
+So the mechanism ships **dormant**, and the first thing to check is that dormant means *nothing*.
+Building the pre-change binary and the current one, then running both against this machine's corpus
+seconds apart, produced the same file byte for byte `[verified 2026-08-02]`:
+
+```console
+$ shasum -a 256 /tmp/AB-old.md /tmp/AB-new.md
+b035be83f216989c6b1fe489038517b53ffa316daf806d3ddb85a7dd3128b6e9  /tmp/AB-old.md
+b035be83f216989c6b1fe489038517b53ffa316daf806d3ddb85a7dd3128b6e9  /tmp/AB-new.md
+```
+
+Both binaries were built *before* either ran, because a second machine was actively culling this
+corpus at the time — an A/B with a build in the middle of it measures the cull, not the change.
+Worth knowing generally: this file is a projection of a shared store, so two renders minutes apart
+are not expected to match, and a diff between them is not evidence about the renderer.
+
+`status` reports the distribution a threshold would eventually be chosen from, which today reads as
+"the convention is in use, barely" — exactly the state a number cannot yet be set from:
+
+```console
+$ temper memory status --format json | jq '{in_temper, reinforcement}'
+{
+  "in_temper": 294,
+  "reinforcement": {
+    "reinforced": 5,
+    "never_reinforced": 289,
+    "last_reinforced": "2026-08-02",
+    "malformed": []
+  }
+}
+```
+
+Set one, and below-threshold memories stop rendering individually. With `reinforced_min = 1` on that
+same corpus, 290 rendered entries became 5 plus two tail lines:
+
+```markdown
+- … 163 more in @j-cole-taylor/temper, unreinforced — demoted, not dropped: `temper resource list --type memory --context @j-cole-taylor/temper --all`
+- … 122 more in @j-cole-taylor/working-agreements, unreinforced — demoted, not dropped: `temper resource list --type memory --context @j-cole-taylor/working-agreements --all`
+```
+
+**Those numbers reconcile, and the arithmetic is the point.** `in_temper: 294` is every `memory` row
+fetched, superseded ones included. The render drops superseded before the threshold ever applies, so
+it works over **290** — leaving 4. And `5 + 163 + 122 = 290`: the five reinforced memories `status`
+counted are exactly the five that keep their line.
+
+But `never_reinforced: 289` against `163 + 122 = 285` collapsed is a gap of **4** — those same four
+superseded memories. Neither number is wrong; the gap is the documented consequence of the
+distribution counting the corpus `in_temper` counts rather than the corpus the index renders. **The
+distribution answers "is this convention being used at all", not "what will the tail hide"** — read
+as the second, it over-counts by the number of superseded memories, every time.
+
+**Demotion, never deletion.** Nothing is dropped, nothing becomes unfindable, and the file stays
+bounded however large the corpus grows. The tail is per section, states its own count, and carries
+a route back to the section it hides them in — `--all` included, because a bare `resource list` returns
+a capped page and sending a reader there would replace one truncation with another. This is the same
+rule the rest of the design already holds: supersession replaces deletion, and falling out of a
+summary is never falling out of the record.
+
+Above a threshold of 1 the line states the threshold instead (`reinforced fewer than 2 times`),
+because a memory with one date *is* reinforced and still demoted — calling it "unreinforced" would
+be a false statement about the memories it describes.
+
+**A malformed `reinforced` is a soft report, not a defect.** `status` names it under
+`reinforcement.malformed` and the render carries straight on, treating that memory as unreinforced —
+unlike `status`/`verified`, which stop the whole render. The line is what each key holds up:
+`status` and `verified` are the fields the render's own claims depend on, `reinforced` only orders
+the list. The accepted cost is stated rather than mitigated: one mistyped date silently demotes a
+memory into the tail. It is recoverable precisely because demotion is never deletion, and `status`
+is where it stops being silent.
+
+> The two `status` captures earlier in this guide predate the `reinforcement` field and are left as
+> they ran, on the same policy as the 183/184 count drift noted at the top.
 
 ## Sharing memories with a team
 

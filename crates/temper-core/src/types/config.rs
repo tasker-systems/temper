@@ -126,6 +126,21 @@ pub struct MemoryConfig {
     /// Days after which a memory's `verified` date is rendered as UNEXAMINED.
     #[serde(default = "default_stale_after_days")]
     pub stale_after_days: u32,
+    /// How many distinct `open_meta.reinforced` dates a memory needs before the index renders it
+    /// on its own line. Below it, the memory is **collapsed into a per-section tail line** —
+    /// demoted, never dropped.
+    ///
+    /// **`None` is not "off by default", it is the only honest starting value, and it must stay
+    /// undefaulted.** A threshold is a number that can only be set from months of real
+    /// reinforcement data; picking one here would be a constant with no evidence behind it, and
+    /// every machine would inherit the guess. So this is `Option` with **no** `#[serde(default)]`
+    /// — deliberately unlike [`stale_after_days`](Self::stale_after_days) directly above, whose 90
+    /// is a rendering nicety rather than a claim about which memories matter.
+    ///
+    /// Absent means the index renders exactly what it rendered before this key existed, which
+    /// `render::tests::an_absent_threshold_renders_byte_for_byte_what_it_rendered_before` asserts
+    /// against the whole string.
+    pub reinforced_min: Option<u32>,
 }
 
 fn default_stale_after_days() -> u32 {
@@ -792,6 +807,53 @@ path = "~/vault"
         assert_eq!(m.stale_after_days, 90, "default staleness threshold");
     }
 
+    /// **The acceptance criterion, guarded at the source.** A reinforcement threshold decides
+    /// which memories stop rendering on their own line, and no such number can be honestly chosen
+    /// until months of real reinforcement data exist. So the key must arrive absent and stay
+    /// absent — this fails the moment anyone gives it a `#[serde(default = …)]` the way
+    /// `stale_after_days` two lines above legitimately has one.
+    ///
+    /// Note what this does NOT rely on: it parses a `[memory]` section that names every other key
+    /// and omits this one, so it is a statement about the deserializer's behaviour on a real
+    /// config file rather than about a struct literal a test wrote itself.
+    #[test]
+    fn a_memory_section_omitting_the_threshold_leaves_it_absent_never_defaulted() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            project_contexts = ["@me/temper"]
+            index_path = "~/x/MEMORY.md"
+            stale_after_days = 90
+        "#,
+        )
+        .expect("parses");
+        let m = cfg.memory.expect("present");
+        assert_eq!(
+            m.reinforced_min, None,
+            "the tail threshold has no defensible default; absent must stay absent"
+        );
+    }
+
+    /// The converse, so the guard above cannot be satisfied by deleting the field: a machine that
+    /// HAS months of data must be able to set one, and it must arrive as written.
+    #[test]
+    fn a_configured_threshold_is_read_as_written() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            project_contexts = ["@me/temper"]
+            index_path = "~/x/MEMORY.md"
+            reinforced_min = 2
+        "#,
+        )
+        .expect("parses");
+        assert_eq!(cfg.memory.expect("present").reinforced_min, Some(2));
+    }
+
     #[test]
     fn all_contexts_dedupes_a_context_named_in_both_lists_preserving_order() {
         let cfg = MemoryConfig {
@@ -802,6 +864,7 @@ path = "~/vault"
             project_contexts: vec!["@me/temper".to_string(), "@me/knowledge".to_string()],
             index_path: "~/x/MEMORY.md".to_string(),
             stale_after_days: 90,
+            reinforced_min: None,
         };
         assert_eq!(
             cfg.all_contexts(),
