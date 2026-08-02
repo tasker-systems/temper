@@ -267,6 +267,16 @@ To automatically prime new Claude Code sessions with recent context, add a `Sess
 
 This runs `temper warmup` on every new session, injecting active tasks, recent sessions, open decisions, and project events.
 
+### Operational Memory
+
+The working knowledge a session accumulates can live in Temper as `memory` resources instead of in one machine's directory, so it travels across machines and clients and carries the date each claim was last checked. `temper memory status` reports what a machine is carrying and works before you adopt anything — declining is a supported end state.
+
+```bash
+temper memory status
+```
+
+See [docs/guides/operational-memory.md](docs/guides/operational-memory.md) for adopting it, sharing it with a team, and the limits.
+
 ## Temper Cloud
 
 The cloud is the source of truth. Resources are created and updated via the API. All content is stored as markdown with YAML frontmatter and remains human-readable — read it from the CLI, an agent over MCP, or the web UI.

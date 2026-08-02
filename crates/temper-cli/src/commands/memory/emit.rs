@@ -374,7 +374,7 @@ mod tests {
 
     /// The union is the *un*-migrated half. A file whose counterpart is already in Temper renders
     /// from the store, and letting it also render here would show the reader one memory twice —
-    /// once with a resolving `temper://` link and once marked `[local]`.
+    /// once with a resolving resource link and once marked `[local]`.
     #[test]
     fn a_file_already_in_temper_is_not_in_the_union() {
         let already: HashSet<String> = ["migrated.md".to_string()].into_iter().collect();
