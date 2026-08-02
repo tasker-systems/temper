@@ -1753,3 +1753,140 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
         "a garbage ref with no trailing uuid must error (parse_ref reject path); got: {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// An out-of-vocabulary doc type is still updatable
+// ---------------------------------------------------------------------------
+
+/// A resource whose doc type the Rust `DocType` enum does not name can still be updated
+/// by flags that need no doc-type schema.
+///
+/// **This test exists because no unit test can see the bug it guards.** The refusal lived
+/// in `resolve_update_target`, which fetches the row over the network before inspecting
+/// its type, so the only place the behaviour is observable is with a real server behind
+/// it. Restoring the gate left all 559 `temper-cli` lib tests green
+/// `[measured — 2026-08-02]`; it fails here.
+///
+/// The premise is not hypothetical. Doc type is a free-text `kb_properties` row — no
+/// lookup table, no server-side `DocType::from_str` in temper-api / temper-services /
+/// temper-substrate / temper-mcp, and `resource create` discards its own parse error — so
+/// the system mints types the enum never learned. Production carries 22 live
+/// `kernel_landmark` and 4 live `cogmap_charter` resources, and `update` refused all 26
+/// with *"unknown doctype … expected one of …"* `[observed — 2026-08-02]`.
+///
+/// `kernel_landmark` is used verbatim rather than an invented string: a fictional type
+/// would pin the mechanism while leaving the case that motivated it untested.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cloud_update_admits_a_doctype_the_enum_does_not_name(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp", None)
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+
+    // Seed with a doc type the enum does not name — which the server accepts, and which
+    // is exactly how the 26 production resources came to exist.
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+    let body_text = "# Landmark\n\nSeeded with an out-of-vocabulary doc type.\n";
+    let payload = IngestPayload {
+        idempotency_key: None,
+        segmented: None,
+        goal: None,
+        title: "Out-Of-Vocabulary Doctype Update Test".to_string(),
+        origin_uri: "kb://myapp/landmark/oov-doctype".to_string(),
+        context_ref: "@me/myapp".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "kernel_landmark".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(body_text)),
+        content: body_text.to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    let seeded = app.client.ingest().create(&payload).await.expect(
+        "the server must accept an out-of-vocabulary doc type — if this ever fails, \
+                 the vocabulary has been closed and this test's premise is gone",
+    );
+
+    let cli_config = app.cli_config.clone();
+    let api_url2 = api_url.clone();
+    let token2 = token.clone();
+    let global_config_str2 = global_config_str.clone();
+    let ref_for_update = seeded.id.to_string();
+    let tags = vec!["landmark".to_string()];
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
+            temper_cli::commands::resource::update(
+                &cli_config,
+                &temper_cli::commands::resource::UpdateParams {
+                    r#ref: &ref_for_update,
+                    type_to: None,
+                    context_to: None,
+                    title: None,
+                    // An open-tier flag: needs no doc-type schema, so nothing about this
+                    // update requires the type to be one the enum knows.
+                    tags: &tags,
+                    aliases: &[],
+                    relates_to: &[],
+                    references: &[],
+                    depends_on: &[],
+                    extends: &[],
+                    preceded_by: &[],
+                    derived_from: &[],
+                    open_meta: None,
+                    stage: None,
+                    mode: None,
+                    effort: None,
+                    seq: None,
+                    branch: None,
+                    pr: None,
+                    goal: None,
+                    clear_goal: false,
+                    status: None,
+                    body: None,
+                    sources: &[],
+                    content_block: None,
+                    format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
+                },
+            )
+            .expect(
+                "update must not refuse a resource for carrying a doc type the enum does \
+                 not name; 26 live production resources are exactly this case",
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // The update actually landed — not merely "did not error".
+    let tag_after: Option<String> = sqlx::query_scalar(
+        "SELECT property_value #>> '{}' FROM kb_properties \
+         WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+           AND property_key = 'tags' AND NOT is_folded",
+    )
+    .bind(seeded.id)
+    .fetch_optional(&pool)
+    .await
+    .expect("query tags property");
+    assert!(
+        tag_after.is_some_and(|t| t.contains("landmark")),
+        "the tag must be stored, so this test fails on a refusal AND on a silent no-op"
+    );
+}
