@@ -28,7 +28,7 @@ use temper_workflow::types::resource::ResourceDetail;
 use super::fetch::fetch_context_rows;
 use super::migrate::{parse_memory_file, scan_memory_dir, ScannedFile};
 use super::render::{
-    parse_entry, render_index, LocalEntry, LocalIndex, MemoryDefect, GENERATED_HEADER,
+    parse_entry, render_index, LocalEntry, LocalIndex, MemoryDefect, RenderPolicy, GENERATED_HEADER,
 };
 use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
@@ -87,7 +87,15 @@ pub fn build_index(
         )));
     }
 
-    Ok(render_index(&entries, local, today, cfg.stale_after_days))
+    Ok(render_index(
+        &entries,
+        local,
+        RenderPolicy {
+            today,
+            stale_after_days: cfg.stale_after_days,
+            reinforced_min: cfg.reinforced_min,
+        },
+    ))
 }
 
 /// Assemble the un-migrated half of the index from the files on disk.
@@ -239,6 +247,7 @@ mod tests {
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/.claude/projects/p/memory/MEMORY.md".to_string(),
             stale_after_days: 90,
+            reinforced_min: None,
         }
     }
 
@@ -358,6 +367,65 @@ mod tests {
         let out = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
             .expect("a memory with no source_file must build cleanly, never be a defect");
         assert!(out.contains("a native memory"));
+    }
+
+    /// **The acceptance criterion end-to-end, from a parsed config rather than a struct literal.**
+    ///
+    /// A test that built `MemoryConfig { reinforced_min: None, .. }` by hand would keep passing
+    /// after someone added `#[serde(default = "default_reinforced_min")]` — the literal would
+    /// simply override it, and the criterion "no threshold configured ⇒ today's rendering exactly"
+    /// would be false on every real machine while the suite stayed green. Parsing a `[memory]`
+    /// section that omits the key is what closes that: the value arrives the way a real machine's
+    /// does, and `build_index` renders from it.
+    ///
+    /// The rows are deliberately unreinforced, because that is the entire corpus today.
+    #[test]
+    fn an_unconfigured_threshold_renders_every_unreinforced_memory_individually() {
+        let cfg: temper_core::types::config::TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            project_contexts = ["@me/temper"]
+            index_path = "~/x/MEMORY.md"
+        "#,
+        )
+        .expect("parses");
+        let mem = cfg.memory.expect("present");
+        assert_eq!(
+            mem.reinforced_min, None,
+            "a config omitting the key must yield no threshold — this is the half a struct \
+             literal cannot test"
+        );
+
+        let rows = vec![
+            meta_row_native("one", "@me/temper"),
+            meta_row_native("two", "@me/temper"),
+        ];
+        let out =
+            build_index(&mem, &rows, &LocalIndex::default(), d("2026-08-01")).expect("must render");
+
+        assert!(out.contains("- [one]") && out.contains("- [two]"));
+        assert!(
+            !out.contains("more in"),
+            "with no threshold nothing is ever collapsed, however unreinforced: {out}"
+        );
+    }
+
+    /// The converse, through the same path: a machine that HAS set one gets the tail. Without
+    /// this, the guard above could be satisfied by never reading `cfg.reinforced_min` at all.
+    #[test]
+    fn a_configured_threshold_reaches_the_render_through_build_index() {
+        let mut c = cfg();
+        c.reinforced_min = Some(1);
+        let rows = vec![meta_row_native("quiet", "@me/temper")];
+
+        let out = build_index(&c, &rows, &LocalIndex::default(), d("2026-08-01")).expect("renders");
+
+        assert!(
+            out.contains("- … 1 more in @me/temper"),
+            "the configured threshold must actually be read from the config: {out}"
+        );
     }
 
     /// A stamped local file, as `harvest` leaves it.

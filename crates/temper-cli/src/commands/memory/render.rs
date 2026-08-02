@@ -4,6 +4,13 @@
 //! because those keys live in the OPEN tier and nothing validates them at write
 //! time (design §"The open-tier cost"). A missing or malformed key is therefore a
 //! DEFECT that fails the command — never a value that quietly defaults.
+//!
+//! **`open_meta.reinforced` is the deliberate exception, and the line between them is what each
+//! key holds up.** `status` and `verified` are the fields the render's own claims depend on, so
+//! refusing the whole index on one is proportionate. `reinforced` only decides whether a memory
+//! renders on its own line or inside the tail — so a malformed one is a SOFT class that `status`
+//! names and `emit` renders straight through (`[decided — 2026-08-02, Pete]`). See
+//! [`reinforcement_of`].
 
 use chrono::NaiveDate;
 use uuid::Uuid;
@@ -27,6 +34,24 @@ pub const READING_GUIDANCE: &str = "\
 > A `verified` date far in the past means nobody has re-checked the claim — never that it is \
 wrong.\n";
 
+/// How the index is to be rendered — the three policy values that are not the entries themselves.
+///
+/// A params struct rather than three positional arguments because they are all scalars of the same
+/// shape ("a date, a number, a number") and a call site reading `(…, d("2026-08-01"), 90, None)`
+/// says nothing about which is which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderPolicy {
+    /// Always a parameter, never the clock — a renderer that reads the clock cannot be tested
+    /// deterministically.
+    pub today: NaiveDate,
+    /// Days after which a `verified` date renders as UNEXAMINED.
+    pub stale_after_days: u32,
+    /// Distinct reinforcement dates required to render on an individual line. `None` — the only
+    /// value with no guess in it — means every active memory renders individually, exactly as it
+    /// did before this field existed. See [`temper_core::types::config::MemoryConfig`].
+    pub reinforced_min: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryEntry {
     pub id: Uuid,
@@ -34,6 +59,13 @@ pub struct MemoryEntry {
     pub context_ref: String,
     pub status: String,
     pub verified: NaiveDate,
+    /// Distinct days this memory did work, ascending. Empty is ordinary — it means nothing has
+    /// reinforced this memory yet, which is the state every memory starts in and the state the
+    /// whole corpus is in until the convention has been used for a while.
+    ///
+    /// **A malformed `open_meta.reinforced` also lands here as empty**, deliberately: see
+    /// [`reinforcement_of`].
+    pub reinforced: Vec<NaiveDate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +117,92 @@ fn open_str(open_meta: &serde_json::Value, key: &str) -> Option<String> {
     open_meta.get(key)?.as_str().map(str::to_owned)
 }
 
+/// What `open_meta.reinforced` was found to say, and — separately — whether it was well-formed.
+///
+/// The two travel together rather than as a `Result` because they are **not** alternatives: a
+/// memory can be both unreinforced and malformed, and the render needs the first while `status`
+/// needs the second.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Reinforcement {
+    /// Distinct dates, ascending. Empty when the key is absent — and also when it is malformed.
+    pub dates: Vec<NaiveDate>,
+    /// A human-readable account of *what* was wrong, when something was. `None` covers both "the
+    /// key is absent" and "the key is a well-formed list of dates" — neither is a report.
+    pub malformed: Option<String>,
+}
+
+impl Reinforcement {
+    /// Recency: the most recent date, or `None` for a memory nothing has reinforced.
+    pub fn last(&self) -> Option<NaiveDate> {
+        self.dates.last().copied()
+    }
+}
+
+/// Read `open_meta.reinforced` — **a SOFT class, never a [`MemoryDefect`]**
+/// (`[decided — 2026-08-02, Pete]`).
+///
+/// `status` and `verified` are the fields the render's own claims depend on, so refusing the whole
+/// index on one is proportionate *there*. `reinforced` only decides ordering, so a bad value must
+/// not take the index down with it: `status` names it and `emit` renders straight through.
+///
+/// **A malformed value yields NO dates, not the salvageable subset.** Keeping the parseable dates
+/// out of `["2026-05-14", "last tuesday"]` was the tempting reading and it is the wrong one: the
+/// accepted consequence on record is that *"a mistyped date silently demotes a memory into the
+/// tail, which is recoverable because demotion is never deletion"* — and salvaging would make that
+/// sentence false in exactly the mixed case, leaving the typo invisible instead of visibly
+/// demoting the memory to where `status` explains it. Louder, and already decided.
+///
+/// Absent is not malformed. Every memory in existence is in that state today.
+pub fn reinforcement_of(d: &temper_workflow::types::resource::ResourceDetail) -> Reinforcement {
+    let Some(raw) = d.open_meta.as_ref().and_then(|om| om.get("reinforced")) else {
+        return Reinforcement::default();
+    };
+
+    let Some(items) = raw.as_array() else {
+        return Reinforcement {
+            dates: Vec::new(),
+            malformed: Some(format!(
+                "open_meta.reinforced is {raw} (expected a list of ISO dates, YYYY-MM-DD)"
+            )),
+        };
+    };
+
+    let mut dates = Vec::with_capacity(items.len());
+    let mut bad: Vec<String> = Vec::new();
+    for item in items {
+        match item
+            .as_str()
+            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        {
+            Some(date) => dates.push(date),
+            None => bad.push(item.to_string()),
+        }
+    }
+
+    if !bad.is_empty() {
+        return Reinforcement {
+            dates: Vec::new(),
+            malformed: Some(format!(
+                "open_meta.reinforced holds {} unparseable entr{}: {} (expected ISO dates, \
+                 YYYY-MM-DD)",
+                bad.len(),
+                if bad.len() == 1 { "y" } else { "ies" },
+                bad.join(", "),
+            )),
+        };
+    }
+
+    // Distinct and ascending. `union_list` already dedups server-side by structural equality, so
+    // this is not the primary guard — it is what makes `strength()` honest about a list that
+    // reached storage some other way (a hand-written `--open-meta`, an import).
+    dates.sort_unstable();
+    dates.dedup();
+    Reinforcement {
+        dates,
+        malformed: None,
+    }
+}
+
 /// Parse one metadata row into an entry, or the specific defect that stops the render.
 ///
 /// `list_meta` returns `ResourceMetaListResponse { rows: Vec<ResourceDetail>, .. }`
@@ -133,6 +251,10 @@ pub fn parse_entry(
         },
         status,
         verified,
+        // Soft by construction: whatever `reinforcement_of` made of the key, this row still
+        // parses. The `malformed` half is dropped here and read by `status`, which is the surface
+        // that reports it.
+        reinforced: reinforcement_of(d).dates,
     })
 }
 
@@ -173,19 +295,13 @@ impl LocalIndex {
     }
 }
 
-/// Render the index. `today` is a parameter, never the clock — a renderer that
-/// reads the clock cannot be tested deterministically.
+/// Render the index.
 ///
 /// The un-migrated section is appended only when there is something local to say. A machine that
 /// has finished migrating renders byte-for-byte what it rendered before the union existed, which
 /// is what keeps this transitional rather than a permanent second code path.
-pub fn render_index(
-    entries: &[MemoryEntry],
-    local: &LocalIndex,
-    today: NaiveDate,
-    stale_after_days: u32,
-) -> String {
-    let mut out = render_migrated(entries, today, stale_after_days);
+pub fn render_index(entries: &[MemoryEntry], local: &LocalIndex, policy: RenderPolicy) -> String {
+    let mut out = render_migrated(entries, policy);
     if !local.is_empty() {
         out.push_str(&render_local(local));
     }
@@ -233,7 +349,60 @@ fn render_local(local: &LocalIndex) -> String {
     out
 }
 
-fn render_migrated(entries: &[MemoryEntry], today: NaiveDate, stale_after_days: u32) -> String {
+/// Split a section's entries into the ones that render individually and the ones the tail
+/// collapses. **Order within each half is preserved** — this filters, it never re-sorts, so an
+/// unconfigured threshold cannot reorder anything.
+///
+/// `None` puts every entry in the first half, which is what makes the absent-threshold render
+/// byte-identical to the render that existed before this function did.
+fn split_by_reinforcement(
+    entries: Vec<&MemoryEntry>,
+    reinforced_min: Option<u32>,
+) -> (Vec<&MemoryEntry>, Vec<&MemoryEntry>) {
+    let Some(min) = reinforced_min else {
+        return (entries, Vec::new());
+    };
+    entries
+        .into_iter()
+        .partition(|e| e.reinforced.len() as u64 >= u64::from(min))
+}
+
+/// The tail line: **demotion, never deletion.**
+///
+/// It states the count, the section they are still in, why they were collapsed, and the command
+/// that lands on the section they are still in — because an entry that stops rendering must not
+/// thereby become something
+/// a reader has no route back to. `--all` is part of that: a bare `resource list` returns a capped
+/// page, so sending a reader to one would be sending them to a second truncation.
+///
+/// Returns `None` for an empty tail rather than rendering "0 more", so a section that collapsed
+/// nothing looks exactly like a section from before the tail existed.
+fn render_tail(collapsed: &[&MemoryEntry], section: &str, reinforced_min: u32) -> Option<String> {
+    if collapsed.is_empty() {
+        return None;
+    }
+    // At a threshold of 1 the collapsed set really is the unreinforced ones, which is the plain
+    // word for it. Above 1 that word would be false — an entry with one date is reinforced and
+    // still demoted — so the line states the threshold instead of reaching for the shorter phrase.
+    let why = if reinforced_min <= 1 {
+        "unreinforced".to_string()
+    } else {
+        format!("reinforced fewer than {reinforced_min} times")
+    };
+    Some(format!(
+        "- … {} more in {section}, {why} — demoted, not dropped: \
+         `temper resource list --type memory --context {section} --all`\n",
+        collapsed.len(),
+    ))
+}
+
+fn render_migrated(entries: &[MemoryEntry], policy: RenderPolicy) -> String {
+    let RenderPolicy {
+        today,
+        stale_after_days,
+        reinforced_min,
+    } = policy;
+
     let mut out = String::from(GENERATED_HEADER);
     out.push_str("\n\n# Memory index\n\n");
     out.push_str(READING_GUIDANCE);
@@ -248,10 +417,12 @@ fn render_migrated(entries: &[MemoryEntry], today: NaiveDate, stale_after_days: 
 
     for ctx in contexts {
         out.push_str(&format!("\n## {ctx}\n\n"));
-        for e in entries
+        let in_section: Vec<&MemoryEntry> = entries
             .iter()
             .filter(|e| e.status == "active" && e.context_ref == ctx)
-        {
+            .collect();
+        let (kept, collapsed) = split_by_reinforcement(in_section, reinforced_min);
+        for e in kept {
             let age = (today - e.verified).num_days();
             // UNEXAMINED, never STALE/WRONG: an old date means nobody has checked,
             // which is not evidence the claim is false.
@@ -274,6 +445,13 @@ fn render_migrated(entries: &[MemoryEntry], today: NaiveDate, stale_after_days: 
             // works nowhere is worse than no link, because it reads as one.
             out.push_str(&format!("- [{}]({})  {}\n", e.title, e.id, mark));
         }
+        // `split_by_reinforcement` returns an empty tail for `None`, so this nesting never has to
+        // invent a threshold to describe a collapse that cannot have happened.
+        if let Some(min) = reinforced_min {
+            if let Some(tail) = render_tail(&collapsed, ctx, min) {
+                out.push_str(&tail);
+            }
+        }
     }
     out
 }
@@ -290,6 +468,23 @@ mod tests {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
+    /// The render policy every pre-tail test was written against: no threshold configured, which
+    /// is what every machine in existence has today.
+    fn no_threshold(today: &str) -> RenderPolicy {
+        RenderPolicy {
+            today: d(today),
+            stale_after_days: 90,
+            reinforced_min: None,
+        }
+    }
+
+    fn threshold(today: &str, min: u32) -> RenderPolicy {
+        RenderPolicy {
+            reinforced_min: Some(min),
+            ..no_threshold(today)
+        }
+    }
+
     fn entry(title: &str, status: &str, verified: &str) -> MemoryEntry {
         MemoryEntry {
             id: Uuid::nil(),
@@ -297,7 +492,17 @@ mod tests {
             context_ref: "@me/temper".to_string(),
             status: status.to_string(),
             verified: d(verified),
+            reinforced: Vec::new(),
         }
+    }
+
+    /// The same, with `n` distinct reinforcement dates — the only axis the tail reads.
+    fn reinforced_entry(title: &str, n: usize) -> MemoryEntry {
+        let mut e = entry(title, "active", "2026-07-20");
+        e.reinforced = (0..n)
+            .map(|i| d("2026-01-01") + chrono::Duration::days(i as i64))
+            .collect();
+        e
     }
 
     /// Build a `ResourceDetail` wrapping a real `ResourceRow`, with `open_meta`
@@ -305,12 +510,25 @@ mod tests {
     /// `Some` — omitting a key entirely (not setting it to null) is what a
     /// real un-migrated memory resource looks like.
     fn row_with(status: Option<&str>, verified: Option<&str>) -> ResourceDetail {
+        row_with_reinforced(status, verified, None)
+    }
+
+    /// As [`row_with`], plus a raw `open_meta.reinforced` value — raw rather than typed because
+    /// the cases that matter are the ones no type would let you construct.
+    fn row_with_reinforced(
+        status: Option<&str>,
+        verified: Option<&str>,
+        reinforced: Option<serde_json::Value>,
+    ) -> ResourceDetail {
         let mut open = serde_json::Map::new();
         if let Some(s) = status {
             open.insert("status".to_string(), json!(s));
         }
         if let Some(v) = verified {
             open.insert("verified".to_string(), json!(v));
+        }
+        if let Some(r) = reinforced {
+            open.insert("reinforced".to_string(), r);
         }
 
         let row = ResourceRow {
@@ -363,8 +581,7 @@ mod tests {
         let out = render_index(
             &[entry("a memory", "active", "2026-07-20")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert_eq!(
             out,
@@ -389,8 +606,7 @@ mod tests {
         let out = render_index(
             &[entry("a memory", "active", "2026-07-20")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         let targets: Vec<&str> = out
             .lines()
@@ -418,8 +634,7 @@ mod tests {
         let out = render_index(
             &[entry("a memory", "active", "2026-07-20")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(
             out.contains("a line is a title, not the memory"),
@@ -453,8 +668,7 @@ mod tests {
                 entries: vec![local("project_x.md", "local one")],
                 untitled: 0,
             },
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         let line = out
             .lines()
@@ -494,8 +708,7 @@ mod tests {
                 entries: vec![local("project_x.md", "local one")],
                 untitled: 0,
             },
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         let line = out
             .lines()
@@ -518,8 +731,7 @@ mod tests {
                 entries: vec![local("project_x.md", "local one")],
                 untitled: 4,
             },
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(
             out.contains("(5 files)"),
@@ -548,8 +760,7 @@ mod tests {
                 entries: vec![],
                 untitled: 4,
             },
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(
             !out.contains("Run `temper memory migrate`"),
@@ -571,8 +782,7 @@ mod tests {
                 entries: vec![local("project_x.md", "a hook")],
                 untitled: 4,
             },
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(out.contains("Run `temper memory migrate`"));
     }
@@ -595,7 +805,7 @@ mod tests {
                 untitled: 0,
             },
         ] {
-            let out = render_index(&[], &local_index, d("2026-08-01"), 90);
+            let out = render_index(&[], &local_index, no_threshold("2026-08-01"));
             assert!(
                 !out.contains("\n\n\n"),
                 "no run of blank lines, got:\n{out}"
@@ -621,8 +831,7 @@ mod tests {
                 entries: locals,
                 untitled: 0,
             },
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
 
         for i in 0..69 {
@@ -646,8 +855,7 @@ mod tests {
                 entry("dead one", "superseded", "2026-08-01"),
             ],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(out.contains("live one"));
         assert!(
@@ -661,8 +869,7 @@ mod tests {
         let out = render_index(
             &[entry("old claim", "active", "2026-01-01")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(
             out.contains("UNEXAMINED"),
@@ -687,8 +894,7 @@ mod tests {
         let out = render_index(
             &[entry("a title", "active", "2026-07-20")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(
             !out.contains("hook text"),
@@ -705,8 +911,7 @@ mod tests {
         let out = render_index(
             &[entry("fresh", "active", "2026-07-20")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(out.contains("[verified 2026-07-20]"));
         assert!(!out.contains("UNEXAMINED"));
@@ -717,8 +922,7 @@ mod tests {
         let out = render_index(
             &[entry("x", "active", "2026-08-01")],
             &LocalIndex::default(),
-            d("2026-08-01"),
-            90,
+            no_threshold("2026-08-01"),
         );
         assert!(out.starts_with("<!-- GENERATED by `temper memory emit` — do not edit -->"));
     }
@@ -729,9 +933,313 @@ mod tests {
         a.context_ref = "@me/temper".into();
         let mut b = entry("from agreements", "active", "2026-08-01");
         b.context_ref = "@me/working-agreements".into();
-        let out = render_index(&[a, b], &LocalIndex::default(), d("2026-08-01"), 90);
+        let out = render_index(&[a, b], &LocalIndex::default(), no_threshold("2026-08-01"));
         assert!(out.contains("## @me/temper"));
         assert!(out.contains("## @me/working-agreements"));
+    }
+
+    // ---- the collapsed tail ----------------------------------------------------------------
+
+    /// **The acceptance criterion, asserted against the whole string.** Every machine in existence
+    /// has no threshold configured, and every memory in existence is unreinforced — so the
+    /// no-threshold render over unreinforced entries is not an edge case, it is the *only* case
+    /// today. This must therefore be byte-identical to what shipped before the tail existed: no
+    /// tail line, no trailing marker, no extra blank.
+    ///
+    /// The config half of this criterion is guarded separately, at the deserializer
+    /// (`temper_core::types::config::tests::a_memory_section_omitting_the_threshold_leaves_it_absent_never_defaulted`)
+    /// and end-to-end through a parsed config
+    /// (`emit::tests::an_unconfigured_threshold_renders_every_unreinforced_memory_individually`).
+    /// Neither can stand in for this one: they prove the value arrives as `None`, this proves what
+    /// `None` renders.
+    #[test]
+    fn an_absent_threshold_renders_byte_for_byte_what_it_rendered_before() {
+        // The entry CARRIES reinforcement dates. Asserting this over an unreinforced entry would
+        // have been the natural fixture and would have guarded almost nothing: the criterion is
+        // about what reinforcement does to the render, so the render has to be given some.
+        let mut e = entry("a memory", "active", "2026-07-20");
+        e.reinforced = vec![d("2026-05-14"), d("2026-06-02")];
+
+        let out = render_index(&[e], &LocalIndex::default(), no_threshold("2026-08-01"));
+        assert_eq!(
+            out,
+            format!(
+                "<!-- GENERATED by `temper memory emit` — do not edit -->\n\n\
+                 # Memory index\n\n\
+                 {READING_GUIDANCE}\n\
+                 ## @me/temper\n\n\
+                 - [a memory](00000000-0000-0000-0000-000000000000)  [verified 2026-07-20]\n"
+            ),
+            "reinforcement must leave no trace in the render until a threshold is set"
+        );
+    }
+
+    /// **The half the byte-for-byte assertion above cannot reach: N > 1, and the two states side
+    /// by side.** A per-line reinforcement marker — `[×3]`, a re-sort, anything keyed on the new
+    /// field — is the obvious next thing someone adds, and it would break criterion 2 on the five
+    /// memories that are reinforced on the live corpus today while every fixture built from
+    /// unreinforced rows stayed green. Rendering the same corpus twice, differing only in
+    /// reinforcement, is what makes that indistinguishable-by-construction.
+    #[test]
+    fn under_no_threshold_reinforcement_changes_nothing_about_the_render() {
+        let policy = no_threshold("2026-08-01");
+        let unreinforced: Vec<MemoryEntry> = (0..4)
+            .map(|i| reinforced_entry(&format!("memory {i}"), 0))
+            .collect();
+        let reinforced: Vec<MemoryEntry> = (0..4)
+            .map(|i| reinforced_entry(&format!("memory {i}"), i + 1))
+            .collect();
+
+        assert_eq!(
+            render_index(&reinforced, &LocalIndex::default(), policy),
+            render_index(&unreinforced, &LocalIndex::default(), policy),
+            "with no threshold, a heavily-reinforced corpus and an untouched one must render the \
+             same bytes — order included"
+        );
+    }
+
+    /// **Demotion, never deletion** — the load-bearing rule of the whole feature. A collapsed
+    /// memory stops having its own line and does not stop existing, so the render must say how
+    /// many went, that they were demoted rather than dropped, and a route back to
+    /// them. `--all` is asserted because a bare `resource list` returns a capped page: sending a
+    /// reader there would replace one truncation with another.
+    #[test]
+    fn a_collapsed_memory_is_counted_and_routed_to_never_silently_dropped() {
+        let out = render_index(
+            &[
+                reinforced_entry("load-bearing", 2),
+                reinforced_entry("quiet one", 0),
+                reinforced_entry("also quiet", 0),
+            ],
+            &LocalIndex::default(),
+            threshold("2026-08-01", 1),
+        );
+        assert!(
+            out.contains("- [load-bearing]"),
+            "an at-threshold memory keeps its own line: {out}"
+        );
+        assert!(
+            !out.contains("quiet one") && !out.contains("also quiet"),
+            "below-threshold memories stop rendering individually: {out}"
+        );
+        let tail = out
+            .lines()
+            .find(|l| l.contains("more in"))
+            .expect("the tail must render");
+        assert!(tail.contains("2 more"), "the count must be stated: {tail}");
+        assert!(
+            tail.contains("@me/temper"),
+            "the tail must name the section they are still in: {tail}"
+        );
+        assert!(
+            tail.contains("demoted, not dropped"),
+            "the render must say they still exist: {tail}"
+        );
+        assert!(
+            tail.contains("temper resource list --type memory --context @me/temper --all"),
+            "and must give an uncapped route back to the section rather than a second capped \
+             page: {tail}"
+        );
+    }
+
+    /// The converse, so the tail cannot be satisfied by always printing one. A section where every
+    /// memory clears the threshold must look exactly like a section from before the tail existed —
+    /// no "0 more" line, which would be noise on the common case once a threshold is finally set.
+    #[test]
+    fn a_section_that_collapsed_nothing_renders_no_tail_line() {
+        let out = render_index(
+            &[reinforced_entry("a", 3), reinforced_entry("b", 3)],
+            &LocalIndex::default(),
+            threshold("2026-08-01", 2),
+        );
+        assert!(
+            !out.contains("more in"),
+            "a section with an empty tail must not announce one: {out}"
+        );
+    }
+
+    /// The tail is **per section**, not one global line — a reader scanning `@me/temper` must be
+    /// told what `@me/temper` is hiding, and the route printed must be scoped to that section or
+    /// it points at the wrong corpus.
+    #[test]
+    fn each_section_carries_its_own_tail_with_its_own_count() {
+        let mut a = reinforced_entry("quiet in temper", 0);
+        a.context_ref = "@me/temper".into();
+        let mut b = reinforced_entry("quiet in agreements", 0);
+        b.context_ref = "@me/working-agreements".into();
+        let mut c = reinforced_entry("also quiet in agreements", 0);
+        c.context_ref = "@me/working-agreements".into();
+
+        let out = render_index(
+            &[a, b, c],
+            &LocalIndex::default(),
+            threshold("2026-08-01", 1),
+        );
+        assert!(
+            out.contains("- … 1 more in @me/temper,"),
+            "each section counts only its own: {out}"
+        );
+        assert!(
+            out.contains("- … 2 more in @me/working-agreements,"),
+            "each section counts only its own: {out}"
+        );
+        assert!(
+            out.contains("--context @me/working-agreements --all"),
+            "the route must be scoped to the section it appears under: {out}"
+        );
+    }
+
+    /// **The tail says why, and the reason has to be true.** At a threshold of 1 the collapsed set
+    /// really is the unreinforced ones. At 2 it is not — a memory with one date *is* reinforced
+    /// and still demoted — so the shorter word would be a false statement about the memories it
+    /// describes, which is the same class of error as a `verified` date that reads as checked.
+    #[test]
+    fn the_tail_states_a_reason_that_is_true_at_the_threshold_in_force() {
+        let at_one = render_index(
+            &[reinforced_entry("quiet", 0)],
+            &LocalIndex::default(),
+            threshold("2026-08-01", 1),
+        );
+        assert!(
+            at_one.contains("unreinforced"),
+            "at a threshold of 1 the plain word is accurate: {at_one}"
+        );
+
+        let at_two = render_index(
+            &[reinforced_entry("once", 1)],
+            &LocalIndex::default(),
+            threshold("2026-08-01", 2),
+        );
+        assert!(
+            at_two.contains("reinforced fewer than 2 times"),
+            "above 1 the line must state the threshold: {at_two}"
+        );
+        assert!(
+            !at_two.contains("unreinforced"),
+            "a memory with one date is not unreinforced, and the tail must not say it is: {at_two}"
+        );
+    }
+
+    /// The tail filters; it never re-sorts. A threshold that reordered the surviving entries would
+    /// make the index churn for reasons unrelated to what changed, and would put `check` into
+    /// permanent drift on any machine that set one.
+    #[test]
+    fn the_threshold_filters_without_reordering_what_survives() {
+        let out = render_index(
+            &[
+                reinforced_entry("first", 5),
+                reinforced_entry("collapsed", 0),
+                reinforced_entry("second", 1),
+            ],
+            &LocalIndex::default(),
+            threshold("2026-08-01", 1),
+        );
+        let first = out.find("first").expect("renders");
+        let second = out.find("second").expect("renders");
+        assert!(
+            first < second,
+            "surviving entries keep their incoming order, weakest-first or not: {out}"
+        );
+    }
+
+    // ---- reading `open_meta.reinforced` --------------------------------------------------------
+
+    /// The state of every memory in existence today. Absent is **not** malformed — reporting it as
+    /// one would make `status` print 388 lines of noise on a corpus that is behaving correctly.
+    #[test]
+    fn an_absent_reinforced_key_is_unreinforced_not_malformed() {
+        let r = reinforcement_of(&row_with(Some("active"), Some("2026-08-01")));
+        assert_eq!(r.dates.len(), 0);
+        assert_eq!(r.last(), None);
+        assert_eq!(
+            r.malformed, None,
+            "absent is the ordinary state, not a report"
+        );
+    }
+
+    #[test]
+    fn well_formed_dates_are_read_distinct_and_ascending() {
+        let r = reinforcement_of(&row_with_reinforced(
+            Some("active"),
+            Some("2026-08-01"),
+            Some(json!(["2026-06-02", "2026-05-14", "2026-06-02"])),
+        ));
+        assert_eq!(r.dates, vec![d("2026-05-14"), d("2026-06-02")]);
+        assert_eq!(r.dates.len(), 2, "strength is the count of DISTINCT dates");
+        assert_eq!(r.last(), Some(d("2026-06-02")), "recency is their max");
+        assert_eq!(r.malformed, None);
+    }
+
+    /// A value that is not a list at all — what `--open-meta-add` refuses with a 400, and what a
+    /// hand-written `--open-meta` will happily store.
+    #[test]
+    fn a_non_list_reinforced_is_reported_and_yields_no_dates() {
+        let r = reinforcement_of(&row_with_reinforced(
+            Some("active"),
+            Some("2026-08-01"),
+            Some(json!("2026-05-14")),
+        ));
+        assert_eq!(r.dates.len(), 0);
+        assert!(
+            r.malformed
+                .as_deref()
+                .is_some_and(|m| m.contains("expected a list")),
+            "the report must say what was expected: {:?}",
+            r.malformed
+        );
+    }
+
+    /// **The accepted consequence, asserted rather than described.** One mistyped date demotes the
+    /// whole memory into the tail — the parseable siblings are deliberately NOT salvaged, because
+    /// salvaging would leave the typo invisible on exactly the memory that has one. Recoverable,
+    /// because demotion is never deletion, and `status` names it.
+    #[test]
+    fn one_unparseable_date_makes_the_whole_record_unreinforced() {
+        let r = reinforcement_of(&row_with_reinforced(
+            Some("active"),
+            Some("2026-08-01"),
+            Some(json!(["2026-05-14", "last tuesday"])),
+        ));
+        assert_eq!(
+            r.dates.len(),
+            0,
+            "the parseable sibling must not be salvaged — the demotion is the signal"
+        );
+        assert!(
+            r.malformed
+                .as_deref()
+                .is_some_and(|m| m.contains("last tuesday")),
+            "the report must name what it could not read: {:?}",
+            r.malformed
+        );
+    }
+
+    /// **The soft/hard line, asserted at the boundary it governs.** `status` and `verified` fail
+    /// the whole index; `reinforced` must not. This is the test that fails the moment someone
+    /// gives the reinforcement parse a `MemoryDefect` variant.
+    #[test]
+    fn a_malformed_reinforced_is_never_a_defect_and_the_entry_still_parses() {
+        let row = row_with_reinforced(
+            Some("active"),
+            Some("2026-08-01"),
+            Some(json!(["not a date"])),
+        );
+        let e = parse_entry(&row).expect("a malformed reinforced must not fail the parse");
+        assert!(
+            e.reinforced.is_empty(),
+            "and the entry is treated as unreinforced"
+        );
+    }
+
+    #[test]
+    fn a_parsed_entry_carries_its_reinforcement_dates() {
+        let row = row_with_reinforced(
+            Some("active"),
+            Some("2026-08-01"),
+            Some(json!(["2026-05-14", "2026-08-02"])),
+        );
+        let e = parse_entry(&row).expect("parses");
+        assert_eq!(e.reinforced, vec![d("2026-05-14"), d("2026-08-02")]);
     }
 
     #[test]
