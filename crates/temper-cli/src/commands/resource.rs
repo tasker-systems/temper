@@ -1982,10 +1982,29 @@ fn build_move_spec_from_args(
         })
 }
 
-/// Resolve the update target: parse the ref to an id, read the current
-/// server row (context-free) for its doctype + home context, and validate
-/// the current doctype and any `--type-to` target before the command is
-/// built. Returns the `(id, row)` pair the rest of `update` threads on.
+/// Resolve the update target: parse the ref to an id, read the current server row
+/// (context-free) for its doctype + home context, and validate any `--type-to` target
+/// before the command is built. Returns the `(id, row)` pair the rest of `update` threads on.
+///
+/// **The resource's OWN doctype is deliberately not gated here.** It used to be, and the
+/// gate refused resources the system itself creates: doc type is a free-text
+/// `kb_properties` row with no lookup table and no server-side parse (`DocType::from_str`
+/// appears nowhere in temper-api / temper-services / temper-substrate / temper-mcp), and
+/// `resource create` discards its own parse error, so the vocabulary is open in every
+/// direction but this one. Production carries 22 live `kernel_landmark` and 4 live
+/// `cogmap_charter` resources `[observed — 2026-08-02]`, and `update` refused all 26 with
+/// *"unknown doctype … expected one of …"* — a message wrong about the system it describes.
+///
+/// The gate was also inert: its parse result was discarded. The remaining doctype check is
+/// [`validate_update_args`], which takes the name as a **string** and reaches
+/// `schema::updatable_fields` — which re-parses it — only when a scalar flag (`--stage`,
+/// `--mode`, …) is actually set. So an out-of-vocabulary resource now accepts
+/// `--tags`/`--open-meta-add`/`--body`, and still refuses `--stage`. The refusal is
+/// **scoped, not renamed**: it is the same "unknown doctype" message, now raised only where
+/// a doc-type schema is genuinely required rather than on every update of the resource.
+///
+/// `--type-to` keeps its gate: choosing a conversion TARGET is a caller's assertion about
+/// what the resource should become, not an existing fact to be re-litigated.
 fn resolve_update_target(
     params: &UpdateParams<'_>,
 ) -> Result<(
@@ -1993,7 +2012,8 @@ fn resolve_update_target(
     temper_workflow::types::resource::ResourceRow,
 )> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
-    // Update needs only the row (doctype validation); `get` also carries both meta tiers.
+    // Update needs only the row (home context + doctype for schema-keyed flag validation);
+    // `get` also carries both meta tiers.
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
@@ -2004,7 +2024,6 @@ fn resolve_update_target(
         })
     })?
     .row;
-    let _ = temper_workflow::frontmatter::DocType::from_str(&row.doc_type_name)?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
     }
@@ -2030,7 +2049,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use temper_workflow::operations::{BodyUpdate, GoalPatch, UpdateResource};
 
     // 1. Resolve the ref to an id + the current server row (for its doctype
-    //    and home context), validating the doctype and any `--type-to`.
+    //    and home context), validating any `--type-to` target.
     let (id, row) = resolve_update_target(params)?;
     let current_type = row.doc_type_name.clone();
 
@@ -2662,6 +2681,67 @@ mod build_helpers_tests {
             format: crate::format::OutputFormat::Json,
             act: temper_core::types::ActInput::default(),
         }
+    }
+
+    /// A doc type the Rust enum does not name is still updatable, as long as the flags in
+    /// play need no doc-type schema.
+    ///
+    /// Doc type is a free-text `kb_properties` row: no lookup table, no server-side parse,
+    /// and `resource create` discards its own. The system therefore mints types the enum
+    /// never learned — 22 live `kernel_landmark` and 4 live `cogmap_charter` in production
+    /// `[observed — 2026-08-02]` — and `resolve_update_target` used to refuse every one of
+    /// them before reading a single flag.
+    ///
+    /// `kernel_landmark` is used verbatim rather than a made-up string precisely because it
+    /// is a real type the substrate writes; a fictional one would pin the mechanism while
+    /// leaving the case that motivated it untested.
+    #[test]
+    fn an_out_of_vocabulary_doctype_is_updatable_by_flags_needing_no_schema() {
+        let mut params = empty_update_params("foo");
+        params.open_meta = Some(r#"{"marker":"x"}"#);
+        let tags = vec!["x".to_string()];
+        params.tags = &tags;
+
+        assert!(
+            validate_update_args(&params, "kernel_landmark").is_ok(),
+            "open-tier flags need no doc-type schema, so an unknown doctype must not \
+             block them — 26 live production resources are exactly this case"
+        );
+    }
+
+    /// The converse, and the reason removing the blanket gate is safe: a flag that DOES
+    /// need the doc-type schema still refuses.
+    ///
+    /// The refusal is scoped, not renamed — `schema::updatable_fields` re-parses the type,
+    /// so it is the same "unknown doctype" message, now raised only where a schema is
+    /// genuinely required instead of on every update of the resource.
+    #[test]
+    fn a_schema_keyed_flag_still_refuses_an_out_of_vocabulary_doctype() {
+        let mut params = empty_update_params("foo");
+        params.stage = Some("done");
+
+        assert!(
+            validate_update_args(&params, "kernel_landmark").is_err(),
+            "--stage is validated against the doc-type schema, so a type with no schema \
+             must still be refused; dropping the blanket gate must not drop this"
+        );
+    }
+
+    /// A known doctype is unaffected in both directions — the change is about types the
+    /// enum does not name, and a guard that also loosened the ordinary path would be a
+    /// different change wearing this one's clothes.
+    #[test]
+    fn a_known_doctype_still_validates_its_scalar_flags() {
+        let mut params = empty_update_params("foo");
+        params.stage = Some("done");
+        assert!(validate_update_args(&params, "task").is_ok());
+
+        let mut bad = empty_update_params("foo");
+        bad.stage = Some("done");
+        assert!(
+            validate_update_args(&bad, "memory").is_err(),
+            "a memory has no temper-stage field, so --stage on one is still a schema error"
+        );
     }
 
     #[test]
