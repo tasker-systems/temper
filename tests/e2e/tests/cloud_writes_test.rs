@@ -1857,6 +1857,7 @@ async fn cloud_update_admits_a_doctype_the_enum_does_not_name(pool: sqlx::PgPool
                     preceded_by: &[],
                     derived_from: &[],
                     open_meta: None,
+                    open_meta_add: None,
                     stage: None,
                     mode: None,
                     effort: None,

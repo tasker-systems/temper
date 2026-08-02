@@ -286,6 +286,26 @@ provenance/attribution and the segmented `ingest_*` lifecycle, read `reference.m
 → *Block-Grain Ingest & Attribution*. Full body-source precedence is in
 `reference.md` → *Body Source*.
 
+**A body write replaces the WHOLE body, so verify what you are about to send.**
+`show` hands you a *snapshot*, and the gap between reading it and writing it back
+is where content disappears — to another session, another machine, or your own
+splice. Both happened in one session: a concurrent edit from a second machine was
+nearly overwritten, and then a single-section edit that spliced on a heading
+silently truncated everything after it. The second had no concurrency at all.
+
+- **Re-read immediately before writing**, not once at the start of the work. Edit
+  a scratch copy, then re-`show` and re-apply to what is actually stored now.
+- **Assert at BOTH ends of a splice.** Confirming your new text landed says
+  nothing about what it displaced. Check that the content you did *not* intend to
+  touch survived, and prefer counting sections or naming markers over trusting a
+  byte count.
+- **Prefer the narrowest write.** One line spliced into a freshly-read body beats
+  regenerating a document you did not author.
+
+This is operating discipline, not a lock. Cloud writes are **not** mutexed, and
+deliberately so — locking them would be overkill for essentially every workflow
+here, and the same care is what a stale local edit needs anyway.
+
 ## Cognitive Maps
 
 A **context** homes resources as they are; a **cognitive map** homes *distilled nodes* in a

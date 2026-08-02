@@ -1487,6 +1487,42 @@ mod tests {
         );
     }
 
+    /// Both routers must warn that a body write REPLACES, and must say to verify before sending.
+    ///
+    /// The two `SKILL.md` files have no shared template — the CLI one is an askama render carrying
+    /// a per-user context list, the MCP one is static, and the shared supporting files
+    /// (`reference.md` and friends) are CLI-only or MCP-only. So a rule that belongs on both is
+    /// written twice, and nothing but this test keeps the second copy from being forgotten when
+    /// the first is edited.
+    ///
+    /// The rule earns a guard because it was learned twice in one session `[2026-08-02]`: a
+    /// concurrent edit from a second machine was nearly overwritten, and then a single-section
+    /// splice truncated everything after its anchor — the second with no concurrency involved at
+    /// all, which is why the guidance is about *verifying the write* rather than about locking.
+    #[test]
+    fn both_routers_warn_that_a_body_write_replaces_and_must_be_verified() {
+        let cli = generate_skill_files_with_hash(&test_config(), "testhash").unwrap();
+        let mcp = generate_agent_skill_files().unwrap();
+
+        for (surface, rendered) in [("CLI", &cli["SKILL.md"]), ("MCP", &mcp["SKILL.md"])] {
+            assert!(
+                rendered.contains("Re-read immediately before writing"),
+                "the {surface} SKILL.md does not tell a session to re-read before writing, so the \
+                 window between reading a body and replacing it goes unmentioned"
+            );
+            assert!(
+                rendered.contains("BOTH ends of a splice"),
+                "the {surface} SKILL.md does not say to assert at both ends of a splice — \
+                 confirming new text landed says nothing about what it displaced"
+            );
+            assert!(
+                rendered.contains("not a lock"),
+                "the {surface} SKILL.md must state this is discipline rather than mutexing, or a \
+                 reader will file the absence of locking as the defect"
+            );
+        }
+    }
+
     /// The projection must be a pure function of the source tree — no config, no environment, no
     /// home directory. That is the whole reason it can be committed and gated, where the CLI skill
     /// (which bakes a per-user context list) cannot.

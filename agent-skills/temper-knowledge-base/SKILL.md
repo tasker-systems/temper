@@ -164,6 +164,23 @@ server chunks and embeds inline, so there is no second step and nothing to poll.
 fragment: a partial body is a silent truncation, not an append. To change only frontmatter, use
 `update_resource_meta` and send no body at all.
 
+**Because it replaces, verify what you are about to send.** `get_resource` hands you a *snapshot*,
+and the gap between reading it and writing it back is where content disappears — to another session,
+another machine, or your own splice. Both happened in one session: a concurrent edit from a second
+machine was nearly overwritten, and then a single-section edit that spliced on a heading silently
+truncated everything after it. The second had no concurrency at all.
+
+- **Re-read immediately before writing**, not once at the start of the work. Assemble the amended
+  document, then `get_resource` again and re-apply to what is actually stored now.
+- **Assert at BOTH ends of a splice.** Confirming your new text landed says nothing about what it
+  displaced. Check that the content you did *not* intend to touch survived, and prefer counting
+  sections or naming markers over trusting a length.
+- **Prefer the narrowest write** — `update_resource_meta` when only frontmatter changes, and one
+  spliced section over regenerating a document you did not author.
+
+This is operating discipline, not a lock. Writes are **not** mutexed, and deliberately so — locking
+them would be overkill for essentially every workflow here.
+
 For a body too large for one call, for a resumable build, or for citation-grade per-block
 attribution, use the segmented `ingest_*` lifecycle and `annotate_resource` — `knowledge-base.md`
 has both.
