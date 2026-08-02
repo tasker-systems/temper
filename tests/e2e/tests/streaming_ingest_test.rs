@@ -1022,11 +1022,15 @@ async fn cli_discards_a_corrupt_upload_on_integrity_failure(pool: PgPool) {
     temper_cli::actions::ingest_manifest::store(
         &manifest_path,
         &temper_cli::actions::ingest_manifest::IngestManifest {
-            resource_id,
+            // A legacy-shaped manifest (no client key), named `<resource_id>.json`: begin already
+            // committed here, so its resume takes the `resource_id`-known path and never needs the
+            // key — exercising the rung-3-C backward-compat branch end to end through the real CLI.
+            idempotency_key: None,
+            resource_id: Some(resource_id),
             source_hash: source_hash.clone(),
             block_budget: budget as u32,
             segmenter_version: temper_cli::actions::ingest_manifest::SEGMENTER_VERSION,
-            correlation_id: begin.correlation_id,
+            correlation_id: Some(begin.correlation_id),
             blocks: landed,
             finalized: false,
         },
