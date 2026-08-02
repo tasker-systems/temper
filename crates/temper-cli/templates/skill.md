@@ -26,7 +26,8 @@ upfront; read only what the current task requires.
 - `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. Read when
   **authoring or amending a goal or sub-goal**, not to start a task
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
-- `memories.md` — This machine's `MEMORY.md`: what generates it, and how to check it for drift
+- `memories.md` — Durable memories: what a `memory` resource is, how to **populate** the store from
+  a machine's local files, and what generates and gates this machine's `MEMORY.md`
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
 - `teams.md` — Working with teams: create, invite (email as correlator), list your invitations, join, roles, offboarding
@@ -325,3 +326,9 @@ Read `session-lifecycle.md` for:
 ## Memories
 
 Read `memories.md` — this machine's `MEMORY.md` is a generated projection, not a hand-edited file.
+
+**Read it before assuming this machine's memories are in Temper.** `temper memory status` reports
+what is still local-only, and populating the store is `temper memory harvest` **then**
+`temper memory migrate` — in that order, because the takeover destroys the only copy of every
+curated title. `migrate` reconciles rather than bulk-imports: it is interactive by default and
+refuses to write with no terminal attached.

@@ -38,7 +38,7 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `knowledge-base.md` | **The tool reference.** Which tool for which intent, reads vs writes, orientation, block-grain ingest |
 | `references/frontmatter.md` | Before any write — the doc types, the two metadata tiers, what you may and may not send |
 | `session-lifecycle.md` | Starting or ending a working session; mid-session drift; checkpoints |
-| `memories.md` | Understanding what a `memory`-typed resource is and how to read it |
+| `memories.md` | What a `memory`-typed resource is — how to read one, and how to author, correct and supersede one |
 | `subagent-guidance.md` | Before dispatching any subagent |
 | `plan-verification.md` | Before acting on a written plan's claims about code |
 | `implementation-grounding.md` | Writing a plan, or writing code from one — including yourself |

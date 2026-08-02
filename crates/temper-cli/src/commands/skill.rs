@@ -1354,6 +1354,103 @@ mod tests {
         );
     }
 
+    /// **The populate half.** Phase 1 shipped discovery of `status`/`emit`/`check` — read and
+    /// verify — and named neither command that puts anything *into* the store, so a session on a
+    /// machine full of un-migrated files could learn the convention exists and still never learn it
+    /// had something to move. Asserted per command: dropping either of the two write commands
+    /// leaves a workflow that cannot be run from what is shipped.
+    #[test]
+    fn the_cli_skill_names_every_command_of_the_workflow() {
+        let rendered = MEMORIES_CLI_MD;
+        for cmd in [
+            "temper memory status",
+            "temper memory harvest",
+            "temper memory migrate",
+            "temper memory emit",
+            "temper memory check",
+        ] {
+            assert!(
+                rendered.contains(cmd),
+                "the CLI memory guidance never names `{cmd}`, so no session will find it"
+            );
+        }
+    }
+
+    /// `harvest` before the `emit` takeover is not a preference. The takeover destroys the only
+    /// copy of every curated title, and with it `migrate`'s ability to move the remaining files at
+    /// all — a one-way loss for whoever takes them in the other order.
+    ///
+    /// Asserted as **document order**, not as a phrase. A prose assertion passes on any sentence
+    /// that happens to contain the words; what a reader actually follows is the sequence the file
+    /// presents, so that is what this pins.
+    #[test]
+    fn the_cli_skill_puts_harvest_before_migrate_and_the_takeover() {
+        let rendered = MEMORIES_CLI_MD;
+        let harvest = rendered
+            .find("temper memory harvest")
+            .expect("harvest is named — see the_cli_skill_names_every_command_of_the_workflow");
+        let migrate = rendered
+            .find("temper memory migrate")
+            .expect("migrate is named — see the_cli_skill_names_every_command_of_the_workflow");
+        let emit_section = rendered
+            .find("## Rendering and gating the index")
+            .expect("the takeover is its own section");
+        assert!(
+            harvest < migrate,
+            "harvest must be presented before migrate — a file whose title was never stamped is \
+             skipped by migrate, so the reverse order silently strands the tail"
+        );
+        assert!(
+            migrate < emit_section,
+            "the emit takeover must come last — taken first it destroys the titles harvest exists \
+             to preserve"
+        );
+    }
+
+    /// A reader who takes `migrate` for a bulk import runs it unattended and is surprised by a
+    /// refusal — or, worse, reaches for `--unattended` without knowing it *skips* every collision
+    /// rather than resolving one. Each of these carries a consequence a session acts on.
+    #[test]
+    fn the_cli_skill_says_migrate_reconciles_rather_than_bulk_imports() {
+        let rendered = MEMORIES_CLI_MD;
+        for claim in [
+            "reconciles rather than bulk-imports",
+            "interactive by default",
+            "refuses to write",
+            "--unattended",
+            "--dry-run",
+            "source_file",
+        ] {
+            assert!(
+                rendered.contains(claim),
+                "the CLI memory guidance never states `{claim}`, so a session will expect a bulk \
+                 import and be wrong about what a run does"
+            );
+        }
+    }
+
+    /// The MCP audience has no local files and no migration to run, but it populates the store the
+    /// most ordinary way there is — by creating a resource. Guidance that only says *read the
+    /// active ones* leaves that surface able to consume memories and never contribute one.
+    #[test]
+    fn the_mcp_skill_teaches_authoring_a_memory_not_only_reading_one() {
+        let rendered = MEMORIES_MCP_MD;
+        assert!(
+            rendered.contains("create_resource"),
+            "the MCP memory guidance never names a write tool, so it teaches reading only"
+        );
+        assert!(
+            rendered.contains("superseded"),
+            "correcting by supersession is how a wrong memory is fixed without destroying the \
+             account of having been wrong"
+        );
+        assert!(
+            rendered.contains("`verified` is a judgment"),
+            "nothing validates the open tier at write time, so the one rule that keeps `verified` \
+             meaningful has to be stated where the write is taught"
+        );
+    }
+
     #[test]
     fn the_mcp_skill_describes_the_convention_without_naming_a_context() {
         let rendered = MEMORIES_MCP_MD;
