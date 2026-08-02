@@ -445,7 +445,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Parse the optional --open-meta JSON object (the free-form open tier) and validate its shape
     // send-side (the server re-enforces the same gate — symmetric defense).
-    let open_meta_value = open_meta.map(parse_open_meta_flag).transpose()?;
+    let open_meta_value = open_meta
+        .map(|raw| parse_open_meta_flag("--open-meta", raw))
+        .transpose()?;
     if let Some(om) = &open_meta_value {
         validate_open_meta_send_side(om)?;
     }
@@ -1753,6 +1755,10 @@ pub struct UpdateParams<'a> {
     /// Raw `--open-meta` JSON object string: arbitrary open-tier ("bring-your-own")
     /// keys, merged over the repeatable list flags above by `build_open_meta_for_update`.
     pub open_meta: Option<&'a str>,
+    /// Raw `--open-meta-add` JSON object string: the ADD channel's generic door, for
+    /// list-valued open-tier keys the eight repeatable flags above do not name. Unioned
+    /// with those flags into one patch by `build_open_meta_add_for_update`.
+    pub open_meta_add: Option<&'a str>,
     // Task-specific fields
     pub stage: Option<&'a str>,
     pub mode: Option<&'a str>,
@@ -1850,18 +1856,22 @@ struct PartialOpenMeta<'a> {
     derived_from: &'a [String],
 }
 
-/// Parse a `--open-meta <json>` flag value into a validated open-tier object.
+/// Parse an open-tier JSON object flag value (`--open-meta`, `--open-meta-add`).
 ///
 /// The open tier is a key/value map, so the value MUST be a JSON object; a
 /// malformed string, or a JSON array/scalar, is a hard error rather than a
 /// silent drop (parse-don't-validate / escalate). Returns the object `Value`.
-fn parse_open_meta_flag(raw: &str) -> Result<serde_json::Value> {
+///
+/// `flag` names the caller's flag in both messages. The two channels differ in
+/// what they DO with the object, never in what shape they accept, so they share
+/// one parser rather than two that would drift.
+fn parse_open_meta_flag(flag: &str, raw: &str) -> Result<serde_json::Value> {
     let value: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|e| TemperError::BadRequest(format!("--open-meta must be valid JSON: {e}")))?;
+        .map_err(|e| TemperError::BadRequest(format!("{flag} must be valid JSON: {e}")))?;
     if !value.is_object() {
-        return Err(TemperError::BadRequest(
-            "--open-meta must be a JSON object (e.g. '{\"marker\":\"x\"}')".into(),
-        ));
+        return Err(TemperError::BadRequest(format!(
+            "{flag} must be a JSON object (e.g. '{{\"marker\":\"x\"}}')"
+        )));
     }
     Ok(value)
 }
@@ -1924,22 +1934,80 @@ fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_
     let Some(raw) = params.open_meta else {
         return Ok(None);
     };
-    let parsed = parse_open_meta_flag(raw)?;
+    let parsed = parse_open_meta_flag("--open-meta", raw)?;
     // Shape hard-error + discouraged-key warning, send-side; the server re-enforces it.
     validate_open_meta_send_side(&parsed)?;
     Ok(Some(parsed))
 }
 
-/// The update surface's ADD channel: the repeatable list flags (`--tags`/`--relates-to`/…).
+/// The update surface's ADD channel: the repeatable list flags (`--tags`/`--relates-to`/…)
+/// AND the generic `--open-meta-add` door beside them.
 ///
-/// Returns `None` when no list flag was passed, so a frontmatter-only update PATCHes
-/// nothing on the open tier.
+/// The repeatable flags cover eight keys and no more, so before `--open-meta-add` existed
+/// any other list-valued key — `reinforced` is the case that first needed one — was
+/// reachable from the CLI only through `--open-meta`, which REPLACES: writing one date
+/// destroyed every date already stored, silently, with a success response. MCP's
+/// `update_resource` has carried a generic `open_meta_add` throughout
+/// (`temper-mcp/src/tools/resources.rs:275`) and the field exists end to end on the wire,
+/// so this closes a door that was missing rather than adding a capability.
+///
+/// One generic flag rather than a `--reinforced` list flag per convention: a per-key flag
+/// solves one key and leaves the next additive convention to have this conversation again.
+///
+/// Both inputs feed the single `open_meta_add` wire field, so where they name the same key
+/// the two sets UNION — the channel's own semantics applied to its own two doors, and the
+/// server unions over the stored value on top of that. Validation runs once, on the merged
+/// object, so a discouraged key named by both warns once rather than twice.
+///
+/// Returns `None` when neither door was used, so a frontmatter-only update PATCHes nothing
+/// on the open tier.
 fn build_open_meta_add_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_json::Value>> {
-    let Some(partial) = build_partial_open_meta_from_args(params) else {
+    let named = build_partial_open_meta_from_args(params);
+    let generic = params
+        .open_meta_add
+        .map(|raw| parse_open_meta_flag("--open-meta-add", raw))
+        .transpose()?;
+    let Some(merged) = union_open_meta_patches(named, generic) else {
         return Ok(None);
     };
-    validate_open_meta_send_side(&partial)?;
-    Ok(Some(partial))
+    validate_open_meta_send_side(&merged)?;
+    Ok(Some(merged))
+}
+
+/// Union two open-tier patches bound for the one `open_meta_add` wire field.
+///
+/// Both arguments are objects (or absent). Where a key is a list on both sides the lists
+/// concatenate, skipping values already present — the same collapse the server's
+/// `union_list` applies, done here only so the patch that leaves the CLI is already the
+/// set the caller asked for. Any other collision takes the `--open-meta-add` value, which
+/// is then the server's to judge: a non-list on the add channel is refused with a 400
+/// rather than replacing the stored list, and that refusal is deliberately left to the one
+/// place that owns the rule.
+fn union_open_meta_patches(
+    named: Option<serde_json::Value>,
+    generic: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let (named, generic) = match (named, generic) {
+        (None, None) => return None,
+        (Some(only), None) | (None, Some(only)) => return Some(only),
+        (Some(n), Some(g)) => (n, g),
+    };
+    let mut out = named.as_object().cloned().unwrap_or_default();
+    for (key, incoming) in generic.as_object().cloned().unwrap_or_default() {
+        match (out.get_mut(&key), &incoming) {
+            (Some(serde_json::Value::Array(existing)), serde_json::Value::Array(add)) => {
+                for item in add {
+                    if !existing.contains(item) {
+                        existing.push(item.clone());
+                    }
+                }
+            }
+            _ => {
+                out.insert(key, incoming);
+            }
+        }
+    }
+    Some(serde_json::Value::Object(out))
 }
 
 /// Build a partial `open_meta` JSON object from update CLI list flags. Returns
@@ -2647,6 +2715,7 @@ mod build_helpers_tests {
             preceded_by: &[],
             derived_from: &[],
             open_meta: None,
+            open_meta_add: None,
             stage: None,
             mode: None,
             effort: None,
@@ -2755,7 +2824,7 @@ mod build_helpers_tests {
 
     #[test]
     fn parse_open_meta_flag_accepts_object() {
-        let v = parse_open_meta_flag(r#"{"marker":"x","n":1}"#).expect("valid object");
+        let v = parse_open_meta_flag("--open-meta", r#"{"marker":"x","n":1}"#).expect("object");
         assert_eq!(v.get("marker"), Some(&serde_json::json!("x")));
         assert_eq!(v.get("n"), Some(&serde_json::json!(1)));
     }
@@ -2800,10 +2869,28 @@ mod build_helpers_tests {
     #[test]
     fn parse_open_meta_flag_rejects_non_object_and_malformed() {
         // A JSON array/scalar is not a key/value map → hard error.
-        assert!(parse_open_meta_flag(r#"["a","b"]"#).is_err());
-        assert!(parse_open_meta_flag("42").is_err());
+        assert!(parse_open_meta_flag("--open-meta", r#"["a","b"]"#).is_err());
+        assert!(parse_open_meta_flag("--open-meta", "42").is_err());
         // Malformed JSON → hard error (never a silent drop).
-        assert!(parse_open_meta_flag("{not json").is_err());
+        assert!(parse_open_meta_flag("--open-meta", "{not json").is_err());
+    }
+
+    /// The refusal names the flag the caller actually typed.
+    ///
+    /// Both channels share one parser, so the flag name is a parameter rather than a
+    /// literal — and a shared parser that hardcodes one caller's flag sends everyone who
+    /// mistypes `--open-meta-add` to look at `--open-meta`.
+    #[test]
+    fn a_malformed_open_tier_flag_is_refused_under_its_own_name() {
+        let err = parse_open_meta_flag("--open-meta-add", "{not json").expect_err("malformed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--open-meta-add"),
+            "the refusal must name --open-meta-add, not the flag it shares a parser with. \
+             Got: {msg}"
+        );
+        let err = parse_open_meta_flag("--open-meta-add", "42").expect_err("scalar");
+        assert!(err.to_string().contains("--open-meta-add"));
     }
 
     /// The two open-tier channels stay separate all the way to the wire.
@@ -2841,7 +2928,7 @@ mod build_helpers_tests {
         );
     }
 
-    /// The add channel is absent when no list flag was passed, so a frontmatter-only
+    /// The add channel is absent when neither door was used, so a frontmatter-only
     /// update PATCHes nothing on the open tier.
     #[test]
     fn open_meta_add_is_none_without_list_flags() {
@@ -2850,6 +2937,74 @@ mod build_helpers_tests {
         assert!(build_open_meta_add_for_update(&params)
             .expect("ok")
             .is_none());
+    }
+
+    /// A key none of the eight repeatable flags names still reaches the ADD channel,
+    /// and reaches ONLY it.
+    ///
+    /// This is the whole point of the generic door. `reinforced` — a memory's record of
+    /// the days it proved load-bearing — is exactly such a key, and before this flag the
+    /// only CLI route to it was `--open-meta`, which replaces: one date written over
+    /// however many were stored, silently, with a success response. The two halves are
+    /// asserted together here because the defect is not "the add channel is empty", it is
+    /// "the value went down the destroying one".
+    ///
+    /// What this test can and cannot see: it pins the ROUTING, which is the half the CLI
+    /// owns. That `open_meta_add` then unions server-side rather than replacing is pinned
+    /// against a real database by `open_meta_add_unions_instead_of_replacing`
+    /// (`temper-services/tests/open_meta_roundtrip_test.rs`).
+    #[test]
+    fn an_unnamed_key_reaches_the_add_channel_and_never_the_replace_one() {
+        let mut params = empty_update_params("foo");
+        params.open_meta_add = Some(r#"{"reinforced":["2026-08-02"]}"#);
+
+        let add = build_open_meta_add_for_update(&params)
+            .expect("ok")
+            .expect("some open_meta_add");
+        assert_eq!(
+            add.get("reinforced"),
+            Some(&serde_json::json!(["2026-08-02"]))
+        );
+
+        assert!(
+            build_open_meta_for_update(&params).expect("ok").is_none(),
+            "--open-meta-add must contribute NOTHING to the replace channel; anything it \
+             puts there would overwrite the stored list it exists to preserve"
+        );
+    }
+
+    /// Where both add-channel doors name one key, the two sets union rather than one
+    /// winning — they are two doors onto a single wire field, so a caller who used both
+    /// asked for both.
+    #[test]
+    fn the_two_add_doors_union_on_a_shared_key() {
+        let mut params = empty_update_params("foo");
+        let tags = vec!["a".to_string(), "b".to_string()];
+        params.tags = &tags;
+        params.open_meta_add = Some(r#"{"tags":["b","c"],"reinforced":["2026-08-02"]}"#);
+
+        let add = build_open_meta_add_for_update(&params)
+            .expect("ok")
+            .expect("some open_meta_add");
+        assert_eq!(
+            add.get("tags"),
+            Some(&serde_json::json!(["a", "b", "c"])),
+            "a value present on both sides is carried once, in flag-then-generic order"
+        );
+        assert_eq!(
+            add.get("reinforced"),
+            Some(&serde_json::json!(["2026-08-02"])),
+            "a key only the generic door names survives the union"
+        );
+    }
+
+    /// The send-side shape gate covers the generic door too — it runs on the MERGED patch,
+    /// so a key arriving that way is held to the same schema as one arriving by flag.
+    #[test]
+    fn build_open_meta_add_rejects_a_misshaped_recognized_key() {
+        let mut params = empty_update_params("foo");
+        params.open_meta_add = Some(r#"{"tags":[1,2]}"#);
+        assert!(build_open_meta_add_for_update(&params).is_err());
     }
 
     #[test]

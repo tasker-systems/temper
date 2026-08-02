@@ -308,6 +308,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
                     open_meta: None,
+                    open_meta_add: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -478,6 +479,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
                     open_meta: None,
+                    open_meta_add: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -646,6 +648,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
                     open_meta: None,
+                    open_meta_add: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -803,6 +806,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
                     open_meta: None,
+                    open_meta_add: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -966,6 +970,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                 &cli_config2,
                 &temper_cli::commands::resource::UpdateParams {
                     open_meta: None,
+                    open_meta_add: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -1348,6 +1353,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
                     open_meta: None,
+                    open_meta_add: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
