@@ -61,6 +61,41 @@ carries one of its own.
 Every skipped file is reported with its reason. A file that vanished silently from a migration
 would be indistinguishable from one that migrated.
 
+## Recording that a memory was load-bearing
+
+```bash
+temper resource update <ref> --open-meta-add '{"reinforced":["2026-08-02"]}'
+```
+
+`open_meta.reinforced` is a list of bare ISO dates: the days this memory did work. **Two things
+count as a day's work, and the second is the one that matters.** The situation the memory describes
+*recurred* — the trap it names actually fired. Or the memory *caught you*, and a mistake did not get
+made because of it.
+
+Counting only recurrence would be broken in a way worth understanding: **a memory that works
+prevents its own situation from recurring.** It would go unreinforced, decay out of the index, and
+then the situation would recur — a loop that oscillates, each swing costing whatever the memory was
+preventing. Counting the catch dissolves that.
+
+**Use `--open-meta-add`, never `--open-meta`.** They differ in exactly the way that matters here:
+`--open-meta '{"reinforced":["2026-08-02"]}'` **replaces** the list, discarding every date already
+stored, silently, with a success response. `--open-meta-add` unions server-side over what is there.
+
+The date is bare, and the contract is bare deliberately. **No `by` field** — `resource update`
+already emits a `property_set` event carrying the acting principal, so the trail answers *who*, and
+a self-asserted copy in a tier nothing validates could only ever disagree with the record that is
+already right. **No note field** — a free-text note makes every record structurally unique, which
+stops the union from collapsing same-day duplicates and loses the one-a-day grain that comes free
+from the stored shape.
+
+**The harder half: if the catch revealed a shape the memory's body does not describe, amend the
+body — that is the act.** A metadata note *about* the gap is the memory-system version of shipping a
+"for now" comment: a breadcrumb standing in for the fix. Reinforce the date *and* rewrite what the
+memory says.
+
+Amending a memory's body is **not** re-checking its claim, so it does not advance `verified`. Those
+are separate judgments and only one of them is about whether the claim still holds.
+
 ## Rendering and gating the index
 
 ```bash

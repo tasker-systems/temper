@@ -30,6 +30,40 @@ it at write time**:
   for a decision, never merged automatically — one of them may be the account someone wanted to
   compare against.
 
+## Recording that a memory was load-bearing
+
+Call `update_resource` with `open_meta_add`, which unions over the stored list instead of replacing
+it:
+
+```json
+{ "open_meta_add": { "reinforced": ["2026-08-02"] } }
+```
+
+`open_meta.reinforced` is a list of bare ISO dates: the days this memory did work. **Two things
+count as a day's work, and the second is the one that matters.** The situation the memory describes
+*recurred* — the trap it names actually fired. Or the memory *caught you*, and a mistake did not get
+made because of it.
+
+Counting only recurrence would be broken in a way worth understanding: **a memory that works
+prevents its own situation from recurring.** It would go unreinforced, decay out of any summary, and
+then the situation would recur — a loop that oscillates, each swing costing whatever the memory was
+preventing. Counting the catch dissolves that.
+
+**Use `open_meta_add`, never `open_meta`, for this key.** `open_meta` replaces each key it names, so
+writing one date there discards every date already stored — silently, with a success response.
+
+The date is bare, and the contract is bare deliberately. **No `by` field** — the update already
+emits a `property_set` event carrying the acting principal, so the trail answers *who*, and a
+self-asserted copy in a tier nothing validates could only ever disagree with the record that is
+already right. **No note field** — a free-text note makes every record structurally unique, which
+stops the union from collapsing same-day duplicates and loses the one-a-day grain that comes free
+from the stored shape.
+
+**The harder half: if the catch revealed a shape the memory's body does not describe, amend the
+body — that is the act.** A metadata note *about* the gap is a breadcrumb standing in for the fix.
+Reinforce the date *and* rewrite what the memory says. Amending a body is **not** re-checking the
+claim, so it does not advance `verified`.
+
 Some memories began as files on a contributor's machine and were moved in by a command-line
 migration; those carry `open_meta.source_file`, naming the file they came from. That migration is a
 machine-local concern and nothing on this surface runs it — but a memory that arrived that way is
