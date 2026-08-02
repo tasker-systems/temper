@@ -6,6 +6,8 @@
     "#*": "./agent/*"
   },
   "scripts": {
+    "build:dep": "npm --prefix ../../../clients/temper-telemetry-ts ci",
+    "prebuild": "npm run build:dep",
     "build": "eve build",
     "dev": "eve dev",
     "start": "eve start",
