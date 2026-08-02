@@ -244,15 +244,26 @@ Ordered by value-per-cost. None of this is implemented by this spike.
    failures are advertised as retry-safe; the ambiguous remainder defaults to reconcile. It closes
    most of the client-side gap without an idempotency key and needs no schema change.
 
-3. **Generalize the stable-id create the resumable path already proves — the complete fix.** Accept a
-   **client-minted `resource_id` (UUIDv7) as the idempotency key** on the id-minting step (one-shot
-   `create` and segmented `begin`), and add a `block_append`-style *exists → return existing* arm so a
-   replay converges instead of raising a PK conflict. The substrate already mints under a supplied id
-   (`writes.rs:763-765`); only authored `create` passes `None`. Strictly additive — absent id ⇒
-   today's behaviour (mint fresh). This is the load-bearing one: it makes both modes collapse to
-   "retry," makes the OpenAPI dedup contract true, and unlocks keyed proxy/CLI retry. Prefer the
-   resource id over a synthetic `idempotency_key` + dedup table, and over overloading
-   `correlation_id` — the machinery, and the no-op template, already exist for the resource id.
+3. **An owner-scoped `idempotency_key` on the create path — the complete fix.** A client-minted key,
+   deduped on `(owner_profile_id, idempotency_key)` in a side table (`kb_idempotency_keys`), claimed
+   **atomically with the create**: the first create under a key mints a resource under a server id and
+   records the mapping; a replay returns that resource, skipping all post-create work. Strictly
+   additive (absent key ⇒ today's behaviour). It makes both modes collapse to "retry" and unlocks
+   keyed proxy/CLI retry.
+
+   > **Superseded sub-decision, recorded because it is load-bearing.** The first cut used the
+   > **client-supplied resource id itself** as the key (reusing the substrate's mint-under-a-supplied-id
+   > path). Review found this reopens an existence oracle the read path deliberately closes: a create
+   > under a *free* id mints (200), but under a *foreign-but-hidden* id must refuse (404) — a
+   > distinction `GET` never makes (it 404s nonexistent and hidden alike). The oracle is inherent to
+   > keying on the **global** id namespace, where a hidden foreign resource collides with your create.
+   > Keying on `(owner, key)` dissolves it by construction: the lookup is caller-scoped, so a foreign
+   > key is absent from your namespace — you mint fresh, nothing to adjudicate, and nonexistent vs
+   > hidden stay indistinguishable exactly as for a read. **This is the argument the spike's original
+   > "reuse resource-id vs dedicated key" open question under-weighted** `[decided — 2026-08-02, Pete]`.
+   > Implemented on the idempotency-key branch (PR #620): migration `20260802000010`, an atomic
+   > claim-then-mint in `create_resource_impl`, and a `same-key-different-owner → mints-fresh` test
+   > that pins the no-oracle property.
 
 Do **1** immediately (it is a doc/hint fix, not production write behaviour). Do **2** alongside the
 sibling TypeScript-telemetry work (it is the same "make the failed hop legible" theme and shares the
@@ -272,10 +283,25 @@ sibling TypeScript-telemetry work (it is the same "make the failed hop legible" 
 
 ## Open questions (named, not omitted)
 
-- **Why is Vercel→Vercel connect failing at all, and is it load-shaped?** The steward is both the
-  dominant traffic and the dominant victim (34 of 42). Whether this is undici connection-pool
-  exhaustion, Vercel edge→function cold-connect churn, or Neon-adjacent backpressure is
-  undetermined — this spike classifies the failure, it does not root-cause the infrastructure.
+- **Why is Vercel→Vercel connect failing at all, and is it load-shaped? — ANSWERED**
+  `[observed — 2026-08-02, Pete]`. The failure locus is the **extra Vercel→Vercel hop itself**:
+  the CLI (and steward) were pointed at `temperkb.io`, whose temper-ui proxy rewrites `/api` →
+  temper-cloud, and that hop hits **Vercel's rewrite/proxy cap under load** — so the `504` fires on
+  the *hop*, for requests that **never reach the API**. This is exactly the never-dispatched
+  signature the spike measured (no upstream `x-vercel-id`, sub-second/timeout, API logging zero
+  errors). Pointing the CLI's config directly at `temper-cloud.vercel.app` (one fewer hop) removed
+  the failure class outright — a ~100-file bulk ingest landed clean. It was **not** undici pool
+  exhaustion or Neon backpressure; it was the proxy hop.
+
+  **The asymmetry that scopes the residual work:** our own high-volume clients CAN bypass — the CLI,
+  and the steward via env-driven `TEMPER_MCP_URL` (the dominant victim, 34/42). What **cannot** bypass
+  is the public `temperkb.io/mcp` endpoint (OAuth discovery resolves at the apex, RFC 8414/9728; external
+  MCP clients connect there) and browser/single-origin traffic. So the bypass removes most of the
+  volume, but the apex proxy hop stays on the critical path for OAuth/public MCP — which is exactly
+  the path the proxy-resilience recommendations (1, 2) and keyed proxy retry (idempotency, 3) still
+  serve. The rule: **bulk/programmatic bearer-token writers → temper-cloud direct; browser + OAuth
+  MCP → apex.** (The bypass is not an option for OAuth-flow MCP: discovery and single origin live at
+  the apex.)
 - **What is the exact `err.cause.code` distribution for the two real incidents?** The ~130 ms /
   `timedOut: false` shape strongly implies connect-phase, but the actual codes were not captured
   (the proxy discards them). Recommendation 2 would make this measurable going forward; until then
