@@ -359,6 +359,7 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
                 open_meta: None,
+                open_meta_add: None,
                 goal: None,
                 clear_goal: false,
                 r#ref: &distilled_ref,
@@ -762,6 +763,7 @@ async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgP
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
                 open_meta: None,
+                open_meta_add: None,
                 goal: None,
                 clear_goal: false,
                 r#ref: &distilled_ref,
@@ -828,6 +830,7 @@ async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgP
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
                 open_meta: None,
+                open_meta_add: None,
                 goal: None,
                 clear_goal: false,
                 r#ref: &distilled_ref,

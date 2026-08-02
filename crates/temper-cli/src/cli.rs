@@ -682,6 +682,16 @@ pub enum ResourceAction {
         /// fields; temper-* keys use the typed flags. Must be a JSON object.
         #[arg(long)]
         open_meta: Option<String>,
+        /// Open (caller-defined) frontmatter to ADD, as a JSON object string of
+        /// list-valued keys, e.g. --open-meta-add '{"reinforced":["2026-08-02"]}'.
+        /// Mirrors --open-meta exactly but UNIONS each key over the stored list
+        /// instead of replacing it, so accumulated history survives. This is the
+        /// only way to add to a key the repeatable flags above do not name; every
+        /// value must be a list (a scalar is refused rather than replacing the
+        /// stored list). Where both this and a repeatable flag name one key, the
+        /// two sets union.
+        #[arg(long)]
+        open_meta_add: Option<String>,
         // --- Managed (temper-*) fields: a closed vocabulary; caller-defined
         //     tags/relationships are open-tier (see --tags/--relates-to above) ---
         /// Task stage (backlog, in-progress, done, cancelled)
