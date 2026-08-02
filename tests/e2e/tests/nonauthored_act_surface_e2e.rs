@@ -50,7 +50,6 @@ async fn act_metadata(pool: &sqlx::PgPool, invocation_id: Uuid, kind: &str) -> s
 
 /// An empty-content create payload (no body → no embed) addressed to `@me/{ctx}`.
 fn empty_payload(title: &str, ctx: &str) -> IngestPayload {
-    idempotency_key: None,
     IngestPayload {
         idempotency_key: None,
         segmented: None,

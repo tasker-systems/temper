@@ -19,7 +19,6 @@ use uuid::Uuid;
 /// (which hands the caller the raw `Result`), so the failure path exercises the *same*
 /// payload shape the success path does rather than a bespoke one.
 fn seed_payload(context: &str, doc_type: &str, slug: &str, goal: Option<Uuid>) -> IngestPayload {
-    idempotency_key: None,
     let mut managed = serde_json::Map::new();
     managed.insert("temper-mode".to_string(), serde_json::json!("build"));
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));

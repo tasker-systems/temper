@@ -110,6 +110,7 @@ fn begin_input(context_ref: &str, title: &str, segment0: &str) -> IngestBeginInp
         create: CreateResourceInput {
             context_ref: Some(context_ref.to_string()),
             cogmap: None,
+            idempotency_key: None,
             doc_type_name: "research".to_string(),
             title: title.to_string(),
             content: Some(segment0.to_string()),
@@ -250,6 +251,7 @@ async fn one_shot_create(svc: &TemperMcpService, context_ref: &str, body: &str) 
         CreateResourceInput {
             context_ref: Some(context_ref.to_string()),
             cogmap: None,
+            idempotency_key: None,
             doc_type_name: "research".to_string(),
             title: "Reference".to_string(),
             content: Some(body.to_string()),

@@ -117,6 +117,7 @@ async fn strip_to_legacy_shape(pool: &PgPool, profile_id: uuid::Uuid) {
 fn create_request(context_id: ContextId, title: &str) -> ResourceCreateRequest {
     ResourceCreateRequest {
         kb_context_id: *context_id,
+        idempotency_key: None,
         doc_type: "research".to_string(),
         origin_uri: format!("test://e2e/legacy-profile/{title}"),
         title: title.to_string(),

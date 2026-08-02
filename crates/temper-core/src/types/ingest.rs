@@ -442,6 +442,7 @@ mod tests {
     #[test]
     fn payload_serialization_roundtrip() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -479,6 +480,7 @@ mod tests {
     #[test]
     fn payload_serializes_with_optional_chunks_absent() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -517,6 +519,7 @@ mod tests {
     #[test]
     fn payload_with_chunks_present_roundtrips() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -734,6 +737,7 @@ mod tests {
     #[test]
     fn ingest_payload_segmented_field_round_trips_when_present() {
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Big Doc".to_owned(),
             origin_uri: "kb://ctx/task/big".to_owned(),
             context_ref: "ctx".to_owned(),
@@ -775,6 +779,7 @@ mod tests {
         assert!(payload.segmented.is_none());
 
         let payload = IngestPayload {
+            idempotency_key: None,
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),

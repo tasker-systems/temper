@@ -151,6 +151,10 @@ fn cmd_to_ingest_payload_base(
     };
 
     Ok(IngestPayload {
+        // Owner-scoped create idempotency key (issue #581). The CLI does not yet mint one on this
+        // path, so ordinary (non-idempotent) create is the current behaviour; wiring a client-minted
+        // key through is a later rung.
+        idempotency_key: None,
         segmented: None,
         title: cmd.title.clone(),
         // Forward the command's origin URI (issue #352). A URL `--from` populates it (see

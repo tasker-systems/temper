@@ -40,6 +40,9 @@ module Temper::Generated
     # Doc-type name (the substrate stores doc-type as a property name; the backend create path passes it straight through to `CreateResource`).
     attr_accessor :doc_type
 
+    # Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by convention): a retried create carrying the same key converges on the already-committed resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary, non-idempotent create. The server mints the resource id; the key never supplies one.
+    attr_accessor :idempotency_key
+
     # Context addressed by UUID. The API wraps this as `ContextRef::Id` and resolves it through `resolve_context_ref` (visibility-gated). Stays UUID-keyed intentionally (spec §7 decision): the create path is server-to-server / MCP and always has the UUID at hand; a `context_ref` string here would add blast-radius with no practical benefit (deferred).
     attr_accessor :kb_context_id
 
@@ -80,6 +83,7 @@ module Temper::Generated
         :'rationale' => :'rationale',
         :'reasoning' => :'reasoning',
         :'doc_type' => :'doc_type',
+        :'idempotency_key' => :'idempotency_key',
         :'kb_context_id' => :'kb_context_id',
         :'origin_uri' => :'origin_uri',
         :'title' => :'title'
@@ -107,6 +111,7 @@ module Temper::Generated
         :'rationale' => :'String',
         :'reasoning' => :'String',
         :'doc_type' => :'String',
+        :'idempotency_key' => :'String',
         :'kb_context_id' => :'String',
         :'origin_uri' => :'String',
         :'title' => :'String'
@@ -123,6 +128,7 @@ module Temper::Generated
         :'persona',
         :'rationale',
         :'reasoning',
+        :'idempotency_key',
       ])
     end
 
@@ -174,6 +180,10 @@ module Temper::Generated
         self.doc_type = attributes[:'doc_type']
       else
         self.doc_type = nil
+      end
+
+      if attributes.key?(:'idempotency_key')
+        self.idempotency_key = attributes[:'idempotency_key']
       end
 
       if attributes.key?(:'kb_context_id')
@@ -283,6 +293,7 @@ module Temper::Generated
           rationale == o.rationale &&
           reasoning == o.reasoning &&
           doc_type == o.doc_type &&
+          idempotency_key == o.idempotency_key &&
           kb_context_id == o.kb_context_id &&
           origin_uri == o.origin_uri &&
           title == o.title
@@ -297,7 +308,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, doc_type, kb_context_id, origin_uri, title].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, doc_type, idempotency_key, kb_context_id, origin_uri, title].hash
     end
 
     # Builds the object from hash
