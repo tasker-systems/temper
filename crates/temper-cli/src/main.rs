@@ -1229,6 +1229,16 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 println!("{}", temper_cli::format::render(&report, output_format)?);
                 Ok(())
             }
+            MemoryAction::Harvest {
+                dry_run,
+                unattended,
+            } => {
+                let global = temper_cli::config::load_global_config()?;
+                let report =
+                    temper_cli::commands::memory::harvest::harvest(&global, dry_run, unattended)?;
+                println!("{}", temper_cli::format::render(&report, output_format)?);
+                Ok(())
+            }
             MemoryAction::Check { path } => {
                 let config = temper_cli::config::load_global_config()?;
                 match temper_cli::commands::memory::emit::emit_outcome(config.memory.as_ref()) {

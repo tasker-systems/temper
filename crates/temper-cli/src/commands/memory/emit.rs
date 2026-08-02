@@ -17,6 +17,7 @@
 //! them through [`build_index`], and write the result to `index_path` (or the override),
 //! creating parent directories as needed.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::{NaiveDate, Utc};
@@ -25,7 +26,10 @@ use temper_core::types::config::{MemoryConfig, TemperConfig};
 use temper_workflow::types::resource::ResourceDetail;
 
 use super::fetch::fetch_context_rows;
-use super::render::{parse_entry, render_index, MemoryDefect, GENERATED_HEADER};
+use super::migrate::{parse_memory_file, scan_memory_dir, ScannedFile};
+use super::render::{
+    parse_entry, render_index, LocalEntry, LocalIndex, MemoryDefect, GENERATED_HEADER,
+};
 use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
 
@@ -57,6 +61,7 @@ pub fn emit_outcome(mem: Option<&MemoryConfig>) -> EmitOutcome {
 pub fn build_index(
     cfg: &MemoryConfig,
     rows: &[ResourceDetail],
+    local: &LocalIndex,
     today: NaiveDate,
 ) -> Result<String> {
     let mut entries = Vec::with_capacity(rows.len());
@@ -82,7 +87,83 @@ pub fn build_index(
         )));
     }
 
-    Ok(render_index(&entries, today, cfg.stale_after_days))
+    Ok(render_index(&entries, local, today, cfg.stale_after_days))
+}
+
+/// Assemble the un-migrated half of the index from the files on disk.
+///
+/// **Titles come from each file's own frontmatter, never from the index.** Harvesting them out of
+/// the index at render time would be the natural shortcut and is the one thing that must not
+/// happen: the index would then be both a generated projection and the sole store for those
+/// titles, which makes it un-gateable — `check` re-renders through this same path, so a hand-edited
+/// title would be read back in and reproduced as a `Match`, and a hand-deleted line would drop that
+/// memory from the index permanently. `temper memory harvest` is what puts the titles somewhere
+/// this function can read them from instead.
+///
+/// A file that is already a Temper memory is not in the union — it renders in the migrated half,
+/// and appearing in both is the one way this render could show a reader the same memory twice.
+pub fn build_local_index(
+    scanned: &[ScannedFile],
+    already_migrated: &HashSet<String>,
+) -> LocalIndex {
+    let mut entries = Vec::new();
+    let mut untitled = 0usize;
+
+    for file in scanned {
+        if already_migrated.contains(&file.filename) {
+            continue;
+        }
+        // Unparseable and untitled land in the same bucket deliberately: both are files this
+        // machine carries and this index cannot name, which is the only distinction a reader of
+        // the index can act on. `temper memory status` is where the two come apart.
+        match parse_memory_file(&file.content).ok().and_then(|p| p.title) {
+            Some(title) => entries.push(LocalEntry {
+                filename: file.filename.clone(),
+                title,
+            }),
+            None => untitled += 1,
+        }
+    }
+
+    LocalIndex { entries, untitled }
+}
+
+/// The whole read side: fetch every configured context's rows, scan the local files beside the
+/// index, and render the union — returning the render together with the path it describes.
+///
+/// **Shared by `emit` and `check` so the two cannot assemble differently.** The drift gate's entire
+/// meaning is that it compares the file against what `emit` would write; if `check` built its
+/// render from a separately-written pipeline, a divergence between the two would surface as drift
+/// in the user's index rather than as a bug in this file.
+pub(super) async fn render_current(
+    mem: &MemoryConfig,
+    path_override: Option<&str>,
+) -> Result<(String, PathBuf)> {
+    let (_cfg, _store, client) = build_config_store_and_client()?;
+
+    let mut rows: Vec<ResourceDetail> = Vec::new();
+    for ctx in mem.all_contexts() {
+        let mut ctx_rows = fetch_context_rows(&client, ctx).await?;
+        rows.append(&mut ctx_rows);
+    }
+
+    let path = super::resolve_index_path(mem, path_override);
+    let already_migrated: HashSet<String> = rows
+        .iter()
+        .filter_map(super::status::source_file_of)
+        .collect();
+    // Scanned from the CONFIGURED index path, never the override. `--path` says where the index
+    // is written, not where this machine's memories live — so `emit --path /tmp/preview.md`
+    // previews the real index instead of reporting an empty machine, and `check --path` still
+    // compares against a render built from the same files. `migrate` reads the configured path
+    // for the same reason.
+    let local = build_local_index(
+        &scan_memory_dir(&super::resolve_index_path(mem, None)),
+        &already_migrated,
+    );
+
+    let today = Utc::now().date_naive();
+    Ok((build_index(mem, &rows, &local, today)?, path))
 }
 
 /// Resolve the write path (`path_override`, or `mem.index_path` tilde-expanded), create any
@@ -135,17 +216,7 @@ pub async fn emit(config: &TemperConfig, path_override: Option<&str>) -> Result<
         )
     })?;
 
-    let (_cfg, _store, client) = build_config_store_and_client()?;
-
-    let mut rows: Vec<ResourceDetail> = Vec::new();
-    for ctx in mem.all_contexts() {
-        let mut ctx_rows = fetch_context_rows(&client, ctx).await?;
-        rows.append(&mut ctx_rows);
-    }
-
-    let today = Utc::now().date_naive();
-    let rendered = build_index(mem, &rows, today)?;
-
+    let (rendered, _path) = render_current(mem, path_override).await?;
     resolve_and_write(mem, path_override, &rendered)
 }
 
@@ -243,7 +314,8 @@ mod tests {
     #[test]
     fn emit_refuses_when_any_memory_is_malformed() {
         let rows = vec![meta_row_missing_status("feedback_x", "@me/temper")];
-        let err = build_index(&cfg(), &rows, d("2026-08-01")).expect_err("must refuse");
+        let err = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
+            .expect_err("must refuse");
         assert!(err.to_string().contains("open_meta.status is missing"));
         assert!(
             err.to_string().contains("feedback_x"),
@@ -257,7 +329,8 @@ mod tests {
             meta_row_missing_status("a", "@me/temper"),
             meta_row_missing_verified("b", "@me/temper"),
         ];
-        let err = build_index(&cfg(), &rows, d("2026-08-01")).expect_err("must refuse");
+        let err = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
+            .expect_err("must refuse");
         assert!(
             err.to_string().contains("\"a\"") && err.to_string().contains("\"b\""),
             "one fix-run should not require N emit-runs to discover N defects"
@@ -282,9 +355,79 @@ mod tests {
     #[test]
     fn build_index_succeeds_for_a_memory_with_no_source_file() {
         let rows = vec![meta_row_native("a native memory", "@me/temper")];
-        let out = build_index(&cfg(), &rows, d("2026-08-01"))
+        let out = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
             .expect("a memory with no source_file must build cleanly, never be a defect");
         assert!(out.contains("a native memory"));
+    }
+
+    /// A stamped local file, as `harvest` leaves it.
+    fn scanned(filename: &str, title: Option<&str>) -> ScannedFile {
+        let title_line = title.map_or(String::new(), |t| format!("title: {t}\n"));
+        ScannedFile {
+            filename: filename.to_string(),
+            content: format!(
+                "---\n{title_line}name: n\ndescription: d\nmetadata:\n  type: project\n---\n\nbody\n"
+            ),
+            mtime: d("2026-07-14"),
+        }
+    }
+
+    /// The union is the *un*-migrated half. A file whose counterpart is already in Temper renders
+    /// from the store, and letting it also render here would show the reader one memory twice —
+    /// once with a resolving `temper://` link and once marked `[local]`.
+    #[test]
+    fn a_file_already_in_temper_is_not_in_the_union() {
+        let already: HashSet<String> = ["migrated.md".to_string()].into_iter().collect();
+        let local = build_local_index(
+            &[
+                scanned("migrated.md", Some("already in the store")),
+                scanned("still_local.md", Some("only here")),
+            ],
+            &already,
+        );
+        assert_eq!(local.entries.len(), 1);
+        assert_eq!(local.entries[0].filename, "still_local.md");
+        assert_eq!(
+            local.untitled, 0,
+            "an excluded file is not an omission — it renders in the migrated half"
+        );
+    }
+
+    /// A file with no stamped title cannot be named here, but the machine is still carrying it.
+    /// Counting it is what lets the render state its own omission instead of implying there is
+    /// nothing else.
+    #[test]
+    fn an_untitled_or_unparseable_file_is_counted_never_dropped() {
+        let local = build_local_index(
+            &[
+                scanned("titled.md", Some("a hook")),
+                scanned("untitled.md", None),
+                ScannedFile {
+                    filename: "broken.md".to_string(),
+                    content: "# no frontmatter at all\n".to_string(),
+                    mtime: d("2026-07-14"),
+                },
+            ],
+            &HashSet::new(),
+        );
+        assert_eq!(local.entries.len(), 1);
+        assert_eq!(
+            local.untitled, 2,
+            "both the untitled and the unparseable file must be counted"
+        );
+    }
+
+    /// The whole point of `harvest`. `build_local_index` takes the scanned **files** and nothing
+    /// else — there is no parameter through which the index could be consulted — so a title can
+    /// only come from the file that carries it. This is what keeps `check` able to see a hand
+    /// edit; see the module doc on `build_local_index`.
+    #[test]
+    fn a_local_title_comes_from_the_file_not_from_any_index() {
+        let local = build_local_index(
+            &[scanned("x.md", Some("the file's own title"))],
+            &HashSet::new(),
+        );
+        assert_eq!(local.entries[0].title, "the file's own title");
     }
 
     #[test]

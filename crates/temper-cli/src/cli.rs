@@ -1848,6 +1848,24 @@ pub enum MemoryAction {
         #[arg(long, default_value_t = 3)]
         collision_limit: usize,
     },
+    /// Copy each curated title out of the hand-written index into the file it names.
+    ///
+    /// Run this BEFORE letting `emit` take the index over. A memory's human-readable title exists
+    /// in exactly one place — the link text in `MEMORY.md` — so the takeover destroys it, and with
+    /// it `migrate`'s ability to move the remaining files at all. A title is never invented from a
+    /// filename: measured on a real corpus, that loses the hook on nearly half the files.
+    ///
+    /// Idempotent: a file that already carries a `title:` is skipped, so a second run changes
+    /// nothing. Each stamp also pins `metadata.modified` to the file's pre-write mtime, so the
+    /// write's own mtime bump cannot re-date a claim nobody re-checked.
+    Harvest {
+        /// Plan and print; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Authorize a write run with no terminal attached.
+        #[arg(long)]
+        unattended: bool,
+    },
     /// Check whether the on-disk index matches a fresh render — the LOCAL drift gate.
     ///
     /// The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can

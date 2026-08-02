@@ -25,6 +25,10 @@ use crate::output;
 /// downstream may depend on it. Titles come from [`harvest_titles`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedMemoryFile {
+    /// The curated human-readable title, from a root `title:` key — present only on files
+    /// [`super::harvest`] has stamped. `None` on an un-harvested file, whose title still lives
+    /// only in the index's link text.
+    pub title: Option<String>,
     /// `open_meta.descriptor` — the recall-relevance line, from `description:`.
     pub descriptor: String,
     /// Which cohort this file belongs to (`feedback` / `project` / `reference`), from the
@@ -76,6 +80,13 @@ pub fn parse_memory_file(content: &str) -> std::result::Result<ParsedMemoryFile,
     let fm: serde_yaml::Value =
         serde_yaml::from_str(&yaml_text).map_err(|e| FileDefect::InvalidYaml(e.to_string()))?;
 
+    // Optional by construction: a file only carries `title:` once `harvest` has stamped it, and
+    // an un-stamped file is ordinary rather than defective.
+    let title = fm
+        .get("title")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_string);
+
     let descriptor = fm
         .get("description")
         .and_then(serde_yaml::Value::as_str)
@@ -98,6 +109,7 @@ pub fn parse_memory_file(content: &str) -> std::result::Result<ParsedMemoryFile,
         .and_then(|raw| NaiveDate::parse_from_str(&raw[..raw.len().min(10)], "%Y-%m-%d").ok());
 
     Ok(ParsedMemoryFile {
+        title,
         descriptor,
         cohort,
         modified,
@@ -666,14 +678,22 @@ pub fn plan_migration(
             skipped.push((file.filename.clone(), SkipReason::AlreadyMigrated));
             continue;
         }
-        let Some(title) = titles.get(&file.filename) else {
+        // The file's own stamped title wins over the index's link text. Both are the same curated
+        // string — `harvest` put it there — but preferring the file is what lets this command keep
+        // working once `emit` has taken the index over, instead of depending on a generated file
+        // to carry the titles forward.
+        let Some(title) = parsed
+            .title
+            .clone()
+            .or_else(|| titles.get(&file.filename).cloned())
+        else {
             skipped.push((file.filename.clone(), SkipReason::NoHarvestedTitle));
             continue;
         };
 
         proposals.push(MigrationProposal {
             source_file: file.filename.clone(),
-            title: title.clone(),
+            title,
             descriptor: parsed.descriptor,
             verified: parsed.modified.unwrap_or(file.mtime),
             body: parsed.body,
@@ -1148,6 +1168,42 @@ Never ship code with \"for now\".
         assert_eq!(p.title, "a curated hook");
         assert_eq!(p.descriptor, "desc of feedback_a.md");
         assert_eq!(p.body, "body of feedback_a.md\n");
+    }
+
+    /// Once `harvest` has stamped a file, its own `title:` is the source — not the index's link
+    /// text. This is what lets `migrate` keep working after `emit` takes the index over: the
+    /// generated index is no longer the thing carrying these titles.
+    ///
+    /// The two strings are made to differ only so the test can tell which one was used; in
+    /// practice `harvest` puts the same curated string in both places.
+    #[test]
+    fn a_stamped_title_on_the_file_wins_over_the_indexs_link_text() {
+        let mut file = scanned("feedback_a.md", "feedback", None, "2026-06-01");
+        file.content = file
+            .content
+            .replace("---\nname:", "---\ntitle: the file's own title\nname:");
+
+        let plan = plan_migration(
+            &[file],
+            &titles_of(&[("feedback_a.md", "the index's link text")]),
+            "feedback",
+            &HashSet::new(),
+        );
+        assert_eq!(plan.proposals.len(), 1);
+        assert_eq!(plan.proposals[0].title, "the file's own title");
+    }
+
+    /// The fallback stays live: a file harvest has not reached is still migratable while the
+    /// hand-written index survives. Removing the fallback would strand every un-stamped file.
+    #[test]
+    fn an_unstamped_file_still_falls_back_to_the_indexs_link_text() {
+        let plan = plan_migration(
+            &[scanned("feedback_a.md", "feedback", None, "2026-06-01")],
+            &titles_of(&[("feedback_a.md", "the index's link text")]),
+            "feedback",
+            &HashSet::new(),
+        );
+        assert_eq!(plan.proposals[0].title, "the index's link text");
     }
 
     #[test]
