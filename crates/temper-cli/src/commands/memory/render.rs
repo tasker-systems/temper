@@ -181,24 +181,36 @@ fn render_local(local: &LocalIndex) -> String {
     let total = local.total();
     let mut out = format!(
         "\n## Not yet migrated — local to this machine ({total} file{})\n\n\
-         Not in Temper: no id, no verified date, readable only on this machine.\n\
-         Run `temper memory migrate` to move them.\n\n",
+         Not in Temper: no id, no verified date, readable only on this machine.\n",
         if total == 1 { "" } else { "s" }
     );
 
-    for e in &local.entries {
-        out.push_str(&format!("- [{}](./{})  [local]\n", e.title, e.filename));
+    // **Only where it is true of something listed.** `migrate` moves a file by its title, so once
+    // every remaining local file is untitled — the terminal state of a transition — this sends the
+    // reader to a command that skips all of them without explaining itself.
+    if !local.entries.is_empty() {
+        out.push_str("Run `temper memory migrate` to move them.\n\n");
+        for e in &local.entries {
+            out.push_str(&format!("- [{}](./{})  [local]\n", e.title, e.filename));
+        }
     }
 
-    // Stated, never merely absent: what the index omits, it says it has omitted.
+    // Stated, never merely absent: what the index omits, it says it has omitted — and says why the
+    // obvious remedy will not reach them, since "run migrate" is what a reader would try next.
     if local.untitled > 0 {
+        let (plural, verb, is_are) = if local.untitled == 1 {
+            ("", "ies", "is")
+        } else {
+            ("s", "y", "are")
+        };
+        if !local.entries.is_empty() {
+            out.push('\n');
+        }
         out.push_str(&format!(
-            "\n{} further local file{} carr{} no title and {} not listed — \
-             `temper memory status` names them.\n",
+            "{} further local file{plural} carr{verb} no title, {is_are} not listed, and \
+             `temper memory migrate` skips {} — `temper memory status` names them.\n",
             local.untitled,
-            if local.untitled == 1 { "" } else { "s" },
-            if local.untitled == 1 { "ies" } else { "y" },
-            if local.untitled == 1 { "is" } else { "are" },
+            if local.untitled == 1 { "it" } else { "them" },
         ));
     }
     out
@@ -422,6 +434,74 @@ mod tests {
             out.contains("temper memory status"),
             "and must say where the omitted ones can be named: {out}"
         );
+    }
+
+    /// **The instruction has to be true of the files it is printed beside.** `migrate` can only
+    /// move a file that carries a title, so where every remaining local file is untitled — which
+    /// is the terminal state of a transition, once harvest and migrate have taken everything they
+    /// can — telling the reader to run it sends them to a command that will skip all of them and
+    /// say nothing about why. Observed live on 2026-08-01 with the four files no index link named.
+    #[test]
+    fn the_migrate_instruction_is_absent_when_nothing_listed_can_be_migrated() {
+        let out = render_index(
+            &[],
+            &LocalIndex {
+                entries: vec![],
+                untitled: 4,
+            },
+            d("2026-08-01"),
+            90,
+        );
+        assert!(
+            !out.contains("Run `temper memory migrate`"),
+            "must not instruct a run that would skip every remaining file: {out}"
+        );
+        assert!(
+            out.contains("skip"),
+            "and must say that migrate skips them, so the absence is explained: {out}"
+        );
+    }
+
+    /// The converse, so the fix cannot be "delete the instruction". Where a titled file is
+    /// present, `migrate` genuinely moves it and the instruction must survive.
+    #[test]
+    fn the_migrate_instruction_is_present_when_a_listed_file_can_be_migrated() {
+        let out = render_index(
+            &[],
+            &LocalIndex {
+                entries: vec![local("project_x.md", "a hook")],
+                untitled: 4,
+            },
+            d("2026-08-01"),
+            90,
+        );
+        assert!(out.contains("Run `temper memory migrate`"));
+    }
+
+    /// A section rendered with nothing to list used to emit the preamble's trailing blank, the
+    /// empty entry loop, and the note's leading blank in a row.
+    #[test]
+    fn the_section_never_renders_a_run_of_blank_lines() {
+        for local_index in [
+            LocalIndex {
+                entries: vec![],
+                untitled: 4,
+            },
+            LocalIndex {
+                entries: vec![local("project_x.md", "a hook")],
+                untitled: 2,
+            },
+            LocalIndex {
+                entries: vec![local("project_x.md", "a hook")],
+                untitled: 0,
+            },
+        ] {
+            let out = render_index(&[], &local_index, d("2026-08-01"), 90);
+            assert!(
+                !out.contains("\n\n\n"),
+                "no run of blank lines, got:\n{out}"
+            );
+        }
     }
 
     /// The acceptance criterion, at the real ratio rather than a two-element fixture: taking the
