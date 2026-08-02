@@ -15,6 +15,7 @@
   "dependencies": {
     "ai": "^7.0.0",
     "eve": "^0.18.1",
+    "temper-telemetry-ts": "file:../../../clients/temper-telemetry-ts",
     "zod": "4.4.3"
   },
   "devDependencies": {

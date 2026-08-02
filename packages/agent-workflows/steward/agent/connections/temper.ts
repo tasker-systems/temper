@@ -3,7 +3,7 @@ import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
 import { mintM2mToken, requireEnv } from "../lib/temper-auth.js";
-import { makeTraceparent } from "../lib/trace.js";
+import { makeTraceparent, otlpExportConfigured } from "../lib/trace.js";
 import { STEWARD_TOOLS } from "../lib/tool-allowlists.js";
 
 /**
@@ -41,13 +41,14 @@ export default defineMcpClientConnection({
     : process.env.TEMPER_CONNECT_CONNECTOR
       ? connect({ connector: process.env.TEMPER_CONNECT_CONNECTOR, principalType: "app" })
       : { getToken: async () => ({ token: requireEnv("TEMPER_TOKEN") }) },
-  // A W3C `traceparent` on every MCP call, so the steward's tool calls correlate
-  // with the API + MCP logs they trigger (temper-mcp reads it into its root span).
-  // trace-id is derived from the eve session id (one trace per session); span-id
-  // is per-call. See `../lib/trace`.
-  headers: {
-    traceparent: (ctx) => makeTraceparent(ctx.session.id),
-  },
+  // Trace propagation. When OTLP export is configured, `agent/instrumentation.ts` enables
+  // undici auto-instrumentation, which injects a per-request `traceparent` naming a real
+  // exported span — so we must NOT also stamp a static one here (it would be a second,
+  // ambiguous header; see `otlpExportConfigured`). Without export, keep the session-derived
+  // header as the cross-service log-correlation handle (PR #611).
+  ...(otlpExportConfigured()
+    ? {}
+    : { headers: { traceparent: (ctx) => makeTraceparent(ctx.session.id) } }),
   approval: never(),
   tools: {
     allow: [...STEWARD_TOOLS],

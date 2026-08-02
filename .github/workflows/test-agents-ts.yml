@@ -127,13 +127,15 @@ jobs:
       - name: Run tests
         run: npm test
 
-  # NOTE: this job does NOT run `npm run build`, so it cannot catch an eve
-  # DISCOVERY failure (missing `instructions.md`, an unregistered channel) —
-  # those are build-time only, and typecheck/vitest are both blind to them. The
-  # steward deploys on merge to `main`, so such a break surfaces as a failed
-  # production deploy rather than a red PR. The `mention` job below runs the
-  # build for exactly this reason; the steward's job wants the same treatment,
-  # left out here only because it is a different agent's narrative.
+      # eve resolves the agent by DISCOVERY at build time — authored instructions, channels,
+      # routes, and now `agent/instrumentation.ts`. typecheck and vitest are both blind to a
+      # discovery break, so build here (as the `mention` job does). `connections/temper.ts`
+      # resolves TEMPER_MCP_URL at module load, so discovery needs the variable PRESENT, not
+      # correct — `.invalid` is reserved by RFC 2606 and can never resolve.
+      - name: Build (eve discovery)
+        env:
+          TEMPER_MCP_URL: https://mcp.example.invalid
+        run: npm run build
 
   mention:
     name: mention agent (typecheck, vitest)

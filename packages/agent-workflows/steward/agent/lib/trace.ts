@@ -32,3 +32,21 @@ export function makeTraceparent(sessionId: string): string {
   const spanId = randomBytes(8).toString("hex");
   return `00-${traceId}-${spanId}-01`;
 }
+
+/**
+ * Whether OTLP span export is configured for this process (an endpoint is set).
+ *
+ * When it is, `agent/instrumentation.ts` enables undici HTTP auto-instrumentation, which
+ * injects a per-request `traceparent` naming a real exported CLIENT span (a child of the
+ * active `ai.toolCall` span). A connection that *also* stamps a static {@link makeTraceparent}
+ * header would put a SECOND `traceparent` on the wire — undici appends via `request.addHeader`,
+ * and temper-mcp reads the first, static one, so its post-auth link would dangle at a span that
+ * does not exist. So connections omit the static header when this is true, and keep it only when
+ * export is off — where it remains the cross-service log-correlation handle (PR #611).
+ *
+ * The gate mirrors `temper-telemetry-ts`'s `initTelemetry` (both key on
+ * `OTEL_EXPORTER_OTLP_ENDPOINT`), so the "do we export?" decision is the same on both sides.
+ */
+export function otlpExportConfigured(): boolean {
+  return Boolean(process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim());
+}
