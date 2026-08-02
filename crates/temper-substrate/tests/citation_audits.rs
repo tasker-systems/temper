@@ -64,6 +64,7 @@ async fn make_resource(
     writes::create_resource_with(
         pool,
         CreateParams {
+            resource_id: None,
             title,
             origin_uri: uri,
             body: "seed body",
@@ -1240,6 +1241,7 @@ async fn make_cogmap_finding(
     writes::create_resource_with(
         pool,
         CreateParams {
+            resource_id: None,
             title,
             origin_uri: uri,
             body: "seed body",
@@ -1301,6 +1303,7 @@ async fn seed_cogmap_finding_with_n_citations(
     writes::create_resource_with(
         pool,
         CreateParams {
+            resource_id: None,
             title: p.title,
             origin_uri: p.uri,
             body: "seed body",
@@ -1475,6 +1478,7 @@ async fn sweep_omits_a_context_homed_finding(pool: sqlx::PgPool) {
     let finding = writes::create_resource_with(
         &pool,
         CreateParams {
+            resource_id: None,
             title: "finding",
             origin_uri: "temper://ads/context-finding",
             body: "seed body",

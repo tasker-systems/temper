@@ -648,6 +648,7 @@ pub(crate) async fn build_create_command(
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
     let cmd = CreateResource {
+        resource_id: None,
         slug,
         doctype: input.doc_type_name,
         home,

@@ -49,6 +49,7 @@ async fn build_edge_pair(
     let src = writes::create_resource(
         pool,
         CreateParams {
+            resource_id: None,
             sources: vec![],
             title: &src_title,
             origin_uri: &src_title,
@@ -67,6 +68,7 @@ async fn build_edge_pair(
     let tgt = writes::create_resource(
         pool,
         CreateParams {
+            resource_id: None,
             sources: vec![],
             title: &tgt_title,
             origin_uri: &tgt_title,

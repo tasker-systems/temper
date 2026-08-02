@@ -38,6 +38,7 @@ fn create_cmd(
     goal: Option<ResourceId>,
 ) -> CreateResource {
     CreateResource {
+        resource_id: None,
         slug: slug.to_string(),
         doctype: doctype.to_string(),
         home: HomeAnchor::Context(context),

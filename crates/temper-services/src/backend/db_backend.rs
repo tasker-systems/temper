@@ -546,6 +546,45 @@ impl DbBackend {
         }
     }
 
+    /// Keyed-create idempotency probe (spike rung 3, issue #581). Given the caller's client-minted
+    /// stable id, decides what a create carrying it should do:
+    ///   - `Ok(Some(row))` — a resource already exists under `id` AND the caller may modify it: an
+    ///     idempotent replay (the lost-acknowledgment retry), so return the committed resource — no
+    ///     twin, no error.
+    ///   - `Err(NotFound)` — a resource exists under `id` but is NOT the caller's: refuse
+    ///     leak-safely, byte-identical to the not-visible read deny (`map_readback_err`), never
+    ///     403/409 — a foreign stable id must not become an existence oracle.
+    ///   - `Ok(None)` — no resource exists under `id`: fall through and mint under it.
+    ///
+    /// `can_modify_resource` is the same gate `update`/`delete` use, so "may replay a create under
+    /// this id" is exactly "may mutate this resource". Existence is probed separately because
+    /// `can_modify_resource` returns false for BOTH a nonexistent id and a foreign one, and those
+    /// two cases must diverge (mint vs refuse).
+    async fn return_existing_keyed(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<Option<ResourceRow>, TemperError> {
+        let exists: Option<bool> = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM kb_resources WHERE id = $1)",
+            id
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if !exists.unwrap_or(false) {
+            return Ok(None);
+        }
+        match self.check_can_modify_next(id).await {
+            Ok(()) => Ok(Some(
+                native_resource_row(&self.pool, self.profile_id, ResourceId::from(id)).await?,
+            )),
+            Err(TemperError::Forbidden) => {
+                Err(TemperError::NotFound(format!("resource {id} not found")))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// The landed (non-folded) segment set for a resource, ordered by `seq`, plus the resource's
     /// live `body_hash` — the whole [`BlocksResponse`] every segmented read returns.
     ///
@@ -1594,6 +1633,17 @@ impl DbBackend {
             HomeAnchor::Cogmap(m) => self.check_cogmap_authorable(uuid::Uuid::from(*m)).await?,
             HomeAnchor::Context(c) => self.check_context_authorable(uuid::Uuid::from(*c)).await?,
         }
+        // Keyed-create idempotency fast path (spike rung 3, issue #581). When the caller supplied a
+        // stable id and a resource already exists under it, converge on that resource instead of
+        // minting a twin — the safe recovery for a lost-acknowledgment retry. Runs AFTER the
+        // home-authorable gate (auth before writes) and BEFORE the managed-meta pipeline, so a
+        // replay does no needless work. `return_existing_keyed` is leak-safe: a foreign id renders
+        // NotFound, never 403/409, matching every other single-resource read on this backend.
+        if let Some(id) = cmd.resource_id {
+            if let Some(row) = self.return_existing_keyed(id).await? {
+                return Ok(CommandOutput::new(row));
+            }
+        }
         // Map the command's HomeAnchor to the substrate's AnchorRef so CreateParams.home
         // accepts either a context or a cognitive map without further branching downstream.
         let home = match cmd.home {
@@ -1687,6 +1737,10 @@ impl DbBackend {
             properties: &properties,
             chunks: incoming_chunks,
             sources,
+            // Mint under the caller's stable id when supplied (idempotency key). The keyed-replay
+            // fast path returned already for an existing id; reaching here means either no key or a
+            // key whose id does not yet exist, so this births the resource under it.
+            resource_id: cmd.resource_id,
         };
         // Validate the goal BEFORE anything is written. The edge assert below gates the goal
         // too, but only AFTER the resource is committed — no transaction spans both — so an

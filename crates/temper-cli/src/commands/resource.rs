@@ -484,6 +484,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     let act_for_edges = act.clone();
 
     let cmd = temper_workflow::operations::CreateResource {
+        resource_id: None,
         slug: slug_resolved,
         doctype: doc_type.to_string(),
         home,

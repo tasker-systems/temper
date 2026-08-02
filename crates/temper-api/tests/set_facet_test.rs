@@ -31,6 +31,7 @@ async fn backend_with_context(pool: &PgPool, email: &str) -> (DbBackend, Context
 
 fn create_cmd(context: ContextId, slug: &str) -> CreateResource {
     CreateResource {
+        resource_id: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(context),

@@ -110,6 +110,13 @@ pub struct CreateParams<'a> {
     /// Provenance sources the body was distilled from — applied to the resource's body block and
     /// recorded into `kb_block_provenance`. Empty for an ordinary create with no attribution.
     pub sources: Vec<Incorporation>,
+    /// Client-supplied stable id (UUIDv7) used as the create idempotency key. `Some` mints the
+    /// resource *under this id* — so a retried create/begin is a primary-key conflict, never a
+    /// silent twin (the same mechanism the reconcile/kernel path already uses, see
+    /// [`KernelCreateParams::resource_id`] and `create_kernel_resource` below). `None` ⇒ mint a
+    /// fresh id (today's behaviour). The leak-safe "already exists → return existing" arm lives one
+    /// layer up in `db_backend` (it needs the caller principal, which SQL never sees).
+    pub resource_id: Option<Uuid>,
 }
 
 /// How a create is initiated — the two orthogonal switches [`create_resource_with_mode`] branches on.
@@ -214,8 +221,10 @@ async fn create_resource_impl(
         SeedAction::ResourceCreate {
             title: p.title,
             origin_uri: p.origin_uri,
-            // A genuinely new resource created through the live write path — mint a fresh id.
-            resource_id: None,
+            // Mint under the caller's supplied stable id when present (idempotency key) — so a
+            // replayed create is a primary-key conflict the backend converts to "return existing",
+            // never a silent twin. `None` falls back to a fresh `Uuid::now_v7()` in `fire_with`.
+            resource_id: p.resource_id.map(ResourceId::from),
             home: p.home,
             owner: p.owner,
             originator: Some(p.originator),
