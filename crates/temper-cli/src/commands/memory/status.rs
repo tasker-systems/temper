@@ -18,7 +18,7 @@ use temper_core::types::config::{expand_tilde, MemoryConfig, TemperConfig};
 use temper_workflow::types::resource::ResourceDetail;
 
 use super::fetch::fetch_context_rows;
-use super::render::parse_entry;
+use super::render::{parse_entry, reinforcement_of};
 use crate::actions::runtime::build_config_store_and_client;
 use crate::error::Result;
 use crate::format::{self, OutputFormat};
@@ -54,6 +54,45 @@ pub struct MemoryStatus {
     /// ordinary and simply does not contribute a match; it is never itself reported as orphaned,
     /// since orphaning is a property of local files, not of Temper resources.
     pub local_without_counterpart: Vec<String>,
+    /// How much of the corpus has been reinforced, and how recently. This is the evidence a
+    /// threshold would eventually be set from — see [`ReinforcementDistribution`].
+    pub reinforcement: ReinforcementDistribution,
+}
+
+/// The reinforcement distribution across every fetched memory.
+///
+/// **This exists to be read before a threshold is chosen, not after.** `reinforced_min` is
+/// deliberately absent from every config in existence, and the only honest way to pick one is to
+/// look at what the corpus actually does over months. So this is the instrument, and today it
+/// reports `reinforced: 0` on every machine — which is information, not a bug.
+///
+/// **The population is every fetched `memory` row — the same one [`MemoryStatus::in_temper`]
+/// counts, which is NOT the population the index tail collapses.** `fetch_context_rows` returns
+/// superseded rows too, and the render drops those before it ever reaches the threshold
+/// (`render::render_migrated` filters `status == "active"`). So `never_reinforced` is a strict
+/// over-count of what a tail line would say, by the number of superseded memories, and the two
+/// numbers are expected to differ.
+///
+/// That is the right population for this field's actual job — *is the convention being used at
+/// all, and by how much of what I am carrying* — but it is emphatically not "what the tail will
+/// hide", and reading it as that will mislead. Stated here rather than reconciled, because making
+/// the distribution tail-shaped would break its agreement with `in_temper` and buy one consistency
+/// with another.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ReinforcementDistribution {
+    /// Memories carrying at least one well-formed reinforcement date.
+    pub reinforced: usize,
+    /// Memories carrying none. **A malformed record counts here**, matching how the render treats
+    /// it — on that one axis the two agree. See the type doc for the axis on which they do not.
+    pub never_reinforced: usize,
+    /// The most recent reinforcement anywhere in the corpus, or `None` if nothing has been
+    /// reinforced. Not a per-memory field: this answers "is the convention in use at all?".
+    pub last_reinforced: Option<chrono::NaiveDate>,
+    /// One line per memory whose `open_meta.reinforced` could not be read — **reported, never
+    /// fatal, and not a [`super::render::MemoryDefect`]** (`[decided — 2026-08-02, Pete]`). Unlike
+    /// `defects`, nothing anywhere refuses on these: `emit` renders straight through and treats
+    /// the memory as unreinforced.
+    pub malformed: Vec<String>,
 }
 
 /// Extract `open_meta.source_file` from a row, if present. Independent of whether the row parses
@@ -91,11 +130,32 @@ pub fn status_report(
     let mut in_temper = 0usize;
     let mut defects = Vec::new();
     let mut known_source_files: HashSet<String> = HashSet::new();
+    let mut reinforcement = ReinforcementDistribution::default();
 
     for row in rows {
         if let Some(source_file) = source_file_of(row) {
             known_source_files.insert(source_file);
         }
+
+        // Read UNCONDITIONALLY, before the parse match, so a row that is *both* a hard defect and
+        // malformed on `reinforced` contributes both reports. Reading it inside the `Ok` arm would
+        // silently drop the soft report for exactly the rows most likely to have one — a memory
+        // whose open tier is wrong in one place is the memory most likely to be wrong in another.
+        let r = reinforcement_of(row);
+        if let Some(msg) = &r.malformed {
+            reinforcement.malformed.push(format!(
+                "{} \"{}\": {msg}",
+                row.row.id.uuid(),
+                row.row.title
+            ));
+        }
+        if r.dates.is_empty() {
+            reinforcement.never_reinforced += 1;
+        } else {
+            reinforcement.reinforced += 1;
+            reinforcement.last_reinforced = reinforcement.last_reinforced.max(r.last());
+        }
+
         match parse_entry(row) {
             Ok(_) => in_temper += 1,
             Err(defect) => defects.push(defect.to_string()),
@@ -115,6 +175,7 @@ pub fn status_report(
         defects,
         local_files: local.len(),
         local_without_counterpart,
+        reinforcement,
     }
 }
 
@@ -211,6 +272,7 @@ mod tests {
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/.claude/projects/p/memory/MEMORY.md".to_string(),
             stale_after_days: 90,
+            reinforced_min: None,
         }
     }
 
@@ -357,6 +419,146 @@ mod tests {
             r.local_without_counterpart,
             vec!["feedback_z.md"],
             "an unrelated local file stays orphaned; a source-file-less memory matches nothing"
+        );
+    }
+
+    /// As [`build_row`], plus a raw `open_meta.reinforced`.
+    fn meta_row_reinforced(
+        title: &str,
+        context_ref: &str,
+        reinforced: serde_json::Value,
+    ) -> ResourceDetail {
+        let mut r = build_row(title, context_ref, Some("active"), Some("2026-08-01"), None);
+        let Some(serde_json::Value::Object(open)) = r.open_meta.as_mut() else {
+            unreachable!("build_row always builds an object")
+        };
+        open.insert("reinforced".to_string(), reinforced);
+        r
+    }
+
+    /// **The instrument the threshold will eventually be chosen from.** It has to report the
+    /// corpus as it actually is today — everything unreinforced — as a number rather than as
+    /// silence, because "no data yet" and "the feature is not wired up" are indistinguishable
+    /// otherwise.
+    #[test]
+    fn status_reports_the_reinforcement_distribution() {
+        let rows = vec![
+            meta_row_reinforced(
+                "worked twice",
+                "@me/temper",
+                json!(["2026-05-14", "2026-07-02"]),
+            ),
+            meta_row_reinforced("worked once", "@me/temper", json!(["2026-08-01"])),
+            meta_row_titled("never used", "@me/temper"),
+        ];
+        let r = status_report(Some(&cfg()), &rows, &[]);
+
+        assert_eq!(r.reinforcement.reinforced, 2);
+        assert_eq!(r.reinforcement.never_reinforced, 1);
+        assert_eq!(
+            r.reinforcement.last_reinforced,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 1).expect("date")),
+            "last-reinforced is the max across the corpus, not the last row's max"
+        );
+        assert!(r.reinforcement.malformed.is_empty());
+    }
+
+    /// **The distribution and the tail count different populations, and that is pinned here so
+    /// nobody has to rediscover it from a mismatch in the wild.** `fetch_context_rows` returns
+    /// superseded memories; the render drops them before the threshold ever applies. So
+    /// `never_reinforced` is over-counted relative to any tail line by exactly the superseded
+    /// count — which is why the distribution agrees with `in_temper` and not with the index.
+    ///
+    /// This is a real observed gap: on the live corpus `never_reinforced` read 303 while the tail
+    /// lines summed to 298.
+    #[test]
+    fn the_distribution_counts_superseded_memories_which_the_tail_never_collapses() {
+        // The superseded memory is REINFORCED, deliberately. Two unreinforced rows cannot
+        // discriminate here: skipping one still lands it in `never_reinforced`, so the assertion
+        // would hold whether or not superseded rows were counted. Only a superseded row that must
+        // appear in the `reinforced` bucket proves the population includes it.
+        let mut retired = meta_row_reinforced("retired", "@me/temper", json!(["2026-07-01"]));
+        let Some(serde_json::Value::Object(open)) = retired.open_meta.as_mut() else {
+            unreachable!()
+        };
+        open.insert("status".to_string(), json!("superseded"));
+
+        let rows = vec![
+            meta_row_titled("live and unreinforced", "@me/temper"),
+            retired,
+        ];
+        let r = status_report(Some(&cfg()), &rows, &[]);
+
+        assert_eq!(
+            r.reinforcement.reinforced, 1,
+            "a superseded memory's reinforcement is counted, though the index never renders it"
+        );
+        assert_eq!(r.reinforcement.never_reinforced, 1);
+        assert_eq!(
+            r.reinforcement.last_reinforced,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 1).expect("date")),
+            "and it can be the corpus's most recent reinforcement"
+        );
+        assert_eq!(
+            r.reinforcement.reinforced + r.reinforcement.never_reinforced,
+            r.in_temper,
+            "the distribution's population is `in_temper`'s, which is the agreement that DOES hold"
+        );
+    }
+
+    /// The acceptance criterion: a malformed record is **reported, not fatal**. `status` already
+    /// treats hard defects this way; this asserts the softer class gets at least the same
+    /// treatment, and lands in its own list rather than in `defects` — nothing anywhere refuses
+    /// on it, so filing it beside the fatal ones would misreport what it costs.
+    #[test]
+    fn status_reports_a_malformed_reinforced_rather_than_failing() {
+        let rows = vec![meta_row_reinforced(
+            "typo'd",
+            "@me/temper",
+            json!(["last tuesday"]),
+        )];
+        let r = status_report(Some(&cfg()), &rows, &[]);
+
+        assert_eq!(
+            r.in_temper, 1,
+            "the memory itself is fine and still counted"
+        );
+        assert!(
+            r.defects.is_empty(),
+            "a malformed `reinforced` is NOT a MemoryDefect — emit must still render"
+        );
+        assert_eq!(r.reinforcement.malformed.len(), 1);
+        assert!(
+            r.reinforcement.malformed[0].contains("typo'd")
+                && r.reinforcement.malformed[0].contains("last tuesday"),
+            "the report must name the memory and what it could not read: {:?}",
+            r.reinforcement.malformed
+        );
+        assert_eq!(
+            r.reinforcement.never_reinforced, 1,
+            "and it counts as unreinforced, matching how the render will treat it"
+        );
+    }
+
+    /// **A row can be wrong in both tiers, and reading the soft one inside the `Ok` arm would have
+    /// dropped it for exactly those rows.** A memory whose open tier is malformed in one place is
+    /// the memory most likely to be malformed in another, so the report that helps least is the
+    /// one that goes quiet there.
+    #[test]
+    fn a_row_that_is_both_defective_and_malformed_contributes_both_reports() {
+        let mut row = meta_row_reinforced("doubly wrong", "@me/temper", json!(["not a date"]));
+        let Some(serde_json::Value::Object(open)) = row.open_meta.as_mut() else {
+            unreachable!()
+        };
+        open.remove("status");
+
+        let r = status_report(Some(&cfg()), &[row], &[]);
+
+        assert_eq!(r.defects.len(), 1, "the hard defect is still reported");
+        assert_eq!(
+            r.reinforcement.malformed.len(),
+            1,
+            "and so is the soft one — neither report may swallow the other"
         );
     }
 

@@ -850,6 +850,7 @@ Never ship code with \"for now\".
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/.claude/projects/p/memory/MEMORY.md".to_string(),
             stale_after_days: 90,
+            reinforced_min: None,
         }
     }
 

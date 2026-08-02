@@ -106,6 +106,7 @@ mod tests {
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/x/MEMORY.md".to_string(),
             stale_after_days: 90,
+            reinforced_min: None,
         };
         let scanned = [ScannedFile {
             filename: "project_x.md".to_string(),
