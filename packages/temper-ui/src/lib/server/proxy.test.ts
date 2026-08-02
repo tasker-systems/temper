@@ -284,4 +284,49 @@ describe('forwardRequest (upstream failure handling)', () => {
 			flaky.close();
 		}
 	});
+
+	it('retries a keyed write (Idempotency-Key header) after a dropped connection, replaying the same body', async () => {
+		// A write carrying an idempotency key is replay-safe: the API dedups on (owner, key), so the
+		// proxy retries it exactly like a GET (issue #581, spike rung 3-C). The replayed attempt must
+		// carry the identical body, which requires the proxy to buffer it (a Request body is a
+		// single-use stream).
+		let hits = 0;
+		const bodies: string[] = [];
+		const flaky = createServer((req: IncomingMessage, res: ServerResponse) => {
+			hits += 1;
+			let raw = '';
+			req.on('data', (c) => {
+				raw += c;
+			});
+			req.on('end', () => {
+				bodies.push(raw);
+				if (hits === 1) {
+					req.socket.destroy(); // drop the first attempt at the connection layer
+					return;
+				}
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(JSON.stringify({ id: 'r-1' }));
+			});
+		});
+		await new Promise<void>((resolve) => flaky.listen(0, '127.0.0.1', resolve));
+		const { port } = flaky.address() as AddressInfo;
+		try {
+			const res = await forwardRequest(
+				`http://127.0.0.1:${port}`,
+				'/api/ingest',
+				'',
+				new Request('http://ui.local/api/ingest', {
+					method: 'POST',
+					headers: { 'idempotency-key': '018f-key', 'content-type': 'application/json' },
+					body: JSON.stringify({ title: 'doc', idempotency_key: '018f-key' }),
+				}),
+			);
+			expect(res.status).toBe(200);
+			expect(hits).toBe(2); // failed once, retried once
+			// Both attempts saw the same body — the buffer was replayed, not lost.
+			expect(bodies[1]).toBe(JSON.stringify({ title: 'doc', idempotency_key: '018f-key' }));
+		} finally {
+			flaky.close();
+		}
+	});
 });

@@ -43,19 +43,26 @@ fn retry_delay(after_attempt: u32) -> Duration {
 
 /// Whether a failed request is safe to retry.
 ///
-/// Only **safe** methods (GET/HEAD — no server-side effects) are retried, so a
-/// retry can never duplicate a write. Within those, retries fire only on
-/// transient failures: a transport error (the cold serverless function never
-/// answered) or an HTTP 5xx (e.g. a cold-start / cold-DB-resume 500). Every
-/// 4xx, auth, conflict, and rate-limit error is permanent and propagates
-/// immediately.
-fn should_retry(method: &reqwest::Method, err: &ClientError) -> bool {
-    let safe = matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD);
-    safe && match err {
-        ClientError::Network(_) => true,
-        ClientError::Server { status, .. } => *status >= 500,
-        _ => false,
-    }
+/// A request is retry-eligible when it is a **safe** method (GET/HEAD — no
+/// server-side effects) *or* it is an **idempotent write** (`idempotent`): a
+/// write carrying a client-minted create idempotency key, which the server
+/// dedups on `(owner, key)` so a replay converges on the already-committed
+/// resource instead of minting a duplicate (issue #581, spike rung 3-C). An
+/// unkeyed write is never retried, because replaying it could double-apply.
+///
+/// Within the eligible set, retries fire only on transient failures: a transport
+/// error (the cold serverless function never answered) or an HTTP 5xx (e.g. a
+/// cold-start / cold-DB-resume 500, or the apex proxy's synthetic 502 when it
+/// could not reach the upstream). Every 4xx, auth, conflict, and rate-limit error
+/// is permanent and propagates immediately.
+fn should_retry(method: &reqwest::Method, err: &ClientError, idempotent: bool) -> bool {
+    let eligible = matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD) || idempotent;
+    eligible
+        && match err {
+            ClientError::Network(_) => true,
+            ClientError::Server { status, .. } => *status >= 500,
+            _ => false,
+        }
 }
 
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
@@ -228,6 +235,12 @@ impl HttpClient {
 
     /// Send a request, injecting `Bearer` auth if `token` is provided.
     ///
+    /// Transient failures retry only for **safe** methods (GET/HEAD); a write is
+    /// never replayed on this path, because it could double-apply. Callers with a
+    /// keyed, idempotent write (a create carrying an idempotency key) use
+    /// [`HttpClient::send_idempotent`] / [`HttpClient::send_json_idempotent`]
+    /// instead, which lift the retry ban for that request only.
+    ///
     /// `method` and `path` are for observability only — they describe the
     /// request for structured logging. They must match the `RequestBuilder`
     /// but are not validated against it.
@@ -237,6 +250,38 @@ impl HttpClient {
         path: &str,
         req: RequestBuilder,
         token: Option<&str>,
+    ) -> Result<Response> {
+        self.send_inner(method, path, req, token, false).await
+    }
+
+    /// Send a keyed, idempotent write, retrying transient failures as if it were
+    /// a safe method.
+    ///
+    /// The caller guarantees the request carries a client-minted idempotency key
+    /// (issue #581): the server dedups on `(owner, key)`, so a replay converges
+    /// on the already-committed resource rather than minting a duplicate. Only
+    /// the ingest create / segmented-begin paths, and only when a key is present,
+    /// use this — see [`crate::ingest`].
+    pub async fn send_idempotent(
+        &self,
+        method: &reqwest::Method,
+        path: &str,
+        req: RequestBuilder,
+        token: Option<&str>,
+    ) -> Result<Response> {
+        self.send_inner(method, path, req, token, true).await
+    }
+
+    /// Core send + retry loop shared by [`HttpClient::send`] (safe-method retry
+    /// only) and [`HttpClient::send_idempotent`] (keyed-write retry). `idempotent`
+    /// is the only difference: it lifts the retry ban for the write.
+    async fn send_inner(
+        &self,
+        method: &reqwest::Method,
+        path: &str,
+        req: RequestBuilder,
+        token: Option<&str>,
+        idempotent: bool,
     ) -> Result<Response> {
         // An empty base URL would join to a relative path (`/api/...`), which
         // reqwest rejects at send time with an opaque "builder error". Catch it
@@ -313,7 +358,7 @@ impl HttpClient {
                 match send_once(this_attempt).await {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
-                        if attempt < MAX_ATTEMPTS && should_retry(method, &err) {
+                        if attempt < MAX_ATTEMPTS && should_retry(method, &err, idempotent) {
                             let delay = retry_delay(attempt);
                             tracing::warn!(
                                 attempt,
@@ -343,6 +388,21 @@ impl HttpClient {
         token: Option<&str>,
     ) -> Result<T> {
         let resp = self.send(method, path, req, token).await?;
+        let bytes = resp.bytes().await?;
+        let value: T = serde_json::from_slice(&bytes)?;
+        Ok(value)
+    }
+
+    /// Send a keyed, idempotent write and deserialize the JSON body on success.
+    /// The [`HttpClient::send_idempotent`] counterpart to [`HttpClient::send_json`].
+    pub async fn send_json_idempotent<T: DeserializeOwned>(
+        &self,
+        method: &reqwest::Method,
+        path: &str,
+        req: RequestBuilder,
+        token: Option<&str>,
+    ) -> Result<T> {
+        let resp = self.send_idempotent(method, path, req, token).await?;
         let bytes = resp.bytes().await?;
         let value: T = serde_json::from_slice(&bytes)?;
         Ok(value)
@@ -718,15 +778,23 @@ mod tests {
 
     #[test]
     fn should_retry_safe_methods_on_5xx() {
-        assert!(should_retry(&reqwest::Method::GET, &server_err(500)));
-        assert!(should_retry(&reqwest::Method::GET, &server_err(503)));
-        assert!(should_retry(&reqwest::Method::HEAD, &server_err(502)));
+        assert!(should_retry(&reqwest::Method::GET, &server_err(500), false));
+        assert!(should_retry(&reqwest::Method::GET, &server_err(503), false));
+        assert!(should_retry(
+            &reqwest::Method::HEAD,
+            &server_err(502),
+            false
+        ));
     }
 
     #[test]
     fn should_not_retry_safe_methods_below_500() {
         // 422 is mapped to ClientError::Server but is a permanent client error.
-        assert!(!should_retry(&reqwest::Method::GET, &server_err(422)));
+        assert!(!should_retry(
+            &reqwest::Method::GET,
+            &server_err(422),
+            false
+        ));
     }
 
     #[test]
@@ -735,31 +803,83 @@ mod tests {
             &reqwest::Method::GET,
             &ClientError::NotFound {
                 message: "x not found".to_owned()
-            }
+            },
+            false
         ));
         assert!(!should_retry(
             &reqwest::Method::GET,
-            &ClientError::Forbidden
+            &ClientError::Forbidden,
+            false
         ));
         assert!(!should_retry(
             &reqwest::Method::GET,
-            &ClientError::NotAuthenticated
+            &ClientError::NotAuthenticated,
+            false
         ));
         assert!(!should_retry(
             &reqwest::Method::GET,
             &ClientError::RateLimited {
                 retry_after: Duration::from_secs(1)
-            }
+            },
+            false
         ));
     }
 
     #[test]
-    fn should_not_retry_unsafe_methods_even_on_5xx() {
-        // Retrying a write could duplicate a server-side effect.
-        assert!(!should_retry(&reqwest::Method::POST, &server_err(500)));
-        assert!(!should_retry(&reqwest::Method::PATCH, &server_err(503)));
-        assert!(!should_retry(&reqwest::Method::PUT, &server_err(500)));
-        assert!(!should_retry(&reqwest::Method::DELETE, &server_err(500)));
+    fn should_not_retry_unkeyed_writes_even_on_5xx() {
+        // Retrying an UNKEYED write could duplicate a server-side effect.
+        assert!(!should_retry(
+            &reqwest::Method::POST,
+            &server_err(500),
+            false
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::PATCH,
+            &server_err(503),
+            false
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::PUT,
+            &server_err(500),
+            false
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::DELETE,
+            &server_err(500),
+            false
+        ));
+    }
+
+    #[test]
+    fn should_retry_keyed_writes_on_transient_failures() {
+        // A keyed write (idempotent = true) is as retry-safe as a GET: the server dedups on
+        // `(owner, key)`, so a replay converges instead of duplicating (issue #581, rung 3-C).
+        assert!(should_retry(&reqwest::Method::POST, &server_err(500), true));
+        assert!(should_retry(&reqwest::Method::POST, &server_err(502), true));
+        assert!(should_retry(&reqwest::Method::PUT, &server_err(503), true));
+    }
+
+    #[test]
+    fn should_not_retry_keyed_writes_on_permanent_errors() {
+        // Idempotency lifts the *method* ban, not the transient/permanent distinction: a keyed
+        // write still does not retry a 4xx, a conflict, or a rate-limit.
+        assert!(!should_retry(
+            &reqwest::Method::POST,
+            &server_err(422),
+            true
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::POST,
+            &ClientError::Conflict {
+                message: "already exists".to_owned()
+            },
+            true
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::POST,
+            &ClientError::Forbidden,
+            true
+        ));
     }
 
     #[test]

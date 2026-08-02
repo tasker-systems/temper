@@ -151,10 +151,12 @@ fn cmd_to_ingest_payload_base(
     };
 
     Ok(IngestPayload {
-        // Owner-scoped create idempotency key (issue #581). The CLI does not yet mint one on this
-        // path, so ordinary (non-idempotent) create is the current behaviour; wiring a client-minted
-        // key through is a later rung.
-        idempotency_key: None,
+        // Owner-scoped create idempotency key (issue #581, spike rung 3-C). Carried verbatim from the
+        // command — `commands::resource` mints one on every CLI create, and the segmented path may
+        // substitute a resumed key. This is the field the server dedups on `(owner, key)`; the
+        // temper-client also mirrors it into an `Idempotency-Key` header so the apex proxy can treat a
+        // keyed write as retry-safe.
+        idempotency_key: cmd.idempotency_key,
         segmented: None,
         title: cmd.title.clone(),
         // Forward the command's origin URI (issue #352). A URL `--from` populates it (see
@@ -472,6 +474,33 @@ mod tests {
         assert_eq!(
             segmented.source_hash.as_deref(),
             Some("a".repeat(64).as_str())
+        );
+    }
+
+    #[test]
+    fn segmented_begin_payload_carries_the_idempotency_key() {
+        // Spike rung 3-C: the client-minted key threads from the command onto the wire so a
+        // begin whose ack was lost converges on the committed resource instead of duplicating.
+        let mut cmd = sample_cmd();
+        let key = uuid::Uuid::now_v7();
+        cmd.idempotency_key = Some(key);
+        let segmented = temper_core::types::ingest::SegmentedBegin {
+            total_blocks_hint: None,
+            block_budget: 262_144,
+            source_hash: None,
+        };
+        let payload = cmd_to_segmented_begin_payload(
+            &cmd,
+            "@me/temper",
+            "seg0".to_string(),
+            "packed".to_string(),
+            segmented,
+        )
+        .expect("should succeed");
+        assert_eq!(
+            payload.idempotency_key,
+            Some(key),
+            "the begin payload carries the command's idempotency key verbatim"
         );
     }
 

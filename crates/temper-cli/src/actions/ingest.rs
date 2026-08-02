@@ -258,6 +258,72 @@ pub struct SegmentedCreateParams<'a> {
     pub budget: usize,
 }
 
+/// Inputs to [`begin_segmented_attempt`], bundled per the >5-domain-params rule.
+#[cfg(feature = "embed")]
+struct BeginAttempt<'a> {
+    client: &'a temper_client::TemperClient,
+    cmd: &'a temper_workflow::operations::CreateResource,
+    context_ref: &'a str,
+    /// Segment 0's raw text (the create-path body block).
+    seg0_text: String,
+    /// Segment 0's already-chunked `ChunkData`, embedded + packed inside the call.
+    seg0_chunks: &'a [temper_ingest::chunk::ChunkData],
+    /// Total segment count, for the begin marker's `total_blocks_hint`.
+    total_segments: usize,
+    budget: usize,
+    source_hash: &'a str,
+    /// The key to send — the command's freshly-minted one on a fresh session, or the manifest's
+    /// PERSISTED one on a resume-replay (they can differ; the persisted one is what converges).
+    key: uuid::Uuid,
+}
+
+/// Embed segment 0, build the begin payload under `p.key`, and dispatch `begin_segmented`.
+///
+/// Shared by the fresh-session begin and the resume-replay begin (a prior attempt whose begin ack
+/// was lost, issue #581 rung 3-C). The key is set on the payload explicitly rather than trusting the
+/// command's own field: on a resume it is the key the interrupted attempt PERSISTED in the manifest,
+/// which may differ from the command's freshly-minted one, and replaying that exact key is what
+/// makes a lost-ack begin converge on the already-committed resource (via `(owner, key)` dedup)
+/// instead of minting a duplicate.
+///
+/// Returns the response plus the embed and upload durations so the caller folds them into its
+/// stage-timing counters exactly as the inline path used to.
+#[cfg(feature = "embed")]
+async fn begin_segmented_attempt(
+    p: BeginAttempt<'_>,
+) -> Result<(
+    temper_core::types::ingest::SegmentedBeginResponse,
+    std::time::Duration,
+    std::time::Duration,
+)> {
+    let embed_start = std::time::Instant::now();
+    let chunks_packed = embed_and_pack(p.seg0_chunks)?;
+    let embed_elapsed = embed_start.elapsed();
+
+    let segmented = temper_core::types::ingest::SegmentedBegin {
+        total_blocks_hint: Some(p.total_segments as u32),
+        block_budget: p.budget as u32,
+        source_hash: Some(p.source_hash.to_string()),
+    };
+    let mut payload = crate::cloud_backend::translators::cmd_to_segmented_begin_payload(
+        p.cmd,
+        p.context_ref,
+        p.seg0_text,
+        chunks_packed,
+        segmented,
+    )?;
+    payload.idempotency_key = Some(p.key);
+
+    let upload_start = std::time::Instant::now();
+    let response = p
+        .client
+        .ingest()
+        .begin_segmented(&payload)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    Ok((response, embed_elapsed, upload_start.elapsed()))
+}
+
 /// Stream a large body (`cmd.body` over `budget` bytes) through the segmented ingest
 /// endpoints: segment 0 lands via `begin_segmented` (the create path), segments `1..N` via
 /// `append_block`, then `finalize`. Writes the `.temper/` resume manifest after every landed
@@ -279,7 +345,9 @@ pub struct SegmentedCreateParams<'a> {
 pub async fn run_segmented_create(
     params: SegmentedCreateParams<'_>,
 ) -> Result<temper_workflow::types::ResourceRow> {
-    use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload, SegmentedBegin};
+    // `SegmentedBegin` is built inside `begin_segmented_attempt` (full path); only the append +
+    // finalize payloads are constructed inline here.
+    use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload};
 
     let SegmentedCreateParams {
         client,
@@ -326,11 +394,63 @@ pub async fn run_segmented_create(
         content.len() / 1024
     ));
 
+    // The client key for THIS attempt (issue #581 rung 3-C): the one `commands::resource` minted
+    // onto the command, with a defensive fresh mint if a caller ever built the command without one.
+    // A resume overrides it with the key the interrupted attempt persisted.
+    let attempt_key = cmd.idempotency_key.unwrap_or_else(uuid::Uuid::now_v7);
+
     let existing =
         crate::actions::ingest_manifest::find_resumable(vault_root, &source_hash, budget as u32)?;
 
-    let (resource_id, mut manifest, landed) = match existing {
-        Some((resource_id, mut manifest)) => {
+    // `manifest_path` is the ONE path every checkpoint below writes to. It is whatever
+    // `find_resumable` returned for a resume (so a legacy `<resource_id>.json` is updated in place,
+    // never orphaned), or `<attempt_key>.json` for a fresh session.
+    let (resource_id, mut manifest, landed, manifest_path) = match existing {
+        Some((manifest_path, mut manifest)) => {
+            // Resume. Prefer the resource id the interrupted attempt recorded; if its begin ack was
+            // lost before it could record one, replay begin with the PERSISTED key so the server
+            // converges on the committed resource — or mints fresh if the write never dispatched —
+            // either way handing back the real id. Without this, a lost-ack begin would leave no
+            // resource id, and a re-run would mint a duplicate: the exact hazard #581 names.
+            let resource_id = match manifest.resource_id {
+                Some(id) => id,
+                None => {
+                    let key = manifest.idempotency_key.ok_or_else(|| {
+                        TemperError::Project(
+                            "resume manifest has neither a resource id nor an idempotency key; \
+                             cannot recover — delete it and re-run to start a fresh ingest"
+                                .to_string(),
+                        )
+                    })?;
+                    crate::output::progress_line(
+                        "  resuming: begin was interrupted before it acknowledged — replaying it \
+                         with the saved key"
+                            .to_string(),
+                    );
+                    let (response, embed_d, upload_d) = begin_segmented_attempt(BeginAttempt {
+                        client,
+                        cmd,
+                        context_ref,
+                        seg0_text: segments[0].text.clone(),
+                        seg0_chunks: &chunked[0],
+                        total_segments: segments.len(),
+                        budget,
+                        source_hash: &source_hash,
+                        key,
+                    })
+                    .await?;
+                    bump(&embed_ns, embed_d);
+                    bump(&upload_ns, upload_d);
+                    seg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    chunk_count.fetch_add(chunked[0].len(), std::sync::atomic::Ordering::Relaxed);
+                    // Durably record the id BEFORE any append, so a second interruption resumes via
+                    // `list_blocks` rather than replaying begin again.
+                    manifest.resource_id = Some(response.resource_id);
+                    manifest.correlation_id = Some(response.correlation_id);
+                    crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
+                    response.resource_id
+                }
+            };
             // Re-verify against the live server rather than trusting the on-disk cache — the
             // manifest may be stale if a prior attempt crashed between a server-side landing
             // and the next `store` call.
@@ -345,53 +465,59 @@ pub async fn run_segmented_create(
                 "  resuming: {}/{total_segments} segments already present",
                 landed.len()
             ));
-            (resource_id, manifest, landed)
+            (resource_id, manifest, landed, manifest_path)
         }
         None => {
-            // Fresh session: segment 0 always lands via begin_segmented (the create path) —
-            // there is no resource to append a block to before this call returns one.
-            let embed_start = std::time::Instant::now();
-            let chunks_packed = embed_and_pack(&chunked[0])?;
-            bump(&embed_ns, embed_start.elapsed());
-            seg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            chunk_count.fetch_add(chunked[0].len(), std::sync::atomic::Ordering::Relaxed);
-            let segmented = SegmentedBegin {
-                total_blocks_hint: Some(segments.len() as u32),
-                block_budget: budget as u32,
-                source_hash: Some(source_hash.clone()),
-            };
-            let payload = crate::cloud_backend::translators::cmd_to_segmented_begin_payload(
-                cmd,
-                context_ref,
-                segments[0].text.clone(),
-                chunks_packed,
-                segmented,
-            )?;
-            let upload_start = std::time::Instant::now();
-            let response = client
-                .ingest()
-                .begin_segmented(&payload)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            bump(&upload_ns, upload_start.elapsed());
-            let manifest = crate::actions::ingest_manifest::IngestManifest {
-                resource_id: response.resource_id,
+            // Fresh session. Write a PENDING manifest keyed by the client key BEFORE begin, so a
+            // begin whose ack is lost is still recoverable on a re-run: `find_resumable` matches by
+            // source_hash and the resume branch above replays the persisted key. Segment 0 then
+            // lands via begin_segmented (the create path) — there is no resource to append a block
+            // to before this call returns one.
+            let manifest_path =
+                crate::actions::ingest_manifest::manifest_path(vault_root, attempt_key);
+            let mut manifest = crate::actions::ingest_manifest::IngestManifest {
+                idempotency_key: Some(attempt_key),
+                resource_id: None,
                 source_hash: source_hash.clone(),
                 block_budget: budget as u32,
                 segmenter_version: crate::actions::ingest_manifest::SEGMENTER_VERSION,
-                correlation_id: response.correlation_id,
-                blocks: response.blocks.clone(),
+                correlation_id: None,
+                blocks: Vec::new(),
                 finalized: false,
             };
-            crate::actions::ingest_manifest::store(
-                &crate::actions::ingest_manifest::manifest_path(vault_root, response.resource_id),
-                &manifest,
-            )?;
+            crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
+
+            let (response, embed_d, upload_d) = begin_segmented_attempt(BeginAttempt {
+                client,
+                cmd,
+                context_ref,
+                seg0_text: segments[0].text.clone(),
+                seg0_chunks: &chunked[0],
+                total_segments: segments.len(),
+                budget,
+                source_hash: &source_hash,
+                key: attempt_key,
+            })
+            .await?;
+            bump(&embed_ns, embed_d);
+            bump(&upload_ns, upload_d);
+            seg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            chunk_count.fetch_add(chunked[0].len(), std::sync::atomic::Ordering::Relaxed);
+
+            manifest.resource_id = Some(response.resource_id);
+            manifest.correlation_id = Some(response.correlation_id);
+            manifest.blocks = response.blocks.clone();
+            crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
             crate::output::progress_line(format!(
                 "  uploaded segment {}/{total_segments} (resource created)",
                 response.blocks.len()
             ));
-            (response.resource_id, manifest, response.blocks)
+            (
+                response.resource_id,
+                manifest,
+                response.blocks,
+                manifest_path,
+            )
         }
     };
 
@@ -469,8 +595,7 @@ pub async fn run_segmented_create(
                 "  uploaded segment {}/{total_segments}",
                 manifest.blocks.len()
             ));
-            let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
-            crate::actions::ingest_manifest::store(&path, manifest)?;
+            crate::actions::ingest_manifest::store(&manifest_path, manifest)?;
         }
         Ok::<(), TemperError>(())
     };
@@ -511,8 +636,6 @@ pub async fn run_segmented_create(
                 .resources()
                 .delete(resource_id, &Default::default())
                 .await;
-            let manifest_path =
-                crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
             let _ = std::fs::remove_file(&manifest_path);
             return Err(TemperError::ContentIntegrity(format!(
                 "upload integrity check failed for {:?}: {message}. The stored bytes do not match \
@@ -525,8 +648,7 @@ pub async fn run_segmented_create(
     }
 
     manifest.finalized = true;
-    let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
-    crate::actions::ingest_manifest::store(&path, &manifest)?;
+    crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
     crate::output::progress_line(format!("  finalized: {total_segments} segments committed"));
 
     use std::sync::atomic::Ordering::Relaxed;

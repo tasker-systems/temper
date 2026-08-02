@@ -74,9 +74,33 @@ export const UPSTREAM_CONNECT_TIMEOUT_MS = 20_000;
  * which. Replaying a write could double-apply it — this proxy carries
  * `PATCH /api/resources` and `POST /api/auditor/.../complete`, both
  * non-idempotent — so only idempotent, effectively-bodyless methods are
- * retried; everything else surfaces the failure as 502.
+ * retried by default; a write is retried only when it carries an idempotency
+ * key (see {@link IDEMPOTENCY_KEY_HEADER}). Everything else surfaces as 502.
  */
 const RETRYABLE_METHODS = new Set(['GET', 'HEAD']);
+
+/**
+ * Header a keyed write carries so the proxy can recognise it as retry-safe
+ * WITHOUT parsing the body (issue #581, spike rung 3-C). It mirrors the request
+ * body's `idempotency_key`; the temper-client sets both (see that crate's
+ * `IDEMPOTENCY_KEY_HEADER`). The API dedups a keyed create on `(owner, key)`, so
+ * a replay converges on the already-committed resource instead of minting a
+ * duplicate — which is exactly what makes a keyed `POST` as replay-safe as a GET.
+ * Compared case-insensitively via `Headers.has`.
+ */
+const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+
+/**
+ * Whether a failed forward may be replayed: a safe method, or a write carrying a
+ * client-minted idempotency key. An unkeyed write is never replayed — a dropped
+ * connection there is genuinely ambiguous and a retry could double-apply.
+ */
+function isReplayable(request: Request): boolean {
+	return (
+		RETRYABLE_METHODS.has(request.method.toUpperCase()) ||
+		request.headers.has(IDEMPOTENCY_KEY_HEADER)
+	);
+}
 
 /** Options for {@link forwardRequest}; defaulted in production, overridden in tests. */
 export interface ForwardOptions {
@@ -151,10 +175,23 @@ async function forwardOnce(
 	request: Request,
 	traceparent: string,
 	timeoutMs: number,
+	bufferedBody?: ArrayBuffer,
 ): Promise<Response> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	const outbound = new Request(target, request);
+	// A request body is a single-use stream: `new Request(target, request)` consumes it, so a second
+	// attempt would send nothing. When the caller buffered the body for replay (a keyed write), build
+	// the outbound request from that buffer instead, so every attempt sends identical bytes. GET/HEAD
+	// have no body and take the plain clone path.
+	const outbound =
+		bufferedBody !== undefined
+			? new Request(target, {
+					method: request.method,
+					headers: request.headers,
+					body: bufferedBody,
+					redirect: 'manual',
+				})
+			: new Request(target, request);
 	// Set (not append) so a forwarded inbound value is not duplicated, and a
 	// generated one is present exactly once.
 	outbound.headers.set(TRACEPARENT, traceparent);
@@ -202,14 +239,17 @@ export async function forwardRequest(
 	// Prefer the active UI span's id (exported, so a receiver's link resolves) over a
 	// forwarded/minted one; fall back to `resolveTraceparent` when export is disabled.
 	const traceparent = activeTraceparent() ?? resolveTraceparent(request);
-	const retries = RETRYABLE_METHODS.has(request.method.toUpperCase())
-		? (options.maxRetries ?? 1)
-		: 0;
+	const retries = isReplayable(request) ? (options.maxRetries ?? 1) : 0;
+
+	// Buffer a retryable write's body once, up front, so each attempt replays identical bytes (see
+	// `forwardOnce`). Only for a keyed write with a body and retries enabled — GET/HEAD have no body,
+	// and an unkeyed write never retries, so both skip the read and stream straight through.
+	const bufferedBody = retries > 0 && request.body ? await request.arrayBuffer() : undefined;
 
 	let lastErr: unknown;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
-			const response = await forwardOnce(target, request, traceparent, timeoutMs);
+			const response = await forwardOnce(target, request, traceparent, timeoutMs, bufferedBody);
 			// An upstream that answered with a server error is a different failure
 			// from an unreachable one — it is relayed as-is (not rewritten), but the
 			// join key is logged so it can be lined up against the upstream's own

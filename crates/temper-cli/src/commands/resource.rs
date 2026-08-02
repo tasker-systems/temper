@@ -484,7 +484,14 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     let act_for_edges = act.clone();
 
     let cmd = temper_workflow::operations::CreateResource {
-        idempotency_key: None,
+        // Mint an owner-scoped create idempotency key up front (issue #581, spike rung 3-C). Every
+        // CLI create carries one so a transient-failure retry — the in-process HTTP retry loop, or a
+        // segmented resume that replays the persisted key — converges on the already-committed
+        // resource via `(owner, key)` dedup instead of minting a duplicate. UUIDv7 by convention
+        // (time-sortable, like every other id this repo mints); the server never treats it as a
+        // resource id. The segmented path may replace this with a resumed key it persisted on a
+        // prior attempt (see `run_segmented_create`).
+        idempotency_key: Some(uuid::Uuid::now_v7()),
         slug: slug_resolved,
         doctype: doc_type.to_string(),
         home,
