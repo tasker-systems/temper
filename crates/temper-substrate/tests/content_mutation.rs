@@ -179,7 +179,7 @@ async fn create_with_sources_carries_incorporation_in_payload(pool: sqlx::PgPool
     writes::create_resource_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled concept",
             origin_uri: "temper://prov/distilled",
             body: "deployment pipeline staging and rollout cadence",
@@ -254,7 +254,7 @@ async fn create_with_sources_writes_block_provenance(pool: sqlx::PgPool) {
     writes::create_resource_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/c",
             body: "deployment pipeline staging and rollout cadence",
@@ -303,7 +303,7 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
     let resource = writes::create_resource_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/accrete",
             body: "deployment pipeline staging and rollout cadence",
@@ -392,7 +392,7 @@ async fn update_with_content_block_targets_named_block(pool: sqlx::PgPool) {
     let resource = writes::create_resource_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/cb-target",
             body: "deployment pipeline staging and rollout cadence",
@@ -471,7 +471,7 @@ async fn update_with_foreign_content_block_is_rejected(pool: sqlx::PgPool) {
     let resource = writes::create_resource_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/cb-foreign",
             body: "deployment pipeline staging and rollout cadence",
@@ -529,7 +529,7 @@ async fn update_with_folded_content_block_is_rejected(pool: sqlx::PgPool) {
     let resource = writes::create_resource_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/cb-folded",
             body: "deployment pipeline staging and rollout cadence",
@@ -601,7 +601,7 @@ async fn annotate_records_provenance_without_touching_chunks(pool: sqlx::PgPool)
     let resource = writes::create_resource_deferred_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/annotate",
             body: "deployment pipeline staging and rollout cadence",
@@ -759,7 +759,7 @@ async fn annotate_with_remote_locator_round_trips(pool: sqlx::PgPool) {
     let resource = writes::create_resource_deferred_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "chapter 11",
             origin_uri: "temper://prov/locator",
             body: "part eleven of a sixteen chunk series about staged rollout",
@@ -823,7 +823,7 @@ async fn annotate_with_empty_sources_is_rejected(pool: sqlx::PgPool) {
     let resource = writes::create_resource_deferred_with(
         &pool,
         CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             title: "distilled",
             origin_uri: "temper://prov/annotate-empty",
             body: "deployment pipeline staging and rollout cadence",
@@ -873,7 +873,7 @@ async fn create_with_remote_source_mints_dedups_and_surfaces_url(pool: sqlx::PgP
     let (owner, emitter, home) = prov_fixture(&pool).await;
 
     let mk = |title: &'static str, origin: &'static str, url: &'static str| CreateParams {
-        resource_id: None,
+        idempotency_key: None,
         title,
         origin_uri: origin,
         body: "deployment pipeline staging and rollout cadence",

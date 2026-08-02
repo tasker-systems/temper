@@ -129,7 +129,7 @@ pub async fn create(
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
 
     let cmd = CreateResource {
-        resource_id: None,
+        idempotency_key: None,
         home,
         doctype: payload.doc_type_name,
         // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is

@@ -243,7 +243,7 @@ pub async fn create(
     let act = req.act.into_act_context().map_err(ApiError::from)?;
 
     let cmd = CreateResource {
-        resource_id: None,
+        idempotency_key: None,
         home: HomeAnchor::Context(context),
         doctype: req.doc_type,
         slug,

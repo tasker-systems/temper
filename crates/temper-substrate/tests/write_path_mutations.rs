@@ -558,7 +558,7 @@ async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Orig",
             origin_uri: "temper://w/r",

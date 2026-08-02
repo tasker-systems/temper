@@ -949,7 +949,7 @@ async fn create_into_cogmap_denied_at_backend_for_nongranted(pool: PgPool) {
 
     fn cmd(cogmap: Uuid, slug: &str) -> CreateResource {
         CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: slug.to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Cogmap(CogmapId::from(cogmap)),

@@ -82,7 +82,7 @@ async fn create_populates_index_with_title_and_body(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Salamander architecture",
             origin_uri: "temper://idx/r",
@@ -124,7 +124,7 @@ async fn deferred_create_is_fts_immediate_then_backfills_vectors(pool: sqlx::PgP
     let r = writes::create_resource_deferred_with(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Deferred doc",
             origin_uri: "temper://def/r",
@@ -214,7 +214,7 @@ async fn body_edit_updates_index(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Doc",
             origin_uri: "temper://idx/r",
@@ -271,7 +271,7 @@ async fn title_only_update_updates_index(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Aardvark",
             origin_uri: "temper://idx/r",
@@ -332,7 +332,7 @@ async fn backfill_covers_preexisting_rows(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Backfillable",
             origin_uri: "temper://idx/r",
@@ -375,7 +375,7 @@ async fn soft_deleted_resource_excluded_from_fts_search(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Phlogiston study",
             origin_uri: "temper://del/r",
@@ -450,7 +450,7 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
         writes::create_resource(
             &pool,
             writes::CreateParams {
-                resource_id: None,
+                idempotency_key: None,
                 sources: vec![],
                 title: t,
                 origin_uri: u,
@@ -537,7 +537,7 @@ async fn fts_search_supports_quoted_phrase(pool: sqlx::PgPool) {
             writes::create_resource(
                 &pool,
                 writes::CreateParams {
-                    resource_id: None,
+                    idempotency_key: None,
                     sources: vec![],
                     title,
                     origin_uri: uri,
@@ -625,7 +625,7 @@ async fn create_resource_homes_in_cogmap(pool: sqlx::PgPool) {
     let id = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "concept",
             origin_uri: "",
@@ -766,7 +766,7 @@ async fn open_meta_keywords_are_searchable_and_boost_rank(pool: sqlx::PgPool) {
             writes::create_resource(
                 &pool,
                 writes::CreateParams {
-                    resource_id: None,
+                    idempotency_key: None,
                     sources: vec![],
                     title: "Ocean layers",
                     origin_uri: uri,
@@ -835,7 +835,7 @@ async fn open_meta_descriptor_is_searchable(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Section 4",
             origin_uri: "temper://desc/r",
@@ -875,7 +875,7 @@ async fn updating_open_meta_keyword_reindexes(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
-            resource_id: None,
+            idempotency_key: None,
             sources: vec![],
             title: "Doc",
             origin_uri: "temper://reidx/r",

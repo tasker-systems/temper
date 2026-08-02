@@ -63,7 +63,7 @@ async fn open_meta_round_trips_on_create_and_update(pool: PgPool) {
     // --- create: managed + open tiers on the same call, chunks_packed None ---
     let created = backend
         .create_resource(CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "zz-open-meta-probe".to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),
@@ -150,7 +150,7 @@ async fn open_meta_add_unions_instead_of_replacing(pool: PgPool) {
 
     let created = backend
         .create_resource(CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "zz-open-meta-add-probe".to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),

@@ -1,23 +1,26 @@
-//! Integration test — client-supplied resource id as the create idempotency key (spike rung 3,
-//! issue #581). A create carrying a `resource_id` mints the resource *under that id*; a replay of
-//! the same keyed create converges on the already-committed resource instead of minting a twin
-//! (the safe recovery for a lost-acknowledgment retry). A replay of a **foreign** id is refused
-//! leak-safely as `NotFound` — never 403/409, so a stable id can't become an existence oracle.
+//! Integration test — owner-scoped create idempotency key (issue #581, spike rung 3).
+//!
+//! A create carrying an `idempotency_key` claims the `(owner, key)` slot atomically with the create;
+//! a replay of the same key by the same owner converges on the already-committed resource instead of
+//! minting a twin. The key is **owner-scoped**, which is what makes it safe: the *same key value*
+//! supplied by a *different* owner does not collide and is not refused — it simply mints a fresh
+//! resource in that owner's namespace. So a key can never be an existence oracle (a foreign key is
+//! absent from your namespace, exactly as a read cannot tell nonexistent from hidden). The server
+//! always mints the resource id; the client never supplies one.
 #![cfg(feature = "test-db")]
 
 use sqlx::PgPool;
 
-use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
-/// Seed a substrate profile + a profile-owned `temper` context (the minimum the write path's
-/// `resolve_emitter` + visibility gate require). Each test-target crate keeps its own copy so it
-/// has no cross-target harness dependency — mirrors `segmented_backend_test.rs`.
+/// Seed a substrate profile and a profile-owned context (the minimum the write path's
+/// `resolve_emitter` and visibility gate require). Each test-target crate keeps its own copy,
+/// mirroring `segmented_backend_test.rs`.
 async fn seed_profile_with_context(
     pool: &PgPool,
     email: &str,
@@ -58,14 +61,14 @@ async fn seed_profile_with_context(
     (profile_id, context_id)
 }
 
-/// Build a `CreateResource` for the owned `temper` context, carrying `resource_id`.
-fn keyed_create(
+/// Build a `CreateResource` for the owned context, carrying an optional idempotency key.
+fn create_cmd(
     context: uuid::Uuid,
     slug: &str,
-    resource_id: Option<uuid::Uuid>,
+    idempotency_key: Option<uuid::Uuid>,
 ) -> CreateResource {
     CreateResource {
-        resource_id,
+        idempotency_key,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(ContextId::from(context)),
@@ -82,9 +85,8 @@ fn keyed_create(
     }
 }
 
-/// Count live resources homed in a specific context. `kb_resources` carries no owner column
-/// (ownership is derived via the home), so a per-context count is what isolates a test's own writes
-/// from the L0 kernel resources a migrated DB already seeds. Each test uses a fresh context.
+/// Count live resources homed in a context — isolates a test's own writes from the L0 kernel
+/// resources a migrated DB seeds. Each test uses a fresh context.
 async fn homed_count(pool: &PgPool, context: uuid::Uuid) -> i64 {
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM kb_resource_homes h \
@@ -97,102 +99,120 @@ async fn homed_count(pool: &PgPool, context: uuid::Uuid) -> i64 {
     .expect("count homed resources")
 }
 
-/// A create carrying a fresh client-minted id mints the resource *under that exact id*.
+/// A keyed create mints a resource under a **server-generated** id (never the key), and records the
+/// `(owner, key) → resource` mapping.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn keyed_create_mints_under_the_supplied_id(pool: PgPool) {
+async fn keyed_create_mints_a_resource_and_records_the_mapping(pool: PgPool) {
     let (profile, context) =
         seed_profile_with_context(&pool, "keyed-mint@example.com", "temper").await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
-    let id = uuid::Uuid::now_v7();
+    let key = uuid::Uuid::now_v7();
 
     let row = backend
-        .create_resource(keyed_create(context, "keyed-doc", Some(id)))
+        .create_resource(create_cmd(context, "keyed-doc", Some(key)))
         .await
         .expect("keyed create")
         .value;
 
-    assert_eq!(
-        row.id,
-        ResourceId::from(id),
-        "the resource must be born under the supplied id"
+    assert_ne!(
+        uuid::Uuid::from(row.id),
+        key,
+        "the resource id is server-minted, never the client's key"
     );
     assert_eq!(homed_count(&pool, context).await, 1);
+    let mapped: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT resource_id FROM kb_idempotency_keys WHERE owner_profile_id = $1 AND idempotency_key = $2",
+    )
+    .bind(profile)
+    .bind(key)
+    .fetch_one(&pool)
+    .await
+    .expect("mapping row recorded");
+    assert_eq!(
+        mapped,
+        uuid::Uuid::from(row.id),
+        "mapping points at the minted resource"
+    );
 }
 
-/// Replaying the SAME keyed create converges on the already-committed resource — no twin, no
-/// error. This is the lost-acknowledgment recovery: the client retries with the same id and gets
-/// the existing resource back.
+/// Replaying the SAME key by the SAME owner converges on the already-committed resource — no twin,
+/// no error. The lost-acknowledgment recovery.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn replaying_a_keyed_create_returns_the_existing_resource(pool: PgPool) {
+async fn replaying_a_key_returns_the_same_resource(pool: PgPool) {
     let (profile, context) =
         seed_profile_with_context(&pool, "keyed-replay@example.com", "temper").await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
-    let id = uuid::Uuid::now_v7();
+    let key = uuid::Uuid::now_v7();
 
     let first = backend
-        .create_resource(keyed_create(context, "keyed-doc", Some(id)))
+        .create_resource(create_cmd(context, "keyed-doc", Some(key)))
         .await
         .expect("first keyed create")
         .value;
     let second = backend
-        .create_resource(keyed_create(context, "keyed-doc", Some(id)))
+        .create_resource(create_cmd(context, "keyed-doc-attempt-2", Some(key)))
         .await
-        .expect("replayed keyed create must succeed, not conflict")
+        .expect("replay must succeed, not conflict")
         .value;
 
-    assert_eq!(first.id, ResourceId::from(id));
-    assert_eq!(second.id, first.id, "replay must return the same resource");
+    assert_eq!(second.id, first.id, "replay returns the original resource");
     assert_eq!(
         homed_count(&pool, context).await,
         1,
-        "a replay must not mint a duplicate"
+        "a replay mints no duplicate"
     );
 }
 
-/// A create replaying a FOREIGN id (one that belongs to another principal) is refused as
-/// `NotFound` — never `Forbidden`/`Conflict` — so a stable id discloses nothing a GET would not,
-/// and the other principal's resource is untouched.
+/// The key is **owner-scoped**: the SAME key value supplied by a DIFFERENT owner does not collide,
+/// is not refused (no 404), and mints a fresh resource in that owner's namespace. This is the
+/// no-oracle property — a foreign key is simply absent from your namespace.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn keyed_create_on_a_foreign_id_is_notfound_and_leaves_the_owner_untouched(pool: PgPool) {
-    // Principal A owns id X.
+async fn the_same_key_from_a_different_owner_mints_fresh_no_oracle(pool: PgPool) {
+    let key = uuid::Uuid::now_v7();
+
     let (profile_a, context_a) =
         seed_profile_with_context(&pool, "owner-a@example.com", "temper").await;
     let backend_a = DbBackend::new(pool.clone(), ProfileId::from(profile_a));
-    let id = uuid::Uuid::now_v7();
-    let a_row = backend_a
-        .create_resource(keyed_create(context_a, "a-doc", Some(id)))
+    let a = backend_a
+        .create_resource(create_cmd(context_a, "a-doc", Some(key)))
         .await
-        .expect("A creates under id X")
+        .expect("A creates under key K")
         .value;
-    assert_eq!(a_row.id, ResourceId::from(id));
 
-    // Principal B (a different owner + context) replays a create under A's id.
     let (profile_b, context_b) =
-        seed_profile_with_context(&pool, "intruder-b@example.com", "temper-b").await;
+        seed_profile_with_context(&pool, "owner-b@example.com", "temper-b").await;
     let backend_b = DbBackend::new(pool.clone(), ProfileId::from(profile_b));
-    let err = backend_b
-        .create_resource(keyed_create(context_b, "b-doc", Some(id)))
+    let b = backend_b
+        .create_resource(create_cmd(context_b, "b-doc", Some(key)))
         .await
-        .expect_err("B must not adopt A's id");
+        .expect("B's create under the same key K must succeed (owner-scoped), not 404 or collide")
+        .value;
 
-    match err {
-        TemperError::NotFound(_) => {}
-        other => panic!("foreign-id keyed create must be NotFound (leak-safe), got {other:?}"),
-    }
-    // A still owns exactly her one resource, unchanged (owner lives on the home, not kb_resources).
-    assert_eq!(homed_count(&pool, context_a).await, 1);
-    let owner: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT owner_profile_id FROM kb_resource_homes WHERE resource_id = $1",
+    assert_ne!(
+        b.id, a.id,
+        "B mints its own resource; it does not adopt or observe A's"
+    );
+    assert_eq!(homed_count(&pool, context_a).await, 1, "A untouched");
+    assert_eq!(
+        homed_count(&pool, context_b).await,
+        1,
+        "B got its own resource"
+    );
+    // Two independent mappings, one per owner.
+    let rows: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM kb_idempotency_keys WHERE idempotency_key = $1",
     )
-    .bind(id)
+    .bind(key)
     .fetch_one(&pool)
     .await
-    .expect("A's resource still present");
-    assert_eq!(owner, profile_a, "A's resource must be untouched");
+    .expect("count key mappings");
+    assert_eq!(
+        rows, 2,
+        "one (owner,key) mapping per owner — namespaces are disjoint"
+    );
 }
 
-/// A create with NO supplied id keeps today's behaviour: a fresh id is minted, and two such
-/// creates are distinct resources (the id is the identity, not the body).
+/// A create with no key keeps today's behaviour: a fresh id each time, distinct resources.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn unkeyed_create_mints_fresh_each_time(pool: PgPool) {
     let (profile, context) =
@@ -200,12 +220,12 @@ async fn unkeyed_create_mints_fresh_each_time(pool: PgPool) {
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
 
     let a = backend
-        .create_resource(keyed_create(context, "doc", None))
+        .create_resource(create_cmd(context, "doc", None))
         .await
         .expect("first create")
         .value;
     let b = backend
-        .create_resource(keyed_create(context, "doc", None))
+        .create_resource(create_cmd(context, "doc", None))
         .await
         .expect("second create")
         .value;

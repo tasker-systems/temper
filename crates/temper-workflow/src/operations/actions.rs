@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn validate_create_accepts_valid_command() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "valid-slug".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -811,7 +811,7 @@ mod tests {
     #[test]
     fn validate_create_rejects_invalid_slug() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "INVALID".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -839,7 +839,7 @@ mod tests {
         // Open tail (Task A2): a genuinely-unknown doctype has no per-doctype
         // invariants to enforce and passes validate_create.
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "valid-slug".to_string(),
             doctype: "anecdote".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn validate_create_rejects_empty_doctype() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "valid-slug".to_string(),
             doctype: String::new(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -891,7 +891,7 @@ mod tests {
     #[test]
     fn validate_create_rejects_empty_title() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "valid".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -1117,7 +1117,7 @@ mod tests {
     #[test]
     fn validate_create_rejects_task_with_unknown_mode() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "2026-05-14-test-task".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -1149,7 +1149,7 @@ mod tests {
     #[test]
     fn validate_create_rejects_task_with_unknown_effort() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "2026-05-14-test-task".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -1181,7 +1181,7 @@ mod tests {
     #[test]
     fn validate_create_accepts_valid_task() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "2026-05-14-test-task".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(
@@ -1209,7 +1209,7 @@ mod tests {
     #[test]
     fn validate_create_accepts_research_with_arbitrary_managed_meta() {
         let cmd = CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "2026-05-14-test-research".to_string(),
             doctype: "research".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(

@@ -342,7 +342,7 @@ mod tests {
     // ungated.
     fn sample_cmd() -> CreateResource {
         CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "2026-05-18-test".to_string(),
             doctype: "task".to_string(),
             home: temper_core::types::home::HomeAnchor::Context(

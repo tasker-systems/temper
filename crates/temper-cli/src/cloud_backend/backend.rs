@@ -841,7 +841,7 @@ mod non_embed_impl {
             use temper_workflow::operations::CreateResource;
             use temper_workflow::types::ManagedMeta;
             let cmd = CreateResource {
-                resource_id: None,
+                idempotency_key: None,
                 slug: "test".to_string(),
                 doctype: "task".to_string(),
                 home: temper_core::types::home::HomeAnchor::Context(

@@ -56,7 +56,7 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 
 fn create_cmd(context: Uuid, slug: &str) -> CreateResource {
     CreateResource {
-        resource_id: None,
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(ContextId::from(context)),

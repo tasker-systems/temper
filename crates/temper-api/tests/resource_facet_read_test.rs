@@ -43,7 +43,7 @@ async fn owner_with_context(pool: &PgPool, email: &str) -> (DbBackend, ProfileId
 
 fn create_cmd(context: ContextId, slug: &str) -> CreateResource {
     CreateResource {
-        resource_id: None,
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(context),

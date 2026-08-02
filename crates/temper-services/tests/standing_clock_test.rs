@@ -99,7 +99,7 @@ fn create_cmd(
 ) -> CreateResource {
     let content = format!("body of {title}");
     CreateResource {
-        resource_id: None,
+        idempotency_key: None,
         slug: slug.to_string(),
         doctype: "research".to_string(),
         home: HomeAnchor::Context(ContextId::from(context)),
@@ -158,7 +158,7 @@ async fn a_resource_create_ticks_the_standing_memo(pool: PgPool) {
 
     let created = backend
         .create_resource(CreateResource {
-            resource_id: None,
+            idempotency_key: None,
             slug: "zz-standing-probe".to_string(),
             doctype: "research".to_string(),
             home: HomeAnchor::Context(ContextId::from(context)),
