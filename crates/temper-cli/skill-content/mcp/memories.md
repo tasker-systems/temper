@@ -28,7 +28,16 @@ it at write time**:
   context *is* choosing the audience.
 - **A near-duplicate is for a human to judge.** Two accounts of nearly the same thing are surfaced
   for a decision, never merged automatically — one of them may be the account someone wanted to
-  compare against.
+  compare against. Nothing detects them for you, so before authoring into a context others write
+  to, read what is already there and **compare the claim, not the wording**. Shared project
+  vocabulary is not overlap of claim: two memories naming the same subsystem, command or CI job
+  routinely assert unrelated things, and a shared context accumulates exactly that vocabulary.
+  Expect three outcome kinds, because an author who expects only the first mis-handles the other
+  two — a **duplicate** (one incident recorded twice, often from two machines; resolved by keeping
+  the older, richer account, which no similarity score encodes), a **supersession** (a newer
+  account strictly richer than the one it covers), and **both stale** (both out of date, the newer
+  one still the more wrong — recency arbitrates nothing). Surface the short list; resolving one is
+  a human's call, not the authoring agent's. Nothing enforces this — it is judgement, not a gate.
 
 ## Recording that a memory was load-bearing
 

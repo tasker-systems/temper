@@ -33,16 +33,58 @@ from its filename. It is idempotent: a file already carrying a `title:` is skipp
 pins `metadata.modified` to the file's pre-write mtime, so the write's own mtime bump cannot
 re-date a claim nobody re-checked.
 
-**`temper memory migrate` moves the files in, and it reconciles rather than bulk-imports.** Before
-each write it searches the target context and **surfaces near-matches for you to judge** — it never
-resolves an overlap itself. Three consequences a reader who expects a bulk import will trip over:
+**`temper memory migrate` moves the files in, and it reconciles rather than bulk-imports.** The
+reconciliation is exactly one thing: a file already in Temper is matched on `open_meta.source_file`
+and skipped. **It detects nothing about near-duplicates** — it searches nothing and compares
+nothing, so two accounts of one incident written on two machines both land. Three consequences a
+reader who expects a bulk import will trip over:
 
-- It is **interactive by default**, and the prompt's default answer is *no*. With no terminal
-  attached it **refuses to write** unless `--unattended` explicitly authorizes a run that *skips
-  every collision* rather than resolving one.
+- It is **interactive by default** — one confirmation for the whole batch (count, target context,
+  cohort), defaulting to *no*, and it states plainly there that near-duplicates are not detected.
+  A batch with nothing in it never asks. With no terminal attached it **refuses to write** unless
+  `--unattended` authorizes writing without that confirmation. `--unattended` skips no check;
+  there is no check to skip.
 - `--dry-run` is always permitted and writes nothing. Run it first.
-- Re-running is safe. A file already in Temper is matched on `open_meta.source_file` and skipped,
-  so a run interrupted halfway is resumed rather than duplicated.
+- Re-running is safe. The `source_file` match is what makes a run interrupted halfway resume rather
+  than duplicate.
+
+### Before migrating, read for near-duplicates yourself
+
+A pre-write full-text search used to do this, and it was deleted because it did not work: against a
+real 184-memory store on 2026-08-02 it surfaced **54 collisions, 3 of them genuinely overlapping**
+— 51 false positives, ~94% noise. The false positives matched on *shared project vocabulary*, not
+on claim: `temper invocation` was surfaced against `NEVER abbreviate a UUIDv7 to its prefix`,
+`cargo make cannot` against `the ts-rs drift gate`. Both mention temper, or cargo, or a CI job.
+Full-text search cannot see that they make unrelated claims, and this gets **worse in a shared
+context, not better** — shared vocabulary is exactly what a team's context accumulates.
+
+**The rule did not go with the mechanism.** Two accounts of nearly the same thing are surfaced for
+judgment, never merged automatically. What changed is who forms the candidate set and on what
+basis: read the local memories against what the store already holds, and
+**compare the claim, not the wording**. Two memories about one subsystem are not an overlap; two
+memories asserting the same thing are, however differently they are phrased. Bring a short list a
+human can actually adjudicate.
+
+**Three outcome kinds, each observed on 2026-08-02.** A reader who expects only the first will
+mis-handle the other two:
+
+- **Duplicate** — the same incident documented twice, in that case on two different machines.
+  Resolved by keeping the **older, richer** account: a judgement no confidence score encodes.
+- **Supersession** — a three-weeks-newer account, strictly richer than the one it covers.
+- **Both stale** — both accounts out of date, and the newer one still wrong. The real instance was
+  two memories about what triggers an `sqlx::migrate!` rebuild; the more recent one was the more
+  wrong. **Recency arbitrated nothing.**
+
+**Say what this costs: a compiled-in gate is unskippable, and this is guidance, which is skippable
+by construction.** An agent can simply not do it. The trade is an *enforcement* mechanism for a
+*judgement* mechanism, and it is defensible only because the enforcement traded away was 94% noise
+and was already being switched off under pressure — **not** because guidance is as strong as a
+gate. It is not.
+
+Two repairs that look obvious are **rejected**, not deferred: tuning the score, or swapping
+full-text for embedding cosine — several of those 51 false positives are genuinely *about* the
+same subsystem and would score **higher** under embeddings; and merging automatically above a
+confidence threshold, which is the one thing the rule forbids.
 
 One cohort per run, keyed on the files' own frontmatter `type`:
 

@@ -1408,8 +1408,10 @@ mod tests {
     }
 
     /// A reader who takes `migrate` for a bulk import runs it unattended and is surprised by a
-    /// refusal — or, worse, reaches for `--unattended` without knowing it *skips* every collision
-    /// rather than resolving one. Each of these carries a consequence a session acts on.
+    /// refusal — or, worse, reads the surviving batch confirmation as a duplicate check. It is
+    /// one: the pre-write search was deleted, so `migrate`'s whole reconciliation is the
+    /// `source_file` skip, and `--unattended` authorizes the batch rather than skipping any check.
+    /// Each of these carries a consequence a session acts on.
     #[test]
     fn the_cli_skill_says_migrate_reconciles_rather_than_bulk_imports() {
         let rendered = MEMORIES_CLI_MD;
@@ -1420,6 +1422,7 @@ mod tests {
             "--unattended",
             "--dry-run",
             "source_file",
+            "detects nothing about near-duplicates",
         ] {
             assert!(
                 rendered.contains(claim),
@@ -1466,6 +1469,45 @@ mod tests {
             !rendered.contains("temper memory"),
             "Desktop has no CLI; pointing it at a CLI command is a dead end"
         );
+    }
+
+    /// The pre-write collision search is gone — measured at 54 surfaced / 3 real on a 184-memory
+    /// store `[2026-08-02]`, ~94% of it matching on shared project vocabulary rather than on
+    /// claim. The **rule** it enforced is not gone, so the discipline now lives in the prose on
+    /// both surfaces, and prose is the only thing carrying it: nothing compiled in will fire if
+    /// this is dropped.
+    ///
+    /// Asserted on the load-bearing terms, not on sentences. `duplicate` alone would pass on any
+    /// paragraph containing the word, which is precisely the protection this needs not to be:
+    ///
+    /// - `the claim, not the wording` — what to compare. Without it a reader falls back to
+    ///   comparing text, which is the failure the deleted search embodied.
+    /// - `older, richer` / `strictly richer` / `both stale` — the three observed outcome kinds,
+    ///   one term each. They are asserted separately because they resolve *differently*: the first
+    ///   keeps the **older** account, and the third is the case where recency arbitrates nothing.
+    ///   A reader who learns only "duplicate" mis-handles the other two.
+    ///
+    /// Lower-cased before matching so a heading, a bolded label or a sentence-initial capital is
+    /// not a failure — the test is about the content being present, not its typography.
+    #[test]
+    fn both_memory_surfaces_teach_judging_a_near_duplicate_by_claim() {
+        for (surface, rendered) in [("CLI", MEMORIES_CLI_MD), ("MCP", MEMORIES_MCP_MD)] {
+            let lowered = rendered.to_lowercase();
+            for claim in [
+                "the claim, not the wording",
+                "older, richer",
+                "strictly richer",
+                "both stale",
+            ] {
+                assert!(
+                    lowered.contains(claim),
+                    "the {surface} memory guidance never states `{claim}` — with the collision \
+                     search deleted, an author who is not told to compare the claim will compare \
+                     wording, and one who is told only about duplicates will mis-resolve a \
+                     supersession or a pair that are both stale"
+                );
+            }
+        }
     }
 
     /// `memories.md` is shipped in both trees but is dead content unless each surface's router

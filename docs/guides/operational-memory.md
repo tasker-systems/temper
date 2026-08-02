@@ -183,11 +183,39 @@ On the run above the 182 skips break down as: 69 *already in Temper (matched by 
   first `project_contexts` entry otherwise; `--context` overrides it. Run it once per cohort.
 - **Re-runs are safe.** A file already in Temper is matched on `source_file` and skipped, so an
   interrupted batch is resumed by running it again rather than by reasoning about what got through.
-- **It searches before each write** and surfaces near-matches for you to judge. It never resolves an
-  overlap itself.
-- **Interactive by default**, and it *refuses to write with no terminal attached* unless
-  `--unattended` explicitly authorizes a run — which then **skips** every collision rather than
-  resolving one. `--dry-run` is always permitted and writes nothing.
+- **It detects nothing about near-duplicates.** The `source_file` skip above is the whole of its
+  reconciliation; nothing is compared against what the target context already holds, so two accounts
+  of one incident written on two machines both land. Adjudicating overlap is a step to take *before*
+  running it — see [Reading for near-duplicates](#reading-for-near-duplicates-is-yours-now).
+- **Interactive by default**, where it confirms the whole batch once — count, target context, cohort
+  — defaulting to *no*, and says plainly at the prompt that near-duplicates are not detected. A batch
+  with nothing in it never asks. It *refuses to write with no terminal attached* unless
+  `--unattended` authorizes writing without that confirmation. `--dry-run` is always permitted and
+  writes nothing.
+
+### Reading for near-duplicates is yours now
+
+A pre-write full-text search used to surface overlapping memories for you to judge. **It was deleted
+on 2026-08-02, and the measurement is why:** against a real 184-memory store it surfaced 54
+collisions, **3** of which genuinely overlapped. The other 51 matched on *shared project vocabulary*
+rather than on claim — `temper invocation` against `NEVER abbreviate a UUIDv7 to its prefix`,
+`cargo make cannot` against `the ts-rs drift gate`. Full-text search cannot see that two texts make
+unrelated claims, and this gets **worse in a shared context, not better**, because shared vocabulary
+is exactly what a team's context accumulates.
+
+**The rule did not go with the mechanism.** Two accounts of nearly the same thing are still surfaced
+for judgment and never merged automatically. What changed is who forms the candidate set: read the
+local memories against what the store already holds and **compare the claim, not the wording**. Three
+outcome kinds were each observed on 2026-08-02, and a reader who expects only the first will
+mis-handle the other two — a **duplicate** (one incident recorded twice, resolved by keeping the
+older, richer account), a **supersession** (a newer account strictly richer than the one it covers),
+and **both stale** (both out of date, the newer one still the more wrong — recency arbitrated
+nothing). The `memories` skill carries the working form of this on both surfaces.
+
+**What this costs, plainly.** A compiled-in gate is unskippable; guidance is skippable by
+construction. The trade is an *enforcement* mechanism for a *judgement* mechanism, and it is
+defensible only because the enforcement traded away was ~94% noise and was already being switched
+off under operational pressure — **not** because guidance is as strong as a gate. It is not.
 
 ## The takeover: `emit` and `check`
 
@@ -395,14 +423,15 @@ supported state, not an unfinished one.
 
 - **Before adoption, `status` cannot measure divergence** — see the top of this guide. Evaluating
   costs a config edit, which writes nothing but is still an edit.
-- **`--collision-limit 0` disables the near-duplicate gate.** The cap is applied *before* the
-  empty-check, so a limit of zero turns every verdict into "clear" and every proposal writes unasked.
-  The flag reads as a display knob and is documented as one. It has been reached for in practice,
-  under operational pressure from an unrelated failure. Treat it as `--yes`, not as `--quiet`.
-- **Detection does not eliminate the residue.** Two accounts of the same thing phrased differently
-  enough share no lexemes, pass the search, and land twice. That is deliberate — a reconciler that
-  merged on similarity would destroy one of two accounts someone may have wanted to compare — but it
-  means the store can hold near-duplicates.
+- **Nothing detects a near-duplicate any more.** The residue used to be "what the search missed"; it
+  is now everything, because there is no search. `migrate` will write a second account of something
+  the context already holds and say nothing about it. The store can hold near-duplicates, and only a
+  reader looking for them will find them — see
+  [Reading for near-duplicates](#reading-for-near-duplicates-is-yours-now) for why that trade was
+  taken and what it costs.
+- **The replacement is guidance, and guidance is skippable.** An agent told to adjudicate overlap
+  before migrating can simply not do it, and nothing fails. That is a real downgrade from the gate it
+  replaced, and it is not defended on the grounds that the two are equivalent.
 - **Nothing validates the open tier at write time.** `status`, `verified`, `descriptor` and
   `source_file` are ordinary open-meta keys. A malformed one is accepted by the write, reported by
   `status`, and refused by `emit`. Nothing catches it at the moment it is written.
