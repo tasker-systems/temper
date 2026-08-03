@@ -20,12 +20,24 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// Gated on BOTH schemars features, matching `ids.rs`'s `define_id!`. It was `mcp`-only until the
+// query-envelope contract's `EdgeFilter` re-used this type instead of restating it: `EdgeFilter`
+// derives `JsonSchema` under `any(mcp, scenario-schema)`, so a `scenario-schema`-only build could
+// not satisfy `Vec<EdgeKind>: JsonSchema`. Widening is safe rather than merely convenient — a
+// `scenario-schema`-only build compiled before that field existed, which is proof nothing under
+// that feature alone referenced this type.
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
 // Inline the variants into every MCP input schema rather than emitting a
 // `$ref` into `$defs`. The Anthropic tool-use layer does not resolve
 // `$ref`/`$defs`, so a referenced scalar enum reaches the model with no type
 // signal and is sent back as `null`. Inlining surfaces the `enum` values
 // directly on the field. See tasks/review-mcp-assert-relationship-edge-issues.
+//
+// Deliberately still `mcp`-only: inlining answers an Anthropic tool-use constraint, and the
+// `scenario-schema` trees emit `$ref`s by convention.
 #[cfg_attr(feature = "mcp", schemars(inline))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "edge_kind", rename_all = "snake_case")]

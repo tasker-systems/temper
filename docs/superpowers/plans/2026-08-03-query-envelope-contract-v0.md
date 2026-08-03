@@ -481,6 +481,25 @@ The task that makes the audit's #1 finding untypeable. `--edge-type advances` to
 > **The tests below are kept and still earn their place** — they become regression cover asserting
 > that the incumbent has the properties the contract depends on (closedness, snake_case wire form,
 > and that `"advances"` cannot deserialize). They pass against the incumbent unchanged.
+>
+> **Re-use had one consequence worth carrying forward: it forced a feature-gate widening.**
+> `graph.rs` gated `EdgeKind`'s `JsonSchema` derive on `mcp` alone, while `query/` gates on
+> `any(mcp, scenario-schema)` per Global Constraints. So `cargo check -p temper-core --features
+> scenario-schema` failed with *"the trait bound `EdgeKind: JsonSchema` is not satisfied … required
+> for `Vec<EdgeKind>`"* `[verified — 2026-08-03, observed]`. Fixed by widening `graph.rs` to the gate
+> `ids.rs`'s `define_id!` already uses (`crates/temper-core/src/types/ids.rs:13`), leaving
+> `schemars(inline)` on `mcp` alone — inlining answers an Anthropic tool-use constraint, and the
+> `scenario-schema` trees emit `$ref`s by convention.
+>
+> The widening is **safe by construction, not by inspection**: a `scenario-schema`-only build
+> compiled *before* `EdgeFilter` existed, which proves nothing under that feature alone referenced
+> the type; adding a derive can only add capability. `cargo make test-schema` (the substrate
+> snapshot gate) passes unchanged at 115 tests, confirming no emitted schema moved.
+>
+> **The general lesson for the remaining tasks:** re-using an incumbent is still the right call, but
+> check the incumbent's *feature gates* against `query/`'s, not just its shape. Any later task that
+> reaches for an existing temper-core type should run `cargo check -p temper-core --features
+> scenario-schema` before assuming it composes.
 
 - [ ] **Step 1: Write the failing tests**
 
