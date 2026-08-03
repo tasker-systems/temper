@@ -397,6 +397,16 @@ pub fn scan_memory_dir(index_path: &std::path::Path) -> Vec<ScannedFile> {
                 return None;
             }
             let content = std::fs::read_to_string(entry.path()).ok()?;
+            // **Frontmatter is what separates a memory file from an index, and the filename
+            // cannot.** Excluding `index_path` alone was sufficient while temper owned the only
+            // index in the directory; it stopped being sufficient when the index moved to a
+            // sibling name and Claude Code's own frontmatter-free `MEMORY.md` was left beside the
+            // memory files. Without this, that file is scanned as an un-migrated memory forever.
+            // Deliberately weaker than "parses as frontmatter" — a malformed block still belongs
+            // to a memory the reader must be told about.
+            if !content.starts_with("---") {
+                return None;
+            }
             let mtime = entry.metadata().ok()?.modified().ok()?;
             Some(ScannedFile {
                 filename,
@@ -722,6 +732,13 @@ originSessionId: 4be1a0cf-c843-422f-acdb-0adda843de45
 Never ship code with \"for now\".
 ";
 
+    /// The smallest thing the scan accepts. **Every fixture below carries frontmatter because
+    /// every real memory file does** — `harvest` guarantees it and Claude Code's auto-memory
+    /// template emits it. Bodies of `"a"` / `"x"` passed before the frontmatter rule existed and
+    /// would have gone on passing after it, which is a fixture describing a file shape the
+    /// producer never emits.
+    const MINIMAL: &str = "---\nname: feedback_a\n---\nbody\n";
+
     /// The index is the title source, not a memory. Scanning it in would try to migrate
     /// `MEMORY.md` itself.
     #[test]
@@ -729,7 +746,7 @@ Never ship code with \"for now\".
         let dir = tempfile::TempDir::new().unwrap();
         let index = dir.path().join("MEMORY.md");
         std::fs::write(&index, "- [t](feedback_a.md)\n").unwrap();
-        std::fs::write(dir.path().join("feedback_a.md"), "a").unwrap();
+        std::fs::write(dir.path().join("feedback_a.md"), MINIMAL).unwrap();
         std::fs::write(dir.path().join("notes.txt"), "b").unwrap();
 
         let found = scan_memory_dir(&index);
@@ -738,16 +755,43 @@ Never ship code with \"for now\".
         assert_eq!(names, ["feedback_a.md"]);
     }
 
+    /// **A frontmatter-free `.md` beside the memory files is an index, not a memory.** Since
+    /// 2026-08-03 temper's index is `MANAGED_MEMORY.md` and Claude Code's auto-memory keeps
+    /// `MEMORY.md`, so a sibling the scan must not claim is now the normal state of the directory
+    /// rather than a hypothetical. Excluding `index_path` alone cannot do this — only one of the
+    /// two is ever the configured index.
+    #[test]
+    fn the_scan_excludes_a_frontmatter_free_sibling_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index = dir.path().join("MANAGED_MEMORY.md");
+        std::fs::write(&index, "<!-- GENERATED -->\n\n# Memory index\n").unwrap();
+        std::fs::write(
+            dir.path().join("MEMORY.md"),
+            "# Memory index\n\n- [a pointer](feedback_a.md) — hook\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("feedback_a.md"), MINIMAL).unwrap();
+
+        let found = scan_memory_dir(&index);
+
+        let names: Vec<&str> = found.iter().map(|f| f.filename.as_str()).collect();
+        assert_eq!(
+            names,
+            ["feedback_a.md"],
+            "the harness's own index must not be scanned as an un-migrated memory"
+        );
+    }
+
     #[test]
     fn the_scan_carries_each_files_content() {
         let dir = tempfile::TempDir::new().unwrap();
         let index = dir.path().join("MEMORY.md");
         std::fs::write(&index, "").unwrap();
-        std::fs::write(dir.path().join("feedback_a.md"), "the raw file\n").unwrap();
+        std::fs::write(dir.path().join("feedback_a.md"), MINIMAL).unwrap();
 
         let found = scan_memory_dir(&index);
 
-        assert_eq!(found[0].content, "the raw file\n");
+        assert_eq!(found[0].content, MINIMAL, "content is carried verbatim");
     }
 
     /// The mtime is the `verified` fallback for 50 of the 69 files in the first cohort, so it has
@@ -758,7 +802,7 @@ Never ship code with \"for now\".
         let index = dir.path().join("MEMORY.md");
         std::fs::write(&index, "").unwrap();
         let file = dir.path().join("feedback_a.md");
-        std::fs::write(&file, "x").unwrap();
+        std::fs::write(&file, MINIMAL).unwrap();
         // 2026-05-14T00:00:00Z, chosen so a today-shaped bug is visibly wrong.
         let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_778_716_800);
         filetime::set_file_mtime(&file, filetime::FileTime::from_system_time(when)).unwrap();

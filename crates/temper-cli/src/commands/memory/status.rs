@@ -223,38 +223,24 @@ pub async fn status(config: &TemperConfig, output_format: OutputFormat) -> Resul
     Ok(())
 }
 
-/// List `.md` files in the directory containing `index_path`, excluding the index file itself.
+/// List the memory files in the directory containing `index_path`.
+///
+/// **Delegates to `migrate::scan_memory_dir` rather than enumerating the directory itself.** These
+/// were two independent scans of one concept, and on 2026-08-03 they drifted exactly as two copies
+/// do: the index moved to a sibling filename, the frontmatter rule that keeps Claude Code's own
+/// `MEMORY.md` from being read as an un-migrated memory was added here, and `emit` — which scans
+/// through `scan_memory_dir` — went on counting it. `status` said one un-migrated file while the
+/// index it validates said two. One scanner is the fix; agreeing today would not have been.
+///
 /// Returns an empty list (never an error) when the directory or its parent is unreachable — a
 /// machine mid-adoption whose configured directory does not exist yet still gets a report.
 fn read_local_files(index_path: &str) -> Vec<LocalMemoryFile> {
-    let expanded = expand_tilde(index_path);
-    let Some(dir) = expanded.parent() else {
-        return Vec::new();
-    };
-    let index_filename = expanded
-        .file_name()
-        .and_then(|f| f.to_str())
-        .map(str::to_string);
-
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    let mut files: Vec<LocalMemoryFile> = entries
-        .filter_map(std::io::Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_string();
-            if !name.ends_with(".md") {
-                return None;
-            }
-            if index_filename.as_deref() == Some(name.as_str()) {
-                return None;
-            }
-            Some(LocalMemoryFile { filename: name })
+    super::migrate::scan_memory_dir(&expand_tilde(index_path))
+        .into_iter()
+        .map(|f| LocalMemoryFile {
+            filename: f.filename,
         })
-        .collect();
-    files.sort_by(|a, b| a.filename.cmp(&b.filename));
-    files
+        .collect()
 }
 
 #[cfg(test)]
@@ -570,6 +556,91 @@ mod tests {
             r.defects.len(),
             1,
             "status REPORTS defects; only emit refuses on them"
+        );
+    }
+
+    /// Write `body` to `dir/name` and return the directory, so a test reads like the directory
+    /// it is describing. Mirrors `emit::tests`' `tempfile::TempDir` idiom.
+    fn write(dir: &tempfile::TempDir, name: &str, body: &str) {
+        std::fs::write(dir.path().join(name), body).expect("write fixture");
+    }
+
+    /// A memory file, as `harvest` leaves one: frontmatter first, `title:` present.
+    const STAMPED: &str = "---\nname: project_x\ntitle: a curated title\n---\n\nbody\n";
+
+    /// **The discriminator is frontmatter, not the filename.** Excluding only `index_path` was
+    /// sufficient while temper owned the one index in the directory. It stops being sufficient the
+    /// moment the index moves to a sibling name and the harness's own `MEMORY.md` — which carries
+    /// no frontmatter — is left in place beside the memory files. Without this, that file is
+    /// reported as an un-migrated memory forever: `status` lists it under
+    /// `local_without_counterpart` and `emit` renders it under "Not yet migrated" with an
+    /// instruction to `migrate` a file that is not a memory.
+    #[test]
+    fn a_file_without_frontmatter_is_not_a_local_memory_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write(&dir, "MANAGED_MEMORY.md", "<!-- GENERATED -->\n\n# Index\n");
+        write(
+            &dir,
+            "MEMORY.md",
+            "# Memory index\n\n- a harness-written pointer\n",
+        );
+        write(&dir, "project_x.md", STAMPED);
+
+        let index = dir.path().join("MANAGED_MEMORY.md");
+        let found = read_local_files(index.to_str().unwrap());
+
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["project_x.md"],
+            "only the frontmatter-bearing file is a memory; neither index is"
+        );
+    }
+
+    /// The over-filter this must not become. `harvest` stamps `title:` into files that lack one,
+    /// and a file it could not title is exactly the file a reader needs `status` to name — the
+    /// live instance is `project_temper_services_extraction_idea.md`, which `migrate` skips *and*
+    /// `status` still reports. Filtering on `title:` rather than on frontmatter would hide it, so
+    /// the presence of a frontmatter block is the whole test.
+    #[test]
+    fn a_frontmatter_file_with_no_title_is_still_a_local_memory_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write(&dir, "MEMORY.md", "# not a memory\n");
+        write(&dir, "untitled.md", "---\nname: untitled\n---\n\nbody\n");
+
+        let index = dir.path().join("MEMORY.md");
+        let found = read_local_files(index.to_str().unwrap());
+
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["untitled.md"],
+            "a titleless memory must stay visible — it is the one a reader must be told about"
+        );
+    }
+
+    /// The incumbent behaviour, pinned so the frontmatter rule cannot quietly replace it: the file
+    /// named by `index_path` is excluded even when it *does* carry frontmatter.
+    #[test]
+    fn the_configured_index_is_excluded_even_if_it_has_frontmatter() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write(&dir, "MANAGED_MEMORY.md", STAMPED);
+        write(&dir, "project_x.md", STAMPED);
+
+        let index = dir.path().join("MANAGED_MEMORY.md");
+        let found = read_local_files(index.to_str().unwrap());
+
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["project_x.md"],
+            "index_path exclusion is independent of the frontmatter rule"
         );
     }
 }
