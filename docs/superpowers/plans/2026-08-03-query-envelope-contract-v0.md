@@ -29,13 +29,22 @@ Every task's requirements implicitly include this section.
 **Repo constraints:**
 
 - **Typed structs over inline JSON.** Never `serde_json::json!()` for data with a known structure.
-- **Derive pattern**, copied from `crates/temper-core/src/types/ids.rs`:
+- **Derive pattern**, copied from `crates/temper-core/src/types/ids.rs` — written here in the form
+  **rustfmt actually produces**, since the single-line `schemars` variant is 101 chars and every
+  sketch in this plan reproduces it. Write it wrapped and skip the `cargo make fix` round-trip:
   ```rust
   #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
   #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
   #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-  #[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+  #[cfg_attr(
+      any(feature = "mcp", feature = "scenario-schema"),
+      derive(schemars::JsonSchema)
+  )]
   ```
+- **`Option<T>` + `skip_serializing_if` emits a ts-rs warning, and that is the crate's convention.**
+  ts-rs cannot parse the combined attribute and ignores it, so the TS field is `T | null` rather
+  than optional. 71 such warnings pre-exist in temper-core and `ts(optional)` appears nowhere in
+  the crate `[verified — 2026-08-03]`. Conform; do not "fix" it into an outlier.
 - **Do NOT register these types in `crates/temper-api/src/openapi.rs` components.** T2 ships no route. The audit already found `SearchResultRow` shipped as *"a published wire type with no producer"* into `openapi.json`, both TS trees and the Ruby gem — do not manufacture a second one. T3 registers them when routes exist.
 - **After any task that adds a ts-rs derive**: run `cargo make generate-ts-types`, commit the regenerated tree, then run `cd packages/temper-ui && bun run check`. `cargo make check` does **not** cover temper-ui.
 - **Schema snapshots are package-scoped, never `--workspace`.** Feature unification changes the emitted schema: under `--workspace` temper-core's `mcp` feature unifies in and id newtypes emit **inline**; package-scoped they emit as `$ref`s. See the comment block at `tools/cargo-make/main.toml:91`.
