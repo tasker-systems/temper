@@ -121,11 +121,40 @@ export type BoundTerm = "limit" | "offset" | "regions";
 export type BoundsMode = "bound" | "seed";
 
 /**
+ * Where a stage's bounds came from.
+ */
+export type BoundsSource = { "source": "upstream", stage: number, } | { "source": "expression" } | { "source": "caller" };
+
+/**
  * Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —
  * which is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`
  * failure: a const beside a registry, with a test holding its own second copy.
  */
 export type BuildState = { "state": "served" } | { "state": "fused", host: string, } | { "state": "unbuilt" };
+
+/**
+ * A composition, declared before execution.
+ */
+export type Composition = { outcome: OutcomeDeclaration, intention: Intention | null, 
+/**
+ * What happens when a stage refuses. Declared, never improvised.
+ */
+on_stage_refusal: RefusalDisposition, meta_detail: MetaDetail, 
+/**
+ * The SECOND bound layer: over the composition's own output, distinct from the act-level
+ * terms on each stage. A composition never carries a total — with each stage's output the
+ * next stage's domain, a full-composition total is not well-defined.
+ */
+bounds: { [key in BoundTerm]?: bigint }, 
+/**
+ * Ordered. Stages reference their inputs explicitly — there is no prev-else-fallback.
+ */
+stages: Array<ActInvocation>, };
+
+/**
+ * The whole composition's disclosure: an ordered per-stage record array.
+ */
+export type CompositionTrace = { meta_detail: MetaDetail, stages: Array<StageTrace>, };
 
 /**
  * Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
@@ -183,9 +212,28 @@ export type IdSet = { kind: IdKind,
 provenance: IdProvenance | null, ids: Array<string>, };
 
 /**
+ * The question, computed once at composition start and threaded to every stage.
+ *
+ * Its ABSENCE is meaningful: a `find-about-*` stage with no intention refuses, rather than the
+ * server embedding on the caller's behalf. That is what makes "I chose not to embed" and
+ * "I cannot embed" different states instead of one ambiguous one.
+ */
+export type Intention = { query: string, 
+/**
+ * Whether an embedding was computed for it. Inspectable in the trace, which is what makes
+ * paraphrase-stability measurable from outside.
+ */
+embedded: boolean, };
+
+/**
  * How much per-resource meta the trace retains (design §4.4, tier 2).
  */
 export type MetaDetail = "surviving" | "full" | "none";
+
+/**
+ * A per-resource meta budget that bit.
+ */
+export type MetaTruncated = { stage: number, retained: bigint, dropped: bigint, };
 
 /**
  * One act-specific threshold, and what applying it did.
@@ -196,6 +244,19 @@ export type NarrowedBy = { key: string, value: string,
  * re-introduce the second query `Extent` exists to avoid.
  */
 admitted: bigint | null, excluded: bigint | null, };
+
+/**
+ * A composition's pocket outcome register: what it is for, in the act schemas' own terms.
+ */
+export type OutcomeDeclaration = { 
+/**
+ * What being served looks like. NOT optional.
+ */
+description: string, 
+/**
+ * The kind the whole composition yields, when it is fixed.
+ */
+produces: IdKind | null, };
 
 /**
  * What a composition does when a stage refuses. Declared BEFORE execution; the executor never
@@ -234,6 +295,11 @@ facets: Array<FacetPredicate>, stage: string | null, status: string | null, owne
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
  */
 export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
+
+/**
+ * One stage's mandatory disclosure. Exists whether or not the stage produced a result.
+ */
+export type StageTrace = { stage: number, act: ActName, disposition: StageDisposition, bounds_source: BoundsSource | null, bounds_in: bigint, bounds_honored: bigint, bounds_withheld: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
 
 /**
  * Where the principal constraint applies to an act's mechanic.

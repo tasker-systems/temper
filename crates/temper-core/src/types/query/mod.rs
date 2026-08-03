@@ -4,20 +4,24 @@
 //! the design reasoning.
 
 pub mod act;
+pub mod composition;
 pub mod disposition;
 pub mod envelope;
 pub mod filter;
 pub mod id_set;
 pub mod registry;
 pub mod scalars;
+pub mod trace;
 
 // `EdgeKind` is deliberately NOT re-exported here. It is not query's type — `crate::types` already
 // re-exports it from `graph` — and a second public path to one type invites exactly the ambiguity
 // that re-using it instead of restating it was meant to remove.
 pub use act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
+pub use composition::{Composition, Intention, OutcomeDeclaration};
 pub use disposition::{ActRefusal, RefusalDisposition, RefusalReason, StageDisposition};
 pub use envelope::{ActInvocation, ActResult, NarrowedBy};
 pub use filter::{EdgeFilter, FacetPredicate, FilterField, ResourceFilter};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
+pub use trace::{BoundsSource, CompositionTrace, MetaTruncated, StageTrace};
