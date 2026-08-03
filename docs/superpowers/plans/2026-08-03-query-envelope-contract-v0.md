@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship the v0 query-envelope contract for Temper's search family — the act declarations, the typed `IdSet` currency, the composition envelope and trace, the refusal variants, and the semver policy — as Rust types plus a normative spec, with a committed JSON-Schema snapshot gate.
+**Goal:** Ship the v0 query-envelope contract for Temper's search family — the act declarations, the typed `IdSet` currency, the predicate layer, the composition envelope and trace, and the refusal variants — **as Rust types**, with a committed JSON-Schema snapshot gate.
+
+**The contract is not a document this plan writes.** Its destination is Temper's published, generated API spec, so hand-authoring one here would create the second copy the whole design forbids. The published artifact and its usability review are **T3's** work; this plan ships the types it is generated from.
 
 **Architecture:** Types live in `crates/temper-core/src/types/query/`, one file per responsibility, following the crate's existing feature-gated derive pattern. The act *registry* is data (declarations + a chainability matrix), not code paths — T3 later gates that data against the live router and the SQL signatures. **No schemas are hand-written**: schemars emits them from the Rust types into committed snapshots, which is what makes the artifact a projection of the code rather than a second copy of it.
 
@@ -60,73 +62,10 @@ Every task's requirements implicitly include this section.
 | `crates/temper-core/src/types/query/composition.rs` | `Composition`, `Intention`, `OutcomeDeclaration` |
 | `crates/temper-core/tests/query_schema.rs` | committed JSON-Schema snapshot gate |
 | `crates/temper-core/tests/fixtures/query/*.schema.json` | the snapshots |
-| `docs/contracts/query-envelope-v0.md` | the normative contract spec |
 
 ---
 
-### Task 1: The normative contract spec
-
-Build-independent, and the artifact the rest of the plan realizes. Written first so later tasks have a normative reference that is not the design doc (which explains *why*; this states *what*).
-
-**Files:**
-- Create: `docs/contracts/query-envelope-v0.md`
-
-**Interfaces:**
-- Consumes: nothing.
-- Produces: the normative statement every later task's types must satisfy. Later tasks cite section numbers from it.
-
-- [ ] **Step 1: Write the contract document**
-
-Sections, in order. Each is normative prose, not rationale — cite the design doc for rationale rather than restating it.
-
-1. **Scope** — the search family only. Name the four excluded families and point at T1's audit for each.
-2. **The seven act declarations.** One subsection per act, each stating: `name`, `asker_holds` (one sentence, asker-shaped), `served_by` (the SQL function), `build_state`, `accepts_bounds` (kinds), `accepts_seeds` (kinds), `accepts_bound_terms`, `bound_ceilings`, `accepts_filters`, `produces` (kind), `visibility_profile`, `scoring_revision`, and the act's `meta` field names.
-3. **The `IdSet` currency** — shape, the four kinds, when `provenance` is required, the two consumption modes.
-4. **The envelope** — `ActInvocation`, `ActResult`, the composition envelope, contract chaining on kinds.
-5. **Filters** — the two typed slots, why `edge_kind` and `label` are separate fields, the
-   unknown-value refusal, and what a filter is NOT (no generic predicate grammar).
-6. **The trace** — the two tiers, the `meta_detail` levels, the disclosure obligation on caps.
-7. **Refusal** — the four dispositions, the typed refusal variant, the composition-level disposition vocabulary.
-8. **Versioning** — the open/closed table, the additive/breaking table, verbatim from design §6.1–§6.2.
-9. **Inexpressibility** — the machine-readable list, from design §8.
-10. **Admission notes for the out-of-scope families** — short, two entries:
-
-   > **This contract takes no dependency on the incumbent Atlas wire shapes.** `Territory`,
-   > `TerritoryKind` and `NodeHome` belong to the surface goal `019fbaac-96e2-7620-ace2-667a0f8ff000`
-   > exists to replace wholesale; that goal is held back pending this work and bends toward this
-   > frame rather than the reverse. Build no mapping from them, and do not treat their shapes as
-   > constraints. What the successor surface carries is that goal's to decide, and `IdSet` is a
-   > candidate answer.
-
-   And record that the shape family's scope read (`ShapeQuery { lens }` — no query, no embedding)
-   is a **different act** from `survey`, not the same act in another build-state, so no
-   family/instance dimension is needed on `ActDeclaration`.
-
-- [ ] **Step 2: Verify every act's `served_by` names a function that exists**
-
-Run:
-```bash
-for f in search_fts_candidates search_vector_candidates search_graph_expand wayfind_region_scores; do
-  echo -n "$f: "; rg -l "FUNCTION $f" migrations/ | wc -l
-done
-```
-Expected: each returns a non-zero count. `substantiate` has no `served_by` — it is `unbuilt`, and the document must say so rather than omit the field.
-
-- [ ] **Step 3: Verify the document declares exactly seven acts and one anti-act**
-
-Run: `rg -c '^### ' docs/contracts/query-envelope-v0.md`
-Expected: the act subsections number 7 (six acts + `admit`).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docs/contracts/query-envelope-v0.md
-git commit -m "docs(contract): normative query-envelope v0 spec"
-```
-
----
-
-### Task 2: `IdSet` — the typed currency
+### Task 1: `IdSet` — the typed currency
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/mod.rs`, `crates/temper-core/src/types/query/id_set.rs`
@@ -289,8 +228,10 @@ pub struct IdSet {
 Create `crates/temper-core/src/types/query/mod.rs`:
 
 ```rust
-//! The v0 query-envelope contract. See `docs/contracts/query-envelope-v0.md` for the normative
-//! statement and `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md` for why.
+//! The v0 query-envelope contract. These types ARE the contract: the published spec is generated
+//! from them in T3 and ships with the other generated artifacts, so there is no hand-written
+//! second copy. See `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md` for
+//! the design reasoning.
 
 pub mod id_set;
 
@@ -323,7 +264,7 @@ git commit -m "feat(query): IdSet — the typed, tagged currency"
 
 ---
 
-### Task 3: Envelope scalars — `Extent`, `BoundTerm`, `BoundsMode`, `MetaDetail`
+### Task 2: Envelope scalars — `Extent`, `BoundTerm`, `BoundsMode`, `MetaDetail`
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/scalars.rs`
@@ -505,7 +446,7 @@ git commit -m "feat(query): Extent, BoundTerm, BoundsMode, MetaDetail"
 
 ---
 
-### Task 4: Filters — the predicate layer
+### Task 3: Filters — the predicate layer
 
 The task that makes the audit's #1 finding untypeable. `--edge-type advances` today returns a corpus byte-identical to `--no-graph`, with `reason: ok` and exit 0, because the filter compares `edge_kind::text` while every edge the caller has ever seen displays a `label`.
 
@@ -710,7 +651,7 @@ git commit -m "feat(query): the predicate layer, with edge_kind and label as sep
 
 ---
 
-### Task 5: Dispositions and refusal
+### Task 4: Dispositions and refusal
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/disposition.rs`
@@ -885,14 +826,14 @@ git commit -m "feat(query): four dispositions and the typed refusal variant"
 
 ---
 
-### Task 6: Act identity and build-state
+### Task 5: Act identity and build-state
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/act.rs`
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `IdKind` (Task 2).
+- Consumes: `IdKind` (Task 1).
 - Produces: `ActName`, `BuildState`, `VisibilityProfile`, `ActDeclaration`. Task 6 populates the registry with `ActDeclaration` values.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1107,7 +1048,7 @@ git commit -m "feat(query): ActName, BuildState, ActDeclaration"
 
 ---
 
-### Task 7: The registry — seven declarations and the chainability matrix
+### Task 6: The registry — seven declarations and the chainability matrix
 
 The task where the contract makes checkable claims about reality. Every value here is a claim T3's gates verify.
 
@@ -1116,7 +1057,7 @@ The task where the contract makes checkable claims about reality. Every value he
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActDeclaration`, `ActName`, `BuildState`, `VisibilityProfile` (Task 6); `IdKind` (Task 2).
+- Consumes: `ActDeclaration`, `ActName`, `BuildState`, `VisibilityProfile` (Task 5); `IdKind` (Task 1).
 - Produces: `pub fn search_family() -> Vec<ActDeclaration>` and `pub fn declaration(name: &ActName) -> Option<ActDeclaration>`. T3 gates iterate `search_family()`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1294,7 +1235,7 @@ fn fused() -> BuildState {
     BuildState::Fused { host: "unified_search".to_string() }
 }
 
-/// The seven declarations. Order is stable and matches the contract document.
+/// The seven declarations. Order is stable — the generated contract renders them in this order.
 pub fn search_family() -> Vec<ActDeclaration> {
     vec![
         ActDeclaration {
@@ -1426,14 +1367,14 @@ git commit -m "feat(query): the search family's seven act declarations"
 
 ---
 
-### Task 8: Invocation and result envelopes
+### Task 7: Invocation and result envelopes
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/envelope.rs`
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActName` (Task 6), `IdSet`/`IdKind` (Task 2), `BoundsMode`/`Extent`/`BoundTerm` (Task 3).
+- Consumes: `ActName` (Task 5), `IdSet`/`IdKind` (Task 1), `BoundsMode`/`Extent`/`BoundTerm` (Task 2).
 - Produces: `ActInvocation`, `ActResult`, `NarrowedBy`. Task 8's `StageTrace` embeds `NarrowedBy`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1649,7 +1590,7 @@ git commit -m "feat(query): ActInvocation and ActResult envelopes"
 
 ---
 
-### Task 9: The composition envelope and its trace
+### Task 8: The composition envelope and its trace
 
 Both halves in one task: the trace is the composition envelope's disclosure half, and a reviewer cannot meaningfully accept one while rejecting the other.
 
@@ -1658,7 +1599,7 @@ Both halves in one task: the trace is the composition envelope's disclosure half
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActName` (Task 6), `Disposition`/`RefusalDisposition` (Task 5), `NarrowedBy`/`ActInvocation` (Task 8), `MetaDetail` (Task 3), `IdKind` (Task 2).
+- Consumes: `ActName` (Task 5), `Disposition`/`RefusalDisposition` (Task 4), `NarrowedBy`/`ActInvocation` (Task 7), `MetaDetail` (Task 2), `IdKind` (Task 1).
 - Produces: `StageTrace`, `BoundsSource`, `MetaTruncated`, `CompositionTrace`, `Intention`, `OutcomeDeclaration`, `Composition`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2011,7 +1952,7 @@ git commit -m "feat(query): the composition envelope and its per-stage trace"
 
 ---
 
-### Task 10: The JSON-Schema snapshot gate
+### Task 9: The JSON-Schema snapshot gate
 
 Makes the schema artifact a projection of the code. **No schema is hand-written.**
 
@@ -2021,7 +1962,7 @@ Makes the schema artifact a projection of the code. **No schema is hand-written.
 - Modify: `tools/cargo-make/main.toml`
 
 **Interfaces:**
-- Consumes: every type from Tasks 2–9.
+- Consumes: every type from Tasks 1–8.
 - Produces: `cargo make test-schema` covering temper-core as well as temper-substrate.
 
 - [ ] **Step 1: Confirm `query/mod.rs` re-exports everything the harness names**
@@ -2173,47 +2114,46 @@ git commit -m "test(query): committed JSON-Schema snapshot gate for the v0 contr
 
 ---
 
-### Task 11: Full check and contract/registry reconciliation
-
-The task that catches a contract document and a registry that disagree — two copies of one claim, which is the failure this whole design exists to prevent.
+### Task 10: Full check
 
 **Files:**
-- Modify: `docs/contracts/query-envelope-v0.md` (only if it disagrees with the registry)
+- None. This task changes nothing; it verifies.
 
 **Interfaces:**
 - Consumes: everything.
-- Produces: a green `cargo make check` and a reconciled pair.
+- Produces: a green `cargo make check` and a green `cargo make test`.
 
-- [ ] **Step 1: Reconcile the contract document against the registry, by hand, act by act**
+> There is deliberately **no contract-document reconciliation step**. The published contract is
+> *generated* from these types in T3 and lives with the other generated artifacts — so there is no
+> hand-written second copy to reconcile, and nothing here to remember to run.
 
-For each of the seven acts, confirm the document's `build_state`, `accepts_bounds`, `accepts_seeds`, `produces`, `served_by`, and `visibility_profile` match `registry.rs` exactly. Where they differ, **fix the document** — the registry is executable and the document is not.
-
-Record the reconciliation outcome in the document as a one-line note naming the registry as authoritative, so the next reader knows which to trust.
-
-> This is deliberately a manual step. Automating it would mean generating the document from the registry, which is the right end state and is **T3's** job — do not build it here.
-
-- [ ] **Step 2: Run the full quality gate**
+- [ ] **Step 1: Run the full quality gate**
 
 Run: `cargo make check`
 Expected: clean — fmt, clippy, docs, machete, TS typecheck, biome, and every drift gate (`openapi-check`, `ts-rs-drift`, `skills-drift`).
 
 If `ts-rs-drift` reds, a previous task skipped `cargo make generate-ts-types`. Run it and commit the regenerated tree.
 
-- [ ] **Step 3: Run the full test suite**
+- [ ] **Step 2: Run the full test suite**
 
 Run: `cargo make test`
 Expected: passes, including both schema gates.
 
-- [ ] **Step 4: Check the UI**
+- [ ] **Step 3: Check the UI**
 
 Run: `cd packages/temper-ui && bun run check && cd ../..`
 Expected: clean. `cargo make check` does not cover this.
+
+- [ ] **Step 4: Confirm the snapshots are committed and current**
+
+Run: `git status --short crates/temper-core/tests/fixtures/query/`
+Expected: no output — every emitted snapshot is committed. An uncommitted snapshot means the gate would pass locally and red in CI.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add -A
-git commit -m "docs(contract): reconcile the v0 contract document against the registry"
+git commit -m "chore(query): full check green for the v0 contract types"
 ```
 
 ---
@@ -2225,6 +2165,7 @@ Named so their absence reads as a decision rather than an oversight:
 - **The executor.** No jaq evaluation, no stage sequencing, no composition running. v0 is a contract.
 - **Any act implementation, route, or MCP tool.** Which is why nothing is registered in `openapi.rs` components.
 - **The five gates.** T3 builds them; this plan produces the *data* they check (`build_state`, `accepts_*`, `scoring_revision`, `served_by`).
+- **The published contract artifact**, and the deliberate usability review of the schema once it exists. Both are T3's, and both depend on these types being in place first.
 - **`params<act>` and `meta<act>` extension payloads.** The base envelope declares the seam; the per-act extensions arrive with the acts.
 - **`unified_search` expressed as the first named plan** (design §7). It is expressible under this contract, and writing it down is what makes its `blend0` sum legible as a defect — but *running* it needs the executor, so authoring it here would produce a plan nothing can validate. It is the natural first entry once an executor exists.
 - **Converging the six incumbent tagged-id patterns** (design §3.1.2).
