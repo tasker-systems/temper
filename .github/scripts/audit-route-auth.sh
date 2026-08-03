@@ -67,6 +67,7 @@ REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_in
 read -r -d '' BASELINE <<'EOF' || true
 embed_internal_routes	handlers::embed::dispatch
 embed_internal_routes	handlers::embed::warm
+embed_internal_routes	handlers::region::dispatch
 embed_internal_routes	handlers::slack_disconnect::reap_intents
 internal_routes	handlers::internal_saml::reconcile
 public_routes	handlers::health::health_check

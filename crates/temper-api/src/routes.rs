@@ -388,6 +388,14 @@ fn embed_internal_routes() -> Router<AppState> {
             get(handlers::slack_disconnect::reap_intents)
                 .post(handlers::slack_disconnect::reap_intents),
         )
+        // Region-clock drain (goal 019fc46c): runs T6's two clocks off the request path. Same
+        // self-gated posture and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in
+        // this group specifically because a settling can run 55–94s, which exceeds the public
+        // function's 60s ceiling — the very reason `api/internal` exists.
+        .route(
+            "/api/region/dispatch",
+            get(handlers::region::dispatch).post(handlers::region::dispatch),
+        )
 }
 
 pub fn create_app(state: AppState) -> Router {

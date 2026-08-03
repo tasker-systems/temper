@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::types::home::HomeAnchor;
+
 /// Lease duration for a claimed job. MUST exceed the Vercel function timeout (300s default) so a
 /// genuinely-running steward session never looks dead to the reaper.
 pub const DEFAULT_STEWARD_LEASE_SECONDS: i32 = 600;
@@ -75,6 +77,11 @@ pub enum Persona {
     /// (`migrations/20260705000001_workflow_jobs.sql:43-45`), so a separate persona is what lets an
     /// auditor job and a steward job be in flight over the same cogmap at once.
     Auditor,
+    /// Region materialization moved off the request path (goal 019fc46c). Like `Embed`, a
+    /// non-agent server-side worker sharing the queue. A DISTINCT persona for the same reason
+    /// `Auditor` is one: single-flight keys on `(scope, persona, dispatch_type)`, and a region job
+    /// must be able to be in flight over a cogmap that already has a steward or auditor job.
+    Region,
 }
 
 impl Persona {
@@ -84,6 +91,7 @@ impl Persona {
             Persona::Steward => "steward",
             Persona::Embed => "embed",
             Persona::Auditor => "auditor",
+            Persona::Region => "region",
         }
     }
 }
@@ -100,6 +108,12 @@ pub enum DispatchType {
     /// persona — deliberately not one per finding: per-finding discrimination would make
     /// `dispatch_type` unboundedly cardinal, which spec §6.1 names and rejects.
     CitationAudit,
+    /// One region-clock tick over a single anchor (context or cogmap). ONE dispatch type for the
+    /// whole persona, and deliberately covering BOTH clocks rather than one each: the two clocks
+    /// share a watermark read and are cheap to run together, and splitting them would let a
+    /// salience job and a formation job contend for the same anchor row — reintroducing, between
+    /// two jobs, the serialization this move exists to remove.
+    Materialize,
 }
 
 impl DispatchType {
@@ -109,6 +123,7 @@ impl DispatchType {
             DispatchType::Steward => "steward",
             DispatchType::Embed => "embed",
             DispatchType::CitationAudit => "citation-audit",
+            DispatchType::Materialize => "materialize",
         }
     }
 }
@@ -193,6 +208,47 @@ pub struct ClaimedEmbedJob {
     pub id: Uuid,
     /// The resource whose deferred embeddings this claimed run backfills.
     pub resource_id: Uuid,
+    /// How many times this job has now been claimed (1 on first dispatch).
+    pub attempts: i32,
+}
+
+/// The payload a region-clock job carries: who occasioned the settling.
+///
+/// Once the tick leaves the request path the write no longer emits the `region_materialized` /
+/// `salience_refreshed` events itself, so the emitter has to travel with the job or attribution is
+/// lost — a system-emitted settling would satisfy the ledger's shape while telling a reader nothing
+/// about which act occasioned it.
+///
+/// **The coalescing consequence, stated rather than discovered.** Single-flight keys on the tuple
+/// alone, so when N arrivals collapse into one job the payload of the FIRST one wins and the later
+/// emitters are dropped — the same "stale payload swallows this one silently" behaviour
+/// `enqueue_with_payload` already documents. That is accepted here: the settling genuinely was
+/// occasioned by many acts, the ledger records one of them, and the events that drove it remain
+/// individually attributed in `kb_events`. It is a narrowing of *which act gets named*, never a loss
+/// of the trail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegionJobPayload {
+    /// The entity whose write occasioned this settling — `kb_entities.id`, the same emitter the
+    /// inline tick used to pass straight through to the clocks.
+    pub emitter: Uuid,
+}
+
+/// An anchor-keyed job claimed for dispatch — the anchor twin of [`ClaimedJob`] and
+/// [`ClaimedEmbedJob`]. The `Region` worker claims one of these per anchor whose region clocks are
+/// due (goal 019fc46c).
+///
+/// The scope is a typed [`HomeAnchor`], not the raw `(cogmap_id, context_id)` pair the SQL returns:
+/// the pair's "exactly one is non-null" invariant is enforced by `ck_workflow_jobs_one_scope` in the
+/// database, and re-deriving it at every use site is how that invariant drifts. Parsing it once, at
+/// the boundary, is what makes the worker unable to hold an ambiguous anchor at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaimedAnchorJob {
+    /// The queue row id.
+    pub id: Uuid,
+    /// The anchor whose region clocks this claimed run ticks.
+    pub anchor: HomeAnchor,
+    /// The entity to attribute this settling's events to — see [`RegionJobPayload`].
+    pub emitter: Uuid,
     /// How many times this job has now been claimed (1 on first dispatch).
     pub attempts: i32,
 }

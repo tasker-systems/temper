@@ -3,7 +3,7 @@
 # Reading a `declare_migration` / `reclassify_migration` call out of SQL happens
 # twice, in two languages:
 #   - awk:  `parse_declarations` in .github/scripts/audit-migration-declarations.sh
-#   - Rust: `parse_declarations`  in crates/temper-substrate/src/migrate_ledger.rs
+#   - Rust: `parse_declarations`  in crates/temper-migrate/src/ledger.rs
 #
 # Neither can be deleted, and they answer the same question for DIFFERENT
 # consumers:

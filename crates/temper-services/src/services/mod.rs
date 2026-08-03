@@ -21,6 +21,7 @@ pub mod machine_registration_service;
 pub mod materialize_service;
 pub mod profile_service;
 pub mod reassign_service;
+pub mod region_service;
 pub mod resource_service;
 pub mod saml_provisioning_service;
 pub mod slack_disconnect_service;

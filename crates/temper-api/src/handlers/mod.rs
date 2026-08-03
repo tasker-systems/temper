@@ -20,6 +20,7 @@ pub mod machine_clients;
 pub mod meta;
 pub mod profiles;
 pub mod reassign;
+pub mod region;
 pub mod resources;
 pub mod search;
 pub mod segments;
