@@ -30,7 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs-only: ${{ steps.detect.outputs.docs-only }}
+      rust-inert: ${{ steps.detect.outputs.rust-inert }}
       run-code-quality: ${{ steps.detect.outputs.run-code-quality }}
+      run-rust-quality: ${{ steps.detect.outputs.run-rust-quality }}
       run-test-rust: ${{ steps.detect.outputs.run-test-rust }}
       run-test-typescript: ${{ steps.detect.outputs.run-test-typescript }}
       run-test-ruby: ${{ steps.detect.outputs.run-test-ruby }}
@@ -54,10 +56,16 @@ jobs:
   # ==========================================================================
   # Stage 1: Parallel quality + test jobs (skipped on docs-only changes)
   # ==========================================================================
+  # code-quality is INVOKED for every non-docs change (so its TypeScript-quality
+  # and pure-bash guard-test jobs always run), but the heavy rust-quality job
+  # inside it is gated by run-rust-quality — off for a rust-inert change (one
+  # whose every non-doc file is in a Rust-inert tree). See detect-ci-scope.sh.
   code-quality:
     needs: detect-scope
     if: needs.detect-scope.outputs.run-code-quality == 'true'
     uses: ./.github/workflows/code-quality.yml
+    with:
+      run-rust-quality: ${{ needs.detect-scope.outputs.run-rust-quality }}
 
   test-rust:
     needs: detect-scope
