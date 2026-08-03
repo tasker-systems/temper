@@ -94,7 +94,7 @@ pub use link::link_trusted_caller;
 pub use propagate::inject_trace_context;
 pub use request_span::traced_request;
 
-use http::HeaderMap;
+use http::{Extensions, HeaderMap, Method};
 use tracing::Span;
 
 /// Re-exported so [`root_span!`] can path to it as `$crate::tracing`, which works regardless of
@@ -142,8 +142,19 @@ macro_rules! root_span {
             // the surfaces whose entry spans already reported `server` showed up. This is the request
             // boundary; naming it as one is what puts these services back on the graph.
             otel.kind = "server",
+            // Two more `otel.*` magic fields `tracing-opentelemetry` consumes, both deferred:
+            // `otel.name` overrides the *exported* span name with the matched route (recorded just
+            // below, where the routing extensions are in hand), and `otel.status_code` is set to
+            // `ERROR` at the end of the request iff it was a server failure. The `tracing` metadata
+            // name stays `$name`, so logs still say `http_request`/`mcp_request` while span metrics
+            // aggregate by route and by status. See `record_matched_route` and `traced_request`.
+            otel.name = $crate::tracing::field::Empty,
+            otel.status_code = $crate::tracing::field::Empty,
             method = %request.method(),
             path = %$crate::redact::redact_path(request.uri().path()),
+            // The matched route *template* (`/api/resources/{id}`), the bounded twin of `path` — a
+            // dimension a metrics generator can key on directly. Recorded beside `otel.name` below.
+            http.route = $crate::tracing::field::Empty,
             version = ?request.version(),
             // Filled by the auth middleware once a token resolves to a profile — a validated token
             // is not yet a profile, so this cannot be known at construction.
@@ -159,6 +170,10 @@ macro_rules! root_span {
         // headers are in hand at construction, so this records onto the span just built rather than
         // via `Span::current()` further in, which is the trap the act-span convention exists to close.
         $crate::record_inbound_trace_context(&span, request.headers());
+        // The route dimension. Read here, at construction, for the same reason as the trace context:
+        // `MatchedPath` is in the extensions by the time a `Router::layer` middleware body runs, so
+        // the value is in hand and recording it anywhere later would be a second way to say so.
+        $crate::record_matched_route(&span, request.method(), request.extensions());
         span
     }};
 }
@@ -306,6 +321,42 @@ pub fn record_inbound_trace_context(span: &Span, headers: &HeaderMap) {
     }
     if let Some(invocation) = header_str(headers, X_VERCEL_INVOCATION_ID) {
         span.record("vercel_invocation_id", invocation);
+    }
+}
+
+/// Record the low-cardinality route dimension the exported span aggregates by.
+///
+/// ## The RED "which route?" a constant span name cannot answer
+///
+/// Both surfaces' root spans have a **static** `tracing` name (`http_request` / `mcp_request`),
+/// because a `tracing` span name is compile-time metadata and cannot be a runtime value. Static is
+/// right for the log stream; it is wrong for span metrics, where the span *name* is the dimension
+/// Tempo's generator aggregates by — one name per service means per-route RED is not derivable. The
+/// raw `path` attribute is the opposite failure: it interpolates resource UUIDs, so it carried 889
+/// distinct values in 12h — too fine to be a dimension, and unbounded by construction.
+///
+/// The dimension is the matched **route template**, `axum::extract::MatchedPath` —
+/// `/api/resources/{id}`, never `/api/resources/019f…`. It is **bounded by construction**: the value
+/// set is the router's finite list of routes, so adding a resource cannot add a dimension value. It
+/// is written to `otel.name`, a `tracing-opentelemetry` magic field that overrides the *exported*
+/// OTel span name while leaving the `tracing` metadata name untouched — so `http_request` still
+/// identifies the span in logs and `GET /api/resources/{id}` identifies it in span metrics. The same
+/// template also rides as `http.route`, the semantic-conventions attribute, for a generator
+/// configured to dimension on it directly rather than on the span name.
+///
+/// The fallback bucket for an unmatched request — the 404 fallback, which has no `MatchedPath` — is
+/// `{method} <unmatched>`: still bounded (method is a small closed set), and deliberately not the raw
+/// path, which would reintroduce exactly the unboundedness this replaces.
+pub fn record_matched_route(span: &Span, method: &Method, extensions: &Extensions) {
+    match extensions.get::<axum::extract::MatchedPath>() {
+        Some(matched) => {
+            let route = matched.as_str();
+            span.record("otel.name", format!("{method} {route}").as_str());
+            span.record("http.route", route);
+        }
+        None => {
+            span.record("otel.name", format!("{method} <unmatched>").as_str());
+        }
     }
 }
 

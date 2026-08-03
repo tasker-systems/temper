@@ -124,6 +124,12 @@ where
             // The span carries no `status`: there is no response, and inventing one would make a
             // panic indistinguishable from a handler that returned 500. `latency_ms` stays, so the
             // panic's timing is comparable with every other request.
+            //
+            // But the span's *status* is unambiguously ERROR — a panic is the clearest server failure
+            // there is, and this is the one place the two axes must not be conflated: no HTTP `status`
+            // (there was no response), yet `otel.status_code = ERROR` (the span failed). Without this,
+            // the request most worth a health signal is the one with no error status at all.
+            span.record("otel.status_code", "ERROR");
             tracing::error!(
                 parent: &span,
                 latency_ms = started.elapsed().as_millis() as u64,
@@ -143,7 +149,31 @@ where
     // Emitted **before** `drop(span)`, necessarily: an event recorded after the span closes cannot be
     // attached to it, and this event is the convention `docs/development/span-field-conventions.md`
     // describes and `tests/e2e/tests/logging_test.rs` gates.
+    // ## The error rule is the OTel HTTP server semantic convention, and the choice is deliberate
+    //
+    // `otel.status_code = ERROR` iff the response is **5xx**. Not `status >= 400`. A 4xx is a correct
+    // judgment the service rendered about a request — bad input, an unauthorized caller, a resource
+    // that is not there — not a failure of the service to function. Marking 4xx `ERROR` would make an
+    // *Error Rate by Service* panel track how often clients send bad requests and how often the authz
+    // gates *work*, which is worse than no signal: it makes a healthy system read as broken and trains
+    // the reader to ignore the panel.
+    //
+    // temper sharpens this. Several authorization denials are rendered as `404` on purpose, so a probe
+    // cannot become an existence oracle (`ScopedAuthority`, the `CONTEXT_REFUSAL` family). Those 404s
+    // are the gate *doing its job*; counting them as errors would invert the signal exactly where it
+    // matters most. So the line is drawn at 5xx — the range that means "the service failed to fulfil a
+    // well-formed request" — and nowhere else.
+    //
+    // Success is left `UNSET`, never `OK`: the OTel convention reserves `OK` for an explicit
+    // application affirmation, and a 2xx server response is not one. `UNSET` + `ERROR` is a complete
+    // basis for a RED error rate (`ERROR / total`); a third `OK` bucket would add nothing and misuse
+    // the status. This mirrors the `is_server_error()` split the log level already makes — one rule,
+    // two consumers.
+    //
+    // Recorded before `drop(span)`, necessarily: `tracing-opentelemetry` applies `otel.status_code`
+    // from the recorded value, and a value recorded after the span closes cannot reach it.
     if status.is_server_error() {
+        span.record("otel.status_code", "ERROR");
         tracing::error!(parent: &span, status = status.as_u16(), latency_ms, "response");
     } else {
         tracing::info!(parent: &span, status = status.as_u16(), latency_ms, "response");

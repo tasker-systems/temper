@@ -62,10 +62,18 @@ async fn request_produces_structured_spans(pool: sqlx::PgPool) {
     );
 }
 
-/// Verify that an unauthenticated request produces a warn-level event.
+/// Verify that an unauthenticated request produces a warn-level event — and that its root span is
+/// **not** marked a server error.
+///
+/// The second half is the load-bearing one for this goal's RED work. A `401` is a correct refusal,
+/// not a service failure, and temper deliberately renders several authorization denials as `404` for
+/// the same reason. The status rule (`crates/temper-telemetry/src/request_span.rs`) draws the error
+/// line at 5xx precisely so an *Error Rate by Service* panel does not track how often the auth gates
+/// turn callers away. This asserts that decision on the real router: a 4xx leaves `otel.status_code`
+/// unset.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn unauthenticated_request_logs_warning(pool: sqlx::PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+async fn unauthenticated_request_logs_warning_and_is_not_a_server_error(pool: sqlx::PgPool) {
+    let (layer, events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
 
     let app = common::setup(pool).await;
@@ -81,13 +89,75 @@ async fn unauthenticated_request_logs_warning(pool: sqlx::PgPool) {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let events = captured.lock().unwrap();
-
-    let has_auth_warning = events.iter().any(|e| e.level <= tracing::Level::WARN);
-
+    let has_auth_warning = events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| e.level <= tracing::Level::WARN);
     assert!(
         has_auth_warning,
-        "expected a WARN-level event for 401 response, got: {events:#?}"
+        "expected a WARN-level event for 401 response"
+    );
+
+    let spans = spans.lock().unwrap();
+    let root = root_span(&spans, "http_request", "/api/resources");
+    assert!(
+        !matches!(
+            root.fields.get("otel.status_code").map(String::as_str),
+            Some("ERROR")
+        ),
+        "a 401 must NOT mark the span a server error — the error rate would then track the authz \
+         gate refusing callers, and temper's deliberate 404-as-deny would read as an outage: {root:#?}"
+    );
+}
+
+/// The exported RED shape of the root span on the real router: a **bounded route dimension**, and a
+/// status that stays unset on success.
+///
+/// This is the tracing-field view of what
+/// `crates/temper-telemetry/tests/root_span_status_and_route.rs` asserts on the exported OTel span
+/// through an in-memory exporter. Running it here proves the mechanism on the actual temper-api
+/// router — `otel.name`/`http.route` come from a genuine `MatchedPath`, and the 2xx-is-not-an-error
+/// rule is checked against a real 200.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn root_span_records_bounded_route_and_leaves_2xx_status_unset(pool: sqlx::PgPool) {
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+
+    let app = common::setup(pool).await;
+
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let spans = spans.lock().unwrap();
+    let root = root_span(&spans, "http_request", "/api/resources");
+
+    // The bounded route dimension: `{method} {matched-template}` as the exported span name
+    // (`otel.name`), and the template as the `http.route` attribute. Never the raw, UUID-bearing path.
+    assert_eq!(
+        root.fields.get("otel.name").map(String::as_str),
+        Some("GET /api/resources"),
+        "otel.name must be the matched-route span name, so span metrics have a per-route dimension \
+         bounded by the router's route set: {root:#?}"
+    );
+    assert_eq!(
+        root.fields.get("http.route").map(String::as_str),
+        Some("/api/resources"),
+        "http.route must carry the matched template: {root:#?}"
+    );
+
+    // Success leaves status UNSET — never OK (reserved for an explicit affirmation), never ERROR.
+    assert!(
+        !root.fields.contains_key("otel.status_code"),
+        "a 2xx must not set otel.status_code — a healthy request is UNSET, not OK: {root:#?}"
     );
 }
 

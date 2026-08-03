@@ -61,6 +61,9 @@ test-embed = []
 # layer ordering in `apply_transport_layers` is verified against the real router.
 temper-telemetry = { path = "../temper-telemetry", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
+# `SpanKind` — the flush test locates the request root span by its server kind rather than by its
+# (now per-route) exported name, so the assertion survives the route-dimension naming.
+opentelemetry = "0.32"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migrate", "json", "uuid"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

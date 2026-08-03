@@ -74,6 +74,62 @@ witnesses the kind, the assertion lives in `root_span_exports_as_server_kind`
 (`crates/temper-telemetry/src/lib.rs`), which exports a macro-built span and checks its
 `SpanKind`.
 
+### Span status is 5xx-only, and the route is a bounded dimension
+
+Being *on* the service graph (above) is necessary but not sufficient to answer the two questions a
+RED dashboard actually asks: **is it failing?** and **which route?** Both were blind on the three
+Rust surfaces until this landed — every span `STATUS_CODE_UNSET`, and one span name per service —
+so an *Error Rate by Service* panel read a flat 0% and per-route RED was underivable. Two more
+`otel.*` magic fields, consumed by `tracing-opentelemetry` the same way `otel.kind` is, close that.
+
+**`otel.status_code` — error is 5xx, and the exclusions are the design.** Set to `ERROR` iff the
+response is a **server error** (5xx), or the handler **panicked** (a server failure with no HTTP
+status — the one place the two axes must not be conflated: no `status` attribute, yet
+`otel.status_code = ERROR`). Everything else stays `UNSET`. This is the OTel HTTP-server semantic
+convention, and the line is at 5xx deliberately, not at `status >= 400`:
+
+- A **4xx is a correct judgment** the service rendered about a request — bad input, an unauthorized
+  caller, a resource that is not there — not a failure to function. Marking it `ERROR` makes the
+  error rate track how often clients send bad requests and how often the **authz gates work**.
+- temper sharpens this: several authorization denials are rendered as **`404` on purpose**, so a
+  probe cannot become an existence oracle (`ScopedAuthority`, the `CONTEXT_REFUSAL` family). Those
+  are the gate doing its job; counting them would invert the signal exactly where it matters most.
+- Success is `UNSET`, **never `OK`** — the convention reserves `OK` for an explicit application
+  affirmation, and a 2xx server response is not one. `UNSET` + `ERROR` is a complete basis for a RED
+  error rate; a third bucket would add nothing and misuse the status.
+
+Recorded in `traced_request` (`crates/temper-telemetry/src/request_span.rs`) before the span closes,
+because `tracing-opentelemetry` applies the value from the record and a value set after close cannot
+reach it. It mirrors the `is_server_error()` split the `response`/`panic` log level already makes —
+one rule, two consumers.
+
+**`otel.name` / `http.route` — the route dimension, bounded by construction.** A `tracing` span name
+is compile-time metadata, so the root span's name is a constant (`http_request` / `mcp_request`).
+That is right for the log stream and wrong for span metrics, where the *name* is the dimension Tempo
+aggregates by. The raw `path` attribute is the opposite failure — it interpolates resource UUIDs, so
+`temper-api`'s `span.path` carried **889 distinct values in 12h**: too fine to aggregate, and
+unbounded by construction. `record_matched_route` records the matched **route template**
+(`axum::extract::MatchedPath` — `/api/resources/{id}`, never `/api/resources/019f…`) into:
+
+- `otel.name`, which overrides the *exported* OTel span name while leaving the `tracing` metadata
+  name untouched — so `http_request` still identifies the span in logs and `GET /api/resources/{id}`
+  identifies it in span metrics, no vendor-side generator config required; and
+- `http.route`, the semantic-conventions attribute carrying the same template, for a generator
+  configured to dimension on it directly.
+
+It is **bounded by construction**: the value set is the router's finite list of routes, so adding a
+resource cannot add a dimension value. An unmatched request (the 404 fallback, which has no
+`MatchedPath`) buckets as `{method} <unmatched>` — still bounded, and deliberately not the raw path.
+The high-cardinality `path` attribute stays, because on an individual trace you want the real path;
+the fix is that *aggregation* now keys on the bounded template, not that the exact path is lost.
+
+Unlike `otel.kind`, these two are recorded as ordinary field values before `tracing-opentelemetry`
+consumes them, so a `tracing` layer **can** witness them — which is why the gate exists on two
+surfaces. `crates/temper-telemetry/tests/root_span_status_and_route.rs` drives a real router through
+`traced_request` and asserts on the **exported** span (name and status, through an in-memory
+exporter); `tests/e2e/tests/logging_test.rs` asserts the same on the real temper-api router at the
+tracing-field level, including that a `401` is not marked a server error.
+
 ### Inbound trace context
 
 `temper_telemetry::record_inbound_trace_context` reads the request's headers and records five
