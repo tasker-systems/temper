@@ -4,6 +4,15 @@ import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
 
 /**
+ * A refusal, distinct from a failure and from an honest empty.
+ */
+export type ActRefusal = { reason: RefusalReason, 
+/**
+ * Human-readable, disclosed at the depth the asker's standing allows.
+ */
+detail: string, };
+
+/**
  * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
  * `offset` is rows skipped, `regions` is funnel width.
  *
@@ -82,6 +91,18 @@ provenance: IdProvenance | null, ids: Array<string>, };
 export type MetaDetail = "surviving" | "full" | "none";
 
 /**
+ * What a composition does when a stage refuses. Declared BEFORE execution; the executor never
+ * improvises it.
+ */
+export type RefusalDisposition = "halt" | "degrade_and_disclose";
+
+/**
+ * Why an act refused. A typed variant so every door renders the same value; how a door
+ * TRANSPORTS it (HTTP status, MCP error code) stays a door concern.
+ */
+export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable";
+
+/**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
  *
  * An unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL
@@ -101,3 +122,8 @@ tags: Array<string>,
  * `kb_properties` where `property_key = 'facet'`.
  */
 facets: Array<FacetPredicate>, stage: string | null, status: string | null, owner: string | null, title_contains: string | null, };
+
+/**
+ * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
+ */
+export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
