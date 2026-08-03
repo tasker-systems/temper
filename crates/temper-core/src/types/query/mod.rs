@@ -7,6 +7,7 @@ pub mod act;
 pub mod disposition;
 pub mod filter;
 pub mod id_set;
+pub mod registry;
 pub mod scalars;
 
 // `EdgeKind` is deliberately NOT re-exported here. It is not query's type — `crate::types` already
@@ -16,4 +17,5 @@ pub use act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
 pub use disposition::{ActRefusal, RefusalDisposition, RefusalReason, StageDisposition};
 pub use filter::{EdgeFilter, FacetPredicate, FilterField, ResourceFilter};
 pub use id_set::{IdKind, IdProvenance, IdSet};
+pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
