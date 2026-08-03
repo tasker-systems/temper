@@ -67,8 +67,13 @@ async fn flush_ordering_exports_the_request_span(pool: PgPool) {
         .get_finished_spans()
         .expect("in-memory exporter readable");
 
+    // Located by server kind, not by name: the root span's exported name is now the per-route
+    // `{method} {route}` (here `GET /api/health`), while `otel.kind = server` still marks it as the
+    // request boundary. Keying on the kind is what makes this assertion outlive the route dimension.
     assert!(
-        exported.iter().any(|span| span.name == "http_request"),
+        exported
+            .iter()
+            .any(|span| span.span_kind == opentelemetry::trace::SpanKind::Server),
         "the request's root span was never exported. Either the flush runs while the root span is \
          still open — so it drains a queue the span has not reached — or it is not wired at all. \
          Exported spans: {:?}",
