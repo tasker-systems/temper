@@ -859,18 +859,35 @@ pub async fn refresh_salience(
 
     let mut tx = pool.begin().await?;
 
+    // 0. the anchor's telos — ONE evaluation, reused by both the readout below and the snapshot in
+    //    step 3. It is a single anchor-level value: `anchor_telos_embedding` depends only on
+    //    (anchor, lens), so computing it per region is an N+1 over the same answer. Measured in
+    //    production 2026-08-03 on a 429-region context: 23.186s per-region vs 0.027s hoisted, same
+    //    values (goal 019fc46c hole 6). It also makes the step-3 discipline literal rather than
+    //    coincidental — the snapshot is no longer a second read that *should* agree with what the
+    //    readouts saw, it is the identical value.
+    let telos = current_telos_text(&mut tx, anchor, lens_id).await?;
+
     // 1. the telos-dependent readout, over every live region of this anchor+lens. `nullif(…, 'NaN')`
     //    guards the zero-centroid edge (a memberless/unembedded region → cosine-vs-zero = NaN), as
     //    populate_readouts does — salience coalesces the resulting NULL to 0 below.
+    //
+    //    This inlines what `anchor_region_telos_alignment` computes rather than calling it: that
+    //    function is per-region BY SIGNATURE, so it cannot be handed a pre-computed telos. Both of
+    //    its branches reduce to `1 - (stored centroid <=> anchor telos)`, and both return NULL when
+    //    the telos is NULL (`WHERE … t.v IS NOT NULL` yields no row) — which `$4` reproduces, since
+    //    `centroid <=> NULL` is NULL. The function itself is deliberately left unchanged: it has
+    //    another caller (`populate_readouts`, which is per-region by construction) and it is the
+    //    oracle the equivalence test in `tests/salience_telos_hoist.rs` holds this statement to.
     let touched = sqlx::query!(
         "UPDATE kb_cogmap_regions r SET \
-           telos_alignment = nullif(anchor_region_telos_alignment(\
-                               r.id, r.home_anchor_table, r.home_anchor_id, $3), 'NaN'::double precision) \
+           telos_alignment = nullif(1 - (r.centroid <=> ($4::text)::vector), 'NaN'::double precision) \
          WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 \
            AND NOT r.is_folded",
         anchor.table(),
         anchor.uuid(),
         lens_id.uuid(),
+        telos.as_deref(),
     )
     .execute(&mut *tx)
     .await?
@@ -892,10 +909,9 @@ pub async fn refresh_salience(
     .execute(&mut *tx)
     .await?;
 
-    // 3. re-arm the clock. Read inside the same transaction as the readouts, so the snapshot is exactly
-    //    the telos they were computed against — the same discipline `materialize` follows — and record
-    //    it in the act, so the projection (and replay) writes it from the ledger.
-    let telos = current_telos_text(&mut tx, anchor, lens_id).await?;
+    // 3. re-arm the clock, from the value read in step 0 — the same discipline `materialize` follows,
+    //    now by construction rather than by two reads inside one transaction agreeing. Recorded in the
+    //    act, so the projection (and replay) writes the snapshot from the ledger.
     fire(
         &mut tx,
         SeedAction::SalienceRefresh {
