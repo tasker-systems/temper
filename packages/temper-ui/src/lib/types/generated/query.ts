@@ -4,6 +4,50 @@ import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
 
 /**
+ * One act, declared.
+ */
+export type ActDeclaration = { name: ActName, 
+/**
+ * What the asker holds. NOT optional — `every-act-is-situated` enforced by the signature.
+ */
+asker_holds: string, 
+/**
+ * The SQL function serving this act; `None` when `build_state` is `unbuilt`. T3 fingerprints
+ * this function's body against `scoring_revision`.
+ */
+served_by: string | null, build_state: BuildState, accepts_bounds: Array<IdKind>, accepts_seeds: Array<IdKind>, 
+/**
+ * Which bound terms this act admits. A term absent here is DECLINED, never reinterpreted:
+ * `survey` admits `[Regions]` and not `Limit`, because `wayfind_region_scores` takes a funnel
+ * width and has no rows to limit.
+ */
+accepts_bound_terms: Array<BoundTerm>, 
+/**
+ * Which filter slots this act admits. An unadmitted filter is declined
+ * (`RefusalReason::FilterNotApplicable`), never silently ignored.
+ */
+accepts_filters: Array<FilterField>, 
+/**
+ * Published ceilings, per admitted term. A ceiling the caller could have read is disclosed by
+ * `terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not
+ * the clamping. A term with no entry here has no ceiling.
+ */
+bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null, visibility_profile: VisibilityProfile, 
+/**
+ * Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4
+ * reds when the body hash moves and this does not.
+ */
+scoring_revision: number, };
+
+/**
+ * The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
+ * the mechanic currently serving it is evidence rather than identity.
+ *
+ * OPEN discriminator — adding an act is additive.
+ */
+export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within" | "follow-from" | "survey" | "substantiate" | "admit" | string;
+
+/**
  * A refusal, distinct from a failure and from an honest empty.
  */
 export type ActRefusal = { reason: RefusalReason, 
@@ -29,6 +73,13 @@ export type BoundTerm = "limit" | "offset" | "regions";
  * has no opinion about what the next act does with it.
  */
 export type BoundsMode = "bound" | "seed";
+
+/**
+ * Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —
+ * which is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`
+ * failure: a const beside a registry, with a test holding its own second copy.
+ */
+export type BuildState = { "state": "served" } | { "state": "fused", host: string, } | { "state": "unbuilt" };
 
 /**
  * Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
@@ -127,3 +178,8 @@ facets: Array<FacetPredicate>, stage: string | null, status: string | null, owne
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
  */
 export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
+
+/**
+ * Where the principal constraint applies to an act's mechanic.
+ */
+export type VisibilityProfile = "principal-agnostic" | "agnostic-in-value-relative-in-domain" | "principal-relative";

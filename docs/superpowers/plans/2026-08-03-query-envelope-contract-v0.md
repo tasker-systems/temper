@@ -874,8 +874,15 @@ git commit -m "feat(query): four dispositions and the typed refusal variant"
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `IdKind` (Task 1).
+- Consumes: `IdKind` (Task 1), `BoundTerm` (Task 2), `FilterField` (Task 3).
 - Produces: `ActName`, `BuildState`, `VisibilityProfile`, `ActDeclaration`. Task 6 populates the registry with `ActDeclaration` values.
+
+> **⚠️ The task disagreed with itself — corrected `[2026-08-03, T2 build]`.** The test literal in
+> Step 1 omitted `accepts_filters`, which the Step 3 struct declares, so the test as written did not
+> compile. `accepts_filters: vec![FilterField::Resource]` is added to the literal below. Worth
+> noticing as a class: the prose and the sketch disagreed, and the sketch is what an implementer
+> builds — here the mismatch was loud (a compile error), but the same disagreement over a field's
+> *meaning* rather than its presence would have been silent.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -930,6 +937,7 @@ mod tests {
             accepts_bounds: vec![IdKind::Resource],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
+            accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             visibility_profile: VisibilityProfile::PrincipalRelative,
