@@ -86,6 +86,19 @@ Sections, in order. Each is normative prose, not rationale — cite the design d
 6. **Refusal** — the four dispositions, the typed refusal variant, the composition-level disposition vocabulary.
 7. **Versioning** — the open/closed table, the additive/breaking table, verbatim from design §6.1–§6.2.
 8. **Inexpressibility** — the machine-readable list, from design §8.
+9. **Admission notes for the out-of-scope families** — short, and one entry is load-bearing:
+
+   > **`TerritoryKind` is not an `IdKind`.** It is a rendering tint. `context_graph_service.rs:67`
+   > emits `Territory { id: <a goal's RESOURCE id>, kind: TerritoryKind::Context }` — its own
+   > comment says *"Tint encodes the AXIS, not container-ness… it is Context-tinted even though it
+   > is rooted at a goal."* A future mapping of `Territory → IdSet` must read the **producer**,
+   > never the `kind` field, or it will emit `{kind: "context", ids: [<resource id>]}` — a wrong
+   > tag that the chaining check will then trust. `TerritoryKind::Cogmap` is additionally inert:
+   > declared, constructed by no producer.
+
+   Also record that the shape family's scope read (`ShapeQuery { lens }` — no query, no embedding)
+   is a **different act** from `survey`, not the same act in another build-state, so no
+   family/instance dimension is needed on `ActDeclaration`.
 
 - [ ] **Step 2: Verify every act's `served_by` names a function that exists**
 

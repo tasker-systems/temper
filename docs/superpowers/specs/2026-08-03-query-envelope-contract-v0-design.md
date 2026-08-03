@@ -606,19 +606,66 @@ Three things the census settled that were not visible when §9 was written:
    change (§3.3). A currency that cannot name what a mechanism accepts manufactures holes that are
    not there.
 
-### 9.2 What remains open for the four families
+### 9.2 The admissibility pass — RUN `[2026-08-03]`
 
-The census covered which id kinds **flow**. It did not model the four families' acts. Still open,
-and named so it is not mistaken for covered:
+Five risks were named as the things that could force a v0 change. **All five are closed, and none
+forces one.** The pass was scoped to *"what would admitting the four families break?"* — deliberately
+not to modelling them.
 
-- **Their act vocabulary.** `orient` already has a *served* instance in the shape family
-  (`cogmap_shape`/`context_shape` are real routes on three doors) while the search family's `survey`
-  is `fused`. One act, two build-states, in two families — the declaration format handles it, but
-  nobody has written it down.
-- **Whether any of their acts produce a heterogeneous set**, which is the one thing that would break
-  `IdSet`'s per-set tagging. Nothing found so far does — `AtlasSubgraph { nodes, edges }` is two
-  homogeneous sets, not one mixed one — but only the search and shape families were walked closely.
-- **Whether `provenance` is needed for a kind other than `region`.**
+| # | Risk | Result |
+|---|---|---|
+| A | A family produces a **heterogeneous** id set, breaking per-set tagging | **Closed.** No producer emits one |
+| B | A family needs a **bounds kind** beyond the four | **Closed.** None does |
+| C | `provenance` needed for a kind other than `region` | **Closed.** No |
+| D | One act carrying **two build-states** across families, breaking `ActDeclaration` | **Dissolved.** They are two acts |
+| F | A currency that **isn't a uuid set** | **Closed.** None is |
+
+**A — per-set tagging survives.** `AtlasSubgraph { nodes, edges }` is two homogeneous collections.
+`TerritoryOverview.territories: Vec<Territory>` *admits* a mixed set — `Territory` carries its own
+`kind` — but **both producers emit homogeneous sets**: `context_graph_service.rs:67` always
+`TerritoryKind::Context`, `graph_service.rs:256` always `TerritoryKind::Region`
+`[verified — 2026-08-03]`.
+
+> **TRAP, and it must be named before the graph family is admitted: `TerritoryKind` is not an id
+> kind. It is a rendering tint, and on one producer it is wrong about its own id.** The code says so
+> in its own comment — *"Tint encodes the AXIS, not container-ness (spec D6). A goal container sits
+> on the builder axis, so it is Context-tinted even though it is rooted at a goal"* — so that
+> producer emits `Territory { id: <a goal's RESOURCE id>, kind: Context }`. Anyone later mapping
+> `Territory → IdSet` by reading `kind` produces `{kind: "context", ids: [<resource id>]}`: a wrong
+> tag that the chaining check would then **trust**. The mapping must read the *producer*, never the
+> field.
+
+**B — no new bounds kind.** The `group=<key>:<value>` drill token looked like a second currency and
+is not: `CompositionTarget::Bucket { key, value }` resolves through `residual_member_ids` into
+`Vec<Uuid>` seeds **before** the composition read `[verified — 2026-08-03, handlers/graph.rs:328-345]`.
+So it decomposes into *an act that produces an `IdSet`*, not a new kind. A batch `substantiate` would
+consume `IdSet { kind: resource }` — already in the vocabulary.
+
+**C — no.** Block and edge ids are globally unique and need no anchor to address. `Territory.anchor_id`
+is per-id in the type but **constant per response** in both producers (the path's cogmap or context),
+so per-set provenance holds.
+
+**D — dissolved; they are two acts, not one act twice.** `ShapeQuery { lens: Option<Uuid> }` — the
+shape read takes **no query and no embedding**, and dispatches on `HomeAnchor`
+`[verified — 2026-08-03, handlers/cognitive_maps.rs:38-40, :186-196]`. So *"show me this scope's
+shape"* (query-free) and `survey`'s *"what does this scope know, near my question"* (query-relative)
+are different asker-holds. **`ActDeclaration` needs no family or instance dimension.** The shape
+family contributes a *new* act, which is additive under the open discriminator.
+
+**F — closed.** Invitation tokens are not bounds-shaped and sit outside the currency; a context ref
+is addressing sugar over `ContextId`; the element trail's `(kind, id)` is already a tagged id.
+
+**Incidental finding, recorded because it is the audit's own class:** `TerritoryKind::Cogmap` is
+**inert** — declared and constructed by no producer `[verified — 2026-08-03]`. T1 missed it because
+it inventoried parameters and response *fields*, not enum *variants*.
+
+### 9.3 Still genuinely open
+
+- The four families' **act vocabularies** — this pass established they can be admitted, not what they
+  are. The shape family's query-free scope act is the one whose existence is now certain.
+- **Every non-read affordance.** The pass, like T1's, was read-only.
+- Whether `Territory` and `NodeHome` should be *retired* in favour of `IdSet` — that is the six-pattern
+  convergence (§3.1.2), still not undertaken.
 
 ---
 
