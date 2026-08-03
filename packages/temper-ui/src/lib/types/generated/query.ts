@@ -3,6 +3,36 @@ import type { CogmapId } from "./CogmapId";
 import type { ContextId } from "./ContextId";
 
 /**
+ * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
+ * `offset` is rows skipped, `regions` is funnel width.
+ *
+ * An act that cannot serve a term does NOT reinterpret it — it declines it
+ * (`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before
+ * execution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.
+ */
+export type BoundTerm = "limit" | "offset" | "regions";
+
+/**
+ * How a receiving act consumes the `IdSet` it was handed.
+ *
+ * Declared at the CONSUMING stage, never the producing one — the producer emits membership and
+ * has no opinion about what the next act does with it.
+ */
+export type BoundsMode = "bound" | "seed";
+
+/**
+ * Whether the caller received everything that matched.
+ *
+ * NOT a total. A total costs a second query — the standing tax of pagination — and across a chain
+ * that tax is paid per stage; for a whole composition it is not even well-defined, because each
+ * stage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.
+ *
+ * This is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the
+ * ability to distinguish "this is everything" from "this is some of it".
+ */
+export type Extent = { "extent": "complete" } | { "extent": "partial" } | { "extent": "indeterminate", reason: string, };
+
+/**
  * What an [`IdSet`]'s ids name.
  *
  * OPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can
@@ -28,3 +58,8 @@ export type IdSet = { kind: IdKind,
  * Required for `region`; absent for every other kind today.
  */
 provenance: IdProvenance | null, ids: Array<string>, };
+
+/**
+ * How much per-resource meta the trace retains (design §4.4, tier 2).
+ */
+export type MetaDetail = "surviving" | "full" | "none";

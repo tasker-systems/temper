@@ -4,5 +4,7 @@
 //! the design reasoning.
 
 pub mod id_set;
+pub mod scalars;
 
 pub use id_set::{IdKind, IdProvenance, IdSet};
+pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
