@@ -121,9 +121,13 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
     let spans = exporter
         .get_finished_spans()
         .expect("in-memory exporter readable");
+    // The two request root spans, located by server kind rather than by name: the exported name is
+    // now the per-route `{method} {route}` (both requests here are `POST /mcp`), while `otel.kind =
+    // server` still marks the request boundary. temper-mcp reaches temper-services in-process, so the
+    // only server-kind spans are these two roots — any tool-dispatch or act spans are internal.
     let mcp_spans: Vec<_> = spans
         .iter()
-        .filter(|span| span.name == "mcp_request")
+        .filter(|span| span.span_kind == opentelemetry::trace::SpanKind::Server)
         .collect();
     assert_eq!(
         mcp_spans.len(),

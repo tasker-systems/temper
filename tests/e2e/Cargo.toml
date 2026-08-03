@@ -58,6 +58,9 @@ temper-mcp = { path = "../../crates/temper-mcp" }
 # MCP router really exported, rather than a replica of its layer stack.
 temper-telemetry = { path = "../../crates/temper-telemetry", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
+# `SpanKind` — `mcp_span_link_test` locates the two `mcp_request` root spans by their server kind
+# rather than by exported name, which is now the per-route `{method} {route}` rather than a constant.
+opentelemetry = "0.32"
 temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
