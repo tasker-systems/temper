@@ -1,46 +1,106 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> Running pre-commit checks..."
+# Selective pre-commit: run only the check batteries the STAGED change can
+# actually affect. The hook used to run the whole battery — cargo fmt, a
+# full-workspace clippy, cargo doc, two OpenAPI gates, tsc and biome — on every
+# commit regardless of what changed, which made a one-line docs or TypeScript
+# commit pay the entire Rust toolchain cost. That is what trains `--no-verify`,
+# and a hook people routinely bypass protects nothing.
+#
+# So we classify the staged files and run each battery only when its inputs
+# moved, mirroring the philosophy of .github/scripts/detect-ci-scope.sh:
+#
+#   Rust battery (fmt, clippy, doc, OpenAPI gates)  — only if a Rust-affecting
+#       file is staged (a crate, e2e, Cargo.*, .sqlx, a migration, openapi.json,
+#       or the cargo-make wiring).
+#   temper-cloud TS battery (typecheck, biome)      — only if a file under
+#       packages/temper-cloud/ is staged (that is all this hook checks; the UI
+#       and SDK trees are covered in CI, not here).
+#
+# A commit that touches neither — docs, other TS packages, workflow YAML — runs
+# nothing and returns instantly. Conservative by construction: the classifier is
+# an ALLOWLIST of what each battery needs, so anything unrecognized simply does
+# not switch a battery on here; CI (which diffs against the base and runs the
+# full gates) remains the backstop. This hook is a fast local pre-filter, not
+# the authority.
+#
+# Escape hatch unchanged: `git commit --no-verify` still skips everything. The
+# point of this change is that you should rarely want to.
 
-echo "  Checking formatting..."
-cargo fmt --all -- --check
-echo "  ✓ Formatting OK"
+# --diff-filter=ACMR: added / copied / modified / renamed. A staged DELETION
+# alone cannot break fmt/clippy/tsc, and counting it would run a battery for a
+# file that is gone. --cached: only what is actually staged for THIS commit.
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
 
-echo "  Running Clippy..."
-# SQLX_OFFLINE: --all-features pulls temper-next's query! macros, which resolve
-# against the `temper_next` namespace, not the dev DB's default `public`
-# search_path — live validation collapses to E0282. Use the committed .sqlx
-# caches instead (matches CI's code-quality job and all `cargo make` tasks).
-SQLX_OFFLINE=true cargo clippy --all-targets --all-features -- -D warnings
-echo "  ✓ Clippy OK"
+if [ -z "$STAGED" ]; then
+  echo "==> pre-commit: nothing staged — skipping."
+  exit 0
+fi
 
-echo "  Checking docs..."
-SQLX_OFFLINE=true RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --quiet
-echo "  ✓ Docs OK"
+staged_match() { echo "$STAGED" | grep -qE "$1"; }
 
-# openapi.json is a committed product of the Axum router, so it goes stale from a new route OR from a
-# new field on any schema type reachable from one. Nothing else in this hook notices. Cheap here:
-# clippy above already compiled temper-api, so this is just running the emit-openapi bin.
-# Output is captured and replayed only on failure — check-openapi-spec.sh prints the offending diff.
-echo "  Checking OpenAPI spec..."
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-for openapi_gate in check-openapi-spec.sh check-openapi-routes.sh; do
-  if ! openapi_out=$(SQLX_OFFLINE=true bash "$REPO_ROOT/.github/scripts/$openapi_gate" 2>&1); then
-    echo "$openapi_out" >&2
-    echo "  ✗ OpenAPI check failed ($openapi_gate) — run: cargo make openapi" >&2
-    exit 1
-  fi
-done
-echo "  ✓ OpenAPI OK"
+# Rust-affecting: anything that can move a fmt / clippy / doc / OpenAPI result.
+# openapi.json is here because the OpenAPI gates regenerate it from the router
+# and diff — a manual edit must be caught. Cargo.* / .sqlx / migrations move the
+# build or the compile-time query verification; tools/cargo-make + Makefile.toml
+# move how the gates themselves run.
+RUST_RE='^crates/|^tests/e2e/|^Cargo\.(toml|lock)$|^\.sqlx/|^migrations/|^openapi\.json$|^tools/cargo-make/|^Makefile\.toml$|^rust-toolchain'
 
-# TypeScript checks (packages/temper-cloud)
-echo "  TypeScript typecheck..."
-(cd packages/temper-cloud && bun run typecheck)
-echo "  ✓ TypeScript OK"
+# temper-cloud is the only TypeScript this hook checks (typecheck + biome).
+TS_RE='^packages/temper-cloud/'
 
-echo "  Biome lint & format..."
-(cd packages/temper-cloud && bun run check)
-echo "  ✓ Biome OK"
+HAS_RUST=false; staged_match "$RUST_RE" && HAS_RUST=true
+HAS_TS=false;   staged_match "$TS_RE"   && HAS_TS=true
 
-echo "==> All pre-commit checks passed."
+if [ "$HAS_RUST" = "false" ] && [ "$HAS_TS" = "false" ]; then
+  echo "==> pre-commit: no Rust or temper-cloud TypeScript staged — skipping (docs/other only)."
+  exit 0
+fi
+
+echo "==> Running pre-commit checks (rust=${HAS_RUST}, temper-cloud-ts=${HAS_TS})..."
+
+if [ "$HAS_RUST" = "true" ]; then
+  echo "  Checking formatting..."
+  cargo fmt --all -- --check
+  echo "  ✓ Formatting OK"
+
+  echo "  Running Clippy..."
+  # SQLX_OFFLINE: --all-features pulls temper-next's query! macros, which resolve
+  # against the `temper_next` namespace, not the dev DB's default `public`
+  # search_path — live validation collapses to E0282. Use the committed .sqlx
+  # caches instead (matches CI's code-quality job and all `cargo make` tasks).
+  SQLX_OFFLINE=true cargo clippy --all-targets --all-features -- -D warnings
+  echo "  ✓ Clippy OK"
+
+  echo "  Checking docs..."
+  SQLX_OFFLINE=true RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --quiet
+  echo "  ✓ Docs OK"
+
+  # openapi.json is a committed product of the Axum router, so it goes stale from a new route OR from a
+  # new field on any schema type reachable from one. Nothing else in this hook notices. Cheap here:
+  # clippy above already compiled temper-api, so this is just running the emit-openapi bin.
+  # Output is captured and replayed only on failure — check-openapi-spec.sh prints the offending diff.
+  echo "  Checking OpenAPI spec..."
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  for openapi_gate in check-openapi-spec.sh check-openapi-routes.sh; do
+    if ! openapi_out=$(SQLX_OFFLINE=true bash "$REPO_ROOT/.github/scripts/$openapi_gate" 2>&1); then
+      echo "$openapi_out" >&2
+      echo "  ✗ OpenAPI check failed ($openapi_gate) — run: cargo make openapi" >&2
+      exit 1
+    fi
+  done
+  echo "  ✓ OpenAPI OK"
+fi
+
+if [ "$HAS_TS" = "true" ]; then
+  echo "  TypeScript typecheck..."
+  (cd packages/temper-cloud && bun run typecheck)
+  echo "  ✓ TypeScript OK"
+
+  echo "  Biome lint & format..."
+  (cd packages/temper-cloud && bun run check)
+  echo "  ✓ Biome OK"
+fi
+
+echo "==> All applicable pre-commit checks passed."
