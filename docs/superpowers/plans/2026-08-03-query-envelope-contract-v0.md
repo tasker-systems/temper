@@ -53,8 +53,8 @@ Every task's requirements implicitly include this section.
 | `crates/temper-core/src/types/query/mod.rs` | module wiring + re-exports |
 | `crates/temper-core/src/types/query/id_set.rs` | `IdKind`, `IdProvenance`, `IdSet` — the currency |
 | `crates/temper-core/src/types/query/scalars.rs` | `Extent`, `BoundTerm`, `BoundsMode`, `MetaDetail` |
-| `crates/temper-core/src/types/query/filter.rs` | `EdgeKind`, `EdgeFilter`, `ResourceFilter`, `FacetPredicate`, `FilterField` |
-| `crates/temper-core/src/types/query/disposition.rs` | `Disposition`, `Refusal`, `RefusalDisposition` |
+| `crates/temper-core/src/types/query/filter.rs` | `EdgeFilter`, `ResourceFilter`, `FacetPredicate`, `FilterField` — **re-uses** `types::graph::EdgeKind` |
+| `crates/temper-core/src/types/query/disposition.rs` | `StageDisposition`, `ActRefusal`, `RefusalDisposition` |
 | `crates/temper-core/src/types/query/act.rs` | `ActName`, `BuildState`, `VisibilityProfile`, `ActDeclaration` |
 | `crates/temper-core/src/types/query/registry.rs` | the seven declarations + chainability matrix, as data |
 | `crates/temper-core/src/types/query/envelope.rs` | `ActInvocation`, `ActResult`, `NarrowedBy` |
@@ -455,8 +455,23 @@ The task that makes the audit's #1 finding untypeable. `--edge-type advances` to
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: nothing from earlier tasks.
-- Produces: `EdgeKind`, `EdgeFilter`, `ResourceFilter`, `FacetPredicate`, `FilterField`. Task 6 puts `FilterField` on `ActDeclaration`; Task 8 puts the filters on `ActInvocation`.
+- Consumes: **`crate::types::graph::EdgeKind`** — the incumbent, NOT a new definition. See the gap note below.
+- Produces: `EdgeFilter`, `ResourceFilter`, `FacetPredicate`, `FilterField`. Task 6 puts `FilterField` on `ActDeclaration`; Task 8 puts the filters on `ActInvocation`.
+
+> **⚠️ Plan/reality gap — corrected `[2026-08-03, T2 build]`.** This task was written as though it
+> introduced `EdgeKind`. It does not. `crates/temper-core/src/types/graph.rs:33` already defines it
+> with the same four variants, `#[sqlx(type_name = "edge_kind", rename_all = "snake_case")]` bound to
+> `migrations/20260624000001_canonical_schema.sql:95`, `#[serde(rename_all = "snake_case")]`, ts-rs
+> export to `graph.ts`, and a re-export at `crates/temper-core/src/types/mod.rs`
+> (`pub use graph::{EdgeKind, Polarity};`) `[verified — 2026-08-03]`.
+>
+> **Import it; do not redefine it.** Two Rust mirrors on one DDL enum, only one `sqlx::Type`-checked,
+> is a drift site; a second definition also collides at the `types/mod.rs` re-export and emits two
+> same-named TS types. Design §4.1.2 carries the amendment.
+>
+> **The tests below are kept and still earn their place** — they become regression cover asserting
+> that the incumbent has the properties the contract depends on (closedness, snake_case wire form,
+> and that `"advances"` cannot deserialize). They pass against the incumbent unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -535,7 +550,9 @@ mod tests {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo nextest run -p temper-core filter`
-Expected: FAIL — `EdgeKind` not found.
+Expected: FAIL — `EdgeFilter` / `ResourceFilter` / `FacetPredicate` / `FilterField` not found.
+**Not** `EdgeKind`: it resolves already, via the `use` above. If a failure names `EdgeKind` as
+missing, the import is wrong — do not "fix" it by defining one.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -550,21 +567,13 @@ Expected: FAIL — `EdgeKind` not found.
 
 use serde::{Deserialize, Serialize};
 
-/// The four members of the DDL's `edge_kind` enum
-/// (`migrations/20260624000001_canonical_schema.sql:95`). CLOSED — and its closedness is the fix
-/// for the audit's #1 finding: an edge `label` such as `advances` cannot be passed here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum EdgeKind {
-    Express,
-    Contains,
-    LeadsTo,
-    Near,
-}
+// The four members of the DDL's `edge_kind` enum
+// (`migrations/20260624000001_canonical_schema.sql:95`) are ALREADY modelled, and re-used here
+// rather than restated. `types::graph::EdgeKind` is `sqlx::Type`-bound to that DDL, so it is the
+// copy a schema change breaks — which is exactly why the contract must not carry a second one.
+// Its closedness is the fix for the audit's #1 finding: an edge `label` such as `advances` cannot
+// be passed here.
+use crate::types::graph::EdgeKind;
 
 /// Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
 /// kind is a closed DDL enum, the label is free text the caller actually sees on every edge.
@@ -634,7 +643,11 @@ pub enum FilterField {
 }
 ```
 
-Add `pub mod filter;` and re-export `EdgeFilter, EdgeKind, FacetPredicate, FilterField, ResourceFilter` from `query/mod.rs`.
+Add `pub mod filter;` and re-export `EdgeFilter, FacetPredicate, FilterField, ResourceFilter` from `query/mod.rs`.
+
+**Do NOT re-export `EdgeKind` from `query/mod.rs`.** It is not query's type: `crate::types` already
+re-exports it from `graph`, and a second public path to one type invites the very ambiguity this
+correction removed. `EdgeFilter` referencing it is enough.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -659,7 +672,7 @@ git commit -m "feat(query): the predicate layer, with edge_kind and label as sep
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `Disposition`, `Refusal`, `RefusalReason`, `RefusalDisposition`. Task 7 puts `Disposition` on `StageTrace`.
+- Produces: `StageDisposition`, `ActRefusal`, `RefusalReason`, `RefusalDisposition`. Task 7 puts `StageDisposition` on `StageTrace`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -671,10 +684,10 @@ mod tests {
     #[test]
     fn there_are_exactly_four_dispositions() {
         let all = [
-            Disposition::Answered,
-            Disposition::Empty,
-            Disposition::Withheld,
-            Disposition::Refused,
+            StageDisposition::Answered,
+            StageDisposition::Empty,
+            StageDisposition::Withheld,
+            StageDisposition::Refused,
         ];
         let rendered: Vec<String> =
             all.iter().map(|d| serde_json::to_string(d).unwrap()).collect();
@@ -685,7 +698,7 @@ mod tests {
     fn disposition_is_closed_unknown_values_fail_to_parse() {
         // Closedness is the property that lets consumers match exhaustively. Adding a fifth
         // variant is a BREAKING change (design §6.1) precisely because of this test.
-        assert!(serde_json::from_str::<Disposition>("\"partially_answered\"").is_err());
+        assert!(serde_json::from_str::<StageDisposition>("\"partially_answered\"").is_err());
     }
 
     #[test]
@@ -693,18 +706,18 @@ mod tests {
         // An honest zero and a declined question are different answers; collapsing them is the
         // refusal-dialect divergence this contract exists to end.
         assert_ne!(
-            serde_json::to_string(&Disposition::Empty).unwrap(),
-            serde_json::to_string(&Disposition::Refused).unwrap()
+            serde_json::to_string(&StageDisposition::Empty).unwrap(),
+            serde_json::to_string(&StageDisposition::Refused).unwrap()
         );
     }
 
     #[test]
     fn refusal_carries_a_reason_and_round_trips() {
-        let r = Refusal {
+        let r = ActRefusal {
             reason: RefusalReason::UnsupportedBoundKind,
             detail: "act `find-exact` does not accept bounds of kind `region`".to_string(),
         };
-        assert_eq!(serde_json::from_str::<Refusal>(&serde_json::to_string(&r).unwrap()).unwrap(), r);
+        assert_eq!(serde_json::from_str::<ActRefusal>(&serde_json::to_string(&r).unwrap()).unwrap(), r);
     }
 
     #[test]
@@ -721,7 +734,7 @@ mod tests {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo nextest run -p temper-core disposition`
-Expected: FAIL — `Disposition` not found.
+Expected: FAIL — `StageDisposition` not found.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -737,7 +750,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum Disposition {
+pub enum StageDisposition {
     /// Rows returned.
     Answered,
     /// Honest zero — the question was asked and nothing matched.
@@ -789,7 +802,7 @@ pub enum RefusalReason {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
-pub struct Refusal {
+pub struct ActRefusal {
     pub reason: RefusalReason,
     /// Human-readable, disclosed at the depth the asker's standing allows.
     pub detail: String,
@@ -1599,7 +1612,7 @@ Both halves in one task: the trace is the composition envelope's disclosure half
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActName` (Task 5), `Disposition`/`RefusalDisposition` (Task 4), `NarrowedBy`/`ActInvocation` (Task 7), `MetaDetail` (Task 2), `IdKind` (Task 1).
+- Consumes: `ActName` (Task 5), `StageDisposition`/`RefusalDisposition` (Task 4), `NarrowedBy`/`ActInvocation` (Task 7), `MetaDetail` (Task 2), `IdKind` (Task 1).
 - Produces: `StageTrace`, `BoundsSource`, `MetaTruncated`, `CompositionTrace`, `Intention`, `OutcomeDeclaration`, `Composition`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1608,7 +1621,7 @@ Both halves in one task: the trace is the composition envelope's disclosure half
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::query::disposition::Disposition;
+    use crate::types::query::disposition::StageDisposition;
 
     #[test]
     fn a_refused_stage_still_has_a_trace_entry() {
@@ -1617,7 +1630,7 @@ mod tests {
         let t = StageTrace {
             stage: 2,
             act: ActName::FindAboutWithin,
-            disposition: Disposition::Refused,
+            disposition: StageDisposition::Refused,
             bounds_source: Some(BoundsSource::Upstream { stage: 1 }),
             bounds_in: 40,
             bounds_honored: 0,
@@ -1625,7 +1638,7 @@ mod tests {
             narrowed_by: vec![],
             meta_truncated: None,
         };
-        assert_eq!(t.disposition, Disposition::Refused);
+        assert_eq!(t.disposition, StageDisposition::Refused);
         assert_eq!(serde_json::from_str::<StageTrace>(&serde_json::to_string(&t).unwrap()).unwrap(), t);
     }
 
@@ -1648,7 +1661,7 @@ mod tests {
         let t = StageTrace {
             stage: 3,
             act: ActName::FollowFrom,
-            disposition: Disposition::Answered,
+            disposition: StageDisposition::Answered,
             bounds_source: None,
             bounds_in: 0,
             bounds_honored: 0,
@@ -1689,7 +1702,7 @@ Expected: FAIL — `StageTrace` not found.
 use serde::{Deserialize, Serialize};
 
 use super::act::ActName;
-use super::disposition::Disposition;
+use super::disposition::StageDisposition;
 use super::envelope::NarrowedBy;
 use super::scalars::MetaDetail;
 
@@ -1731,7 +1744,7 @@ pub struct MetaTruncated {
 pub struct StageTrace {
     pub stage: u32,
     pub act: ActName,
-    pub disposition: Disposition,
+    pub disposition: StageDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_source: Option<BoundsSource>,
     pub bounds_in: i64,
@@ -1982,9 +1995,9 @@ pub mod trace;
 
 pub use act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
 pub use composition::{Composition, Intention, OutcomeDeclaration};
-pub use disposition::{Disposition, Refusal, RefusalDisposition, RefusalReason};
+pub use disposition::{StageDisposition, ActRefusal, RefusalDisposition, RefusalReason};
 pub use envelope::{ActInvocation, ActResult, NarrowedBy};
-pub use filter::{EdgeFilter, EdgeKind, FacetPredicate, FilterField, ResourceFilter};
+pub use filter::{EdgeFilter, FacetPredicate, FilterField, ResourceFilter};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
@@ -2036,14 +2049,15 @@ fn query_contract_schemas_match_snapshots() {
     check::<q::IdProvenance>("id_provenance");
     check::<q::Extent>("extent");
     check::<q::BoundTerm>("bound_term");
-    check::<q::EdgeKind>("edge_kind");
+    // EdgeKind is deliberately absent: it belongs to `types::graph`, is `sqlx::Type`-bound to the
+    // DDL, and is snapshotted through `EdgeFilter` rather than as a query-owned type.
     check::<q::EdgeFilter>("edge_filter");
     check::<q::ResourceFilter>("resource_filter");
     check::<q::FilterField>("filter_field");
     check::<q::BoundsMode>("bounds_mode");
     check::<q::MetaDetail>("meta_detail");
-    check::<q::Disposition>("disposition");
-    check::<q::Refusal>("refusal");
+    check::<q::StageDisposition>("disposition");
+    check::<q::ActRefusal>("refusal");
     check::<q::RefusalDisposition>("refusal_disposition");
     check::<q::ActName>("act_name");
     check::<q::BuildState>("build_state");

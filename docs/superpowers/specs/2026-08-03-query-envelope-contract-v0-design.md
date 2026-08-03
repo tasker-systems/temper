@@ -1,9 +1,12 @@
 # The query-envelope contract, v0 — design
 
 **Status:** design, approved in session 2026-08-03, **amended the same day** by the §9 census — the
-currency became a typed `IdSet` (§3.1) and one declared foreclosure dissolved (§3.3). Ships nothing
-by itself; it is the settled shape that task **T2** (`019fbddc-227f-7e41-8167-b9eb0db0a63e`) authors
-against and task **T3** (`019fbddc-bf0b-74c3-b48f-c06c799dec04`) inverts into generated artifacts.
+currency became a typed `IdSet` (§3.1) and one declared foreclosure dissolved (§3.3). Amended again
+at the start of T2's build by the **incumbent-name census** (§4.1.2, §5): three of the type names
+this design chose were already taken in the workspace, and a fourth pattern — reuse vs. redefine —
+had to be decided before any of them was written. Ships nothing by itself; it is the settled shape
+that task **T2** (`019fbddc-227f-7e41-8167-b9eb0db0a63e`) authors against and task **T3**
+(`019fbddc-bf0b-74c3-b48f-c06c799dec04`) inverts into generated artifacts.
 
 **Frame register:** [Every question to Temper is answered by a situated act — acts compose by piping,
 no constant decides between them, and no composition
@@ -459,6 +462,31 @@ closed `EdgeKind`, so it is a refusal at the correctness layer rather than a sil
 the same move as `IdSet` (bound vs seed) and `BoundTerm` (rows vs regions) — *make the conflation
 untypeable rather than documented.*
 
+**AMENDED `[2026-08-03, T2 build]` — `EdgeKind` is REUSED, not redefined.** This design named
+`EdgeKind` as though the contract were introducing it. It is not: the workspace already carries
+exactly this enum, and T2 imports it.
+
+```rust
+// crates/temper-core/src/types/graph.rs:33  [verified — 2026-08-03]
+#[derive(…, sqlx::Type)]
+#[sqlx(type_name = "edge_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind { Express, Contains, LeadsTo, Near }
+```
+
+It is already re-exported (`crates/temper-core/src/types/mod.rs`, `pub use graph::{EdgeKind,
+Polarity};`) and already ts-rs-exported to `graph.ts`. **Every property this section asks of
+`EdgeKind` holds of the incumbent unchanged** — the four variants, the snake_case wire spelling, and
+the closedness that makes `"advances"` fail to deserialize `[verified — 2026-08-03]`.
+
+Redefining it in `query/filter.rs` would have been actively wrong, in three independent ways: it
+would put **two Rust mirrors on one DDL enum** with only one of them `sqlx::Type`-checked against
+`migrations/20260624000001_canonical_schema.sql:95`, so a DDL change would break the checked copy
+and silently pass the contract's; it would **collide at the `types/mod.rs` re-export**; and ts-rs
+would emit **two same-named TS types** into one generated tree. The general rule this instance is a
+case of: *a contract that restates a predicate the system already exposes under a name has created a
+drift site, not a definition.*
+
 **Three rules:**
 
 1. **An unknown value on a closed vocabulary is a refusal, never an empty result.**
@@ -591,6 +619,40 @@ Two constraints carried in unchanged:
 
 Preserved from the predecessor register: naming an anchor the principal cannot read yields zero rows,
 never a leak; an empty scope is an honest empty-scope signal, not an error.
+
+### 5.1 AMENDED `[2026-08-03, T2 build]` — the two names this section chose were taken
+
+`[decided — 2026-08-03, Pete]` Both `Disposition` and `Refusal` already name **different** concepts
+in this workspace. The concepts here are genuinely distinct from those — this is a naming collision,
+not a duplicated definition — so the resolution is to rename, and to say what the relationship to
+each incumbent is rather than leave two same-named types for the next reader to disambiguate.
+
+| This section said | Ships as | Incumbent that holds the name |
+|---|---|---|
+| `Disposition` (`answered`/`empty`/`withheld`/`refused`) | **`StageDisposition`** | `crates/temper-core/src/types/invocation.rs:23` — `Completed`/`Failed`/`Abandoned`, the *invocation* terminal disposition, itself mirroring `temper_substrate::payloads::Disposition` `[verified — 2026-08-03]` |
+| `Refusal` (the act declines a well-formed question) | **`ActRefusal`** | `crates/temper-principal/src/refusal.rs:24` — the *admission* refusal riding the 403, with `reason()` and per-variant `schema(title=…)` `[verified — 2026-08-03]` |
+
+`RefusalDisposition` (`halt` | `degrade-and-disclose`) keeps its name — nothing holds it.
+
+**The `Refusal` case is the one that carries meaning beyond hygiene.** temper-core **already depends
+on** temper-principal and forwards its wire features precisely so that type crosses the boundary
+(`crates/temper-core/Cargo.toml:11`, `:55-56`: `typescript = ["ts-rs",
+"temper-principal/typescript"]`, `web-api = [… "temper-principal/web-api"]`)
+`[verified — 2026-08-03]`. So the two would have landed in the same generated TS and OpenAPI trees
+under one name.
+
+That adjacency is not incidental. The frame register says an act's refusal is *"disclosed at a depth
+governed by the refused actor's standing relative to the refused scope **(inherits the
+refusal-surface doctrine)**"* — and `temper_principal::Refusal` **is** that doctrine's incumbent
+expression. `ActRefusal` therefore **inherits the doctrine and does not replace the type**: an act
+declining a well-formed question is a different event from a principal being denied admission, and
+v0 keeps them separate types.
+
+**Stated silence, so it does not read as settled:** whether `ActRefusal` should eventually *compose*
+with `temper_principal::Refusal` — wrap it for the standing-derived arms rather than sit beside it —
+is **open and not decided here**. v0 ships them adjacent. The question is real because the
+disclosure-depth rule above is standing-shaped, which is exactly what the incumbent already models;
+it is deferred because answering it needs the act layer to exist, and v0 ships no act.
 
 ---
 
