@@ -5,6 +5,7 @@
 
 pub mod act;
 pub mod disposition;
+pub mod envelope;
 pub mod filter;
 pub mod id_set;
 pub mod registry;
@@ -15,6 +16,7 @@ pub mod scalars;
 // that re-using it instead of restating it was meant to remove.
 pub use act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
 pub use disposition::{ActRefusal, RefusalDisposition, RefusalReason, StageDisposition};
+pub use envelope::{ActInvocation, ActResult, NarrowedBy};
 pub use filter::{EdgeFilter, FacetPredicate, FilterField, ResourceFilter};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};

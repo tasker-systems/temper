@@ -40,6 +40,29 @@ bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null, visibi
 scoring_revision: number, };
 
 /**
+ * One act, invoked.
+ */
+export type ActInvocation = { act: ActName, 
+/**
+ * The only value that crosses a stage boundary. Membership, never rank.
+ */
+bounds: IdSet | null, 
+/**
+ * How this act consumes `bounds`. Required whenever `bounds` is present.
+ */
+bounds_mode: BoundsMode | null, 
+/**
+ * Act-level bound terms. A term this act does not admit is refused STATICALLY
+ * (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
+ */
+terms: { [key in BoundTerm]?: bigint }, 
+/**
+ * Narrowing by what a thing IS. At most one slot applies per act; supplying the other is
+ * `RefusalReason::FilterNotApplicable`.
+ */
+resource_filter: ResourceFilter | null, edge_filter: EdgeFilter | null, };
+
+/**
  * The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
  * the mechanic currently serving it is evidence rather than identity.
  *
@@ -55,6 +78,29 @@ export type ActRefusal = { reason: RefusalReason,
  * Human-readable, disclosed at the depth the asker's standing allows.
  */
 detail: string, };
+
+/**
+ * One act's answer.
+ */
+export type ActResult = { act: ActName, 
+/**
+ * Declared kind, so contract chaining compares kinds rather than inferring them.
+ */
+produced: IdSet, 
+/**
+ * Complete / partial / indeterminate. NOT a total — see `Extent`.
+ */
+extent: Extent, 
+/**
+ * Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+ */
+total: bigint | null, 
+/**
+ * The APPLIED value of every admitted term, beside what was asked. Generalizes the
+ * `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
+ * for exactly one term and was never extended to `limit` or `depth`.
+ */
+terms_effective: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, bounds_in: bigint, bounds_honored: bigint, bounds_withheld: bigint, };
 
 /**
  * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
@@ -140,6 +186,16 @@ provenance: IdProvenance | null, ids: Array<string>, };
  * How much per-resource meta the trace retains (design §4.4, tier 2).
  */
 export type MetaDetail = "surviving" | "full" | "none";
+
+/**
+ * One act-specific threshold, and what applying it did.
+ */
+export type NarrowedBy = { key: string, value: string, 
+/**
+ * Counts are carried ONLY where the act computes them for free. Requiring them would
+ * re-introduce the second query `Extent` exists to avoid.
+ */
+admitted: bigint | null, excluded: bigint | null, };
 
 /**
  * What a composition does when a stage refuses. Declared BEFORE execution; the executor never
