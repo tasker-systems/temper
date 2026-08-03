@@ -50,7 +50,8 @@ Every task's requirements implicitly include this section.
 |---|---|
 | `crates/temper-core/src/types/query/mod.rs` | module wiring + re-exports |
 | `crates/temper-core/src/types/query/id_set.rs` | `IdKind`, `IdProvenance`, `IdSet` — the currency |
-| `crates/temper-core/src/types/query/scalars.rs` | `Total`, `BoundsMode`, `MetaDetail` |
+| `crates/temper-core/src/types/query/scalars.rs` | `Extent`, `BoundTerm`, `BoundsMode`, `MetaDetail` |
+| `crates/temper-core/src/types/query/filter.rs` | `EdgeKind`, `EdgeFilter`, `ResourceFilter`, `FacetPredicate`, `FilterField` |
 | `crates/temper-core/src/types/query/disposition.rs` | `Disposition`, `Refusal`, `RefusalDisposition` |
 | `crates/temper-core/src/types/query/act.rs` | `ActName`, `BuildState`, `VisibilityProfile`, `ActDeclaration` |
 | `crates/temper-core/src/types/query/registry.rs` | the seven declarations + chainability matrix, as data |
@@ -79,24 +80,25 @@ Build-independent, and the artifact the rest of the plan realizes. Written first
 Sections, in order. Each is normative prose, not rationale — cite the design doc for rationale rather than restating it.
 
 1. **Scope** — the search family only. Name the four excluded families and point at T1's audit for each.
-2. **The seven act declarations.** One subsection per act, each stating: `name`, `asker_holds` (one sentence, asker-shaped), `served_by` (the SQL function), `build_state`, `accepts_bounds` (kinds), `accepts_seeds` (kinds), `produces` (kind), `visibility_profile`, `scoring_revision`, and the act's `meta` field names.
+2. **The seven act declarations.** One subsection per act, each stating: `name`, `asker_holds` (one sentence, asker-shaped), `served_by` (the SQL function), `build_state`, `accepts_bounds` (kinds), `accepts_seeds` (kinds), `accepts_bound_terms`, `bound_ceilings`, `accepts_filters`, `produces` (kind), `visibility_profile`, `scoring_revision`, and the act's `meta` field names.
 3. **The `IdSet` currency** — shape, the four kinds, when `provenance` is required, the two consumption modes.
 4. **The envelope** — `ActInvocation`, `ActResult`, the composition envelope, contract chaining on kinds.
-5. **The trace** — the two tiers, the `meta_detail` levels, the disclosure obligation on caps.
-6. **Refusal** — the four dispositions, the typed refusal variant, the composition-level disposition vocabulary.
-7. **Versioning** — the open/closed table, the additive/breaking table, verbatim from design §6.1–§6.2.
-8. **Inexpressibility** — the machine-readable list, from design §8.
-9. **Admission notes for the out-of-scope families** — short, and one entry is load-bearing:
+5. **Filters** — the two typed slots, why `edge_kind` and `label` are separate fields, the
+   unknown-value refusal, and what a filter is NOT (no generic predicate grammar).
+6. **The trace** — the two tiers, the `meta_detail` levels, the disclosure obligation on caps.
+7. **Refusal** — the four dispositions, the typed refusal variant, the composition-level disposition vocabulary.
+8. **Versioning** — the open/closed table, the additive/breaking table, verbatim from design §6.1–§6.2.
+9. **Inexpressibility** — the machine-readable list, from design §8.
+10. **Admission notes for the out-of-scope families** — short, two entries:
 
-   > **`TerritoryKind` is not an `IdKind`.** It is a rendering tint. `context_graph_service.rs:67`
-   > emits `Territory { id: <a goal's RESOURCE id>, kind: TerritoryKind::Context }` — its own
-   > comment says *"Tint encodes the AXIS, not container-ness… it is Context-tinted even though it
-   > is rooted at a goal."* A future mapping of `Territory → IdSet` must read the **producer**,
-   > never the `kind` field, or it will emit `{kind: "context", ids: [<resource id>]}` — a wrong
-   > tag that the chaining check will then trust. `TerritoryKind::Cogmap` is additionally inert:
-   > declared, constructed by no producer.
+   > **This contract takes no dependency on the incumbent Atlas wire shapes.** `Territory`,
+   > `TerritoryKind` and `NodeHome` belong to the surface goal `019fbaac-96e2-7620-ace2-667a0f8ff000`
+   > exists to replace wholesale; that goal is held back pending this work and bends toward this
+   > frame rather than the reverse. Build no mapping from them, and do not treat their shapes as
+   > constraints. What the successor surface carries is that goal's to decide, and `IdSet` is a
+   > candidate answer.
 
-   Also record that the shape family's scope read (`ShapeQuery { lens }` — no query, no embedding)
+   And record that the shape family's scope read (`ShapeQuery { lens }` — no query, no embedding)
    is a **different act** from `survey`, not the same act in another build-state, so no
    family/instance dimension is needed on `ActDeclaration`.
 
@@ -321,7 +323,7 @@ git commit -m "feat(query): IdSet — the typed, tagged currency"
 
 ---
 
-### Task 3: Envelope scalars — `Total`, `BoundsMode`, `MetaDetail`
+### Task 3: Envelope scalars — `Extent`, `BoundTerm`, `BoundsMode`, `MetaDetail`
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/scalars.rs`
@@ -329,7 +331,7 @@ git commit -m "feat(query): IdSet — the typed, tagged currency"
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `Total`, `BoundsMode`, `MetaDetail`. Task 6 puts `Total` on `ActResult`, `BoundsMode` on `ActInvocation`; Task 7 uses `MetaDetail`.
+- Produces: `Extent`, `BoundTerm`, `BoundsMode`, `MetaDetail`. Task 5 puts `BoundTerm` on `ActDeclaration`; Task 7 puts `Extent` and `BoundTerm` on the envelopes; Task 8 uses `MetaDetail` and `BoundTerm`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -339,20 +341,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn total_known_zero_is_not_unavailable() {
-        // A nullable would collapse these, reproducing the is_stale-on-a-never-materialized-map
-        // ambiguity. "I counted, and it is zero" and "I cannot count" are different answers.
-        let zero = Total::Known(0);
-        let unk = Total::Unavailable { reason: "search reports no total".to_string() };
-        assert_ne!(serde_json::to_string(&zero).unwrap(), serde_json::to_string(&unk).unwrap());
-        assert_eq!(serde_json::from_str::<Total>(&serde_json::to_string(&zero).unwrap()).unwrap(), zero);
-        assert_eq!(serde_json::from_str::<Total>(&serde_json::to_string(&unk).unwrap()).unwrap(), unk);
+    fn extent_distinguishes_complete_from_partial_from_uncountable() {
+        // The clause needs "this is everything" vs "this is some of it" — NOT a total. `Partial`
+        // is answerable with a limit+1 probe; a total would cost a second query per stage.
+        let all = [
+            Extent::Complete,
+            Extent::Partial,
+            Extent::Indeterminate { reason: "candidate set is produced by the bound".to_string() },
+        ];
+        let rendered: Vec<String> = all.iter().map(|e| serde_json::to_string(e).unwrap()).collect();
+        // All three are mutually distinguishable.
+        assert_eq!(rendered.len(), 3);
+        assert_ne!(rendered[0], rendered[1]);
+        assert_ne!(rendered[1], rendered[2]);
+        for (e, j) in all.iter().zip(rendered.iter()) {
+            assert_eq!(&serde_json::from_str::<Extent>(j).unwrap(), e);
+        }
     }
 
     #[test]
-    fn total_never_serializes_as_bare_null() {
-        let unk = Total::Unavailable { reason: "x".to_string() };
-        assert_ne!(serde_json::to_string(&unk).unwrap(), "null");
+    fn extent_never_serializes_as_bare_null() {
+        // A nullable would collapse "complete" with "could not tell" — the
+        // is_stale-on-a-never-materialized-map ambiguity, one family over.
+        assert_ne!(serde_json::to_string(&Extent::Complete).unwrap(), "null");
+    }
+
+    #[test]
+    fn bound_terms_each_have_exactly_one_meaning() {
+        // `limit` means rows, always. `regions` means funnel width, always. A term is never
+        // reinterpreted per act — an act that cannot serve a term DECLINES it (Task 4/5).
+        assert_eq!(serde_json::to_string(&BoundTerm::Limit).unwrap(), "\"limit\"");
+        assert_eq!(serde_json::to_string(&BoundTerm::Offset).unwrap(), "\"offset\"");
+        assert_eq!(serde_json::to_string(&BoundTerm::Regions).unwrap(), "\"regions\"");
+    }
+
+    #[test]
+    fn bound_term_is_closed_unknown_terms_fail_to_parse() {
+        // Closed on purpose: a term whose meaning is not fixed by the contract is exactly the
+        // thing `the-same-bound-term-means-the-same-thing-on-every-read` forbids.
+        assert!(serde_json::from_str::<BoundTerm>("\"page_size\"").is_err());
     }
 
     #[test]
@@ -371,7 +398,7 @@ mod tests {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo nextest run -p temper-core scalars`
-Expected: FAIL — `Total` not found.
+Expected: FAIL — `Extent` not found.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -380,20 +407,50 @@ Expected: FAIL — `Total` not found.
 
 use serde::{Deserialize, Serialize};
 
-/// How many results exist before the caller's limit.
+/// Whether the caller received everything that matched.
 ///
-/// A typed sum, never a nullable. Search reports no total today and `matched` echoes the
-/// POST-clamp count, so 50 rows is indistinguishable from a corpus holding exactly 50. An act
-/// that cannot count says so, with a reason.
+/// NOT a total. A total costs a second query — the standing tax of pagination — and across a chain
+/// that tax is paid per stage; for a whole composition it is not even well-defined, because each
+/// stage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.
+///
+/// This is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the
+/// ability to distinguish "this is everything" from "this is some of it".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case", tag = "state")]
-pub enum Total {
-    Known(i64),
-    Unavailable { reason: String },
+#[serde(rename_all = "snake_case", tag = "extent")]
+pub enum Extent {
+    /// Everything that matched is here.
+    Complete,
+    /// More exists beyond what was returned.
+    Partial,
+    /// Neither is determinable: the candidate set is *produced by* the bound rather than selected
+    /// under it. `survey` is the worked case — a region-salience traversal has no size prior to
+    /// its own funnel width.
+    Indeterminate { reason: String },
+}
+
+/// A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
+/// `offset` is rows skipped, `regions` is funnel width.
+///
+/// An act that cannot serve a term does NOT reinterpret it — it declines it
+/// (`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before
+/// execution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum BoundTerm {
+    /// Rows returned.
+    Limit,
+    /// Rows skipped.
+    Offset,
+    /// Funnel width, in regions. `survey`'s only bound term — it has no rows to limit.
+    Regions,
 }
 
 /// How a receiving act consumes the `IdSet` it was handed.
@@ -431,24 +488,229 @@ pub enum MetaDetail {
 }
 ```
 
-Add `pub mod scalars;` and re-export `BoundsMode, MetaDetail, Total` from `query/mod.rs`.
+Add `pub mod scalars;` and re-export `BoundTerm, BoundsMode, Extent, MetaDetail` from `query/mod.rs`.
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cargo nextest run -p temper-core scalars`
-Expected: PASS, 4 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cargo make generate-ts-types
 git add crates/temper-core/src/types/query/ packages/temper-ui/src/lib/types/generated/
-git commit -m "feat(query): Total, BoundsMode, MetaDetail"
+git commit -m "feat(query): Extent, BoundTerm, BoundsMode, MetaDetail"
 ```
 
 ---
 
-### Task 4: Dispositions and refusal
+### Task 4: Filters — the predicate layer
+
+The task that makes the audit's #1 finding untypeable. `--edge-type advances` today returns a corpus byte-identical to `--no-graph`, with `reason: ok` and exit 0, because the filter compares `edge_kind::text` while every edge the caller has ever seen displays a `label`.
+
+**Files:**
+- Create: `crates/temper-core/src/types/query/filter.rs`
+- Modify: `crates/temper-core/src/types/query/mod.rs`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: `EdgeKind`, `EdgeFilter`, `ResourceFilter`, `FacetPredicate`, `FilterField`. Task 6 puts `FilterField` on `ActDeclaration`; Task 8 puts the filters on `ActInvocation`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_kind_is_closed_at_the_four_the_ddl_declares() {
+        // migrations/20260624000001_canonical_schema.sql:95
+        //   CREATE TYPE edge_kind AS ENUM ('express', 'contains', 'leads_to', 'near');
+        for (k, j) in [
+            (EdgeKind::Express, "\"express\""),
+            (EdgeKind::Contains, "\"contains\""),
+            (EdgeKind::LeadsTo, "\"leads_to\""),
+            (EdgeKind::Near, "\"near\""),
+        ] {
+            assert_eq!(serde_json::to_string(&k).unwrap(), j);
+        }
+    }
+
+    #[test]
+    fn a_label_cannot_be_passed_as_an_edge_kind() {
+        // THE audit's #1 finding, fixed at the type level. `advances` is a real LABEL that appears
+        // on real edges; it is not an edge_kind. Today `--edge-type advances` silently narrows to
+        // nothing with reason: ok. Here it cannot be constructed at all.
+        assert!(serde_json::from_str::<EdgeKind>("\"advances\"").is_err());
+        assert!(serde_json::from_str::<EdgeKind>("\"derived_from\"").is_err());
+    }
+
+    #[test]
+    fn labels_and_edge_kinds_are_separate_fields_on_the_filter() {
+        // Separate slots, different types — so the caller who means "advances" has exactly one
+        // place to put it, and it is the right one.
+        let f = EdgeFilter {
+            edge_kinds: vec![EdgeKind::LeadsTo],
+            labels: vec!["advances".to_string()],
+        };
+        let back: EdgeFilter =
+            serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+        assert_eq!(back, f);
+        assert_eq!(back.edge_kinds, vec![EdgeKind::LeadsTo]);
+        assert_eq!(back.labels, vec!["advances".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_filter_serializes_to_nothing() {
+        let f = ResourceFilter::default();
+        let json = serde_json::to_string(&f).unwrap();
+        assert_eq!(json, "{}", "an unset filter must not emit empty arrays");
+        assert_eq!(serde_json::from_str::<ResourceFilter>("{}").unwrap(), f);
+    }
+
+    #[test]
+    fn resource_filters_compose_and_round_trip() {
+        // filters-compose-to-narrow: several predicates on one request, AND semantics.
+        let f = ResourceFilter {
+            doc_type: vec!["task".to_string()],
+            tags: vec!["search".to_string(), "ci".to_string()],
+            facets: vec![FacetPredicate { key: "domain".to_string(), value: "search".to_string() }],
+            stage: Some("in-progress".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(serde_json::from_str::<ResourceFilter>(&serde_json::to_string(&f).unwrap()).unwrap(), f);
+    }
+
+    #[test]
+    fn filter_fields_name_the_two_slots_an_act_may_admit() {
+        assert_eq!(serde_json::to_string(&FilterField::Resource).unwrap(), "\"resource\"");
+        assert_eq!(serde_json::to_string(&FilterField::Edge).unwrap(), "\"edge\"");
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cargo nextest run -p temper-core filter`
+Expected: FAIL — `EdgeKind` not found.
+
+- [ ] **Step 3: Write the implementation**
+
+```rust
+//! The predicate layer. Bounds are membership and terms are magnitude; neither can narrow by what
+//! a thing IS. Everything carries `kb_properties` (`doc_type`, `tags`, `facet`) and every edge
+//! carries BOTH an `edge_kind` and a `label`.
+//!
+//! Typed slots, deliberately NOT a generic `{field, op, value}` grammar: a general predicate
+//! language would be more expressive and would immediately re-open every conflation this contract
+//! exists to close.
+
+use serde::{Deserialize, Serialize};
+
+/// The four members of the DDL's `edge_kind` enum
+/// (`migrations/20260624000001_canonical_schema.sql:95`). CLOSED — and its closedness is the fix
+/// for the audit's #1 finding: an edge `label` such as `advances` cannot be passed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    Express,
+    Contains,
+    LeadsTo,
+    Near,
+}
+
+/// Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
+/// kind is a closed DDL enum, the label is free text the caller actually sees on every edge.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+pub struct EdgeFilter {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edge_kinds: Vec<EdgeKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+}
+
+/// One `kb_properties` facet predicate, at the inner-key grain the facet model uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+pub struct FacetPredicate {
+    pub key: String,
+    pub value: String,
+}
+
+/// Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
+///
+/// An unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL
+/// (`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four
+/// filters that accept nonsense and return one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+pub struct ResourceFilter {
+    /// `kb_properties` where `property_key = 'doc_type'`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doc_type: Vec<String>,
+    /// `kb_properties` where `property_key = 'tags'`. AND-containment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// `kb_properties` where `property_key = 'facet'`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facets: Vec<FacetPredicate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_contains: Option<String>,
+}
+
+/// Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FilterField {
+    Resource,
+    Edge,
+}
+```
+
+Add `pub mod filter;` and re-export `EdgeFilter, EdgeKind, FacetPredicate, FilterField, ResourceFilter` from `query/mod.rs`.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `cargo nextest run -p temper-core filter`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cargo make generate-ts-types
+git add crates/temper-core/src/types/query/ packages/temper-ui/src/lib/types/generated/
+git commit -m "feat(query): the predicate layer, with edge_kind and label as separate axes"
+```
+
+---
+
+### Task 5: Dispositions and refusal
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/disposition.rs`
@@ -565,6 +827,19 @@ pub enum RefusalReason {
     /// A required input the composition never supplied — e.g. a `find-about-*` stage with no
     /// threaded intention. Explicitly NOT a silent substitution.
     MissingIntention,
+    /// A filter value outside a closed vocabulary — an unknown `doc_type`, `stage` or `status`.
+    /// Refused rather than returned as an empty page: a typo must never be reportable as an
+    /// absence, which is what four filters do today.
+    UnknownFilterValue,
+    /// A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the
+    /// reverse). Declined, never ignored.
+    FilterNotApplicable,
+    /// A bound term was supplied to an act for which that frame of reference does not exist —
+    /// e.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never
+    /// reinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the
+    /// generated schemas, so an inapplicable bound is a property of the plan rather than a
+    /// runtime surprise.
+    BoundTermNotApplicable,
 }
 
 /// A refusal, distinct from a failure and from an honest empty.
@@ -610,7 +885,7 @@ git commit -m "feat(query): four dispositions and the typed refusal variant"
 
 ---
 
-### Task 5: Act identity and build-state
+### Task 6: Act identity and build-state
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/act.rs`
@@ -672,6 +947,8 @@ mod tests {
             build_state: BuildState::Fused { host: "unified_search".to_string() },
             accepts_bounds: vec![IdKind::Resource],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 1,
@@ -692,9 +969,13 @@ Expected: FAIL — `ActName` not found.
 ```rust
 //! Act identity, build-state, and the declaration shape.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::id_set::IdKind;
+use super::filter::FilterField;
+use super::scalars::BoundTerm;
 
 /// The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
 /// the mechanic currently serving it is evidence rather than identity.
@@ -790,6 +1071,17 @@ pub struct ActDeclaration {
     pub build_state: BuildState,
     pub accepts_bounds: Vec<IdKind>,
     pub accepts_seeds: Vec<IdKind>,
+    /// Which bound terms this act admits. A term absent here is DECLINED, never reinterpreted:
+    /// `survey` admits `[Regions]` and not `Limit`, because `wayfind_region_scores` takes a funnel
+    /// width and has no rows to limit.
+    pub accepts_bound_terms: Vec<BoundTerm>,
+    /// Which filter slots this act admits. An unadmitted filter is declined
+    /// (`RefusalReason::FilterNotApplicable`), never silently ignored.
+    pub accepts_filters: Vec<FilterField>,
+    /// Published ceilings, per admitted term. A ceiling the caller could have read is disclosed by
+    /// `terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not
+    /// the clamping. A term with no entry here has no ceiling.
+    pub bound_ceilings: BTreeMap<BoundTerm, i64>,
     pub produces: Option<IdKind>,
     pub visibility_profile: VisibilityProfile,
     /// Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4
@@ -815,7 +1107,7 @@ git commit -m "feat(query): ActName, BuildState, ActDeclaration"
 
 ---
 
-### Task 6: The registry — seven declarations and the chainability matrix
+### Task 7: The registry — seven declarations and the chainability matrix
 
 The task where the contract makes checkable claims about reality. Every value here is a claim T3's gates verify.
 
@@ -824,7 +1116,7 @@ The task where the contract makes checkable claims about reality. Every value he
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActDeclaration`, `ActName`, `BuildState`, `VisibilityProfile` (Task 5); `IdKind` (Task 2).
+- Consumes: `ActDeclaration`, `ActName`, `BuildState`, `VisibilityProfile` (Task 6); `IdKind` (Task 2).
 - Produces: `pub fn search_family() -> Vec<ActDeclaration>` and `pub fn declaration(name: &ActName) -> Option<ActDeclaration>`. T3 gates iterate `search_family()`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -912,6 +1204,49 @@ mod tests {
     }
 
     #[test]
+    fn survey_admits_regions_and_refuses_limit() {
+        // `limit` means ROWS on every read. wayfind_region_scores takes p_regions_n — a funnel
+        // width — and has no rows to limit, so survey DECLINES `limit` rather than quietly
+        // reinterpreting it as a region count. That is the-same-bound-term-means-the-same-thing
+        // holding by construction.
+        let a = declaration(&ActName::Survey).unwrap();
+        assert!(a.accepts_bound_terms.contains(&BoundTerm::Regions));
+        assert!(!a.accepts_bound_terms.contains(&BoundTerm::Limit));
+
+        let e = declaration(&ActName::FindExact).unwrap();
+        assert!(e.accepts_bound_terms.contains(&BoundTerm::Limit));
+        assert!(!e.accepts_bound_terms.contains(&BoundTerm::Regions));
+    }
+
+    #[test]
+    fn every_ceiling_is_published_for_a_term_the_act_admits() {
+        // An unpublished ceiling is the defect, not the clamping: a caller who could have read the
+        // ceiling is owed no separate warning, but one who could not is owed the refusal.
+        for a in search_family() {
+            for term in a.bound_ceilings.keys() {
+                assert!(
+                    a.accepts_bound_terms.contains(term),
+                    "{:?} publishes a ceiling for a term it does not admit: {term:?}", a.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn follow_from_filters_edges_and_the_find_acts_filter_resources() {
+        // The two slots never cross: an edge-walking act has no resource predicate to apply, and
+        // a lexical/vector act has no edge to filter.
+        assert_eq!(
+            declaration(&ActName::FollowFrom).unwrap().accepts_filters,
+            vec![FilterField::Edge]
+        );
+        assert_eq!(
+            declaration(&ActName::FindExact).unwrap().accepts_filters,
+            vec![FilterField::Resource]
+        );
+    }
+
+    #[test]
     fn the_anti_act_is_declared_unbuilt_and_produces_nothing() {
         let a = declaration(&ActName::Admit).unwrap();
         assert_eq!(a.build_state, BuildState::Unbuilt);
@@ -948,8 +1283,12 @@ Expected: FAIL — `search_family` not found.
 //! `build_state` against the live router, `accepts_*` against the SQL signatures, and
 //! `scoring_revision` against a fingerprint of `served_by`'s body.
 
+use std::collections::BTreeMap;
+
 use super::act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
+use super::filter::FilterField;
 use super::id_set::IdKind;
+use super::scalars::BoundTerm;
 
 fn fused() -> BuildState {
     BuildState::Fused { host: "unified_search".to_string() }
@@ -967,6 +1306,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // because the FTS arm carries no top-k, so nothing can be crowded out of it.
             accepts_bounds: vec![IdKind::Resource],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
+            accepts_filters: vec![FilterField::Resource],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 2, // ts_rank flag 32 -> 33, migration 20260801000010
@@ -979,6 +1321,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // A bound would make this find-about-within. Definitional exclusion, not a hole.
             accepts_bounds: vec![],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
+            accepts_filters: vec![FilterField::Resource],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 2, // best-of-N shrunk toward the chunk mean, 20260801000010
@@ -990,6 +1335,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             build_state: fused(),
             accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
+            accepts_filters: vec![FilterField::Resource],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 2,
@@ -1003,6 +1351,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // stay inside this set" is unstatable. The one genuine foreclosure.
             accepts_bounds: vec![],
             accepts_seeds: vec![IdKind::Resource],
+            accepts_bound_terms: vec![BoundTerm::Limit],
+            accepts_filters: vec![FilterField::Edge],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 1,
@@ -1015,6 +1366,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // Takes (p_anchor_table, p_anchor_id) — an anchor, which a typed IdSet can name.
             accepts_bounds: vec![IdKind::Cogmap, IdKind::Context],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![BoundTerm::Regions],
+            accepts_filters: vec![],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Regions, 20)]),
             produces: Some(IdKind::Region),
             visibility_profile: VisibilityProfile::AgnosticInValueRelativeInDomain,
             scoring_revision: 1,
@@ -1026,6 +1380,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             build_state: BuildState::Unbuilt,
             accepts_bounds: vec![],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![],
+            accepts_filters: vec![],
+            bound_ceilings: BTreeMap::new(),
             produces: None,
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 0,
@@ -1039,6 +1396,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             build_state: BuildState::Unbuilt,
             accepts_bounds: vec![],
             accepts_seeds: vec![],
+            accepts_bound_terms: vec![],
+            accepts_filters: vec![],
+            bound_ceilings: BTreeMap::new(),
             produces: None,
             visibility_profile: VisibilityProfile::PrincipalRelative,
             scoring_revision: 0,
@@ -1055,7 +1415,7 @@ pub fn declaration(name: &ActName) -> Option<ActDeclaration> {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cargo nextest run -p temper-core registry`
-Expected: PASS, 9 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1066,14 +1426,14 @@ git commit -m "feat(query): the search family's seven act declarations"
 
 ---
 
-### Task 7: Invocation and result envelopes
+### Task 8: Invocation and result envelopes
 
 **Files:**
 - Create: `crates/temper-core/src/types/query/envelope.rs`
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActName` (Task 5), `IdSet`/`IdKind` (Task 2), `BoundsMode`/`Total` (Task 3).
+- Consumes: `ActName` (Task 6), `IdSet`/`IdKind` (Task 2), `BoundsMode`/`Extent`/`BoundTerm` (Task 3).
 - Produces: `ActInvocation`, `ActResult`, `NarrowedBy`. Task 8's `StageTrace` embeds `NarrowedBy`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1083,18 +1443,22 @@ git commit -m "feat(query): the search family's seven act declarations"
 mod tests {
     use super::*;
     use crate::types::query::id_set::{IdKind, IdSet};
+    use std::collections::BTreeMap;
 
     #[test]
-    fn an_invocation_without_bounds_omits_them() {
+    fn an_invocation_without_bounds_or_terms_omits_them() {
         let inv = ActInvocation {
             act: ActName::FindAboutAnywhere,
             bounds: None,
             bounds_mode: None,
-            limit: Some(10),
-            offset: None,
+            terms: BTreeMap::new(),
+            resource_filter: None,
+            edge_filter: None,
         };
         let json = serde_json::to_string(&inv).unwrap();
         assert!(!json.contains("bounds"));
+        assert!(!json.contains("terms"));
+        assert!(!json.contains("filter"));
         assert_eq!(serde_json::from_str::<ActInvocation>(&json).unwrap(), inv);
     }
 
@@ -1105,9 +1469,9 @@ mod tests {
         let r = ActResult {
             act: ActName::Survey,
             produced: IdSet { kind: IdKind::Region, provenance: None, ids: vec![] },
-            total: Total::Known(0),
-            limit_effective: 20,
-            offset: 0,
+            extent: Extent::Complete,
+            total: None,
+            terms_effective: BTreeMap::from([(BoundTerm::Regions, 3)]),
             narrowed_by: vec![],
             bounds_in: 0,
             bounds_honored: 0,
@@ -1118,22 +1482,42 @@ mod tests {
     }
 
     #[test]
-    fn limit_effective_sits_beside_the_request_so_a_clamp_is_visible() {
+    fn a_result_can_report_partial_without_paying_for_a_total() {
+        // The whole point of Extent: "there is more" is answerable with a limit+1 probe, where a
+        // total would cost a second query on every stage of every chain.
         let r = ActResult {
             act: ActName::FindExact,
             produced: IdSet { kind: IdKind::Resource, provenance: None, ids: vec![] },
-            total: Total::Known(1000),
-            limit_effective: 50,
-            offset: 0,
+            extent: Extent::Partial,
+            total: None,
+            terms_effective: BTreeMap::from([(BoundTerm::Limit, 50)]),
             narrowed_by: vec![],
             bounds_in: 0,
             bounds_honored: 0,
             bounds_withheld: 0,
         };
-        // A caller asking for 1000 and receiving 50 can SEE the clamp — the property the
-        // shipped search response lacks, where `matched` echoes the post-clamp count.
-        assert_eq!(r.limit_effective, 50);
-        assert_eq!(r.total, Total::Known(1000));
+        assert_eq!(r.extent, Extent::Partial);
+        assert!(r.total.is_none(), "a partial answer owes no total");
+        // The applied ceiling is visible beside what was asked, so the clamp is not silent.
+        assert_eq!(r.terms_effective.get(&BoundTerm::Limit), Some(&50));
+    }
+
+    #[test]
+    fn a_traversal_result_reports_indeterminate_rather_than_guessing() {
+        let r = ActResult {
+            act: ActName::Survey,
+            produced: IdSet { kind: IdKind::Region, provenance: None, ids: vec![] },
+            extent: Extent::Indeterminate {
+                reason: "region-salience traversal has no size prior to its funnel width".to_string(),
+            },
+            total: None,
+            terms_effective: BTreeMap::from([(BoundTerm::Regions, 3)]),
+            narrowed_by: vec![],
+            bounds_in: 0,
+            bounds_honored: 0,
+            bounds_withheld: 0,
+        };
+        assert!(matches!(r.extent, Extent::Indeterminate { .. }));
     }
 
     #[test]
@@ -1141,9 +1525,17 @@ mod tests {
         let n = NarrowedBy {
             key: "min_lexical_rank".to_string(),
             value: "0.4".to_string(),
-            admitted: 12,
-            excluded: 88,
+            admitted: Some(12),
+            excluded: Some(88),
         };
+        // A filter may be disclosed without paying to count what it excluded.
+        let cheap = NarrowedBy {
+            key: "doc_type".to_string(),
+            value: "task".to_string(),
+            admitted: None,
+            excluded: None,
+        };
+        assert!(!serde_json::to_string(&cheap).unwrap().contains("admitted"));
         assert_eq!(serde_json::from_str::<NarrowedBy>(&serde_json::to_string(&n).unwrap()).unwrap(), n);
     }
 }
@@ -1164,9 +1556,12 @@ Expected: FAIL — `ActInvocation` not found.
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeMap;
+
 use super::act::ActName;
+use super::filter::{EdgeFilter, ResourceFilter};
 use super::id_set::IdSet;
-use super::scalars::{BoundsMode, Total};
+use super::scalars::{BoundTerm, BoundsMode, Extent};
 
 /// One act, invoked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1182,10 +1577,16 @@ pub struct ActInvocation {
     /// How this act consumes `bounds`. Required whenever `bounds` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_mode: Option<BoundsMode>,
+    /// Act-level bound terms. A term this act does not admit is refused STATICALLY
+    /// (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub terms: BTreeMap<BoundTerm, i64>,
+    /// Narrowing by what a thing IS. At most one slot applies per act; supplying the other is
+    /// `RefusalReason::FilterNotApplicable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<i64>,
+    pub resource_filter: Option<ResourceFilter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offset: Option<i64>,
+    pub edge_filter: Option<EdgeFilter>,
 }
 
 /// One act-specific threshold, and what applying it did.
@@ -1197,8 +1598,12 @@ pub struct ActInvocation {
 pub struct NarrowedBy {
     pub key: String,
     pub value: String,
-    pub admitted: i64,
-    pub excluded: i64,
+    /// Counts are carried ONLY where the act computes them for free. Requiring them would
+    /// re-introduce the second query `Extent` exists to avoid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admitted: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded: Option<i64>,
 }
 
 /// One act's answer.
@@ -1211,11 +1616,15 @@ pub struct ActResult {
     pub act: ActName,
     /// Declared kind, so contract chaining compares kinds rather than inferring them.
     pub produced: IdSet,
-    pub total: Total,
-    /// The APPLIED limit, beside the requested one. The `regions_effective` pattern, which the
-    /// audit singles out as the honest form — and which was never applied to `limit` or `depth`.
-    pub limit_effective: i64,
-    pub offset: i64,
+    /// Complete / partial / indeterminate. NOT a total — see `Extent`.
+    pub extent: Extent,
+    /// Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
+    /// The APPLIED value of every admitted term, beside what was asked. Generalizes the
+    /// `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
+    /// for exactly one term and was never extended to `limit` or `depth`.
+    pub terms_effective: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
     pub bounds_in: i64,
     pub bounds_honored: i64,
@@ -1228,7 +1637,7 @@ Add `pub mod envelope;` and re-export.
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cargo nextest run -p temper-core envelope`
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1240,7 +1649,7 @@ git commit -m "feat(query): ActInvocation and ActResult envelopes"
 
 ---
 
-### Task 8: The composition envelope and its trace
+### Task 9: The composition envelope and its trace
 
 Both halves in one task: the trace is the composition envelope's disclosure half, and a reviewer cannot meaningfully accept one while rejecting the other.
 
@@ -1249,7 +1658,7 @@ Both halves in one task: the trace is the composition envelope's disclosure half
 - Modify: `crates/temper-core/src/types/query/mod.rs`
 
 **Interfaces:**
-- Consumes: `ActName` (Task 5), `Disposition`/`RefusalDisposition` (Task 4), `NarrowedBy`/`ActInvocation` (Task 7), `MetaDetail` (Task 3), `IdKind` (Task 2).
+- Consumes: `ActName` (Task 6), `Disposition`/`RefusalDisposition` (Task 5), `NarrowedBy`/`ActInvocation` (Task 8), `MetaDetail` (Task 3), `IdKind` (Task 2).
 - Produces: `StageTrace`, `BoundsSource`, `MetaTruncated`, `CompositionTrace`, `Intention`, `OutcomeDeclaration`, `Composition`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1424,7 +1833,14 @@ mod tests {
     use crate::types::query::envelope::ActInvocation;
 
     fn stage(act: ActName) -> ActInvocation {
-        ActInvocation { act, bounds: None, bounds_mode: None, limit: None, offset: None }
+        ActInvocation {
+            act,
+            bounds: None,
+            bounds_mode: None,
+            terms: std::collections::BTreeMap::new(),
+            resource_filter: None,
+            edge_filter: None,
+        }
     }
 
     #[test]
@@ -1438,6 +1854,7 @@ mod tests {
             intention: None,
             on_stage_refusal: RefusalDisposition::Halt,
             meta_detail: Default::default(),
+            bounds: std::collections::BTreeMap::new(),
             stages: vec![stage(ActName::FindExact)],
         };
         assert_eq!(c.on_stage_refusal, RefusalDisposition::Halt);
@@ -1453,6 +1870,7 @@ mod tests {
             intention: Some(Intention { query: "wayfind salience".to_string(), embedded: true }),
             on_stage_refusal: RefusalDisposition::DegradeAndDisclose,
             meta_detail: Default::default(),
+            bounds: std::collections::BTreeMap::new(),
             stages: vec![stage(ActName::FindAboutAnywhere)],
         };
         let json = serde_json::to_string(&c).unwrap();
@@ -1471,6 +1889,7 @@ mod tests {
             intention: None,
             on_stage_refusal: RefusalDisposition::Halt,
             meta_detail: Default::default(),
+            bounds: std::collections::BTreeMap::new(),
             stages: vec![stage(ActName::FindExact)],
         };
         assert!(c.intention.is_none());
@@ -1505,11 +1924,13 @@ Prepend to `crates/temper-core/src/types/query/composition.rs`:
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeMap;
+
 use super::act::ActName;
 use super::disposition::RefusalDisposition;
 use super::envelope::ActInvocation;
 use super::id_set::IdKind;
-use super::scalars::MetaDetail;
+use super::scalars::{BoundTerm, MetaDetail};
 
 /// The question, computed once at composition start and threaded to every stage.
 ///
@@ -1556,6 +1977,11 @@ pub struct Composition {
     pub on_stage_refusal: RefusalDisposition,
     #[serde(default)]
     pub meta_detail: MetaDetail,
+    /// The SECOND bound layer: over the composition's own output, distinct from the act-level
+    /// terms on each stage. A composition never carries a total — with each stage's output the
+    /// next stage's domain, a full-composition total is not well-defined.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bounds: BTreeMap<BoundTerm, i64>,
     /// Ordered. Stages reference their inputs explicitly — there is no prev-else-fallback.
     pub stages: Vec<ActInvocation>,
 }
@@ -1585,7 +2011,7 @@ git commit -m "feat(query): the composition envelope and its per-stage trace"
 
 ---
 
-### Task 9: The JSON-Schema snapshot gate
+### Task 10: The JSON-Schema snapshot gate
 
 Makes the schema artifact a projection of the code. **No schema is hand-written.**
 
@@ -1595,18 +2021,19 @@ Makes the schema artifact a projection of the code. **No schema is hand-written.
 - Modify: `tools/cargo-make/main.toml`
 
 **Interfaces:**
-- Consumes: every type from Tasks 2–8.
+- Consumes: every type from Tasks 2–9.
 - Produces: `cargo make test-schema` covering temper-core as well as temper-substrate.
 
 - [ ] **Step 1: Confirm `query/mod.rs` re-exports everything the harness names**
 
-The harness below addresses types as `q::<Name>`, so `crates/temper-core/src/types/query/mod.rs` must re-export all nineteen. Its final state:
+The harness below addresses types as `q::<Name>`, so `crates/temper-core/src/types/query/mod.rs` must re-export every type it names. Its final state:
 
 ```rust
 pub mod act;
 pub mod composition;
 pub mod disposition;
 pub mod envelope;
+pub mod filter;
 pub mod id_set;
 pub mod registry;
 pub mod scalars;
@@ -1616,9 +2043,10 @@ pub use act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
 pub use composition::{Composition, Intention, OutcomeDeclaration};
 pub use disposition::{Disposition, Refusal, RefusalDisposition, RefusalReason};
 pub use envelope::{ActInvocation, ActResult, NarrowedBy};
+pub use filter::{EdgeFilter, EdgeKind, FacetPredicate, FilterField, ResourceFilter};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
-pub use scalars::{BoundsMode, MetaDetail, Total};
+pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
 pub use trace::{BoundsSource, CompositionTrace, MetaTruncated, StageTrace};
 ```
 
@@ -1665,7 +2093,12 @@ fn query_contract_schemas_match_snapshots() {
     check::<q::IdSet>("id_set");
     check::<q::IdKind>("id_kind");
     check::<q::IdProvenance>("id_provenance");
-    check::<q::Total>("total");
+    check::<q::Extent>("extent");
+    check::<q::BoundTerm>("bound_term");
+    check::<q::EdgeKind>("edge_kind");
+    check::<q::EdgeFilter>("edge_filter");
+    check::<q::ResourceFilter>("resource_filter");
+    check::<q::FilterField>("filter_field");
     check::<q::BoundsMode>("bounds_mode");
     check::<q::MetaDetail>("meta_detail");
     check::<q::Disposition>("disposition");
@@ -1740,7 +2173,7 @@ git commit -m "test(query): committed JSON-Schema snapshot gate for the v0 contr
 
 ---
 
-### Task 10: Full check and contract/registry reconciliation
+### Task 11: Full check and contract/registry reconciliation
 
 The task that catches a contract document and a registry that disagree — two copies of one claim, which is the failure this whole design exists to prevent.
 

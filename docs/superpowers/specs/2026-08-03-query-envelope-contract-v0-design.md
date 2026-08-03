@@ -46,15 +46,39 @@ currency that flows between them, the envelope that carries a composition, and t
 make a composed answer legible. The other four audited families are declared out of scope with
 reasons (§8), and §9 records the standing requirement that they be **safely additive** later.
 
-Four decisions were taken in design and are load-bearing for everything below.
+Eight decisions were taken in design and are load-bearing for everything below. The first four were
+taken at authoring; the rest by amendment the same day, each recorded where it applies.
 
 1. **v0 declares the full act vocabulary, with a per-act `build_state`** — not only what ships.
 2. **`build_state` is checked against the live router, both directions** — never mirrored beside it.
 3. **Bound-presence selects the act; it does not parameterize one.**
 4. **Per-stage disclosure lives in an envelope trace in the body**, not in a response header.
-5. **The currency is a typed `IdSet`, tagged as data** — added by amendment after the §9 census
-   (§3.1). The Rust typed-id vocabulary already existed but is `#[serde(transparent)]`, so it never
-   reached the wire where the contract needs it.
+5. **The currency is a typed `IdSet`, tagged as data** (§3.1). The Rust typed-id vocabulary already
+   existed but is `#[serde(transparent)]`, so it never reached the wire where the contract needs it.
+6. **Bounds are two layers, and a `BoundTerm` is never reinterpreted per act** (§4.1.1). An act that
+   cannot serve a term declines it, statically.
+7. **Filters are typed slots, and `edge_kind` and `label` are separate fields** (§4.1.2) — which
+   makes the audit's #1 finding untypeable rather than documented.
+8. **Completeness is an `Extent`; a total is optional and never required** (§4.1). A total costs a
+   second query, and for a composition it is not well-defined at all.
+
+**A theme runs through 5, 6 and 7, and it is the design's one real idea:** each takes a conflation
+the shipped surface documents its way around — seed-vs-bound, rows-vs-regions, kind-vs-label — and
+makes it *untypeable* rather than merely warned about.
+
+### 1.1 The goal constellation
+
+Four registers circle this subject. `[decided — 2026-08-03, Pete]` **This frame register is the
+newest and the one the others bend toward** — aligned, related, and in some cases subsumed. Recorded
+here because a sibling session that finds two registers describing one field needs to know which
+governs.
+
+| Register | Status | Relationship |
+|---|---|---|
+| [Every question is answered by a situated act](./019fbdb9-f287-79c0-aab6-efa0b1de12c8) | active | **The frame.** This contract is its first mechanism |
+| [Cross-map wayfind](./019fb559-7191-75a3-99d4-879090c60e94) | **closed** | Predecessor. Already carries a full supersession amendment naming this frame as enactor: honesty clauses continue upward with EXTEND citations, fairness clauses re-adjudicated per-act as a named remainder. **Fully reconciled — nothing outstanding** |
+| [A read declares its bounds](./019fb087-ca8f-7343-9523-a1b06368e6a4) | active | **Overlaps §4 directly.** Its four clauses are what §4.1/§4.1.1 implement; its surfaced-and-not-taken fork is answered by `Extent`; its `the-same-bound-term-means-the-same-thing-on-every-read` is satisfied by construction |
+| [The graph surface shows the reader's own material](./019fbaac-96e2-7620-ace2-667a0f8ff000) | active, **held back pending this work** | Its incumbent wire shapes are being retired, so this contract takes no dependency on them; `IdSet` is a candidate answer to what the successor carries |
 
 ---
 
@@ -303,16 +327,49 @@ OpenAPI 3.1 `allOf` + `discriminator` on `act`:
 
 ```
 IdSet:          { kind, provenance?, ids[] }                              (§3.1)
+Extent:         Complete | Partial | Indeterminate { reason }
 
-ActInvocation:  { act, bounds: IdSet?, bounds_mode, limit, offset }  ⊕  params<act>
-ActResult:      { act, produced: IdSet, total, limit_effective, offset,
+ActInvocation:  { act, bounds: IdSet?, bounds_mode, terms: {<BoundTerm>: value},
+                  filters: ResourceFilter? | EdgeFilter? }         ⊕  params<act>
+ActResult:      { act, produced: IdSet, extent, total?, terms_effective,
                   narrowed_by[], bounds_in, bounds_honored, bounds_withheld }
                                                                     ⊕  meta<act>
+
+Composition:    { outcome, intention?, on_stage_refusal, meta_detail,
+                  bounds: {<BoundTerm>: value}, stages[] }
 ```
 
 `produced` is an `IdSet`, so an act's output kind is declared and machine-checkable rather than
 inferred from which act ran. `bounds` is an `IdSet` for the same reason on the way in, and
 `bounds_mode` (`bound` | `seed`, §3.2) says how it is consumed.
+
+### 4.1.1 Bounds are two layers, and a term is never reinterpreted
+
+`[decided — 2026-08-03, Pete]` There are **two layers of bound**: an **act-level** bound inside a
+stage, and a **composition-level** bound over the whole result set. Each may carry its own terms.
+
+`BoundTerm` is a **closed vocabulary in which each term has exactly one meaning** — `limit` means
+rows, always; `offset` means rows skipped, always; `regions` means funnel width. **A term is never
+reinterpreted per act.** That is
+`the-same-bound-term-means-the-same-thing-on-every-read` (goal
+[A read declares its bounds](./019fb087-ca8f-7343-9523-a1b06368e6a4)) satisfied by construction
+rather than by discipline.
+
+An act therefore does not *reinterpret* a term it cannot serve — it **declines** it.
+`ActDeclaration.accepts_bound_terms` says which terms an act admits: `find-exact` admits
+`[limit, offset]`; **`survey` admits `[regions]` and NOT `limit`**, because `wayfind_region_scores`
+takes `p_regions_n` — a funnel width — and has no row limit to give
+`[verified — 2026-08-03]`. Handing `limit` to `survey` is `RefusalReason::BoundTermNotApplicable`.
+
+**That refusal is static.** It is decided by evaluating the plan against the generated schemas at the
+correctness layer, *before execution* — so an inapplicable bound is a property of the **plan**,
+catchable when it is authored rather than surfacing at runtime. This is strictly stronger than
+disclosing it after the fact, and it is why the bound question resolves into the contract-chaining
+check rather than into a runtime warning.
+
+Gate 2 extends to cover it for free: it already compares `accepts_bounds` against the SQL signatures,
+and `accepts_bound_terms` is checkable the same way — `survey` claiming `limit` reds against a
+function that has no such parameter.
 
 Four rules make it chain predictably:
 
@@ -334,13 +391,93 @@ Four rules make it chain predictably:
 
 Two base details that fall straight out of the audit:
 
-- **`total` is a typed sum, not a nullable** — `Known(n)` | `Unavailable{reason}`. Search has no
-  total today and `matched` echoes the *post-clamp* count, so 50 rows is indistinguishable from a
-  corpus holding exactly 50 `[audit]`. A nullable would reproduce the
-  `is_stale`-on-a-never-materialized-map ambiguity one family over.
-- **`limit_effective` sits beside `limit`** — the `regions_effective` pattern, which the audit
-  singles out as *"a model of an honest knob"* sitting in the same response object as two silent
-  clamps. The disclosure pattern already exists here; it was never applied to `limit` or `depth`.
+- **Completeness is an `Extent`, and a total is optional — never the base requirement**
+  `[amended 2026-08-03, Pete]`. An earlier draft made `total` a required typed sum
+  (`Known(n)` | `Unavailable{reason}`). That is over-ambitious and was corrected: **a total costs a
+  second query.** The standing tax of pagination is running the query twice to report what it would
+  have returned, and across a chain that tax is paid per stage. For a composition it is worse than
+  expensive — *a full-composition total is not well-defined at all*, because each stage's output is
+  the next stage's domain.
+
+  So the base carries the datum the caller actually needs, which is cheaper and is what the clause
+  asks for:
+
+  ```
+  Extent = Complete | Partial | Indeterminate { reason }
+  ```
+
+  `Partial` is answerable with a `limit + 1` probe — O(1), no second query. `Indeterminate` is for a
+  read whose candidate set is *produced by* the bound rather than selected under it; `survey` is the
+  worked case, and this is a direct answer to the fork goal
+  [A read declares its bounds](./019fb087-ca8f-7343-9523-a1b06368e6a4) surfaced-and-did-not-take:
+  *"'how many results matched' may have no definition independent of the bound applied… needs a
+  different disclosure."* `Extent` is that different disclosure.
+
+  This satisfies `every-bound-a-read-applies-is-visible-in-its-answer` on its own terms — that clause
+  requires distinguishing *"this is everything"* from *"this is some of it"*, **not** reporting a
+  total. `total: Option<i64>` remains, carried only by acts that can produce one without a second
+  query, and never by a composition.
+
+- **A magnitude that simply exceeds the available set is ordinary pagination, not an event.** No
+  warning is owed for asking for 200 and receiving 40 because only 40 exist. What *is* owed is that
+  any **ceiling** an act imposes is published in its declaration — a ceiling the caller could have
+  read is disclosed by `limit_effective` and needs no separate signal; an unpublished ceiling is the
+  defect, not the clamping.
+- **`terms_effective` sits beside the requested terms** — generalizing the `regions_effective`
+  pattern, which the audit singles out as *"a model of an honest knob"* sitting in the same response
+  object as two silent clamps. Every admitted `BoundTerm` echoes its applied value; the disclosure
+  pattern already existed for exactly one term and was never extended to `limit` or `depth`.
+
+### 4.1.2 Filters — the predicate layer
+
+`[decided — 2026-08-03, Pete]` Bounds are membership and terms are magnitude; **neither can narrow
+by what a thing *is***. Everything in the corpus carries `kb_properties` — `doc_type`, `tags`,
+`facet` `[verified — 2026-08-03]` — and every edge carries both an `edge_kind` and a `label`. An act
+that subselects on any of those needs to be able to say so, or `filters-compose-to-narrow` (goal
+[A read declares its bounds](./019fb087-ca8f-7343-9523-a1b06368e6a4)) is unsatisfiable: *"Narrowing
+is reachable through the surface, not only by retrieving broadly and filtering client-side."*
+
+**Filters are typed slots, not a generic predicate language.** A general `{field, op, value}` grammar
+would be more expressive and would immediately re-open every conflation this contract exists to
+close. Two shared filter types, each field carrying its own type:
+
+```
+ResourceFilter { doc_type[], tags[], facets[], stage, status, owner, title_contains }
+EdgeFilter     { edge_kinds: EdgeKind[],   labels: String[] }
+```
+
+**`edge_kinds` and `labels` are separate fields with different types, and that is the whole point.**
+`EdgeKind` is a **closed** enum — `express | contains | leads_to | near`
+`[verified — 2026-08-03, migrations/20260624000001_canonical_schema.sql:95]`. `label` is an **open**
+free string. Today's `--edge-type` compares `e.edge_kind::text` while the caller reads `label` off
+every edge they have ever seen, so `--edge-type advances` returns a corpus byte-identical to
+`--no-graph` with `reason: ok` and exit 0 — the audit's **#1 finding**, and the one it ranks first
+because it fails in the direction the response cannot show.
+
+Under this shape that request **cannot be constructed**: `"advances"` will not deserialize into a
+closed `EdgeKind`, so it is a refusal at the correctness layer rather than a silent empty. This is
+the same move as `IdSet` (bound vs seed) and `BoundTerm` (rows vs regions) — *make the conflation
+untypeable rather than documented.*
+
+**Three rules:**
+
+1. **An unknown value on a closed vocabulary is a refusal, never an empty result.**
+   `RefusalReason::UnknownFilterValue`. The audit found `--type`, `--stage`, `--owner` and
+   `invocation --status` all accept nonsense and return a confident empty page, which is
+   indistinguishable from a truthful zero. A typo must not be reportable as an absence.
+2. **Filters are declared per act.** `ActDeclaration.accepts_filters` names which filter fields an
+   act admits — `follow-from` admits `EdgeFilter`, `find-exact` admits `ResourceFilter` — and an
+   unadmitted filter is declined, not ignored. Same discipline as `accepts_bound_terms`, and gate 2
+   checks it the same way.
+3. **Filters compose by AND and are echoed, but counting what they excluded is optional.** A filter
+   is disclosed in `narrowed_by` with its key and value always, and `admitted`/`excluded` **only
+   where the act computes them for free.** Requiring counts would re-introduce the second query that
+   §4.1 just removed, so `NarrowedBy.admitted` and `.excluded` are `Option<i64>`.
+
+**Not undertaken:** a facet-value predicate richer than equality (ranges, weights, inner-key
+wildcards). `facet` has inner-key grain and a weight, so a richer predicate is expressible in
+principle; nothing in the search family needs it, and adding it would be inventing a query language
+ahead of a caller. Named so its absence reads as a decision.
 
 ### 4.2 Why the body, not a header
 
@@ -404,9 +541,10 @@ Two tiers, split by cost curve.
 
 **Tier 1 — per-stage summary. Mandatory, never truncated, no knob turns it off.** `act`, what was
 asked, `bounds_in`/`bounds_honored`/`bounds_withheld` as counts, `bounds_mode`,
-`narrowed_by: [{key, value, admitted, excluded}]`, `total`, `limit_effective`, `disposition`. This is
-O(stages) — a handful of scalars per stage — and it is what `composition-is-legible` actually
-requires.
+`narrowed_by: [{key, value, admitted, excluded}]`, `extent`, `terms_effective`, `disposition`. This
+is O(stages) — a handful of scalars per stage — and it is what `composition-is-legible` actually
+requires. Note it carries `extent`, not a total: the summary is cheap **because** it never triggers a
+second query (§4.1).
 
 **Tier 2 — per-resource meta. Accumulated, budgeted, disclosed when capped.** This is the
 O(results × stages) term. The invocation declares a level:
@@ -620,20 +758,21 @@ not to modelling them.
 | D | One act carrying **two build-states** across families, breaking `ActDeclaration` | **Dissolved.** They are two acts |
 | F | A currency that **isn't a uuid set** | **Closed.** None is |
 
-**A — per-set tagging survives.** `AtlasSubgraph { nodes, edges }` is two homogeneous collections.
-`TerritoryOverview.territories: Vec<Territory>` *admits* a mixed set — `Territory` carries its own
-`kind` — but **both producers emit homogeneous sets**: `context_graph_service.rs:67` always
-`TerritoryKind::Context`, `graph_service.rs:256` always `TerritoryKind::Region`
-`[verified — 2026-08-03]`.
+**A — per-set tagging survives.** `AtlasSubgraph { nodes, edges }` is two homogeneous collections,
+and every Atlas producer examined emits a homogeneous set `[verified — 2026-08-03]`. Nothing in the
+four families requires a mixed-kind set.
 
-> **TRAP, and it must be named before the graph family is admitted: `TerritoryKind` is not an id
-> kind. It is a rendering tint, and on one producer it is wrong about its own id.** The code says so
-> in its own comment — *"Tint encodes the AXIS, not container-ness (spec D6). A goal container sits
-> on the builder axis, so it is Context-tinted even though it is rooted at a goal"* — so that
-> producer emits `Territory { id: <a goal's RESOURCE id>, kind: Context }`. Anyone later mapping
-> `Territory → IdSet` by reading `kind` produces `{kind: "context", ids: [<resource id>]}`: a wrong
-> tag that the chaining check would then **trust**. The mapping must read the *producer*, never the
-> field.
+**The Atlas wire types impose no constraint on this contract, because they are being retired.**
+`Territory`, `TerritoryKind` and `NodeHome` belong to the surface that goal
+[The graph surface shows the reader's own material](./019fbaac-96e2-7620-ace2-667a0f8ff000) exists to
+**replace wholesale** — its Exercise status records that the successor surface does not exist and
+every clause is uncovered — and that goal is **held back pending this contract work**
+`[decided — 2026-08-03, Pete: do not carry the Atlas wire shapes forward]`. So no `Territory → IdSet`
+mapping should be built, and this contract takes no dependency on those shapes.
+
+**The dependency runs the other way, and that is the point.** This contract's `IdSet` is a candidate
+answer to what the successor surface should carry. Atlas bends toward the frame register, not the
+reverse.
 
 **B — no new bounds kind.** The `group=<key>:<value>` drill token looked like a second currency and
 is not: `CompositionTarget::Bucket { key, value }` resolves through `residual_member_ids` into
@@ -641,9 +780,8 @@ is not: `CompositionTarget::Bucket { key, value }` resolves through `residual_me
 So it decomposes into *an act that produces an `IdSet`*, not a new kind. A batch `substantiate` would
 consume `IdSet { kind: resource }` — already in the vocabulary.
 
-**C — no.** Block and edge ids are globally unique and need no anchor to address. `Territory.anchor_id`
-is per-id in the type but **constant per response** in both producers (the path's cogmap or context),
-so per-set provenance holds.
+**C — no.** Block and edge ids are globally unique and need no anchor to address. `region` remains the
+only kind whose tag is insufficient alone, so per-set provenance holds.
 
 **D — dissolved; they are two acts, not one act twice.** `ShapeQuery { lens: Option<Uuid> }` — the
 shape read takes **no query and no embedding**, and dispatches on `HomeAnchor`
@@ -655,25 +793,29 @@ family contributes a *new* act, which is additive under the open discriminator.
 **F — closed.** Invitation tokens are not bounds-shaped and sit outside the currency; a context ref
 is addressing sugar over `ContextId`; the element trail's `(kind, id)` is already a tagged id.
 
-**Incidental finding, recorded because it is the audit's own class:** `TerritoryKind::Cogmap` is
-**inert** — declared and constructed by no producer `[verified — 2026-08-03]`. T1 missed it because
-it inventoried parameters and response *fields*, not enum *variants*.
+**Method note, worth carrying because it bounds T1's own coverage:** the audit inventoried parameters
+and response *fields*, not enum *variants*, so a declared-but-never-constructed variant is invisible
+to it. That blind spot is a property of the method, not of any one finding.
 
 ### 9.3 Still genuinely open
 
 - The four families' **act vocabularies** — this pass established they can be admitted, not what they
   are. The shape family's query-free scope act is the one whose existence is now certain.
 - **Every non-read affordance.** The pass, like T1's, was read-only.
-- Whether `Territory` and `NodeHome` should be *retired* in favour of `IdSet` — that is the six-pattern
-  convergence (§3.1.2), still not undertaken.
+- **What the successor Atlas surface carries.** Owned by
+  [019fbaac](./019fbaac-96e2-7620-ace2-667a0f8ff000), which is held back pending this work and bends
+  toward this frame rather than the reverse. The incumbent shapes are being retired, so §3.1.2's
+  six-pattern convergence has one fewer pattern to converge than it appears.
 
 ---
 
 ## 10. Summary of the shape
 
-Seven act declarations · a **typed, dual-mode** `IdSet` currency over an open `kind` vocabulary · a
-two-tier envelope with a mandatory per-stage trace · four dispositions · five gates · the declared
-silences of §8.
+Seven act declarations · a **typed, dual-mode** `IdSet` currency over an open `kind` vocabulary ·
+**two layers of bound over a closed, never-reinterpreted `BoundTerm` vocabulary** · a typed filter
+layer that separates `edge_kind` from `label` · a two-tier
+envelope with a mandatory per-stage trace carrying `Extent` rather than a total · four dispositions ·
+five gates · the declared silences of §8.
 
 Three of these are genuinely new builds — the envelope and trace, the typed refusal variant, and the
 gates. Everything else is **exposure and honest naming of mechanics that already exist**, and the §9
