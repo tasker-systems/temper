@@ -5,7 +5,10 @@ edition = "2021"
 description = "Shared telemetry seam for temper's deployables: logging init, inbound trace-context extraction, and the root-span field convention"
 
 [dependencies]
-axum = { version = "0.8", default-features = false }
+# `matched-path` for `MatchedPath`, the bounded route dimension the root span records into
+# `otel.name` — see `record_matched_route`. The type is gated behind it, and its runtime population
+# in the router is the same feature, on by default in the surfaces.
+axum = { version = "0.8", default-features = false, features = ["matched-path"] }
 http = "1"
 opentelemetry = "0.32"
 # `reqwest-blocking-client`, NOT `reqwest-client`, and this is load-bearing rather than incidental.

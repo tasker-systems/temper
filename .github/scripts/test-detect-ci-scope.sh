@@ -86,12 +86,17 @@ run_test "rust source change: full CI" \
     "RUN_TEST_TYPESCRIPT=true" \
     "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline (test-ruby=false, test-agents-ts=false)"
 
-# --- typescript source change: full CI ---
-run_test "typescript source change: full CI" \
+# --- typescript source change: rust-inert (the corpus is inert to it), but
+# --- code-quality is still invoked (its TS + guard jobs) and TS tests run.
+# --- Covered in depth in the RUST-INERT section below; pinned here beside the
+# --- rust-source case so the language asymmetry is visible at a glance.
+run_test "typescript source change: rust-inert, TypeScript runs" \
     "packages/temper-cloud/src/logger.ts" \
     "DOCS_ONLY=false" \
+    "RUST_INERT=true" \
     "RUN_CODE_QUALITY=true" \
-    "RUN_TEST_RUST=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=true"
 
 # --- migration change: full CI (not a doc) ---
@@ -280,6 +285,165 @@ run_test "editing a security guard runs code-quality (the job that runs it)" \
 run_test "editing a guard's own test harness runs code-quality too" \
     ".github/scripts/test-audit-signature-secrets.sh" \
     "DOCS_ONLY=false" "RUN_CODE_QUALITY=true"
+
+# ---------------------------------------------------------------------------
+# RUST-INERT skip. A change whose every non-doc file lives in a Rust-inert tree
+# (the TS packages, the SDK clients) skips the Rust corpus — test-rust AND the
+# rust-quality job inside code-quality (RUN_RUST_QUALITY=false) — while
+# code-quality is still INVOKED (RUN_CODE_QUALITY=true) so its TypeScript and
+# guard-test jobs run, and TypeScript tests run too.
+#
+# The skip is ONE-DIRECTIONAL: a Rust change never skips TypeScript (ts-rs
+# generates TS from Rust), and any edit to a Rust-COUPLED committed artifact
+# (a generated TS tree, agent-skills, openapi.json, a wire contract) VETOES the
+# skip because a Rust quality gate regenerates-and-diffs it.
+# ---------------------------------------------------------------------------
+
+# A hand-written temper-cloud TS change: the Rust corpus is inert to it.
+run_test "temper-cloud TS: rust-inert skips the rust corpus, TS still runs" \
+    "packages/temper-cloud/src/logger.ts" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=true" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=true"
+
+# A hand-written temper-ui change is inert to the rust corpus too. (It still
+# runs test-typescript's UI job — that is gated by RUN_TEST_TYPESCRIPT, on here.)
+run_test "temper-ui hand-written: rust-inert" \
+    "packages/temper-ui/src/routes/+page.svelte" \
+    "RUST_INERT=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=true"
+
+# The Ruby gem is inert to cargo for the same `members`/`workspaces` reason, so a
+# gem-only change skips the rust corpus while test-ruby still runs.
+run_test "ruby gem only: rust-inert, test-ruby still runs" \
+    "clients/temper-rb/lib/temper/client.rb" \
+    "RUST_INERT=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_RUBY=true"
+
+# temper-ts / telemetry-ts / agent-workflows are inert to the rust corpus; their
+# own drift gates ride test-agents-ts (keyed separately), not rust-quality.
+run_test "temper-ts SDK source: rust-inert, agents-ts runs" \
+    "clients/temper-ts/src/credentials.ts" \
+    "RUST_INERT=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_AGENTS_TS=true"
+
+run_test "agent-workflows steward source: rust-inert, agents-ts runs" \
+    "packages/agent-workflows/steward/agent/agent.ts" \
+    "RUST_INERT=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_AGENTS_TS=true"
+
+# docs never force the rust corpus back on: docs + inert TS is still rust-inert.
+run_test "docs + temper-cloud TS: still rust-inert" \
+    "README.md
+packages/temper-cloud/src/x.ts" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false"
+
+# --- VETO cases: a Rust-coupled committed artifact forces the rust corpus on ---
+
+# The ts-rs generated tree under temper-ui: a manual edit must run ts-rs-drift
+# (rust-quality). Living under an inert root must NOT wave it through.
+run_test "temper-ui ts-rs generated tree: VETO, rust corpus runs" \
+    "packages/temper-ui/src/lib/types/generated/ResourceRow.ts" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# The mention agent's ts-rs generated tree: same veto.
+run_test "mention-agent ts-rs generated tree: VETO, rust corpus runs" \
+    "packages/agent-workflows/mention/agent/generated/LinkRefusal.ts" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# openapi.json is regenerated-and-diffed by openapi-check in rust-quality.
+run_test "openapi.json: VETO, rust corpus runs" \
+    "openapi.json" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# agent-skills/ is the committed projection gated by skills-drift in rust-quality.
+# Its files are *.md, so without the RUST_COUPLED clause on DOCS_ONLY a hand-edit
+# would be classified docs-only and skip the very gate that owns it — this pins
+# that the coupling defeats the docs-only skip.
+run_test "agent-skills projection (*.md): defeats docs-only, rust corpus runs" \
+    "agent-skills/temper-knowledge-base/SKILL.md" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# A wire contract is asserted from the Rust side too.
+run_test "wire contract: VETO, rust corpus runs" \
+    "tests/contracts/m2m-token-request.json" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# --- the one-directional guarantee and conservative defaults ---
+
+# A Rust change NEVER skips TypeScript (ts-rs generates TS from Rust).
+run_test "rust source: full corpus, TypeScript still runs (one-directional)" \
+    "crates/temper-services/src/services/search_service.rs" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true" \
+    "RUN_TEST_TYPESCRIPT=true"
+
+# Mixed rust + inert TS: the rust part wins, full corpus runs.
+run_test "mixed rust + temper-cloud TS: full corpus" \
+    "crates/temper-api/src/main.rs
+packages/temper-cloud/src/x.ts" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# An UNRECOGNIZED non-doc file (outside every inert root) is conservatively
+# treated as rust-affecting — unknown never skips.
+run_test "unknown top-level non-doc file: not rust-inert (conservative)" \
+    "some-new-tool.sh" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# A self-edit to the detector forces a full run even when the rest is inert TS,
+# so the change is actually exercised.
+run_test "self-edit + inert TS: full corpus (exercised, not skipped)" \
+    ".github/scripts/detect-ci-scope.sh
+packages/temper-cloud/src/x.ts" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# docs-only leaves the new axes off too (RUST_INERT is a non-docs concept).
+run_test "docs-only: rust-inert false, rust-quality off" \
+    "README.md" \
+    "DOCS_ONLY=true" \
+    "RUST_INERT=false" \
+    "RUN_CODE_QUALITY=false" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false"
+
+# The no-diff safety fallback runs everything, rust-quality included.
+run_test "no-diff fallback: rust-quality runs" \
+    "__force_full_ci__" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
