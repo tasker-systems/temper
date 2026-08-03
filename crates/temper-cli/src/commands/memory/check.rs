@@ -117,7 +117,7 @@ mod tests {
         let local = build_local_index(&scanned, &std::collections::HashSet::new());
         let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 1).expect("date");
 
-        let rendered = build_index(&cfg, &[], &local, today).expect("must render");
+        let rendered = build_index(&cfg, &[], &local, &[], today).expect("must render");
         assert!(
             rendered.contains("the file's title"),
             "the union must actually be in force for this test to discriminate: {rendered}"
