@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActResult",
+  "description": "One act's answer.",
+  "type": "object",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/ActName"
+    },
+    "bounds_honored": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "bounds_in": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "bounds_withheld": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "extent": {
+      "description": "Complete / partial / indeterminate. NOT a total — see `Extent`.",
+      "$ref": "#/$defs/Extent"
+    },
+    "narrowed_by": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NarrowedBy"
+      }
+    },
+    "produced": {
+      "description": "Declared kind, so contract chaining compares kinds rather than inferring them.",
+      "$ref": "#/$defs/IdSet"
+    },
+    "terms_effective": {
+      "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "format": "int64"
+      }
+    },
+    "total": {
+      "description": "Carried only by acts that can produce one WITHOUT a second query. Never by a composition.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    }
+  },
+  "required": [
+    "act",
+    "produced",
+    "extent",
+    "terms_effective",
+    "narrowed_by",
+    "bounds_in",
+    "bounds_honored",
+    "bounds_withheld"
+  ],
+  "$defs": {
+    "ActName": {
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive.",
+      "anyOf": [
+        {
+          "description": "*I can quote the exact words.*",
+          "type": "string",
+          "const": "find-exact"
+        },
+        {
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string",
+          "const": "find-about-anywhere"
+        },
+        {
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string",
+          "const": "find-about-within"
+        },
+        {
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string",
+          "const": "follow-from"
+        },
+        {
+          "description": "*A question about what a scope knows.*",
+          "type": "string",
+          "const": "survey"
+        },
+        {
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string",
+          "const": "substantiate"
+        },
+        {
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string",
+          "const": "admit"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Extent": {
+      "description": "Whether the caller received everything that matched.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\".",
+      "oneOf": [
+        {
+          "description": "Everything that matched is here.",
+          "type": "object",
+          "properties": {
+            "extent": {
+              "type": "string",
+              "const": "complete"
+            }
+          },
+          "required": [
+            "extent"
+          ]
+        },
+        {
+          "description": "More exists beyond what was returned.",
+          "type": "object",
+          "properties": {
+            "extent": {
+              "type": "string",
+              "const": "partial"
+            }
+          },
+          "required": [
+            "extent"
+          ]
+        },
+        {
+          "description": "Neither is determinable: the candidate set is *produced by* the bound rather than selected\nunder it. `survey` is the worked case — a region-salience traversal has no size prior to\nits own funnel width.",
+          "type": "object",
+          "properties": {
+            "extent": {
+              "type": "string",
+              "const": "indeterminate"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "extent",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "IdKind": {
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ]
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ]
+    },
+    "IdProvenance": {
+      "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "type": "string",
+              "const": "cogmap"
+            },
+            "id": {
+              "description": "A `kb_cogmaps.id` value — a cognitive map.",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "type": "string",
+              "const": "context"
+            },
+            "id": {
+              "description": "A `kb_contexts.id` value.",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ]
+        }
+      ]
+    },
+    "IdSet": {
+      "description": "The one value that crosses a stage boundary. Membership, never rank.",
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/IdKind"
+        },
+        "provenance": {
+          "description": "Required for `region`; absent for every other kind today.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IdProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "ids"
+      ]
+    },
+    "NarrowedBy": {
+      "description": "One act-specific threshold, and what applying it did.",
+      "type": "object",
+      "properties": {
+        "admitted": {
+          "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "excluded": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ]
+    }
+  }
+}

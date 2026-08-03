@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BoundsMode",
+  "description": "How a receiving act consumes the `IdSet` it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.",
+  "oneOf": [
+    {
+      "description": "Narrow to within this set.",
+      "type": "string",
+      "const": "bound"
+    },
+    {
+      "description": "Grow from this set.",
+      "type": "string",
+      "const": "seed"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActRefusal",
+  "description": "A refusal, distinct from a failure and from an honest empty.",
+  "type": "object",
+  "properties": {
+    "detail": {
+      "description": "Human-readable, disclosed at the depth the asker's standing allows.",
+      "type": "string"
+    },
+    "reason": {
+      "$ref": "#/$defs/RefusalReason"
+    }
+  },
+  "required": [
+    "reason",
+    "detail"
+  ],
+  "$defs": {
+    "RefusalReason": {
+      "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.",
+      "oneOf": [
+        {
+          "description": "The act does not accept bounds of the supplied `IdKind`.",
+          "type": "string",
+          "const": "unsupported_bound_kind"
+        },
+        {
+          "description": "The act does not accept seeds of the supplied `IdKind`.",
+          "type": "string",
+          "const": "unsupported_seed_kind"
+        },
+        {
+          "description": "A region set arrived without the `provenance` its kind requires.",
+          "type": "string",
+          "const": "missing_provenance"
+        },
+        {
+          "description": "The act is declared but not built (`build_state` is not `served` or `fused`).",
+          "type": "string",
+          "const": "not_implemented"
+        },
+        {
+          "description": "A required input the composition never supplied — e.g. a `find-about-*` stage with no\nthreaded intention. Explicitly NOT a silent substitution.",
+          "type": "string",
+          "const": "missing_intention"
+        },
+        {
+          "description": "A filter value outside a closed vocabulary — an unknown `doc_type`, `stage` or `status`.\nRefused rather than returned as an empty page: a typo must never be reportable as an\nabsence, which is what four filters do today.",
+          "type": "string",
+          "const": "unknown_filter_value"
+        },
+        {
+          "description": "A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the\nreverse). Declined, never ignored.",
+          "type": "string",
+          "const": "filter_not_applicable"
+        },
+        {
+          "description": "A bound term was supplied to an act for which that frame of reference does not exist —\ne.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never\nreinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the\ngenerated schemas, so an inapplicable bound is a property of the plan rather than a\nruntime surprise.",
+          "type": "string",
+          "const": "bound_term_not_applicable"
+        }
+      ]
+    }
+  }
+}

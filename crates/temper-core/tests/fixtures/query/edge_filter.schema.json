@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EdgeFilter",
+  "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.",
+  "type": "object",
+  "properties": {
+    "edge_kinds": {
+      "type": "array",
+      "items": {
+        "description": "Structural edge type — the four Semantic-Spacetime primitives. Each kind\ncarries a distinct traversal algebra:\n- `Contains`  — transitive (composition / part-of participation)\n- `LeadsTo`   — antisymmetric, causal/temporal order\n- `Near`      — symmetric (proximity / similarity)\n- `Express`   — leaf attribute (has-property)\n\nMirrors the Postgres `edge_kind` enum.",
+        "type": "string",
+        "enum": [
+          "express",
+          "contains",
+          "leads_to",
+          "near"
+        ]
+      }
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

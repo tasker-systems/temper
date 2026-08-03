@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MetaDetail",
+  "description": "How much per-resource meta the trace retains (design §4.4, tier 2).",
+  "oneOf": [
+    {
+      "description": "Per-resource meta only for ids in the final result set. Bounded by the caller's own limit.",
+      "type": "string",
+      "const": "surviving"
+    },
+    {
+      "description": "Every id at every stage, including ids dropped mid-composition. The diagnostic mode.",
+      "type": "string",
+      "const": "full"
+    },
+    {
+      "description": "Tier 1 only.",
+      "type": "string",
+      "const": "none"
+    }
+  ]
+}

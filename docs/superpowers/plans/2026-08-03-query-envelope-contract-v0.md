@@ -2118,9 +2118,38 @@ Expected: FAIL — every `check` asserts against an empty string, because no sna
 Run: `UPDATE_SCHEMA=1 cargo nextest run -p temper-core --features mcp --test query_schema`
 Then inspect at least `id_kind.schema.json` and confirm the domain names appear and no `kb_` prefix does:
 
+> **⚠️ Corrected `[2026-08-03, T2 build]` — the bare `rg` is a false-positive generator.** It fires
+> on `description` text, and doc comments legitimately cite tables (`ResourceFilter`'s fields
+> document themselves as `kb_properties` where `property_key = 'doc_type'`). The invariant is
+> *"kinds are domain-named, not table-named"* — a claim about the **wire vocabulary**, not about
+> prose. Check enum values, `const`s, property names and `required` while skipping `description`:
+
 ```bash
-rg -n "kb_" crates/temper-core/tests/fixtures/query/*.schema.json && echo "FAIL: table names leaked" || echo "OK: no table names"
+python3 - <<'EOF'
+import json, glob
+bad = []
+def walk(n, f):
+    if isinstance(n, dict):
+        for k, v in n.items():
+            if k == "description": continue            # prose: exempt by design
+            if k == "properties" and isinstance(v, dict):
+                bad += [(f, "property", p) for p in v if "kb_" in p]
+            if k in ("enum", "required") and isinstance(v, list):
+                bad += [(f, k, i) for i in v if isinstance(i, str) and "kb_" in i]
+            if k == "const" and isinstance(v, str) and "kb_" in v: bad.append((f, "const", v))
+            walk(v, f)
+    elif isinstance(n, list):
+        for i in n: walk(i, f)
+for f in sorted(glob.glob("crates/temper-core/tests/fixtures/query/*.schema.json")):
+    walk(json.load(open(f)), f.split("/")[-1])
+print("FAIL:", bad) if bad else print("OK: no table names in any wire vocabulary")
+EOF
 ```
+
+Verified clean, and `id_kind`'s wire values are exactly `["resource","region","cogmap","context"]`
+`[verified — 2026-08-03]`. Note `act_name` emits per-variant `const` branches rather than one
+`enum`, because each variant carries an explicit `serde(rename)` — so a check that only inspects
+`enum` would silently cover nothing there.
 
 - [ ] **Step 5: Run to verify it passes**
 

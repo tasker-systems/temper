@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilterField",
+  "description": "Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.",
+  "type": "string",
+  "enum": [
+    "resource",
+    "edge"
+  ]
+}

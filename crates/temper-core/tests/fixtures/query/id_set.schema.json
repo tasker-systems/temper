@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IdSet",
+  "description": "The one value that crosses a stage boundary. Membership, never rank.",
+  "type": "object",
+  "properties": {
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "kind": {
+      "$ref": "#/$defs/IdKind"
+    },
+    "provenance": {
+      "description": "Required for `region`; absent for every other kind today.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IdProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "kind",
+    "ids"
+  ],
+  "$defs": {
+    "IdKind": {
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ]
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ]
+    },
+    "IdProvenance": {
+      "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "type": "string",
+              "const": "cogmap"
+            },
+            "id": {
+              "description": "A `kb_cogmaps.id` value — a cognitive map.",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "type": "string",
+              "const": "context"
+            },
+            "id": {
+              "description": "A `kb_contexts.id` value.",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ]
+        }
+      ]
+    }
+  }
+}

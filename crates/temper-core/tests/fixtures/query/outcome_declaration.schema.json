@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OutcomeDeclaration",
+  "description": "A composition's pocket outcome register: what it is for, in the act schemas' own terms.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "description": "What being served looks like. NOT optional.",
+      "type": "string"
+    },
+    "produces": {
+      "description": "The kind the whole composition yields, when it is fixed.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IdKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "description"
+  ],
+  "$defs": {
+    "IdKind": {
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ]
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}
