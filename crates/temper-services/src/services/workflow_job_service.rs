@@ -7,8 +7,11 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::auditor::{AuditJobPayload, ClaimedAuditJob};
-use temper_core::types::ids::{CorrelationId, ProfileId};
-use temper_core::types::workflow_job::{ClaimedEmbedJob, ClaimedJob};
+use temper_core::types::home::HomeAnchor;
+use temper_core::types::ids::{CogmapId, ContextId, CorrelationId, ProfileId};
+use temper_core::types::workflow_job::{
+    ClaimedAnchorJob, ClaimedEmbedJob, ClaimedJob, RegionJobPayload,
+};
 
 /// Enqueue a payload-less job for `(cogmap, persona, dispatch_type)`. Returns `Some(id)` when a new
 /// row was created, `None` when one is already in-flight for the tuple (the single-flight dedup).
@@ -270,6 +273,125 @@ pub async fn complete_resource(
     let id = sqlx::query_scalar!(
         r#"SELECT workflow_job_complete_resource($1, $2, $3) AS "id: Uuid""#,
         resource_id,
+        persona,
+        dispatch_type,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Enqueue a payload-less region-clock job for `(anchor, persona, dispatch_type)` — the anchor twin
+/// of [`enqueue`] and [`enqueue_resource`]. Returns `Some(id)` when a new row was created, `None`
+/// when one is already in-flight for the tuple.
+///
+/// **`None` is the point here, not a degraded outcome.** Every settling-worthy write on an anchor
+/// enqueues; the single-flight index collapses them to one job, so N arrivals within a settling
+/// window cost one materialization rather than N.
+pub async fn enqueue_anchor(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    persona: &str,
+    dispatch_type: &str,
+    payload: RegionJobPayload,
+) -> ApiResult<Option<Uuid>> {
+    // Exactly one of the pair is non-null — `ck_workflow_jobs_one_scope` enforces it, and
+    // `HomeAnchor` being a closed two-variant enum is what makes this total rather than defaulted.
+    let (cogmap, context) = match anchor {
+        HomeAnchor::Cogmap(m) => (Some(m.uuid()), None),
+        HomeAnchor::Context(c) => (None, Some(c.uuid())),
+    };
+    let payload = serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let id = sqlx::query_scalar!(
+        r#"SELECT workflow_job_enqueue_anchor($1, $2, $3, $4, $5) AS "id: Uuid""#,
+        cogmap,
+        context,
+        persona,
+        dispatch_type,
+        payload,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Claim up to `limit` claimable anchor-keyed jobs, leasing each for `lease_seconds` — the anchor
+/// twin of [`claim`] and [`claim_resource`].
+///
+/// The `(cogmap_id, context_id)` pair the SQL returns is parsed into a [`HomeAnchor`] here, at the
+/// boundary, so no caller downstream can hold an ambiguous scope. A row satisfying neither arm is a
+/// genuine integrity failure — `ck_workflow_jobs_one_scope` should have made it unreachable — so it
+/// escalates rather than being skipped: a silently-dropped job is a write that never settles and
+/// leaves no trace, which is precisely what `projection-failure-is-never-silent` forbids.
+pub async fn claim_anchor(
+    pool: &PgPool,
+    persona: &str,
+    dispatch_type: &str,
+    limit: i32,
+    lease_seconds: i32,
+) -> ApiResult<Vec<ClaimedAnchorJob>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id AS "id!: Uuid", cogmap_id AS "cogmap_id?: Uuid",
+               context_id AS "context_id?: Uuid", attempts AS "attempts!: i32",
+               payload AS "payload!: serde_json::Value"
+          FROM workflow_job_claim_anchor($1, $2, $3, $4)
+        "#,
+        persona,
+        dispatch_type,
+        limit,
+        lease_seconds,
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            let anchor = match (r.cogmap_id, r.context_id) {
+                (Some(m), None) => HomeAnchor::Cogmap(CogmapId::from(m)),
+                (None, Some(c)) => HomeAnchor::Context(ContextId::from(c)),
+                _ => {
+                    return Err(ApiError::Internal(format!(
+                        "workflow job {} has an ambiguous anchor scope (cogmap={:?}, context={:?}) \
+                         — ck_workflow_jobs_one_scope should make this unreachable",
+                        r.id, r.cogmap_id, r.context_id
+                    )))
+                }
+            };
+            // A payload that will not deserialize escalates rather than defaulting to a system
+            // emitter: silently re-attributing a settling to nobody is worse than not running it,
+            // and the reaper will re-drive the job once the lease expires.
+            let payload: RegionJobPayload = serde_json::from_value(r.payload).map_err(|e| {
+                ApiError::Internal(format!(
+                    "workflow job {} carries an unreadable region payload: {e}",
+                    r.id
+                ))
+            })?;
+            Ok(ClaimedAnchorJob {
+                id: r.id,
+                anchor,
+                emitter: payload.emitter,
+                attempts: r.attempts,
+            })
+        })
+        .collect()
+}
+
+/// Transition the one active anchor-keyed job for the tuple → done — the anchor twin of
+/// [`complete`]. Returns the job id if one was active.
+pub async fn complete_anchor(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    persona: &str,
+    dispatch_type: &str,
+) -> ApiResult<Option<Uuid>> {
+    let (cogmap, context) = match anchor {
+        HomeAnchor::Cogmap(m) => (Some(m.uuid()), None),
+        HomeAnchor::Context(c) => (None, Some(c.uuid())),
+    };
+    let id = sqlx::query_scalar!(
+        r#"SELECT workflow_job_complete_anchor($1, $2, $3, $4) AS "id: Uuid""#,
+        cogmap,
+        context,
         persona,
         dispatch_type,
     )

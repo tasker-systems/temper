@@ -37,7 +37,7 @@ use temper_core::types::reconcile::{
     ReconcileTelos,
 };
 use temper_core::types::steward::AdvanceWatermarkAck;
-use temper_core::types::workflow_job::{DispatchType, Persona};
+use temper_core::types::workflow_job::{DispatchType, Persona, RegionJobPayload};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
@@ -1435,30 +1435,60 @@ fn record_act_span(ctx: &EventContext) {
 }
 
 impl DbBackend {
-    /// Tick T6's two region clocks after a resource write (spec §3.5) — cheap salience clock on telos
-    /// drift, expensive formation clock on the event-count threshold. See [`region_clocks`].
+    /// Queue T6's two region clocks for an anchor after a resource write (spec §3.5) — cheap salience
+    /// clock on telos drift, expensive formation clock on the event-count threshold. The clocks
+    /// themselves are unchanged and still live in [`region_clocks`]; what changed is *where they run*.
     ///
-    /// **Never fails the write.** The resource has already committed, and region geometry is a
-    /// projection over committed substrate: if a clock errors, the resource is still correct, still
-    /// readable, still searchable, and only its regions are briefly stale — which the very next write
-    /// re-drives from the same watermarks. Escalating would trade a self-healing staleness for a
-    /// user-visible 500. Same posture as the embed-backfill enqueue in these write paths.
-    async fn tick_region_clocks(&self, anchor: HomeAnchor, emitter: EntityId) {
-        match region_clocks::tick(&self.pool, anchor, emitter, None).await {
-            Ok(tick) => {
-                if tick.salience_refreshed || tick.materialized {
-                    tracing::debug!(
-                        anchor = %anchor.uuid(),
-                        salience_refreshed = tick.salience_refreshed,
-                        materialized = tick.materialized,
-                        "region clocks ticked"
-                    );
-                }
-            }
+    /// **The write no longer waits for them** (goal 019fc46c, clause
+    /// `a-write-returns-without-waiting-on-projection`). They used to be `.await`ed inline here, which
+    /// made every caller wait for a settling it never asked for: the resource itself had already
+    /// committed, but `incremental_materialize` opens its own transaction, takes the anchor row lock
+    /// at its first statement (`fire` → `region_materialize` → `_project_region_materialized`) and
+    /// holds it across the whole region loop until commit. Concurrent arrivals on one anchor therefore
+    /// serialized *inside the request*, producing the observed 16–94s HTTP 200s.
+    ///
+    /// **Why the WHOLE tick moves and not just the expensive clock.** The cheap clock is cheap in
+    /// work, not in contention: `refresh_salience` also writes through an event whose projection
+    /// stamps the same anchor row, so leaving it inline would leave a contention path open while
+    /// appearing to have closed one. Moving both also keeps [`region_clocks::tick`] byte-identical,
+    /// so nothing about *when* a clock fires changes here — only when the tick is run.
+    ///
+    /// **The accepted cost, named.** Salience was previously real-time on every write and is now
+    /// deferred to the drain's cadence. `region_clocks`' own module docs argue for real-time capture
+    /// in a context, so this is a genuine trade and not a free win: settling becomes eventual, which
+    /// is what makes the goal's `projection-lag-is-readable` clause load-bearing rather than
+    /// decorative. That clause is a separate build and is NOT satisfied here.
+    ///
+    /// **Never fails the write**, exactly as the inline tick did not. The resource has already
+    /// committed and region geometry is a projection over committed substrate: a failed enqueue
+    /// leaves the regions stale until the next write re-drives them. Same posture, and the same
+    /// reasoning, as the embed-backfill enqueue beside it.
+    async fn queue_region_clocks(&self, anchor: HomeAnchor, emitter: EntityId) {
+        let payload = RegionJobPayload {
+            emitter: emitter.uuid(),
+        };
+        match crate::services::workflow_job_service::enqueue_anchor(
+            &self.pool,
+            anchor,
+            Persona::Region.as_str(),
+            DispatchType::Materialize.as_str(),
+            payload,
+        )
+        .await
+        {
+            // `None` is the single-flight dedup, not a failure: a settling is already queued for this
+            // anchor and this arrival folds into it. That collapse IS the mechanism by which N
+            // arrivals cost one materialization.
+            Ok(queued) => tracing::debug!(
+                anchor = %anchor.uuid(),
+                job_id = ?queued,
+                coalesced = queued.is_none(),
+                "region clocks queued"
+            ),
             Err(e) => tracing::warn!(
                 anchor = %anchor.uuid(),
                 error = %e,
-                "region clocks failed; regions are stale until the next write re-drives them"
+                "failed to queue region clocks; regions are stale until the next write re-drives them"
             ),
         }
     }
@@ -1468,7 +1498,7 @@ impl DbBackend {
     /// touched finding's standing components and UPSERTs its `kb_resource_standing` memo row via the
     /// shipped SQL (Task 5's [`temper_substrate::write::refresh_resource_standing`]).
     ///
-    /// **Never fails the write**, exactly as [`Self::tick_region_clocks`] does not — the resource has
+    /// **Never fails the write**, exactly as [`Self::queue_region_clocks`] does not — the resource has
     /// already committed. A refresh failure is therefore logged and swallowed; the `kb_resource_standing`
     /// memo stays stale only until the next write over this finding re-drives it. Escalating would trade
     /// a self-healing staleness for a user-visible 500.
@@ -1764,7 +1794,7 @@ impl DbBackend {
 
         // T6 — tick the two region clocks (spec §3.5). The resource has committed; region geometry is
         // a projection over it, so a clock failure is logged, never escalated (see `region_clocks`).
-        self.tick_region_clocks(cmd.home, emitter).await;
+        self.queue_region_clocks(cmd.home, emitter).await;
 
         // Set 3 — refresh the new finding's evidential-standing memo. Same self-healing posture as the
         // region clocks above: the resource has committed, the memo is a write-cost optimization over
@@ -2049,7 +2079,7 @@ impl Backend for DbBackend {
         // The cheap clock exists to make that visible immediately instead of waiting for ~5 unrelated
         // writes to trip the formation threshold.
         match region_clocks::home_of(&self.pool, new_id).await {
-            Ok(Some(anchor)) => self.tick_region_clocks(anchor, emitter).await,
+            Ok(Some(anchor)) => self.queue_region_clocks(anchor, emitter).await,
             // No home row ⇒ no anchor whose regions this write could affect ⇒ no clocks to tick.
             Ok(None) => {}
             Err(e) => tracing::warn!(

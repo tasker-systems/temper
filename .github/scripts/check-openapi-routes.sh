@@ -66,7 +66,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/embed/dispatch
 /api/embed/warm
 /api/embed/admin/reembed
-/api/slack/intents/reap'
+/api/slack/intents/reap
+/api/region/dispatch'
 
 if [ ! -f "$ROUTES_FILE" ]; then
     echo "ERROR: routes file not found: $ROUTES_FILE" >&2
