@@ -1,8 +1,9 @@
 # The query-envelope contract, v0 — design
 
-**Status:** design, approved in session 2026-08-03. Ships nothing by itself; it is the settled shape
-that task **T2** (`019fbddc-227f-7e41-8167-b9eb0db0a63e`) authors against and task **T3**
-(`019fbddc-bf0b-74c3-b48f-c06c799dec04`) inverts into generated artifacts.
+**Status:** design, approved in session 2026-08-03, **amended the same day** by the §9 census — the
+currency became a typed `IdSet` (§3.1) and one declared foreclosure dissolved (§3.3). Ships nothing
+by itself; it is the settled shape that task **T2** (`019fbddc-227f-7e41-8167-b9eb0db0a63e`) authors
+against and task **T3** (`019fbddc-bf0b-74c3-b48f-c06c799dec04`) inverts into generated artifacts.
 
 **Frame register:** [Every question to Temper is answered by a situated act — acts compose by piping,
 no constant decides between them, and no composition
@@ -51,6 +52,9 @@ Four decisions were taken in design and are load-bearing for everything below.
 2. **`build_state` is checked against the live router, both directions** — never mirrored beside it.
 3. **Bound-presence selects the act; it does not parameterize one.**
 4. **Per-stage disclosure lives in an envelope trace in the body**, not in a response header.
+5. **The currency is a typed `IdSet`, tagged as data** — added by amendment after the §9 census
+   (§3.1). The Rust typed-id vocabulary already existed but is `#[serde(transparent)]`, so it never
+   reached the wire where the contract needs it.
 
 ---
 
@@ -145,14 +149,90 @@ real act must **delete an explicit refusal**, not quietly add a row.
 
 ## 3. The bounds currency, and dual-mode consumption
 
-### 3.1 The currency
+### 3.1 The currency is a TYPED id set
 
-A **resource-id set**. Membership, never rank. It already exists as `p_scope_ids uuid[]`
-`[verified — 2026-08-03]`. v0 exposes it; it does not invent it.
+> **Amended 2026-08-03**, after the §9 census. The currency was originally specced as a bare
+> resource-id set; that is insufficient, and the reason is not "some acts return regions."
 
-**Only `resource_ids` crosses a stage boundary.** Per-act `meta` is terminal — produced, disclosed,
-and never consumed as a later stage's input. This is what makes `no-cross-act-ranking` structural
-rather than policed: a stage receives a *set*, so no ordering is available to blend.
+```
+IdSet { kind, provenance?, ids[] }
+```
+
+**Membership, never rank.** Only an `IdSet` crosses a stage boundary. Per-act `meta` is terminal —
+produced, disclosed, never consumed as a later stage's input. That is what makes
+`no-cross-act-ranking` structural rather than policed: a stage receives a *set*, so no ordering is
+available to blend.
+
+**Why the tag must be carried as data.** The Rust vocabulary already exists — `crates/temper-core/src/types/ids.rs`
+defines **17 typed ids** via a `define_id!` macro, heavily used (`ProfileId` 1116, `ResourceId` 580,
+`ContextId` 249, `CogmapId` 208, `EdgeId` 123, `BlockId` 100, `RegionId` 33, …), each carrying
+`utoipa::ToSchema`, `ts_rs::TS`, `schemars(inline)`, and full sqlx `Type`/`Encode`/`Decode` **plus
+`PgHasArrayType`**, so `Vec<RegionId>` already binds to `uuid[]` `[verified — 2026-08-03]`.
+
+But the macro applies `#[serde(transparent)]`: **every typed id serializes as a bare uuid string.**
+The module's own test states the intent — *"CogmapId and ResourceId cannot be compared with `==` —
+different types — which is the point"* — and enforces it **in Rust only**. This contract is a *wire*
+contract and jaq operates on *JSON*, so a Rust newtype buys the contract nothing at the seam that
+matters: §4.3's chaining check would have nothing to check, and a jaq projection could move region
+ids into a `bounds` field with no signal at authoring time or at runtime.
+
+**Why a type alone is still insufficient — `provenance`.** Context regions and cogmap regions are
+both `RegionId` and are **not interchangeable**: `graph_region_composition` gates on
+`cogmap_readable_by_profile($2, reg.cogmap_id)`, and a context region's `cogmap_id` is NULL by
+construction, so every id `temper context shape` produces 404s at the sole consumer of region ids
+`[audit]`. A correct `kind: region` tag would still admit that chain and still 404. So for `region`
+the tag must also carry **which anchor produced it** — the `HomeAnchor` shape
+(`crates/temper-core/src/types/home.rs`). `provenance` is optional because `region` is the only kind
+that needs it today, not because it is decorative.
+
+### 3.1.1 The `kind` vocabulary
+
+Closed against evidence by the §9 census — these are the kinds that travel as a **set** on the wire:
+
+| kind | produced by | consumed as |
+|---|---|---|
+| `resource` | search results · list rows · lineage · `edges.peer_resource_id` · auditor sweep `finding_id` · slice and composition nodes · panorama orphans | **seed** (`search.seed_ids`, `slice.seeds`); **bound** (indirectly, via `p_scope_ids`) |
+| `region` | `cogmap_shape` · `context_shape` · region metrics · panorama territories | **bound** (`GET /api/graph/regions/composition?ids=`) — cogmap-only |
+| `cogmap` | `cogmap list` · `GET /api/steward/candidates` · invocations | **bound** (`search.cogmap_ids`, `resources.cogmap_ids`) |
+| `context` | `contexts list` | **bound** (as an `@owner/slug` ref) |
+
+**Produced but terminal** — no consumer takes them as a domain limit, so they belong in `meta` and
+result rows, never in `bounds`: `event`, `block`, `profile`, `edge`, `correlation`, `invocation`,
+`property`, `chunk`, `entity`, `team`, `lens`, `remote-source`. Some are consumed as a *single* id
+(`edge` at `/api/relationships/{edge_handle}`, `lens` as a query param) — that is **addressing, not
+bounding**, and the distinction is why they are excluded.
+
+**`kind` is OPEN**, per §6.1 — a new kind is additive, which is what makes the four out-of-scope
+families admissible without a breaking change. Each act declares which kinds it accepts for `bound`
+and for `seed`; an unaccepted or unknown kind renders a typed **`refused`** (§5), never a silent
+drop.
+
+**Kinds are domain-named, not table-named.** `resource`, not `kb_resources`. This deliberately
+diverges from `LedgerRefTarget`, whose `LedgerRefKind` renames every variant to its SQL table
+`[verified — 2026-08-03, crates/temper-core/src/types/admin.rs:197-216]` — persistence leaking onto
+the wire.
+
+### 3.1.2 Six incumbent patterns, and why this establishes a seventh
+
+The tree already says "a typed id" six ways, disagreeing on tag placement, vocabulary, typing, and
+grain `[verified — 2026-08-03]`:
+
+| pattern | placement | vocabulary | typed | grain |
+|---|---|---|---|---|
+| `HomeAnchor` | external enum | domain (2) | yes | per-id, **no wire derives — internal only** |
+| `LedgerRefTarget {kind,id}` | field | SQL table names (9) | yes | per-id, on wire |
+| `ElementKind` | **URL path** | `node`\|`edge` | yes, 400 on miss | per-id |
+| `BlockProvenanceRow {source_kind, source_id}` | field | `resource`\|`event`\|`remote` | **no — `String`** | per-id, on wire |
+| provenance **write** side | field | same three | yes, `{kind,value}` sum | per-id |
+| SQL convention | sibling column | `anchor_table` text | no | per-row |
+
+The last two are **the same concept in the same module, stringly-typed on the read side and a typed
+sum on the write side** — the drift shape, already realized. `IdSet` is per-**set** rather than
+per-id because every act produces a homogeneous set; per-id tagging would pay for a generality
+nothing uses and would repeat the tag N times.
+
+*Not undertaken here:* converging the six. This contract establishes one shape for the query
+surface; retrofitting the incumbents is separate work with its own blast radius.
 
 ### 3.2 Two consumption modes, declared at the consuming stage
 
@@ -181,8 +261,8 @@ vocabulary rather than missing from it.
 | `find-exact` | ✅ post-filter, membership-equivalent (no top-k on the FTS arm) | ❌ no mechanism | ✅ |
 | `find-about-anywhere` | ❌ *by definition* — a bound makes it `-within` | ❌ | ✅ |
 | `find-about-within` | ✅ **required**, genuine pre-filter (`scoped_res`) | ❌ | ✅ |
-| `follow-from` | ❌ **unbuilt** — `search_graph_expand` takes no scope parameter | ✅ **required** (`p_seed_ids`) | ✅ |
-| `survey` | ❌ **unbuilt** — takes an anchor `(table, id)`, not an id set | ❌ | ✅ (scope ids, today projected away) |
+| `follow-from` | ❌ **unbuilt** — `search_graph_expand` takes no scope parameter | ✅ **required** (`kind: resource`) | ✅ `resource` |
+| `survey` | ✅ **`kind: cogmap` / `kind: context`** — see below | ❌ | ✅ `region` *(today projected away)* |
 | `substantiate` | `unbuilt` | `unbuilt` | `unbuilt` |
 
 Signatures this rests on `[verified — 2026-08-03]`:
@@ -199,12 +279,19 @@ wayfind_region_scores(p_principal uuid, p_lens uuid, p_emb vector, p_regions_n i
 **seeds** (literally `p_seed_ids`). Wide-then-narrow is `find-about-anywhere` → `find-exact` as
 **bounds**.
 
-**Two genuine foreclosures**, declared rather than discovered later:
+**One genuine foreclosure**, declared rather than discovered later:
 
-1. **`follow-from` cannot be bounded.** *"Walk from these seeds but stay inside this set"* is
-   unstatable — which is exactly what "graph-walk my exact hits, but only within this context"
-   needs.
-2. **`survey` cannot be chained into.** It consumes an anchor, not an id set.
+**`follow-from` cannot be bounded.** *"Walk from these seeds but stay inside this set"* is
+unstatable — which is exactly what "graph-walk my exact hits, but only within this context" needs.
+`search_graph_expand` has no scope parameter, so this is a real SQL-level hole.
+
+**`survey` chained-into was a foreclosure of the untyped currency, and the typed currency dissolves
+it** `[amended 2026-08-03]`. `wayfind_region_scores` takes `(…, p_anchor_table varchar, p_anchor_id
+uuid)` `[verified — 2026-08-03]` — an anchor, which is exactly `HomeAnchor`'s shape. Under a bare
+resource-id currency that is unstatable; under `IdSet`, `cogmap_list` produces
+`{kind: cogmap, ids: […]}` and `survey` consumes it directly. **The chain
+`cogmap_list → survey` is expressible with no SQL change at all.** It was never a missing mechanism —
+it was a currency that could not name what the mechanism already accepted.
 
 ---
 
@@ -215,15 +302,21 @@ wayfind_region_scores(p_principal uuid, p_lens uuid, p_emb vector, p_regions_n i
 OpenAPI 3.1 `allOf` + `discriminator` on `act`:
 
 ```
-ActInvocation:  { act, bounds[], bounds_mode, limit, offset }   ⊕  params<act>
-ActResult:      { act, resource_ids[], total, limit_effective, offset,
+IdSet:          { kind, provenance?, ids[] }                              (§3.1)
+
+ActInvocation:  { act, bounds: IdSet?, bounds_mode, limit, offset }  ⊕  params<act>
+ActResult:      { act, produced: IdSet, total, limit_effective, offset,
                   narrowed_by[], bounds_in, bounds_honored, bounds_withheld }
-                                                                ⊕  meta<act>
+                                                                    ⊕  meta<act>
 ```
+
+`produced` is an `IdSet`, so an act's output kind is declared and machine-checkable rather than
+inferred from which act ran. `bounds` is an `IdSet` for the same reason on the way in, and
+`bounds_mode` (`bound` | `seed`, §3.2) says how it is consumed.
 
 Four rules make it chain predictably:
 
-1. **Only `resource_ids` crosses a boundary** (§3.1).
+1. **Only an `IdSet` crosses a boundary** (§3.1).
 2. **Every act-specific quantity that could narrow is an act *input*, not a post-filter.**
    `find-exact` accepts `min_lexical_rank`; `survey` accepts `min_region_salience`; `find-about-*`
    accept `min_affinity`. The narrowing happens inside the act, where the quantity is commensurable
@@ -232,7 +325,7 @@ Four rules make it chain predictably:
    than pretending jaq can be prevented from it.
 3. **When jaq post-filters anyway, the envelope says so.** Each stage's `bounds_in` carries
    provenance: `upstream(stage_k)` | `expression` | `caller`. If a jq step subselects between
-   stages, the next stage's bounds no longer equal the upstream act's `resource_ids`, and the trace
+   stages, the next stage's bounds no longer equal the upstream act's `produced` set, and the trace
    records that an expression produced them. Not forbidden — **disclosed**. This is
    `no-silent-question-substitution` holding at the one seam where it can actually be violated.
 4. **Field names carry their act.** No bare `score`: `lexical_rank`, `vector_affinity`,
@@ -297,8 +390,9 @@ silently answering the raw query because upstream came back empty is *a differen
 Empty upstream is a visible disposition, never a fallback.
 
 **Contract chaining between stages.** Stage N+1's declared input schema is checked against stage N's
-declared output. Since only `resource_ids` crosses, most checks are trivial; the value is that a plan
-referencing a field that is not there fails at authoring, not at execution.
+declared output. Since only an `IdSet` crosses, the check is small but no longer trivial: it compares
+**kinds**, so a plan piping `kind: region` into an act that accepts only `kind: resource` fails at
+authoring rather than at execution. That is the check a bare uuid array could not have supported.
 
 **An `OutcomeDeclaration` per composition** — description plus output schema. The pocket outcome
 register: a saved plan states its served-by in the act schemas' own terms, so `every-act-is-situated`
@@ -384,6 +478,7 @@ new dispositions.
 | a new `meta` field on an act extension | renaming or narrowing any field |
 | a new trace field | a new `disposition` variant |
 | a chainability cell moving `unbuilt` → `served` | a cell moving `served` → `unbuilt` |
+| a new `IdSet` `kind` (the vocabulary is open, §3.1.1) | an act **dropping** a `kind` it accepted |
 
 ### 6.3 Five gates
 
@@ -462,7 +557,13 @@ way to state it, which is `no-cross-act-ranking` having teeth rather than being 
 **Declared holes with no mechanism** — `substantiate` (no representation in search: not input, not
 ranking term, not output field; the nearest thing, `GET /api/resources/{id}/evidence`, is
 one-resource-at-a-time, has no batch form, and is MCP-absent — so `claims-carry-standing` stays
-openly uncovered); `follow-from` **bounded**; `survey` **chained-into**.
+openly uncovered); `follow-from` **bounded**. *(`survey` chained-into was listed here before the §9
+census and is no longer a hole — see §3.3.)*
+
+**Not undertaken, with blast radius named** — converging the six incumbent tagged-id patterns
+(§3.1.2) onto `IdSet`. This contract establishes one shape for the query surface; retrofitting
+`LedgerRefTarget`, `BlockProvenanceRow`'s stringly-typed `source_kind`, and the `anchor_table`
+convention is separate work.
 
 **Declared as a refusal, not a gap** — `admit`.
 
@@ -488,22 +589,53 @@ The mechanisms v0 already provides for this, which the follow-up work should tes
 - The **chainability matrix** (§3.3) has room for new rows and columns, each gated independently.
 - **`build_state`** lets a family be declared before it is served.
 
-The open question the follow-up must answer is whether the *base* is right for them — specifically
-whether `resource_ids` is the correct universal currency for families whose natural products are
-**region ids**, **edge ids**, **block ids**, or **event ids**. The audit found region ids already
-have a consumer, and that context region ids 404 at it; it found event ids and block ids to be
-dead-end producers `[audit]`. If the base currency needs to become a **typed** id set rather than a
-resource-id set, that is a v0-shaped change and is far cheaper to take now than after T3 generates
-from it.
+### 9.1 The base-currency question — ANSWERED `[2026-08-03]`
 
-**This is the first thing to examine after this spec is reviewed.**
+The open question was whether `resource_ids` is the right universal currency for families whose
+natural products are region, edge, block, or event ids. **It is not.** The census was run and the
+currency is now a typed `IdSet` (§3.1), with the `kind` vocabulary closed against evidence (§3.1.1)
+and left **open** for additive growth.
+
+Three things the census settled that were not visible when §9 was written:
+
+1. **The Rust type vocabulary already existed** — 17 typed ids, heavily used — so this was lifting
+   an existing vocabulary to the wire, not inventing one.
+2. **`#[serde(transparent)]` meant it did not reach the wire**, so a Rust newtype could never have
+   given the contract's chaining check anything to check. The tag had to become data.
+3. **Typing dissolved one of the two declared foreclosures** — `cogmap_list → survey` needs no SQL
+   change (§3.3). A currency that cannot name what a mechanism accepts manufactures holes that are
+   not there.
+
+### 9.2 What remains open for the four families
+
+The census covered which id kinds **flow**. It did not model the four families' acts. Still open,
+and named so it is not mistaken for covered:
+
+- **Their act vocabulary.** `orient` already has a *served* instance in the shape family
+  (`cogmap_shape`/`context_shape` are real routes on three doors) while the search family's `survey`
+  is `fused`. One act, two build-states, in two families — the declaration format handles it, but
+  nobody has written it down.
+- **Whether any of their acts produce a heterogeneous set**, which is the one thing that would break
+  `IdSet`'s per-set tagging. Nothing found so far does — `AtlasSubgraph { nodes, edges }` is two
+  homogeneous sets, not one mixed one — but only the search and shape families were walked closely.
+- **Whether `provenance` is needed for a kind other than `region`.**
 
 ---
 
 ## 10. Summary of the shape
 
-Seven act declarations · a dual-mode bounds currency · a two-tier envelope with a mandatory
-per-stage trace · four dispositions · five gates · the declared silences of §8.
+Seven act declarations · a **typed, dual-mode** `IdSet` currency over an open `kind` vocabulary · a
+two-tier envelope with a mandatory per-stage trace · four dispositions · five gates · the declared
+silences of §8.
 
 Three of these are genuinely new builds — the envelope and trace, the typed refusal variant, and the
-gates. Everything else is **exposure and honest naming of mechanics that already exist**.
+gates. Everything else is **exposure and honest naming of mechanics that already exist**, and the §9
+census sharpened that claim rather than weakening it: the typed-id vocabulary was already there and
+already used, and typing the currency **removed** a declared hole (`cogmap_list → survey`) instead of
+adding work.
+
+### Gate 2 grows a clause
+
+The chainability gate (§6.3) now checks kinds, not just presence: an act declaring it accepts
+`kind: region` must be served by SQL that can actually take one. This is what would have caught the
+region-composition dead end at declaration time rather than at the caller's 404.
