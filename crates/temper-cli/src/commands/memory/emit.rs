@@ -25,10 +25,11 @@ use chrono::{NaiveDate, Utc};
 use temper_core::types::config::{MemoryConfig, TemperConfig};
 use temper_workflow::types::resource::ResourceDetail;
 
-use super::fetch::fetch_context_rows;
+use super::fetch::{fetch_context_rows, fetch_principles};
 use super::migrate::{parse_memory_file, scan_memory_dir, ScannedFile};
 use super::render::{
-    parse_entry, render_index, LocalEntry, LocalIndex, MemoryDefect, RenderPolicy, GENERATED_HEADER,
+    parse_entry, render_index, LocalEntry, LocalIndex, MemoryDefect, PrincipleSection,
+    RenderPolicy, GENERATED_HEADER,
 };
 use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
@@ -62,6 +63,7 @@ pub fn build_index(
     cfg: &MemoryConfig,
     rows: &[ResourceDetail],
     local: &LocalIndex,
+    principles: &[PrincipleSection],
     today: NaiveDate,
 ) -> Result<String> {
     let mut entries = Vec::with_capacity(rows.len());
@@ -90,6 +92,7 @@ pub fn build_index(
     Ok(render_index(
         &entries,
         local,
+        principles,
         RenderPolicy {
             today,
             stale_after_days: cfg.stale_after_days,
@@ -150,9 +153,15 @@ pub(super) async fn render_current(
     let (_cfg, _store, client) = build_config_store_and_client()?;
 
     let mut rows: Vec<ResourceDetail> = Vec::new();
+    // Principles are looked for in every configured context, not just the shared one. Where they
+    // live is the author's decision, and a render that only looked in one would silently ignore a
+    // principle homed in the other rather than reporting it.
+    let mut principles: Vec<PrincipleSection> = Vec::new();
     for ctx in mem.all_contexts() {
         let mut ctx_rows = fetch_context_rows(&client, ctx).await?;
         rows.append(&mut ctx_rows);
+        let mut ctx_principles = fetch_principles(&client, ctx).await?;
+        principles.append(&mut ctx_principles);
     }
 
     let path = super::resolve_index_path(mem, path_override);
@@ -171,7 +180,7 @@ pub(super) async fn render_current(
     );
 
     let today = Utc::now().date_naive();
-    Ok((build_index(mem, &rows, &local, today)?, path))
+    Ok((build_index(mem, &rows, &local, &principles, today)?, path))
 }
 
 /// Resolve the write path (`path_override`, or `mem.index_path` tilde-expanded), create any
@@ -323,7 +332,7 @@ mod tests {
     #[test]
     fn emit_refuses_when_any_memory_is_malformed() {
         let rows = vec![meta_row_missing_status("feedback_x", "@me/temper")];
-        let err = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
+        let err = build_index(&cfg(), &rows, &LocalIndex::default(), &[], d("2026-08-01"))
             .expect_err("must refuse");
         assert!(err.to_string().contains("open_meta.status is missing"));
         assert!(
@@ -338,7 +347,7 @@ mod tests {
             meta_row_missing_status("a", "@me/temper"),
             meta_row_missing_verified("b", "@me/temper"),
         ];
-        let err = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
+        let err = build_index(&cfg(), &rows, &LocalIndex::default(), &[], d("2026-08-01"))
             .expect_err("must refuse");
         assert!(
             err.to_string().contains("\"a\"") && err.to_string().contains("\"b\""),
@@ -364,7 +373,7 @@ mod tests {
     #[test]
     fn build_index_succeeds_for_a_memory_with_no_source_file() {
         let rows = vec![meta_row_native("a native memory", "@me/temper")];
-        let out = build_index(&cfg(), &rows, &LocalIndex::default(), d("2026-08-01"))
+        let out = build_index(&cfg(), &rows, &LocalIndex::default(), &[], d("2026-08-01"))
             .expect("a memory with no source_file must build cleanly, never be a defect");
         assert!(out.contains("a native memory"));
     }
@@ -402,8 +411,8 @@ mod tests {
             meta_row_native("one", "@me/temper"),
             meta_row_native("two", "@me/temper"),
         ];
-        let out =
-            build_index(&mem, &rows, &LocalIndex::default(), d("2026-08-01")).expect("must render");
+        let out = build_index(&mem, &rows, &LocalIndex::default(), &[], d("2026-08-01"))
+            .expect("must render");
 
         assert!(out.contains("- [one]") && out.contains("- [two]"));
         assert!(
@@ -420,7 +429,8 @@ mod tests {
         c.reinforced_min = Some(1);
         let rows = vec![meta_row_native("quiet", "@me/temper")];
 
-        let out = build_index(&c, &rows, &LocalIndex::default(), d("2026-08-01")).expect("renders");
+        let out =
+            build_index(&c, &rows, &LocalIndex::default(), &[], d("2026-08-01")).expect("renders");
 
         assert!(
             out.contains("- … 1 more in @me/temper"),
