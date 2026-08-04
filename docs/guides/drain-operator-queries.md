@@ -19,6 +19,13 @@ and [OpenTelemetry setup](open-telemetry-setup.md). Datasource: the Tempo dataso
 | **`[shape]`** | The *aggregation form* was executed live against an existing attribute and works; the specific attribute it names does not exist yet. |
 | **`[blind]`** | Written against the design, never executed. Names spans and attributes the instrumentation has not shipped. |
 
+> **Field presence was verified locally on 2026-08-03**, by
+> `crates/temper-services/tests/drain_span_test.rs`: every name in `DRAIN_DISPATCH_FIELDS` and
+> `DRAIN_JOB_FIELDS` is carried by a real exported span, and `queue_wait_ms` was mutation-tested to
+> confirm it fails on a wrong value rather than only on a missing one. **That verifies the fields
+> exist, not that any query below returns what you want** — local spans never reach Tempo, so no
+> TraceQL on this page has been run against the new spans. The marks are unchanged accordingly.
+
 Most queries here are `[blind]`, and **that is the expected state of this file until the
 instrumentation merges** — it was written alongside the design so the field set could be checked
 against real operator questions rather than invented and then rationalized. A `[blind]` query is a
@@ -143,10 +150,19 @@ Use this to get from "the p95 moved" to an actual trace with its job spans under
 > (`count_over_time() by (span.http.route)`) returned `/api/region/dispatch` 356 and
 > `/api/embed/dispatch` 1431 over 6h.
 
-`outcome` is `completed` | `deferred` | `failed`. **`deferred` is not a failure** — it is the
-deadline path handing a job back cleanly, and a healthy drain under load produces them. A rising
-`deferred` share means the wall-clock budget is the binding constraint; a non-zero `failed` means
-something else.
+`outcome` is `completed` | `deferred` | `partial` | `failed` (`JobOutcome` in
+`crates/temper-services/src/services/drain_span.rs`, asserted against these exact strings).
+
+**Only `failed` is a failure.** `deferred` is the deadline path handing a job back cleanly having
+attempted no work; a healthy drain under load produces them, and a rising share means the wall-clock
+budget is the binding constraint. `partial` is embed-only: work *was* done but did not finish the
+claim's budget, so the job was re-enqueued to resume — the normal path for a large resource
+(production's biggest holds 939 chunks against a budget of 64).
+
+**The two are worth reading separately, because `EmbedDispatchSummary` cannot.** Its `partial` field
+counts both states, which is why the span distinguishes them and the summary was left alone. A drain
+whose `deferred` is climbing while `partial` is flat is out of wall-clock; the reverse is just large
+resources making progress.
 
 **D2 — Tick cadence** `[live]`
 
@@ -181,3 +197,18 @@ correct judgment about the request and deliberately not counted.
   either without cadence, each has a blind spot the other covers.
 - **Anchor id is high-cardinality** and only six anchors carry live regions today. It is a fine
   dimension now and would not be if that changed; B2 is the query to revisit first.
+
+## Post-deploy follow-up
+
+Once these spans are flowing in production, re-run every query on this page against Tempo and
+re-mark it. A query still marked `[blind]` after the spans exist is a query nobody has run — and the
+answer to "is the drain keeping up?" should not rest on one of those.
+
+Two things to check on that pass, both of which local testing structurally cannot answer:
+
+- **Does `oldest_pending_age_ms` stay bounded in practice?** It is recorded as a raw unbounded value
+  because bucketing before anyone has seen its range would be guessing. A never-claimed job grows it
+  without limit, which is a cardinality question for whatever aggregates it.
+- **Does `queue_wait_ms` read the way the p95 in B1 predicts** (a ceiling near 60s from the 1-minute
+  cron)? If it runs materially higher, ticks are being skipped or the claim is starving, and that is
+  a finding rather than a tuning exercise.

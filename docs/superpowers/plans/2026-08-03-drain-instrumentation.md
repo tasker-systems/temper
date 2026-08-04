@@ -69,7 +69,7 @@ drift; that is the failure `ACT_SPAN_FIELDS` exists to prevent, and this follows
   - `pub async fn read_queue_waits(pool: &PgPool, ids: &[Uuid]) -> ApiResult<HashMap<Uuid, i64>>`
   - `pub enum JobOutcome { Completed, Deferred, Partial, Failed }` with `pub fn as_str(&self) -> &'static str`
 
-- [ ] **Step 1: Write the failing test for the outcome vocabulary**
+- [x] **Step 1: Write the failing test for the outcome vocabulary**
 
 Create `crates/temper-services/src/services/drain_span.rs` with only this test module at the bottom:
 
@@ -104,12 +104,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cargo nextest run -p temper-services drain_span`
 Expected: FAIL to compile — `JobOutcome`, `DRAIN_DISPATCH_FIELDS`, `DRAIN_JOB_FIELDS` not found.
 
-- [ ] **Step 3: Write the module head — constants and the outcome enum**
+- [x] **Step 3: Write the module head — constants and the outcome enum**
 
 Put this **above** the test module in `drain_span.rs`:
 
@@ -181,12 +181,12 @@ impl JobOutcome {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p temper-services drain_span`
 Expected: PASS, 2 tests.
 
-- [ ] **Step 5: Add the two queue reads**
+- [x] **Step 5: Add the two queue reads**
 
 Append to `drain_span.rs`, above the test module:
 
@@ -270,7 +270,7 @@ pub async fn read_queue_waits(pool: &PgPool, ids: &[Uuid]) -> ApiResult<HashMap<
 }
 ```
 
-- [ ] **Step 6: Register the module**
+- [x] **Step 6: Register the module**
 
 In `crates/temper-services/src/services/mod.rs`, add alongside the existing `pub mod` lines:
 
@@ -278,7 +278,7 @@ In `crates/temper-services/src/services/mod.rs`, add alongside the existing `pub
 pub mod drain_span;
 ```
 
-- [ ] **Step 7: Regenerate the sqlx cache and check**
+- [x] **Step 7: Regenerate the sqlx cache and check**
 
 Read the `sqlx-query-cache` skill first. Then:
 
@@ -291,7 +291,7 @@ cargo make check
 Expected: clean. If `error[E0282]: type annotations needed` appears on a `query!` you did not touch,
 your dev DB is behind `migrations/` — run `cargo make db-migrate`, do not re-run prepare.
 
-- [ ] **Step 8: Verify the `enqueued_at` bias question the spec left open**
+- [x] **Step 8: Verify the `enqueued_at` bias question the spec left open**
 
 The spec (§"Two things that must be written down") requires this be **resolved, not inherited**.
 `enqueued_at` defaults to `now()` = transaction-start, so if the enqueue runs inside a long write
@@ -304,7 +304,7 @@ Read the call site and determine whether it runs on `&self.pool` after the creat
 `read_queue_waits`'s doc comment** as either "unbiased because …" or "overstates by … because …".
 Do not leave the question open.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/temper-services/src/services/drain_span.rs \
@@ -323,7 +323,7 @@ git commit -m "drain instrumentation: the shared span vocabulary and the two que
 - Consumes: `drain_span::{read_queue_depth, read_queue_waits, JobOutcome, DRAIN_DISPATCH_FIELDS, DRAIN_JOB_FIELDS}`
 - Produces: `region_dispatch` and `region_job` spans; no public Rust API change. `RegionDispatchSummary` is **unchanged** — this task adds observation, not behaviour.
 
-- [ ] **Step 1: Add the tick span to `dispatch_tick_inner`**
+- [x] **Step 1: Add the tick span to `dispatch_tick_inner`**
 
 Replace the existing bare `async fn dispatch_tick_inner(` signature line with the attribute plus the
 same signature. The existing doc comment above it stays.
@@ -353,7 +353,7 @@ async fn dispatch_tick_inner(
 `skip_all` is mandatory, matching `#[act_span]`: a drain's arguments are a pool and a duration, and
 defaulting to `Debug`-formatting arguments onto spans is the habit that eventually puts a body on one.
 
-- [ ] **Step 2: Read the backlog before the claim loop**
+- [x] **Step 2: Read the backlog before the claim loop**
 
 Immediately after the existing `let start = std::time::Instant::now();` and **before** `loop {`:
 
@@ -370,7 +370,7 @@ Immediately after the existing `let start = std::time::Instant::now();` and **be
 
 Add `use crate::services::drain_span;` to the imports at the top.
 
-- [ ] **Step 3: Extract the per-job body into an instrumented fn**
+- [x] **Step 3: Extract the per-job body into an instrumented fn**
 
 Add this above `dispatch_tick_inner`. It is the existing loop body, moved verbatim except that the
 two tally sites become a returned value.
@@ -468,7 +468,7 @@ enum RegionJobResult {
 Add to the imports: `use temper_core::types::workflow_job::ClaimedAnchorJob;` and
 `use crate::services::drain_span::JobOutcome;`.
 
-- [ ] **Step 4: Rewrite the claim loop to call it**
+- [x] **Step 4: Rewrite the claim loop to call it**
 
 Replace the whole `for job in claimed { ... }` block with:
 
@@ -500,7 +500,7 @@ Replace the whole `for job in claimed { ... }` block with:
 Behaviour is preserved exactly: once `start.elapsed() >= deadline` is true it stays true, so every
 subsequent job in the batch defers, as the original `continue` did.
 
-- [ ] **Step 5: Record the tallies onto the tick span before returning**
+- [x] **Step 5: Record the tallies onto the tick span before returning**
 
 Replace the final `Ok(summary)` with:
 
@@ -514,13 +514,13 @@ Replace the final `Ok(summary)` with:
     Ok(summary)
 ```
 
-- [ ] **Step 6: Run the existing region drain tests — behaviour must be unchanged**
+- [x] **Step 6: Run the existing region drain tests — behaviour must be unchanged**
 
 Run: `cargo nextest run -p temper-services --features test-db --test region_tick_off_request_test`
 Expected: PASS, unchanged. This task adds observation only; a red here means the loop rewrite
 changed behaviour.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/temper-services/src/services/region_service.rs
@@ -538,7 +538,7 @@ git commit -m "drain instrumentation: the region drain reports its queue and its
 - Consumes: the same `drain_span` items as Task 2.
 - Produces: `embed_dispatch` and `embed_job` spans. `EmbedDispatchSummary` unchanged.
 
-- [ ] **Step 1: Add the tick span**
+- [x] **Step 1: Add the tick span**
 
 Same shape as Task 2 Step 1, on `embed_service::dispatch_tick_inner`, with embed's tail fields:
 
@@ -562,7 +562,7 @@ Same shape as Task 2 Step 1, on `embed_service::dispatch_tick_inner`, with embed
 
 Note `deferred` is declared even though `EmbedDispatchSummary` has no such field — see Step 3.
 
-- [ ] **Step 2: Read the backlog before the claim loop**
+- [x] **Step 2: Read the backlog before the claim loop**
 
 After `let start = std::time::Instant::now();`, before `loop {` — identical to Task 2 Step 2 but
 with embed's `persona`/`dispatch` locals already in scope.
@@ -576,7 +576,7 @@ with embed's `persona`/`dispatch` locals already in scope.
     }
 ```
 
-- [ ] **Step 3: Split the two states embed currently conflates**
+- [x] **Step 3: Split the two states embed currently conflates**
 
 `EmbedDispatchSummary.partial` is incremented on **two different things**: the deadline-deferral path
 (0 chunks embedded, job untouched) and the budget-exhausted path (chunks embedded, job resumed).
@@ -592,7 +592,7 @@ Track a local `let mut deferred: u32 = 0;` beside `summary`, incremented on the 
 and record it onto the tick span in Step 5. The summary's `partial` keeps counting both, exactly as
 today.
 
-- [ ] **Step 4: Extract the per-job body into `run_embed_job`**
+- [x] **Step 4: Extract the per-job body into `run_embed_job`**
 
 Follow Task 2 Step 3's shape exactly. The span fields differ:
 
@@ -627,7 +627,7 @@ enum EmbedJobResult {
 Keep `budget` owned by the caller. Passing `&mut budget` into an instrumented fn would make the
 witness in Task 4 depend on mutation order.
 
-- [ ] **Step 5: Record tallies and the local `deferred` before returning**
+- [x] **Step 5: Record tallies and the local `deferred` before returning**
 
 ```rust
     span.record("claimed", summary.claimed);
@@ -640,14 +640,14 @@ witness in Task 4 depend on mutation order.
     Ok(summary)
 ```
 
-- [ ] **Step 6: Run the embed drain tests**
+- [x] **Step 6: Run the embed drain tests**
 
 Run: `cargo nextest run -p temper-services --features test-db embed`
 Then: `cargo nextest run -p tests-e2e --features test-db --test async_embed_drain_e2e` if that target
 builds locally; otherwise note it for CI.
 Expected: PASS, unchanged.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/temper-services/src/services/embed_service.rs
@@ -671,7 +671,7 @@ This test file owns a **process-global** tracing subscriber, which cannot be ins
 same constraint `crates/temper-api/tests/telemetry_flush_test.rs` documents. It must be its own file,
 and it must contain exactly one test that installs the subscriber.
 
-- [ ] **Step 1: Write the failing witness**
+- [x] **Step 1: Write the failing witness**
 
 ```rust
 #![cfg(feature = "test-db")]
@@ -785,7 +785,7 @@ bottom of this file. `seed_anchor_with_queued_job` creates a context anchor and 
 `workflow_job_service::enqueue_anchor` — reuse the seeding already in
 `crates/temper-services/tests/region_tick_off_request_test.rs` rather than inventing a second one.
 
-- [ ] **Step 2: Run it to verify it fails for the right reason**
+- [x] **Step 2: Run it to verify it fails for the right reason**
 
 Run: `cargo nextest run -p temper-services --features test-db --test drain_span_test`
 Expected before Tasks 2–3 are in: FAIL on *"the drain emitted no `region_job` span"*.
@@ -793,7 +793,7 @@ Expected with Tasks 2–3 in: **PASS**.
 
 If it passes but you have not yet implemented Task 2, stop — the test is finding something else.
 
-- [ ] **Step 3: Verify the bite by mutation**
+- [x] **Step 3: Verify the bite by mutation**
 
 Temporarily change `read_queue_waits`'s SQL from `(leased_at - enqueued_at)` to
 `(leased_at - leased_at)`. Re-run.
@@ -803,14 +803,14 @@ Then restore the SQL from your file copy — do not `git checkout` to undo a pro
 Record the observed RED and GREEN output in the commit message. A witness whose bite was never
 observed is a witness nobody has verified.
 
-- [ ] **Step 4: Run the whole services suite**
+- [x] **Step 4: Run the whole services suite**
 
 ```bash
 cargo nextest run -p temper-services --features test-db
 cargo make check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/temper-services/tests/drain_span_test.rs
@@ -824,7 +824,7 @@ git commit -m "drain instrumentation: the gate — a value bite on queue wait, a
 **Files:**
 - Modify: `docs/guides/drain-operator-queries.md`
 
-- [ ] **Step 1: Re-mark every query that can now be verified**
+- [x] **Step 1: Re-mark every query that can now be verified**
 
 With the spans emitting locally, the `[blind]` marks on A1, A2, A3, B1, B2, C2, D1 can be upgraded to
 `[shape]` only if you actually ran the aggregation form against real spans. **Do not upgrade a mark
@@ -835,7 +835,7 @@ Locally you can verify field *presence* but not the TraceQL, since local spans d
 So the honest local upgrade is: leave the marks, and add one line under the status table recording
 that field presence was verified by `drain_span_test.rs` on <date>.
 
-- [ ] **Step 2: Note the post-deploy follow-up**
+- [x] **Step 2: Note the post-deploy follow-up**
 
 Add to the end of `docs/guides/drain-operator-queries.md`:
 
@@ -847,7 +847,7 @@ re-mark it. A query still marked `[blind]` after the spans exist is a query nobo
 answer to "is the drain keeping up?" should not rest on one of those.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/guides/drain-operator-queries.md
@@ -872,3 +872,61 @@ are wire types with consumers and this plan adds observation, not behaviour. Any
 `oldest_pending_age_ms` is unbounded — a never-claimed job grows it forever, which is a cardinality
 question for whatever aggregates it. It is recorded as a raw value here because bucketing it before
 anyone has seen its range would be guessing. Revisit after the post-deploy pass in Task 5.
+
+---
+
+## Execution record — 2026-08-03
+
+Executed inline in the authoring session. Four deviations from the plan as written, each with its
+reason, so a later reader is not misled by the ticked boxes.
+
+**1. The module was registered in Task 1 Step 1, not Step 6.** As written, Steps 1–2 run a test in a
+module `mod.rs` does not yet declare — so nothing compiles it and the RED is not observed. Registering
+first made the RED real: `use of undeclared type JobOutcome`, plus two `E0282`s.
+
+**2. Tasks 1–3 were batched into one compile.** A `temper-services` build is ~6–11 minutes here, and
+Tasks 2 and 3 add no new tests (their check is *"the existing tests still pass"*). No bite was lost:
+Task 1's RED was observed before implementing, and Task 4's mutation bite was run separately.
+
+**3. `EmbedJobResult` carries `u64`, not `i64`.** The plan's sketch had `i64`; the real types are
+`ChunkProgress::embedded: u64` and `EmbedDispatchSummary::chunks_embedded: u64`, with only the
+per-claim `budget` as `i64`. Four compile errors, fixed by matching the incumbents and casting at
+the budget decrement — exactly as the original code did.
+
+**4. Task 3's Step 6 named a test target that does not exist.** Embed's drain tests are **lib** tests
+(`embed_service.rs`, `mod tests`), not an integration target — `--test embed_dispatch_test` fails
+with *"no test target named"*. The correct invocation is
+`cargo nextest run -p temper-services --features test-db --lib -E 'test(embed)'`.
+
+### What was actually verified
+
+| | |
+|---|---|
+| `drain_span_test` | **PASS** — and the bite confirmed by mutation (below) |
+| `region_tick_off_request_test` (4 tests) | **PASS**, unchanged — the loop restructure preserved behaviour |
+| `embed_service` lib tests (20, incl. deferral, budget, redrive, concurrency) | **PASS**, unchanged |
+| `cargo make check` | see the commit — run after `cargo fmt --all` |
+
+**The mutation bite, observed.** With `(leased_at - enqueued_at)` changed to
+`(leased_at - leased_at)`, the witness failed with:
+
+```
+queue_wait_ms = 0ms, but the job sat in the queue for at least 1200ms before the drain
+claimed it — the field is present but computed wrong
+```
+
+The span still existed and still carried the field. Only the computation was wrong, and the test
+caught it — which is the whole point of a value assertion over an existence one. Restored from a file
+copy, not `git checkout`.
+
+### Not run, and why
+
+**The full `temper-services` suite did not complete locally.** It stalls on macOS Gatekeeper —
+`syspolicyd` at 98% CPU with nextest at 0%, across ~40 freshly-signed test binaries, zero tests run
+in 20 minutes. That is an environment property, not a signal about this change. The targeted suites
+above cover every file this change touches; CI runs the rest.
+
+### Carried forward, unresolved
+
+`oldest_pending_age_ms` is still an unbounded raw value. Named in the spec as open and unchanged
+here — the range it needs to be bucketed against does not exist until these spans run in production.
