@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "IdKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+    },
+    "IdProvenance": {
+      "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
+      "oneOf": [
+        {
+          "properties": {
+            "anchor": {
+              "const": "cogmap",
+              "type": "string"
+            },
+            "id": {
+              "description": "A `kb_cogmaps.id` value — a cognitive map.",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "anchor": {
+              "const": "context",
+              "type": "string"
+            },
+            "id": {
+              "description": "A `kb_contexts.id` value.",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The one value that crosses a stage boundary. Membership, never rank.",
+  "properties": {
+    "ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "$ref": "#/$defs/IdKind"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IdProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Required for `region`; absent for every other kind today."
+    }
+  },
+  "required": [
+    "kind",
+    "ids"
+  ],
+  "title": "IdSet",
+  "type": "object"
+}

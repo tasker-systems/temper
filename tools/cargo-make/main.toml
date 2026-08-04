@@ -88,8 +88,8 @@ fi
 echo "security-tripwires: all five passed."
 ''']
 
-[tasks.test-schema]
-description = "Run the payload JSON-Schema snapshot gate (no database, no ONNX). Regenerate: UPDATE_SCHEMA=1 cargo make test-schema"
+[tasks.test-schema-substrate]
+description = "Run the payload JSON-Schema snapshot gate (no database, no ONNX). Regenerate: UPDATE_SCHEMA=1 cargo make test-schema-substrate"
 # PACKAGE-SCOPED ON PURPOSE — do NOT fold this into the `--workspace` run below.
 #
 # The emitted schema DEPENDS ON FEATURE UNIFICATION. Under `--workspace`, temper-core's `mcp` feature
@@ -114,8 +114,42 @@ args = [
   "--no-fail-fast"
 ]
 
+[tasks.test-schema-core]
+description = "Run the query-contract JSON-Schema snapshot gate. Regenerate: UPDATE_SCHEMA=1 cargo make test-schema-core"
+# FEATURE-PINNED for the same reason as test-schema-substrate: the emitted schema depends on
+# feature unification. `mcp` is the authoritative shape because it is what an MCP tool schema
+# carries — the id newtypes must emit INLINE there, since a `$ref` reaches the Anthropic tool-use
+# layer with no type signal and comes back as `null`.
+#
+# The two gates pin DIFFERENT features on purpose, each right for its own artifact: substrate pins
+# `scenario-schema` because that is what the boot-seed stamps into `kb_event_types.payload_schema`.
+#
+# UNLIKE test-schema-substrate, this gate ALSO runs under the `--workspace` invocation below,
+# because temper-mcp enables `temper-core/mcp` — so its `#![cfg(feature = "mcp")]` is satisfied
+# there, where substrate's `scenario-schema` is not. That is why `tests/query_schema.rs`
+# canonicalizes key order before comparing: `toon-format` enables `serde_json/preserve_order`,
+# which under `--workspace` unifies in and reorders schemars' property map. Without the
+# canonicalization this task passes and `cargo make test` fails on the same snapshots
+# `[verified — 2026-08-03]`. Read the header comment in that file before changing either.
+command = "cargo"
+args = [
+  "nextest",
+  "run",
+  "-p",
+  "temper-core",
+  "--features",
+  "mcp",
+  "--test",
+  "query_schema",
+  "--no-fail-fast"
+]
+
+[tasks.test-schema]
+description = "All JSON-Schema snapshot gates (payload + query contract)"
+dependencies = ["test-schema-substrate", "test-schema-core"]
+
 [tasks.test]
-description = "Run tests (unit tests, no feature flags) + the payload-schema snapshot gate"
+description = "Run tests (unit tests, no feature flags) + the payload- and query-schema snapshot gates"
 dependencies = ["test-schema"]
 command = "cargo"
 args = ["nextest", "run", "--workspace", "--no-fail-fast"]

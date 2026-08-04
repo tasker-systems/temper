@@ -26,6 +26,9 @@ use serde::{Deserialize, Serialize};
 // `$ref`/`$defs`, so a referenced scalar enum reaches the model with no type
 // signal and is sent back as `null`. Inlining surfaces the `enum` values
 // directly on the field. See tasks/review-mcp-assert-relationship-edge-issues.
+//
+// Deliberately still `mcp`-only: inlining answers an Anthropic tool-use constraint, and the
+// `scenario-schema` trees emit `$ref`s by convention.
 #[cfg_attr(feature = "mcp", schemars(inline))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "edge_kind", rename_all = "snake_case")]

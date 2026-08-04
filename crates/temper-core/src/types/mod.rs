@@ -43,6 +43,7 @@ pub mod ownership;
 pub mod profile;
 pub mod property_owner;
 pub mod provenance;
+pub mod query;
 pub mod reassign;
 pub mod reconcile;
 pub mod relationship_events;
