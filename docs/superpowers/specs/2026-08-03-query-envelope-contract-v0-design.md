@@ -18,6 +18,37 @@ incommensurable quantities](./019fbd21-ba77-7b83-b8d3-454d74bb8c7d) · T1's audi
 [columns 1–3](./019fbe0f-762a-7ad1-81be-1e346a34ea0c) and [column
 4](./019fbe09-d2c9-7c70-981c-d97a62a344cc).
 
+## AMENDED `[2026-08-04]` — a composition is ONE SQL statement, and that decides several things here
+
+`[decided — 2026-08-04, Pete]` Recorded in full as decision
+`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`. A composition is **compiled into a single SQL statement and
+executed once** — a `TemperQueryBuilder` transforms the plan into one query whose stages are CTEs.
+It is *not* a DSL governing chained request-response cycles. Consequences that land on this
+document:
+
+- **Visibility is a join inside one query, not a handoff between queries.** There is one query
+  time, so goal `019fb881`'s clause 3 holds trivially, and the `vis AS MATERIALIZED` hoist becomes
+  composition-wide — the **5** `resources_visible_to` computations a single `unified_search` call
+  makes today collapse toward 1 `[verified — 2026-08-03]`.
+- **Traversal goes narrow-first, never wide-then-filter.** Expanding over invisible material and
+  curtailing afterward yields an impoverished set *and* is less secure. `search_graph_expand`
+  already gates its walk correctly; the unscoped vector branch draws its top-100 **before**
+  visibility and is the counter-example `[verified — 2026-08-03]`.
+- **One statement means one snapshot, which is what makes §4.2's trace honest.** Across chained
+  cycles a `CompositionTrace` would narrate N database states as one story — `the-answer-never-flatters`
+  failing quietly.
+- **jaq is the plan language, compiled** — not a post-filter on returned rows. §4.2's
+  `BoundsSource::Expression` is a pushed-down predicate; an expression the builder cannot push down
+  is **refused** (`RefusalReason::ExpressionNotPushdownable`), never silently materialized into a
+  second query.
+- **`BoundsMode` is also the visibility-cost discriminator** — `bound` narrows within an already-
+  visible set, `seed` expands past it and needs the full live check. **Narrowing, not skipping:**
+  every stage keeps its visibility predicate.
+- **Goal `019fb881` clause 4 is promoted from hygiene to prerequisite.** A single compiled statement
+  concentrates all risk in the query plan, so *"planned and indexed as a unit separable from any
+  single consumer"* becomes the property the builder depends on — and its visibility-spine
+  extraction lands **before** the executor.
+
 ## Provenance discipline
 
 Every load-bearing claim below carries its evidence class, because this area's figures have rotted
@@ -620,6 +651,31 @@ Two constraints carried in unchanged:
 Preserved from the predecessor register: naming an anchor the principal cannot read yields zero rows,
 never a leak; an empty scope is an honest empty-scope signal, not an error.
 
+### 5.2 AMENDED `[2026-08-04]` — `withheld` discloses existence, so it is not always available
+
+`[decided — 2026-08-04, Pete]` Full reasoning in decision
+`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`, which also settles that a composition compiles to **one SQL
+statement**.
+
+`withheld` says *material exists that you may not see*. That is a disclosure, so it is only
+available where **existence is already licensed** — a region the asker can read containing a node
+they cannot.
+
+**For a caller-supplied id it is never available.** Ids the caller names are fully distrusted and,
+when not visible, **silently excluded**: they contribute an honest `empty`, never a withholding. A
+loud refusal would turn the surface into a probe for existence. This is the incumbent doctrine, not
+a new rule — it is `CONTEXT_REFUSAL`'s byte-identical `NotFound`, the audit gate's denial arms
+rendering `NotFound` so the write never becomes an existence oracle, and the register's own *"naming
+an anchor the principal cannot read yields zero rows, never a leak."*
+
+**A count of what was hidden is the same oracle wearing a number.** T2 shipped
+`ActResult.bounds_withheld` / `StageTrace.bounds_withheld`, which — inheriting `withheld`'s meaning
+— let one probe distinguish *invisible* from *nonexistent*. Renamed **`bounds_dropped`** and
+documented as deliberately conflating invisible / nonexistent / malformed. The arithmetic was never
+the problem (`bounds_in − bounds_honored` is derivable either way); the label was. The caller still
+learns that 28 of their 40 did not contribute — `composition-is-legible` — and learns nothing about
+why.
+
 ### 5.1 AMENDED `[2026-08-03, T2 build]` — the two names this section chose were taken
 
 `[decided — 2026-08-03, Pete]` Both `Disposition` and `Refusal` already name **different** concepts
@@ -664,10 +720,19 @@ Stated rather than assumed, because it decides the growth path:
 
 - The **`act` discriminator is open** — clients must tolerate an unknown act.
 - The **`disposition` enum is closed** — clients must handle all four exhaustively.
+- **`RefusalReason` is open** `[decided — 2026-08-04, Pete]`. This section ruled on the two above
+  and **never ruled on refusals**, so T2 shipped it closed by default — an undecided axis settled
+  by omission. Corrected: the growth this contract wants includes *new ways to decline*, and
+  `ExpressionNotPushdownable` was already the first. Closed would make every future reason a
+  breaking change, which is backwards for a value the server produces and clients merely render.
 
 So adding an act is *additive*; adding a fifth disposition is *breaking*. Widening a closed type
 silently weakens every exhaustive match on it, and the growth this contract wants is new acts, not
 new dispositions.
+
+**The two rules are deliberately different and must not converge.** A consumer matches four
+dispositions exhaustively and must tolerate a reason it has never seen. `disposition` is closed
+because it drives control flow; `RefusalReason` is open because it drives explanation.
 
 ### 6.2 The semver table
 

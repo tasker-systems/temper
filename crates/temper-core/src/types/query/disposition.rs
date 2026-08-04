@@ -27,6 +27,16 @@ pub enum StageDisposition {
     /// Honest zero — the question was asked and nothing matched.
     Empty,
     /// Material exists; the asker's standing does not admit disclosure at this depth.
+    ///
+    /// **Only safe where existence is ALREADY licensed** — a region the asker can read containing
+    /// a node they cannot. It is a statement that something is there, so it discloses existence by
+    /// construction.
+    ///
+    /// **Never safe for a caller-supplied id.** An id the caller named and cannot see contributes
+    /// as an honest [`StageDisposition::Empty`], never as a withholding: the alternative is a
+    /// single-probe existence oracle. Same doctrine as `CONTEXT_REFUSAL`'s byte-identical
+    /// `NotFound` and the audit gate's denial arms — see decision
+    /// `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.
     Withheld,
     /// The act declined a well-formed question.
     Refused,
@@ -34,7 +44,14 @@ pub enum StageDisposition {
 
 /// Why an act refused. A typed variant so every door renders the same value; how a door
 /// TRANSPORTS it (HTTP status, MCP error code) stays a door concern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// OPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and
+/// for `disposition` but never ruled on refusals, and v0 first shipped this closed by default.
+/// Corrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants
+/// includes new ways to decline, so a closed enum would make every future reason a breaking
+/// change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
+/// matched exhaustively.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
@@ -68,6 +85,23 @@ pub enum RefusalReason {
     /// generated schemas, so an inapplicable bound is a property of the plan rather than a
     /// runtime surprise.
     BoundTermNotApplicable,
+    /// A jaq expression the builder cannot compile into the single statement a composition
+    /// becomes. Refused rather than silently materialized: a silent materialization boundary
+    /// would reintroduce multi-query semantics — and with them a second database snapshot the
+    /// trace would narrate as one — invisibly (decision
+    /// `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`).
+    ExpressionNotPushdownable,
+    /// A reason this consumer does not recognize. Never constructed by this crate — only by
+    /// deserializing a producer newer than this consumer.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl RefusalReason {
+    /// Whether this is a reason the running binary knows how to interpret.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, RefusalReason::Other(_))
+    }
 }
 
 /// A refusal, distinct from a failure and from an honest empty.
@@ -150,6 +184,26 @@ mod tests {
             serde_json::from_str::<ActRefusal>(&serde_json::to_string(&r).unwrap()).unwrap(),
             r
         );
+    }
+
+    #[test]
+    fn refusal_reason_is_open_so_a_new_way_to_decline_is_additive() {
+        // Design §6.1 ruled on `act` (open) and `disposition` (closed) and never on refusals; v0
+        // shipped this closed by default. A closed enum would make every future reason a breaking
+        // change, and `ExpressionNotPushdownable` was already the first.
+        let r: RefusalReason =
+            serde_json::from_str("\"quota_exhausted\"").expect("unknown reason must parse");
+        assert_eq!(r, RefusalReason::Other("quota_exhausted".to_string()));
+        assert!(!r.is_known());
+        assert!(RefusalReason::ExpressionNotPushdownable.is_known());
+    }
+
+    #[test]
+    fn the_disposition_enum_stays_closed_while_refusals_open() {
+        // The two openness rules are deliberately different and must not converge: a consumer
+        // matches four dispositions exhaustively, but must tolerate a reason it has never seen.
+        assert!(serde_json::from_str::<StageDisposition>("\"quota_exhausted\"").is_err());
+        assert!(serde_json::from_str::<RefusalReason>("\"quota_exhausted\"").is_ok());
     }
 
     #[test]

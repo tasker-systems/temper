@@ -1,8 +1,7 @@
 {
   "$defs": {
     "RefusalReason": {
-      "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.",
-      "oneOf": [
+      "anyOf": [
         {
           "const": "unsupported_bound_kind",
           "description": "The act does not accept bounds of the supplied `IdKind`.",
@@ -42,8 +41,18 @@
           "const": "bound_term_not_applicable",
           "description": "A bound term was supplied to an act for which that frame of reference does not exist —\ne.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never\nreinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the\ngenerated schemas, so an inapplicable bound is a property of the plan rather than a\nruntime surprise.",
           "type": "string"
+        },
+        {
+          "const": "expression_not_pushdownable",
+          "description": "A jaq expression the builder cannot compile into the single statement a composition\nbecomes. Refused rather than silently materialized: a silent materialization boundary\nwould reintroduce multi-query semantics — and with them a second database snapshot the\ntrace would narrate as one — invisibly (decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`).",
+          "type": "string"
+        },
+        {
+          "description": "A reason this consumer does not recognize. Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.",
+          "type": "string"
         }
-      ]
+      ],
+      "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -84,9 +84,23 @@ pub struct ActResult {
     /// for exactly one term and was never extended to `limit` or `depth`.
     pub terms_effective: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
+    /// How many ids this stage was handed.
     pub bounds_in: i64,
+    /// How many of them contributed.
     pub bounds_honored: i64,
-    pub bounds_withheld: i64,
+    /// How many did not — for ANY reason, deliberately conflated.
+    ///
+    /// Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
+    /// this field for the invisible case alone, is a **single-probe existence oracle**: pass one
+    /// id, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,
+    /// whose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —
+    /// *material exists* — and so disclosed exactly that. The arithmetic was always harmless
+    /// (`bounds_in - bounds_honored` is derivable either way); the leak was in the label.
+    ///
+    /// The caller still learns that 28 of their 40 did not contribute, which is what
+    /// `composition-is-legible` asks for. They do not learn why. Decision
+    /// `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.
+    pub bounds_dropped: i64,
 }
 
 #[cfg(test)]
@@ -129,7 +143,7 @@ mod tests {
             narrowed_by: vec![],
             bounds_in: 0,
             bounds_honored: 0,
-            bounds_withheld: 0,
+            bounds_dropped: 0,
         };
         assert_eq!(r.produced.kind, IdKind::Region);
         assert_eq!(
@@ -155,7 +169,7 @@ mod tests {
             narrowed_by: vec![],
             bounds_in: 0,
             bounds_honored: 0,
-            bounds_withheld: 0,
+            bounds_dropped: 0,
         };
         assert_eq!(r.extent, Extent::Partial);
         assert!(r.total.is_none(), "a partial answer owes no total");
@@ -181,9 +195,44 @@ mod tests {
             narrowed_by: vec![],
             bounds_in: 0,
             bounds_honored: 0,
-            bounds_withheld: 0,
+            bounds_dropped: 0,
         };
         assert!(matches!(r.extent, Extent::Indeterminate { .. }));
+    }
+
+    #[test]
+    fn the_dropped_count_cannot_be_read_as_an_existence_oracle() {
+        // Two callers each name one id they cannot see: one id exists, one does not. The wire
+        // form must be IDENTICAL, or a single probe distinguishes them. This is the property the
+        // field's name used to break — `bounds_withheld` inherited StageDisposition::Withheld's
+        // meaning ("material exists") and so answered the question by labelling it.
+        let invisible_but_real = ActResult {
+            act: ActName::FindExact,
+            produced: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: vec![],
+            },
+            extent: Extent::Complete,
+            total: None,
+            terms_effective: BTreeMap::new(),
+            narrowed_by: vec![],
+            bounds_in: 1,
+            bounds_honored: 0,
+            bounds_dropped: 1,
+        };
+        let never_existed = ActResult {
+            bounds_dropped: 1,
+            ..invisible_but_real.clone()
+        };
+        assert_eq!(
+            serde_json::to_string(&invisible_but_real).unwrap(),
+            serde_json::to_string(&never_existed).unwrap(),
+            "an invisible id and a nonexistent one must be indistinguishable on the wire"
+        );
+        // And no field anywhere in the rendering is named for the invisible case alone.
+        let json = serde_json::to_string(&invisible_but_real).unwrap();
+        assert!(!json.contains("withheld"), "no withheld-shaped counter");
     }
 
     #[test]

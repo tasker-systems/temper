@@ -20,8 +20,15 @@ use super::scalars::MetaDetail;
 pub enum BoundsSource {
     /// Verbatim from an earlier stage's `produced` set.
     Upstream { stage: u32 },
-    /// Produced by a jaq expression between stages — i.e. the caller sub-selected, and the
-    /// bounds no longer equal any act's output.
+    /// Produced by a **compiled predicate** rather than verbatim from an upstream act's output —
+    /// the caller sub-selected, so the bounds no longer equal any act's produced set.
+    ///
+    /// A composition compiles to ONE SQL statement, so this is a pushed-down predicate inside
+    /// that statement, NOT a jaq expression evaluated on returned rows between two round-trips.
+    /// v0 first documented it the latter way, which encoded a chained request-response model that
+    /// decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1` replaced. An expression the builder cannot
+    /// push down is refused (`RefusalReason::ExpressionNotPushdownable`), never quietly
+    /// materialized into a second query.
     Expression,
     /// Supplied directly by the caller.
     Caller,
@@ -59,7 +66,10 @@ pub struct StageTrace {
     pub bounds_source: Option<BoundsSource>,
     pub bounds_in: i64,
     pub bounds_honored: i64,
-    pub bounds_withheld: i64,
+    /// Conflates invisible / nonexistent / malformed on purpose — see
+    /// [`super::envelope::ActResult::bounds_dropped`]. Naming the invisible case alone would make
+    /// the trace a single-probe existence oracle.
+    pub bounds_dropped: i64,
     pub narrowed_by: Vec<NarrowedBy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta_truncated: Option<MetaTruncated>,
@@ -95,7 +105,7 @@ mod tests {
             bounds_source: Some(BoundsSource::Upstream { stage: 1 }),
             bounds_in: 40,
             bounds_honored: 0,
-            bounds_withheld: 0,
+            bounds_dropped: 0,
             narrowed_by: vec![],
             meta_truncated: None,
         };
@@ -108,8 +118,8 @@ mod tests {
 
     #[test]
     fn bounds_source_distinguishes_upstream_from_an_expression() {
-        // When jaq post-filters between stages, the next stage's bounds no longer equal the
-        // upstream act's produced set. Not forbidden — DISCLOSED.
+        // When a compiled predicate sub-selects inside the statement, the stage's bounds no longer
+        // equal the upstream act's produced set. Not forbidden — DISCLOSED.
         let up = BoundsSource::Upstream { stage: 1 };
         let ex = BoundsSource::Expression;
         let ca = BoundsSource::Caller;
@@ -139,7 +149,7 @@ mod tests {
             bounds_source: None,
             bounds_in: 0,
             bounds_honored: 0,
-            bounds_withheld: 0,
+            bounds_dropped: 0,
             narrowed_by: vec![],
             meta_truncated: Some(m),
         };

@@ -100,7 +100,30 @@ total: bigint | null,
  * `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
  * for exactly one term and was never extended to `limit` or `depth`.
  */
-terms_effective: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, bounds_in: bigint, bounds_honored: bigint, bounds_withheld: bigint, };
+terms_effective: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, 
+/**
+ * How many ids this stage was handed.
+ */
+bounds_in: bigint, 
+/**
+ * How many of them contributed.
+ */
+bounds_honored: bigint, 
+/**
+ * How many did not — for ANY reason, deliberately conflated.
+ *
+ * Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
+ * this field for the invisible case alone, is a **single-probe existence oracle**: pass one
+ * id, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,
+ * whose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —
+ * *material exists* — and so disclosed exactly that. The arithmetic was always harmless
+ * (`bounds_in - bounds_honored` is derivable either way); the leak was in the label.
+ *
+ * The caller still learns that 28 of their 40 did not contribute, which is what
+ * `composition-is-legible` asks for. They do not learn why. Decision
+ * `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.
+ */
+bounds_dropped: bigint, };
 
 /**
  * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
@@ -267,8 +290,15 @@ export type RefusalDisposition = "halt" | "degrade_and_disclose";
 /**
  * Why an act refused. A typed variant so every door renders the same value; how a door
  * TRANSPORTS it (HTTP status, MCP error code) stays a door concern.
+ *
+ * OPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and
+ * for `disposition` but never ruled on refusals, and v0 first shipped this closed by default.
+ * Corrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants
+ * includes new ways to decline, so a closed enum would make every future reason a breaking
+ * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
+ * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable";
+export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "expression_not_pushdownable" | string;
 
 /**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
@@ -299,7 +329,13 @@ export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
 /**
  * One stage's mandatory disclosure. Exists whether or not the stage produced a result.
  */
-export type StageTrace = { stage: number, act: ActName, disposition: StageDisposition, bounds_source: BoundsSource | null, bounds_in: bigint, bounds_honored: bigint, bounds_withheld: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
+export type StageTrace = { stage: number, act: ActName, disposition: StageDisposition, bounds_source: BoundsSource | null, bounds_in: bigint, bounds_honored: bigint, 
+/**
+ * Conflates invisible / nonexistent / malformed on purpose — see
+ * [`super::envelope::ActResult::bounds_dropped`]. Naming the invisible case alone would make
+ * the trace a single-probe existence oracle.
+ */
+bounds_dropped: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
 
 /**
  * Where the principal constraint applies to an act's mechanic.

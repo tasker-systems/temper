@@ -66,7 +66,7 @@
           "type": "object"
         },
         {
-          "description": "Produced by a jaq expression between stages — i.e. the caller sub-selected, and the\nbounds no longer equal any act's output.",
+          "description": "Produced by a **compiled predicate** rather than verbatim from an upstream act's output —\nthe caller sub-selected, so the bounds no longer equal any act's produced set.\n\nA composition compiles to ONE SQL statement, so this is a pushed-down predicate inside\nthat statement, NOT a jaq expression evaluated on returned rows between two round-trips.\nv0 first documented it the latter way, which encoded a chained request-response model that\ndecision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1` replaced. An expression the builder cannot\npush down is refused (`RefusalReason::ExpressionNotPushdownable`), never quietly\nmaterialized into a second query.",
           "properties": {
             "source": {
               "const": "expression",
@@ -183,7 +183,7 @@
         },
         {
           "const": "withheld",
-          "description": "Material exists; the asker's standing does not admit disclosure at this depth.",
+          "description": "Material exists; the asker's standing does not admit disclosure at this depth.\n\n**Only safe where existence is ALREADY licensed** — a region the asker can read containing\na node they cannot. It is a statement that something is there, so it discloses existence by\nconstruction.\n\n**Never safe for a caller-supplied id.** An id the caller named and cannot see contributes\nas an honest [`StageDisposition::Empty`], never as a withholding: the alternative is a\nsingle-probe existence oracle. Same doctrine as `CONTEXT_REFUSAL`'s byte-identical\n`NotFound` and the audit gate's denial arms — see decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
           "type": "string"
         },
         {
@@ -198,6 +198,11 @@
       "properties": {
         "act": {
           "$ref": "#/$defs/ActName"
+        },
+        "bounds_dropped": {
+          "description": "Conflates invisible / nonexistent / malformed on purpose — see\n[`super::envelope::ActResult::bounds_dropped`]. Naming the invisible case alone would make\nthe trace a single-probe existence oracle.",
+          "format": "int64",
+          "type": "integer"
         },
         "bounds_honored": {
           "format": "int64",
@@ -216,10 +221,6 @@
               "type": "null"
             }
           ]
-        },
-        "bounds_withheld": {
-          "format": "int64",
-          "type": "integer"
         },
         "disposition": {
           "$ref": "#/$defs/StageDisposition"
@@ -252,7 +253,7 @@
         "disposition",
         "bounds_in",
         "bounds_honored",
-        "bounds_withheld",
+        "bounds_dropped",
         "narrowed_by"
       ],
       "type": "object"

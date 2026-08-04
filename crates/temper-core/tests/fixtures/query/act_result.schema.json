@@ -219,15 +219,18 @@
     "act": {
       "$ref": "#/$defs/ActName"
     },
+    "bounds_dropped": {
+      "description": "How many did not — for ANY reason, deliberately conflated.\n\nInvisible, nonexistent and malformed are one number on purpose. Separating them, or naming\nthis field for the invisible case alone, is a **single-probe existence oracle**: pass one\nid, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,\nwhose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —\n*material exists* — and so disclosed exactly that. The arithmetic was always harmless\n(`bounds_in - bounds_honored` is derivable either way); the leak was in the label.\n\nThe caller still learns that 28 of their 40 did not contribute, which is what\n`composition-is-legible` asks for. They do not learn why. Decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
+      "format": "int64",
+      "type": "integer"
+    },
     "bounds_honored": {
+      "description": "How many of them contributed.",
       "format": "int64",
       "type": "integer"
     },
     "bounds_in": {
-      "format": "int64",
-      "type": "integer"
-    },
-    "bounds_withheld": {
+      "description": "How many ids this stage was handed.",
       "format": "int64",
       "type": "integer"
     },
@@ -270,7 +273,7 @@
     "narrowed_by",
     "bounds_in",
     "bounds_honored",
-    "bounds_withheld"
+    "bounds_dropped"
   ],
   "title": "ActResult",
   "type": "object"
