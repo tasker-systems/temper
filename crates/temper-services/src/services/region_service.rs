@@ -31,8 +31,9 @@ use sqlx::PgPool;
 
 use crate::backend::region_clocks;
 use crate::error::ApiResult;
+use crate::services::drain_span::{self, JobOutcome};
 use crate::services::workflow_job_service;
-use temper_core::types::workflow_job::{DispatchType, Persona};
+use temper_core::types::workflow_job::{ClaimedAnchorJob, DispatchType, Persona, RegionJobPayload};
 
 /// Wall-clock ceiling for one drain invocation, in seconds. Sits well under the `api/internal`
 /// function's `maxDuration: 300` so a claimed job that runs long still leaves room to complete and
@@ -69,6 +70,102 @@ pub struct RegionDispatchSummary {
     pub salience_refreshed: u32,
 }
 
+/// What one claimed job did, so the caller can tally without re-reading the span.
+#[derive(Debug, Clone, Copy)]
+enum RegionJobResult {
+    Deferred,
+    Completed {
+        materialized: bool,
+        salience_refreshed: bool,
+    },
+    Failed,
+}
+
+/// One claimed job, as its own span.
+///
+/// Extracted from the claim loop rather than inlined so the per-job facts land on a span of their
+/// own. With no child span, `Span::current().record(..)` resolves to the *tick* span and appears to
+/// work — right up until it silently doesn't. That is the trap CLAUDE.md's span-field convention
+/// exists for, and `crates/temper-services/tests/drain_span_test.rs` asserts against here.
+///
+/// `past_deadline` is passed rather than recomputed inside, so the caller keeps ownership of the
+/// invocation clock and this stays a pure function of its inputs.
+#[tracing::instrument(
+    name = "region_job",
+    skip_all,
+    fields(
+        anchor_id = %job.anchor.uuid(),
+        anchor_kind = job.anchor.table(),
+        attempts = job.attempts,
+        queue_wait_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        materialized = tracing::field::Empty,
+        salience_refreshed = tracing::field::Empty,
+    )
+)]
+async fn run_region_job(
+    pool: &PgPool,
+    job: &ClaimedAnchorJob,
+    queue_wait_ms: Option<i64>,
+    past_deadline: bool,
+) -> ApiResult<RegionJobResult> {
+    let span = tracing::Span::current();
+    if let Some(wait) = queue_wait_ms {
+        span.record("queue_wait_ms", wait);
+    }
+
+    let persona = Persona::Region.as_str();
+    let dispatch = DispatchType::Materialize.as_str();
+
+    if past_deadline {
+        // Past the deadline: hand this job back untouched rather than start a settling we cannot
+        // finish. Complete-then-re-enqueue instead of holding the lease, so the reaper's attempt
+        // count stays clean — the same reasoning the embed drain's deferral path gives.
+        workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+        workflow_job_service::enqueue_anchor(
+            pool,
+            job.anchor,
+            persona,
+            dispatch,
+            RegionJobPayload {
+                emitter: job.emitter,
+            },
+        )
+        .await?;
+        span.record("outcome", JobOutcome::Deferred.as_str());
+        tracing::info!(
+            "region dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
+        );
+        return Ok(RegionJobResult::Deferred);
+    }
+
+    match region_clocks::tick(pool, job.anchor, job.emitter.into(), None).await {
+        Ok(tick) => {
+            workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+            span.record("outcome", JobOutcome::Completed.as_str());
+            span.record("materialized", tick.materialized);
+            span.record("salience_refreshed", tick.salience_refreshed);
+            tracing::debug!("region clocks ticked");
+            Ok(RegionJobResult::Completed {
+                materialized: tick.materialized,
+                salience_refreshed: tick.salience_refreshed,
+            })
+        }
+        Err(e) => {
+            // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then dead at
+            // max attempts). One bad anchor never aborts the pass — and unlike the old inline tick,
+            // a failure here is a job the queue still knows about rather than a warning nothing
+            // tracks.
+            span.record("outcome", JobOutcome::Failed.as_str());
+            tracing::warn!(
+                error = %e,
+                "region clock tick failed; left in-flight for the reaper to retry"
+            );
+            Ok(RegionJobResult::Failed)
+        }
+    }
+}
+
 /// Resolve the invocation deadline from env, falling back to the default.
 fn resolve_dispatch_deadline() -> std::time::Duration {
     let secs = std::env::var(REGION_DISPATCH_DEADLINE_ENV)
@@ -86,6 +183,20 @@ pub async fn dispatch_tick(pool: &PgPool, cap: Option<i32>) -> ApiResult<RegionD
 
 /// [`dispatch_tick`] with the wall-clock ceiling injected, so tests can force the deferral path
 /// deterministically (`Duration::ZERO` defers every claimed job) without sleeping.
+#[tracing::instrument(
+    name = "region_dispatch",
+    skip_all,
+    fields(
+        backlog_depth = tracing::field::Empty,
+        oldest_pending_age_ms = tracing::field::Empty,
+        claimed = tracing::field::Empty,
+        completed = tracing::field::Empty,
+        deferred = tracing::field::Empty,
+        failed = tracing::field::Empty,
+        materialized = tracing::field::Empty,
+        salience_refreshed = tracing::field::Empty,
+    )
+)]
 async fn dispatch_tick_inner(
     pool: &PgPool,
     cap: Option<i32>,
@@ -101,6 +212,16 @@ async fn dispatch_tick_inner(
     let cap = cap.unwrap_or(DEFAULT_REGION_DISPATCH_CAP);
     let mut summary = RegionDispatchSummary::default();
     let start = std::time::Instant::now();
+
+    // Before the first claim, deliberately: this is "how deep was the queue when this tick arrived".
+    // Read after the loop, it would describe the queue this tick has just drained — and a drain
+    // falling behind would look healthy at exactly the moment it is not.
+    let span = tracing::Span::current();
+    let depth = drain_span::read_queue_depth(pool, persona, dispatch).await?;
+    span.record("backlog_depth", depth.backlog_depth);
+    if let Some(age) = depth.oldest_pending_age_ms {
+        span.record("oldest_pending_age_ms", age);
+    }
 
     // Do-while shape, as in the embed drain: always run at least one claim, then keep claiming until
     // the queue is empty or the deadline is hit. Checking the deadline AFTER a full claim means an
@@ -120,63 +241,31 @@ async fn dispatch_tick_inner(
         }
         summary.claimed += claimed.len() as u32;
 
-        for job in claimed {
-            if start.elapsed() >= deadline {
-                // Past the deadline: hand this job (and every one after it) back untouched rather
-                // than start a settling we cannot finish. Complete-then-re-enqueue instead of
-                // holding the lease, so the reaper's attempt count stays clean — the same reasoning
-                // the embed drain's deferral path gives.
-                workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
-                workflow_job_service::enqueue_anchor(
-                    pool,
-                    job.anchor,
-                    persona,
-                    dispatch,
-                    temper_core::types::workflow_job::RegionJobPayload {
-                        emitter: job.emitter,
-                    },
-                )
-                .await?;
-                tracing::info!(
-                    anchor = %job.anchor.uuid(),
-                    elapsed_ms = start.elapsed().as_millis() as u64,
-                    "region dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
-                );
-                summary.deferred += 1;
-                continue;
-            }
+        // One read for the whole batch, keyed by job id. The per-job wait is enqueue→lease, which
+        // only the queue row knows; see `drain_span::read_queue_waits` for why this is a separate
+        // SELECT rather than a widened claim function.
+        let ids: Vec<uuid::Uuid> = claimed.iter().map(|j| j.id).collect();
+        let waits = drain_span::read_queue_waits(pool, &ids).await?;
 
-            match region_clocks::tick(pool, job.anchor, job.emitter.into(), None).await {
-                Ok(tick) => {
-                    workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch)
-                        .await?;
+        for job in claimed {
+            // Once past the deadline this stays true, so every remaining job in the batch defers —
+            // the behaviour the old `continue` gave.
+            let past_deadline = start.elapsed() >= deadline;
+            match run_region_job(pool, &job, waits.get(&job.id).copied(), past_deadline).await? {
+                RegionJobResult::Deferred => summary.deferred += 1,
+                RegionJobResult::Completed {
+                    materialized,
+                    salience_refreshed,
+                } => {
                     summary.completed += 1;
-                    if tick.materialized {
+                    if materialized {
                         summary.materialized += 1;
                     }
-                    if tick.salience_refreshed {
+                    if salience_refreshed {
                         summary.salience_refreshed += 1;
                     }
-                    tracing::debug!(
-                        anchor = %job.anchor.uuid(),
-                        salience_refreshed = tick.salience_refreshed,
-                        materialized = tick.materialized,
-                        "region clocks ticked"
-                    );
                 }
-                Err(e) => {
-                    // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then
-                    // dead at max attempts). One bad anchor never aborts the pass — and unlike the
-                    // old inline tick, a failure here is a job the queue still knows about rather
-                    // than a warning nothing tracks.
-                    tracing::warn!(
-                        anchor = %job.anchor.uuid(),
-                        attempts = job.attempts,
-                        error = %e,
-                        "region clock tick failed; left in-flight for the reaper to retry"
-                    );
-                    summary.failed += 1;
-                }
+                RegionJobResult::Failed => summary.failed += 1,
             }
         }
 
@@ -185,5 +274,11 @@ async fn dispatch_tick_inner(
         }
     }
 
+    span.record("claimed", summary.claimed);
+    span.record("completed", summary.completed);
+    span.record("deferred", summary.deferred);
+    span.record("failed", summary.failed);
+    span.record("materialized", summary.materialized);
+    span.record("salience_refreshed", summary.salience_refreshed);
     Ok(summary)
 }

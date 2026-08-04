@@ -67,6 +67,13 @@ tokio = { version = "1", features = ["full"] }
 # `act_span_declares_every_act_field` reads the metadata of a span the attribute really opened,
 # which needs a subscriber to open it against.
 tracing-subscriber = "0.3"
+# `drain_span_test` asserts on EXPORTED spans, not just declared metadata: it needs the in-memory
+# exporter + the test provider (`test-support`), and `SpanKind` to locate the request root by kind
+# rather than by a name that has changed before. Same three temper-api's telemetry tests carry, at
+# the same versions — these must move together or the two suites disagree about what a span is.
+temper-telemetry = { path = "../temper-telemetry", features = ["test-support"] }
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
+opentelemetry = "0.32"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"

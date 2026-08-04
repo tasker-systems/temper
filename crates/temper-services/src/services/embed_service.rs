@@ -15,10 +15,11 @@ use uuid::Uuid;
 
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
+use crate::services::drain_span::{self, JobOutcome};
 use crate::services::workflow_job_service;
 use temper_core::types::workflow_job::{
-    DispatchType, EmbedDispatchSummary, EmbeddingStatus, Persona, DEFAULT_EMBED_DISPATCH_CAP,
-    DEFAULT_EMBED_LEASE_SECONDS,
+    ClaimedEmbedJob, DispatchType, EmbedDispatchSummary, EmbeddingStatus, Persona,
+    DEFAULT_EMBED_DISPATCH_CAP, DEFAULT_EMBED_LEASE_SECONDS,
 };
 
 /// Whether this deployment defers server-computed embeddings to the async drain (issue #299). Read
@@ -270,8 +271,125 @@ pub async fn dispatch_tick(
     dispatch_tick_inner(pool, cap, redrive, resolve_dispatch_deadline()).await
 }
 
+/// What one claimed embed job did, so the caller can tally and decrement its budget without
+/// re-reading the span. `chunks_embedded` is returned rather than the fn taking `&mut budget`, so
+/// this stays a pure function of its inputs and the gate's assertions do not depend on mutation
+/// order.
+#[derive(Debug, Clone, Copy)]
+enum EmbedJobResult {
+    Deferred,
+    /// `u64` to match `ChunkProgress::embedded` and `EmbedDispatchSummary::chunks_embedded`; the
+    /// per-claim `budget` is `i64` and takes the cast at the decrement, exactly as before.
+    Completed {
+        chunks_embedded: u64,
+    },
+    Partial {
+        chunks_embedded: u64,
+    },
+    Failed,
+}
+
+/// One claimed embed job, as its own span. The twin of `region_service::run_region_job`; see its doc
+/// for why the per-job facts may not go on the tick span.
+#[tracing::instrument(
+    name = "embed_job",
+    skip_all,
+    fields(
+        resource_id = %job.resource_id,
+        attempts = job.attempts,
+        queue_wait_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        chunks_embedded = tracing::field::Empty,
+    )
+)]
+async fn run_embed_job(
+    pool: &PgPool,
+    job: &ClaimedEmbedJob,
+    queue_wait_ms: Option<i64>,
+    past_deadline: bool,
+    budget: i64,
+) -> ApiResult<EmbedJobResult> {
+    let span = tracing::Span::current();
+    if let Some(wait) = queue_wait_ms {
+        span.record("queue_wait_ms", wait);
+    }
+
+    let persona = Persona::Embed.as_str();
+    let dispatch = DispatchType::Embed.as_str();
+
+    if past_deadline {
+        // Past the deadline: defer this job — re-enqueue untouched to resume next tick rather than
+        // hold a lease (a held lease looks like a crash to the reaper and is not reclaimable for
+        // DEFAULT_EMBED_LEASE_SECONDS). 0 chunks embedded, job resumed later.
+        workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch).await?;
+        workflow_job_service::enqueue_resource(pool, job.resource_id, persona, dispatch).await?;
+        span.record("outcome", JobOutcome::Deferred.as_str());
+        tracing::info!(
+            "embed dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
+        );
+        return Ok(EmbedJobResult::Deferred);
+    }
+
+    match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget).await {
+        Ok(progress) => {
+            span.record("chunks_embedded", progress.embedded);
+            if progress.is_complete() {
+                workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
+                    .await?;
+                span.record("outcome", JobOutcome::Completed.as_str());
+                Ok(EmbedJobResult::Completed {
+                    chunks_embedded: progress.embedded,
+                })
+            } else {
+                // More stale chunks than this claim's budget: complete + re-enqueue so a later
+                // iteration (this invocation, or the next tick) resumes it with a fresh budget.
+                // Complete-then-enqueue (not hold the lease) keeps the reaper's attempt count clean
+                // for large resources. The two writes are NOT atomic: a crash between them strands
+                // the resource with no job — and there is no automatic stale sweep (`enqueue_stale`
+                // is operator-triggered), so recovery is the next operator `temper admin reembed`
+                // over a scope containing it.
+                workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
+                    .await?;
+                workflow_job_service::enqueue_resource(pool, job.resource_id, persona, dispatch)
+                    .await?;
+                span.record("outcome", JobOutcome::Partial.as_str());
+                tracing::info!(
+                    embedded = progress.embedded,
+                    remaining = progress.remaining,
+                    "embed job partially drained; re-enqueued for the next tick"
+                );
+                Ok(EmbedJobResult::Partial {
+                    chunks_embedded: progress.embedded,
+                })
+            }
+        }
+        Err(e) => {
+            // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then dead at
+            // max attempts). One bad resource never aborts the pass.
+            span.record("outcome", JobOutcome::Failed.as_str());
+            tracing::warn!(error = %e, "embed job failed; leaving for reaper retry");
+            Ok(EmbedJobResult::Failed)
+        }
+    }
+}
+
 /// [`dispatch_tick`] with the wall-clock ceiling injected, so tests can force the deadline-defer path
 /// deterministically (a `Duration::ZERO` defers every claimed job on its first check) without sleeping.
+#[tracing::instrument(
+    name = "embed_dispatch",
+    skip_all,
+    fields(
+        backlog_depth = tracing::field::Empty,
+        oldest_pending_age_ms = tracing::field::Empty,
+        claimed = tracing::field::Empty,
+        completed = tracing::field::Empty,
+        deferred = tracing::field::Empty,
+        failed = tracing::field::Empty,
+        redriven = tracing::field::Empty,
+        partial = tracing::field::Empty,
+        chunks_embedded = tracing::field::Empty,
+    )
+)]
 async fn dispatch_tick_inner(
     pool: &PgPool,
     cap: Option<i32>,
@@ -304,6 +422,20 @@ async fn dispatch_tick_inner(
     // wall-clock instead of returning after a single ~64-chunk claim.
     let start = std::time::Instant::now();
 
+    // Before the first claim, deliberately — see `drain_span::read_queue_depth`.
+    let span = tracing::Span::current();
+    let depth = drain_span::read_queue_depth(pool, persona, dispatch).await?;
+    span.record("backlog_depth", depth.backlog_depth);
+    if let Some(age) = depth.oldest_pending_age_ms {
+        span.record("oldest_pending_age_ms", age);
+    }
+
+    // `EmbedDispatchSummary.partial` counts BOTH the deadline-deferral and the budget-exhausted
+    // resume — two different states (no work attempted vs. work done and resumed). The summary is a
+    // wire type with consumers and is left alone; the span's `outcome` distinguishes them, and this
+    // local is the deadline half so the tick span can report it separately.
+    let mut deferred: u32 = 0;
+
     // Do-while shape: always run at least one claim, then stop once past the deadline. Checking the
     // deadline AFTER a full claim (not before the first) guarantees every invocation runs at least
     // one claim attempt and can never spin, even under a pathologically small deadline — and preserves
@@ -329,81 +461,38 @@ async fn dispatch_tick_inner(
         // a 939-chunk resource embeds 64, re-enqueues, and is simply re-claimed on a later iteration.
         let mut budget = temper_substrate::embed::resolve_chunk_budget();
 
+        // One read for the whole batch, keyed by job id — see `drain_span::read_queue_waits`.
+        let ids: Vec<Uuid> = claimed.iter().map(|j| j.id).collect();
+        let waits = drain_span::read_queue_waits(pool, &ids).await?;
+
         for job in claimed {
-            if start.elapsed() >= deadline {
-                // Past the deadline: defer this job (and every one after it) — re-enqueue untouched
-                // to resume next tick rather than hold a lease (a held lease looks like a crash to
-                // the reaper and is not reclaimable for DEFAULT_EMBED_LEASE_SECONDS). Tallied
-                // `partial`, not `failed` — 0 chunks embedded, job resumed later.
-                workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
-                    .await?;
-                workflow_job_service::enqueue_resource(pool, job.resource_id, persona, dispatch)
-                    .await?;
-                tracing::info!(
-                    resource_id = %job.resource_id,
-                    elapsed_ms = start.elapsed().as_millis() as u64,
-                    "embed dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
-                );
-                summary.partial += 1;
-                continue;
-            }
-            match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget)
-                .await
+            // Once past the deadline this stays true, so every remaining job in the batch defers —
+            // the behaviour the old `continue` gave.
+            let past_deadline = start.elapsed() >= deadline;
+            match run_embed_job(
+                pool,
+                &job,
+                waits.get(&job.id).copied(),
+                past_deadline,
+                budget,
+            )
+            .await?
             {
-                Ok(progress) => {
-                    summary.chunks_embedded += progress.embedded;
-                    budget -= progress.embedded as i64;
-                    if progress.is_complete() {
-                        workflow_job_service::complete_resource(
-                            pool,
-                            job.resource_id,
-                            persona,
-                            dispatch,
-                        )
-                        .await?;
-                        summary.completed += 1;
-                    } else {
-                        // More stale chunks than this claim's budget: complete + re-enqueue so a
-                        // later iteration (this invocation, or the next tick) resumes it with a
-                        // fresh budget. Complete-then-enqueue (not hold the lease) keeps the reaper's
-                        // attempt count clean for large resources. The two writes are NOT atomic: a
-                        // crash between them strands the resource with no job — and there is no
-                        // automatic stale sweep (`enqueue_stale` is operator-triggered), so recovery
-                        // is the next operator `temper admin reembed` over a scope containing it.
-                        workflow_job_service::complete_resource(
-                            pool,
-                            job.resource_id,
-                            persona,
-                            dispatch,
-                        )
-                        .await?;
-                        workflow_job_service::enqueue_resource(
-                            pool,
-                            job.resource_id,
-                            persona,
-                            dispatch,
-                        )
-                        .await?;
-                        tracing::info!(
-                            resource_id = %job.resource_id,
-                            embedded = progress.embedded,
-                            remaining = progress.remaining,
-                            "embed job partially drained; re-enqueued for the next tick"
-                        );
-                        summary.partial += 1;
-                    }
+                EmbedJobResult::Deferred => {
+                    deferred += 1;
+                    summary.partial += 1;
                 }
-                Err(e) => {
-                    // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then
-                    // dead at max attempts). One bad resource never aborts the pass.
-                    tracing::warn!(
-                        resource_id = %job.resource_id,
-                        attempts = job.attempts,
-                        error = %e,
-                        "embed job failed; leaving for reaper retry"
-                    );
-                    summary.failed += 1;
+                EmbedJobResult::Completed { chunks_embedded } => {
+                    summary.chunks_embedded += chunks_embedded;
+                    budget -= chunks_embedded as i64;
+                    summary.completed += 1;
                 }
+                EmbedJobResult::Partial { chunks_embedded } => {
+                    summary.chunks_embedded += chunks_embedded;
+                    budget -= chunks_embedded as i64;
+                    summary.partial += 1;
+                }
+                EmbedJobResult::Failed => summary.failed += 1,
             }
         }
 
@@ -413,6 +502,14 @@ async fn dispatch_tick_inner(
         }
     }
 
+    span.record("claimed", summary.claimed);
+    span.record("completed", summary.completed);
+    // The deadline half of `summary.partial`, separated — see the local's declaration.
+    span.record("deferred", deferred);
+    span.record("failed", summary.failed);
+    span.record("redriven", summary.redriven);
+    span.record("partial", summary.partial);
+    span.record("chunks_embedded", summary.chunks_embedded);
     Ok(summary)
 }
 
