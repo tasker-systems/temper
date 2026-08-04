@@ -76,6 +76,32 @@ const REACHABLE_TEAMS_EXPR: &str =
 /// The single authoritative home. Every other function joins this instead of restating it.
 const AUTHORITATIVE: &str = "profile_reachable_teams";
 
+/// The **alias-blind** form of the same question, and the one the gate actually runs on.
+///
+/// [`REACHABLE_TEAMS_EXPR`] pins the literal aliases `e` and `a`, which is what the nine original
+/// copies happened to use. That makes it useless for the case this witness exists to catch — the
+/// *tenth* copy, written later by someone who has never read this file and picks `pet`/`anc`:
+///
+/// ```sql
+/// SELECT DISTINCT anc.team_id
+/// FROM profile_effective_teams(p_profile) pet
+/// CROSS JOIN LATERAL team_ancestors(pet.team_id) anc
+/// ```
+///
+/// That is the same fragment and the regex does not see it. So the gate asks the structural
+/// question instead: **does this function reference both primitives at all?** Measured against the
+/// live schema, that predicate exactly characterizes "is a `reachable_teams` copy" — the functions
+/// touching only one are all legitimately doing something else (`graph_home_contexts` uses
+/// `profile_effective_teams` flat for a display label; `graph_region_territories`,
+/// `resources_in_team_scope`, `steward_team_contexts` and `vis_team` walk `team_ancestors` from a
+/// *team*, never from a profile).
+///
+/// **It can false-positive**, on a future function that legitimately needs both primitives for
+/// unrelated reasons. That direction is deliberate: on a gate protecting who-can-see-what, a
+/// spurious failure costs a conversation and a missed copy costs a silent divergence in an
+/// authorization predicate.
+const BOTH_PRIMITIVES: (&str, &str) = ("%profile_effective_teams%", "%team_ancestors%");
+
 // =================================================================================================
 // Tier 1 — the clause-1 witness. Fails against pre-extraction state.
 // =================================================================================================
@@ -89,9 +115,51 @@ const AUTHORITATIVE: &str = "profile_reachable_teams";
 ///
 /// It is deliberately a **catalog scan, not a fixed list**. A list would have to be edited by
 /// whoever adds the tenth copy — which is the person the test exists to stop.
+///
+/// The gate runs on [`BOTH_PRIMITIVES`], not on [`REACHABLE_TEAMS_EXPR`]: the regex pins the
+/// literal aliases the nine original copies happened to use, so it would miss a later copy that
+/// spells them differently. Read that constant's doc for why the structural question is the right
+/// one and which direction it errs in. The regex is still applied, as a **strictly weaker
+/// cross-check** — if it ever matches something the structural scan does not, one of the two is
+/// wrong and the test says so rather than quietly preferring either.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sqlx::Result<()> {
+    let (pet, ta) = BOTH_PRIMITIVES;
+
+    // The gate: alias-blind, structural.
     let copies: Vec<String> = sqlx::query_scalar(
+        "SELECT p.proname \
+           FROM pg_proc p \
+           JOIN pg_namespace n ON n.oid = p.pronamespace \
+           CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
+          WHERE n.nspname = 'public' AND p.prokind = 'f' \
+            AND p.proname <> $1 \
+            AND d.def LIKE $2 AND d.def LIKE $3 \
+          ORDER BY 1",
+    )
+    .bind(AUTHORITATIVE)
+    .bind(pet)
+    .bind(ta)
+    .fetch_all(&pool)
+    .await?;
+
+    assert!(
+        copies.is_empty(),
+        "{} function(s) reference both `profile_effective_teams` and `team_ancestors` directly \
+         instead of joining {AUTHORITATIVE}(): {copies:?}\n\
+         \n\
+         Route it through {AUTHORITATIVE}() rather than restating the walk. Copies in lockstep are \
+         a coincidence, not a structure — this fragment had NINE of them, byte-identical and \
+         undrifted, right up until it mattered.\n\
+         \n\
+         If a function here genuinely needs both primitives for an unrelated reason, this gate has \
+         false-positived: say so explicitly and narrow it, rather than deleting it.",
+        copies.len(),
+    );
+
+    // Cross-check: the exact-expression regex is a subset of the structural scan. It matching
+    // something the scan missed would mean the scan's premise is wrong, not that a copy slipped.
+    let by_regex: Vec<String> = sqlx::query_scalar(
         "SELECT p.proname \
            FROM pg_proc p \
            JOIN pg_namespace n ON n.oid = p.pronamespace \
@@ -107,13 +175,10 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
     .await?;
 
     assert!(
-        copies.is_empty(),
-        "{} function(s) still carry a hand-rolled copy of the reachable_teams expression \
-         instead of joining {AUTHORITATIVE}(): {copies:?}\n\
-         \n\
-         Route it through {AUTHORITATIVE}() rather than restating it. Two copies in lockstep are \
-         a coincidence, not a structure.",
-        copies.len(),
+        by_regex.is_empty(),
+        "the exact-expression regex matched {by_regex:?} while the structural scan came back \
+         clean — the two disagree, so the structural predicate is no longer a superset. Fix the \
+         predicate, do not silence either half."
     );
 
     Ok(())
@@ -147,6 +212,70 @@ async fn the_authoritative_relation_exists_and_is_principal_parameterized(
     assert!(
         result.contains("team_id") && result.contains("uuid"),
         "{AUTHORITATIVE} must return a joinable team_id relation, got: {result}"
+    );
+
+    Ok(())
+}
+
+/// The gate above claims it catches the **tenth** copy — the one written later, by someone who has
+/// not read this file, with whatever aliases they happen to pick. That claim needs evidence, or it
+/// is just a comment.
+///
+/// So: plant a decoy that is the same fragment under different aliases, and assert the gate names
+/// it. The decoy deliberately shares **no** alias with the nine originals, so a gate still keyed to
+/// `e`/`a` cannot see it — which is exactly the regression this guards. Confirmed by running the
+/// old exact-expression regex against the same decoy and watching it come back clean.
+///
+/// Runs in the test's own database, so the decoy dies with it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) -> sqlx::Result<()> {
+    let (pet, ta) = BOTH_PRIMITIVES;
+
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION decoy_tenth_copy(p_profile uuid) \
+           RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS \
+         $$ SELECT DISTINCT anc.team_id \
+              FROM profile_effective_teams(p_profile) pet \
+              CROSS JOIN LATERAL team_ancestors(pet.team_id) anc $$",
+    )
+    .execute(&pool)
+    .await?;
+
+    let structural: Vec<String> = sqlx::query_scalar(
+        "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+           CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
+          WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.proname <> $1 \
+            AND d.def LIKE $2 AND d.def LIKE $3",
+    )
+    .bind(AUTHORITATIVE)
+    .bind(pet)
+    .bind(ta)
+    .fetch_all(&pool)
+    .await?;
+
+    assert!(
+        structural.contains(&"decoy_tenth_copy".to_string()),
+        "the structural gate did NOT catch an alias-renamed copy — it caught {structural:?}. \
+         The gate cannot do the job its doc claims."
+    );
+
+    // And the half that proves the strengthening was necessary rather than decorative: the
+    // alias-pinned regex is blind to this decoy.
+    let by_regex: Vec<String> = sqlx::query_scalar(
+        "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+           CROSS JOIN LATERAL (SELECT regexp_replace(pg_get_functiondef(p.oid), '\\s+', ' ', 'g') AS def) d \
+          WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.proname <> $1 AND d.def ~ $2",
+    )
+    .bind(AUTHORITATIVE)
+    .bind(REACHABLE_TEAMS_EXPR)
+    .fetch_all(&pool)
+    .await?;
+
+    assert!(
+        !by_regex.contains(&"decoy_tenth_copy".to_string()),
+        "the alias-pinned regex unexpectedly matched the decoy, so it is not actually blind to \
+         alias renaming — the stated reason for the structural gate is wrong and this test is \
+         asserting the wrong thing."
     );
 
     Ok(())
