@@ -22,10 +22,7 @@ use crate::types::graph::EdgeKind;
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct EdgeFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edge_kinds: Vec<EdgeKind>,
@@ -38,10 +35,7 @@ pub struct EdgeFilter {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct FacetPredicate {
     pub key: String,
     pub value: String,
@@ -56,10 +50,7 @@ pub struct FacetPredicate {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceFilter {
     /// `kb_properties` where `property_key = 'doc_type'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -85,10 +76,7 @@ pub struct ResourceFilter {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum FilterField {
     Resource,

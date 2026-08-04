@@ -17,10 +17,7 @@ use super::scalars::{BoundTerm, BoundsMode, Extent};
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ActInvocation {
     pub act: ActName,
     /// The only value that crosses a stage boundary. Membership, never rank.
@@ -46,10 +43,7 @@ pub struct ActInvocation {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct NarrowedBy {
     pub key: String,
     pub value: String,
@@ -66,10 +60,7 @@ pub struct NarrowedBy {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ActResult {
     pub act: ActName,
     /// Declared kind, so contract chaining compares kinds rather than inferring them.

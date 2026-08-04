@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "extent")]
 pub enum Extent {
     /// Everything that matched is here.
@@ -40,10 +37,7 @@ pub enum Extent {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum BoundTerm {
     /// Rows returned.
@@ -62,10 +56,7 @@ pub enum BoundTerm {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum BoundsMode {
     /// Narrow to within this set.
@@ -79,10 +70,7 @@ pub enum BoundsMode {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MetaDetail {
     /// Per-resource meta only for ids in the final result set. Bounded by the caller's own limit.

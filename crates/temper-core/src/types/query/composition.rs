@@ -23,10 +23,7 @@ use super::scalars::{BoundTerm, MetaDetail};
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Intention {
     pub query: String,
     /// Whether an embedding was computed for it. Inspectable in the trace, which is what makes
@@ -39,10 +36,7 @@ pub struct Intention {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct OutcomeDeclaration {
     /// What being served looks like. NOT optional.
     pub description: String,
@@ -56,10 +50,7 @@ pub struct OutcomeDeclaration {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Composition {
     pub outcome: OutcomeDeclaration,
     #[serde(default, skip_serializing_if = "Option::is_none")]

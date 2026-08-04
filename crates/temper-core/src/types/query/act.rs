@@ -16,10 +16,7 @@ use super::scalars::BoundTerm;
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub enum ActName {
     /// *I can quote the exact words.*
     #[serde(rename = "find-exact")]
@@ -54,10 +51,7 @@ pub enum ActName {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum BuildState {
     /// Exactly one door invokes this act alone.
@@ -82,10 +76,7 @@ impl BuildState {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum VisibilityProfile {
     PrincipalAgnostic,
@@ -100,10 +91,7 @@ pub enum VisibilityProfile {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(
-    any(feature = "mcp", feature = "scenario-schema"),
-    derive(schemars::JsonSchema)
-)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ActDeclaration {
     pub name: ActName,
     /// What the asker holds. NOT optional — `every-act-is-situated` enforced by the signature.

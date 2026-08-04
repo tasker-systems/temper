@@ -36,11 +36,24 @@ Every task's requirements implicitly include this section.
   #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
   #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
   #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-  #[cfg_attr(
-      any(feature = "mcp", feature = "scenario-schema"),
-      derive(schemars::JsonSchema)
-  )]
+  #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
   ```
+
+  **CORRECTED `[2026-08-04]` — the schemars gate is `mcp` ALONE, not `any(mcp, scenario-schema)`.**
+  This plan originally prescribed the two-feature form "copied from `ids.rs`" and I copied it
+  without checking whether the *reason* transferred. It does not. `ids.rs` needs both because typed
+  ids appear in **event payloads** (which `scenario-schema` stamps into
+  `kb_event_types.payload_schema`) *and* in MCP tool params. **A query type is never an event
+  payload** — the frame register states that search reads emit no ledger events — so the
+  `scenario-schema` half was inert, and it is what forced a needless widening of
+  `types::graph::EdgeKind`'s own gate. Both narrowed; all feature combos and both schema gates
+  verified green `[verified — 2026-08-04]`.
+
+  Worth knowing while reading any of this: **`mcp` is a misnomer.** In temper-core it is
+  `mcp = ["schemars"]` and does one thing — turn on JSON-Schema derives (105 sites). Only **6**
+  sites are genuinely MCP-specific, all `schemars(inline)`, which exists because the Anthropic
+  tool-use layer does not resolve `$ref`. The feature is really `json-schema` named after its first
+  consumer; renaming it is separate cross-crate work and is NOT done here.
 - **`Option<T>` + `skip_serializing_if` emits a ts-rs warning, and that is the crate's convention.**
   ts-rs cannot parse the combined attribute and ignores it, so the TS field is `T | null` rather
   than optional. 71 such warnings pre-exist in temper-core and `ts(optional)` appears nowhere in
