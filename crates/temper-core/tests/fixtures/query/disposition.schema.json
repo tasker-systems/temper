@@ -1,27 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "StageDisposition",
   "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
   "oneOf": [
     {
+      "const": "answered",
       "description": "Rows returned.",
-      "type": "string",
-      "const": "answered"
+      "type": "string"
     },
     {
+      "const": "empty",
       "description": "Honest zero — the question was asked and nothing matched.",
-      "type": "string",
-      "const": "empty"
+      "type": "string"
     },
     {
+      "const": "withheld",
       "description": "Material exists; the asker's standing does not admit disclosure at this depth.",
-      "type": "string",
-      "const": "withheld"
+      "type": "string"
     },
     {
+      "const": "refused",
       "description": "The act declined a well-formed question.",
-      "type": "string",
-      "const": "refused"
+      "type": "string"
     }
-  ]
+  ],
+  "title": "StageDisposition"
 }

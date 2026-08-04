@@ -1,22 +1,38 @@
 {
+  "$defs": {
+    "FacetPredicate": {
+      "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ResourceFilter",
   "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\nAn unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL\n(`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four\nfilters that accept nonsense and return one.",
-  "type": "object",
   "properties": {
     "doc_type": {
       "description": "`kb_properties` where `property_key = 'doc_type'`.",
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "type": "array"
     },
     "facets": {
       "description": "`kb_properties` where `property_key = 'facet'`.",
-      "type": "array",
       "items": {
         "$ref": "#/$defs/FacetPredicate"
-      }
+      },
+      "type": "array"
     },
     "owner": {
       "type": [
@@ -38,10 +54,10 @@
     },
     "tags": {
       "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "type": "array"
     },
     "title_contains": {
       "type": [
@@ -50,22 +66,6 @@
       ]
     }
   },
-  "$defs": {
-    "FacetPredicate": {
-      "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
-      "type": "object",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "value"
-      ]
-    }
-  }
+  "title": "ResourceFilter",
+  "type": "object"
 }

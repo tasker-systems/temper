@@ -1,22 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BoundTerm",
   "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
   "oneOf": [
     {
+      "const": "limit",
       "description": "Rows returned.",
-      "type": "string",
-      "const": "limit"
+      "type": "string"
     },
     {
+      "const": "offset",
       "description": "Rows skipped.",
-      "type": "string",
-      "const": "offset"
+      "type": "string"
     },
     {
+      "const": "regions",
       "description": "Funnel width, in regions. `survey`'s only bound term — it has no rows to limit.",
-      "type": "string",
-      "const": "regions"
+      "type": "string"
     }
-  ]
+  ],
+  "title": "BoundTerm"
 }

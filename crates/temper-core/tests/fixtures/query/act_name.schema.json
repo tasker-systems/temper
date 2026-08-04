@@ -1,45 +1,45 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ActName",
-  "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive.",
   "anyOf": [
     {
+      "const": "find-exact",
       "description": "*I can quote the exact words.*",
-      "type": "string",
-      "const": "find-exact"
+      "type": "string"
     },
     {
+      "const": "find-about-anywhere",
       "description": "*A concept, no exact words; search everything I can see.*",
-      "type": "string",
-      "const": "find-about-anywhere"
+      "type": "string"
     },
     {
+      "const": "find-about-within",
       "description": "*A concept, plus a set to search inside.*",
-      "type": "string",
-      "const": "find-about-within"
+      "type": "string"
     },
     {
+      "const": "follow-from",
       "description": "*A found thing; I want its neighbours.*",
-      "type": "string",
-      "const": "follow-from"
+      "type": "string"
     },
     {
+      "const": "survey",
       "description": "*A question about what a scope knows.*",
-      "type": "string",
-      "const": "survey"
+      "type": "string"
     },
     {
+      "const": "substantiate",
       "description": "*A claim; I want its defensibility.*",
-      "type": "string",
-      "const": "substantiate"
+      "type": "string"
     },
     {
+      "const": "admit",
       "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-      "type": "string",
-      "const": "admit"
+      "type": "string"
     },
     {
       "type": "string"
     }
-  ]
+  ],
+  "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive.",
+  "title": "ActName"
 }

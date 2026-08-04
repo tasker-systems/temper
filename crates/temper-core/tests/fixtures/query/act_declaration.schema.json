@@ -1,46 +1,200 @@
 {
+  "$defs": {
+    "ActName": {
+      "anyOf": [
+        {
+          "const": "find-exact",
+          "description": "*I can quote the exact words.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-anywhere",
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-within",
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string"
+        },
+        {
+          "const": "follow-from",
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string"
+        },
+        {
+          "const": "survey",
+          "description": "*A question about what a scope knows.*",
+          "type": "string"
+        },
+        {
+          "const": "substantiate",
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string"
+        },
+        {
+          "const": "admit",
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+    },
+    "BoundTerm": {
+      "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
+      "oneOf": [
+        {
+          "const": "limit",
+          "description": "Rows returned.",
+          "type": "string"
+        },
+        {
+          "const": "offset",
+          "description": "Rows skipped.",
+          "type": "string"
+        },
+        {
+          "const": "regions",
+          "description": "Funnel width, in regions. `survey`'s only bound term — it has no rows to limit.",
+          "type": "string"
+        }
+      ]
+    },
+    "BuildState": {
+      "description": "Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —\nwhich is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`\nfailure: a const beside a registry, with a test holding its own second copy.",
+      "oneOf": [
+        {
+          "description": "Exactly one door invokes this act alone.",
+          "properties": {
+            "state": {
+              "const": "served",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The mechanic runs only inside a named composite; the act has no door, the host has one.",
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "state": {
+              "const": "fused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "host"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No mechanic exists.",
+          "properties": {
+            "state": {
+              "const": "unbuilt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FilterField": {
+      "description": "Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.",
+      "enum": [
+        "resource",
+        "edge"
+      ],
+      "type": "string"
+    },
+    "IdKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+    },
+    "VisibilityProfile": {
+      "description": "Where the principal constraint applies to an act's mechanic.",
+      "oneOf": [
+        {
+          "enum": [
+            "principal-agnostic",
+            "principal-relative"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "agnostic-in-value-relative-in-domain",
+          "description": "Every input and operation is principal-free, but the fragment is a window or aggregate\nwhose frame is the principal's read-set. `survey`'s `sal_norm` is the worked example.",
+          "type": "string"
+        }
+      ]
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ActDeclaration",
   "description": "One act, declared.",
-  "type": "object",
   "properties": {
     "accepts_bound_terms": {
       "description": "Which bound terms this act admits. A term absent here is DECLINED, never reinterpreted:\n`survey` admits `[Regions]` and not `Limit`, because `wayfind_region_scores` takes a funnel\nwidth and has no rows to limit.",
-      "type": "array",
       "items": {
         "$ref": "#/$defs/BoundTerm"
-      }
+      },
+      "type": "array"
     },
     "accepts_bounds": {
-      "type": "array",
       "items": {
         "$ref": "#/$defs/IdKind"
-      }
+      },
+      "type": "array"
     },
     "accepts_filters": {
       "description": "Which filter slots this act admits. An unadmitted filter is declined\n(`RefusalReason::FilterNotApplicable`), never silently ignored.",
-      "type": "array",
       "items": {
         "$ref": "#/$defs/FilterField"
-      }
+      },
+      "type": "array"
     },
     "accepts_seeds": {
-      "type": "array",
       "items": {
         "$ref": "#/$defs/IdKind"
-      }
+      },
+      "type": "array"
     },
     "asker_holds": {
       "description": "What the asker holds. NOT optional — `every-act-is-situated` enforced by the signature.",
       "type": "string"
     },
     "bound_ceilings": {
-      "description": "Published ceilings, per admitted term. A ceiling the caller could have read is disclosed by\n`terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not\nthe clamping. A term with no entry here has no ceiling.",
-      "type": "object",
       "additionalProperties": {
-        "type": "integer",
-        "format": "int64"
-      }
+        "format": "int64",
+        "type": "integer"
+      },
+      "description": "Published ceilings, per admitted term. A ceiling the caller could have read is disclosed by\n`terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not\nthe clamping. A term with no entry here has no ceiling.",
+      "type": "object"
     },
     "build_state": {
       "$ref": "#/$defs/BuildState"
@@ -60,9 +214,9 @@
     },
     "scoring_revision": {
       "description": "Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4\nreds when the body hash moves and this does not.",
-      "type": "integer",
       "format": "uint32",
-      "minimum": 0
+      "minimum": 0,
+      "type": "integer"
     },
     "served_by": {
       "description": "The SQL function serving this act; `None` when `build_state` is `unbuilt`. T3 fingerprints\nthis function's body against `scoring_revision`.",
@@ -87,160 +241,6 @@
     "visibility_profile",
     "scoring_revision"
   ],
-  "$defs": {
-    "ActName": {
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive.",
-      "anyOf": [
-        {
-          "description": "*I can quote the exact words.*",
-          "type": "string",
-          "const": "find-exact"
-        },
-        {
-          "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string",
-          "const": "find-about-anywhere"
-        },
-        {
-          "description": "*A concept, plus a set to search inside.*",
-          "type": "string",
-          "const": "find-about-within"
-        },
-        {
-          "description": "*A found thing; I want its neighbours.*",
-          "type": "string",
-          "const": "follow-from"
-        },
-        {
-          "description": "*A question about what a scope knows.*",
-          "type": "string",
-          "const": "survey"
-        },
-        {
-          "description": "*A claim; I want its defensibility.*",
-          "type": "string",
-          "const": "substantiate"
-        },
-        {
-          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string",
-          "const": "admit"
-        },
-        {
-          "type": "string"
-        }
-      ]
-    },
-    "BoundTerm": {
-      "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
-      "oneOf": [
-        {
-          "description": "Rows returned.",
-          "type": "string",
-          "const": "limit"
-        },
-        {
-          "description": "Rows skipped.",
-          "type": "string",
-          "const": "offset"
-        },
-        {
-          "description": "Funnel width, in regions. `survey`'s only bound term — it has no rows to limit.",
-          "type": "string",
-          "const": "regions"
-        }
-      ]
-    },
-    "BuildState": {
-      "description": "Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —\nwhich is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`\nfailure: a const beside a registry, with a test holding its own second copy.",
-      "oneOf": [
-        {
-          "description": "Exactly one door invokes this act alone.",
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "served"
-            }
-          },
-          "required": [
-            "state"
-          ]
-        },
-        {
-          "description": "The mechanic runs only inside a named composite; the act has no door, the host has one.",
-          "type": "object",
-          "properties": {
-            "host": {
-              "type": "string"
-            },
-            "state": {
-              "type": "string",
-              "const": "fused"
-            }
-          },
-          "required": [
-            "state",
-            "host"
-          ]
-        },
-        {
-          "description": "No mechanic exists.",
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "unbuilt"
-            }
-          },
-          "required": [
-            "state"
-          ]
-        }
-      ]
-    },
-    "FilterField": {
-      "description": "Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.",
-      "type": "string",
-      "enum": [
-        "resource",
-        "edge"
-      ]
-    },
-    "IdKind": {
-      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table.",
-      "anyOf": [
-        {
-          "type": "string",
-          "enum": [
-            "resource",
-            "region",
-            "cogmap",
-            "context"
-          ]
-        },
-        {
-          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
-          "type": "string"
-        }
-      ]
-    },
-    "VisibilityProfile": {
-      "description": "Where the principal constraint applies to an act's mechanic.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "principal-agnostic",
-            "principal-relative"
-          ]
-        },
-        {
-          "description": "Every input and operation is principal-free, but the fragment is a window or aggregate\nwhose frame is the principal's read-set. `survey`'s `sal_norm` is the worked example.",
-          "type": "string",
-          "const": "agnostic-in-value-relative-in-domain"
-        }
-      ]
-    }
-  }
+  "title": "ActDeclaration",
+  "type": "object"
 }

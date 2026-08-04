@@ -116,15 +116,21 @@ args = [
 
 [tasks.test-schema-core]
 description = "Run the query-contract JSON-Schema snapshot gate. Regenerate: UPDATE_SCHEMA=1 cargo make test-schema-core"
-# PACKAGE-SCOPED AND FEATURE-PINNED for the same reason as test-schema-substrate: the emitted
-# schema depends on feature unification. `mcp` is the authoritative shape because it is what an
-# MCP tool schema carries.
+# FEATURE-PINNED for the same reason as test-schema-substrate: the emitted schema depends on
+# feature unification. `mcp` is the authoritative shape because it is what an MCP tool schema
+# carries — the id newtypes must emit INLINE there, since a `$ref` reaches the Anthropic tool-use
+# layer with no type signal and comes back as `null`.
 #
-# Note the two gates pin DIFFERENT features on purpose, and each is right for its own artifact:
-# substrate pins `scenario-schema` because that is what the boot-seed stamps into
-# `kb_event_types.payload_schema`; this one pins `mcp` because the query contract's consumer is an
-# MCP tool schema, where the id newtypes must emit INLINE (`$ref` reaches the Anthropic tool-use
-# layer with no type signal and comes back as `null`).
+# The two gates pin DIFFERENT features on purpose, each right for its own artifact: substrate pins
+# `scenario-schema` because that is what the boot-seed stamps into `kb_event_types.payload_schema`.
+#
+# UNLIKE test-schema-substrate, this gate ALSO runs under the `--workspace` invocation below,
+# because temper-mcp enables `temper-core/mcp` — so its `#![cfg(feature = "mcp")]` is satisfied
+# there, where substrate's `scenario-schema` is not. That is why `tests/query_schema.rs`
+# canonicalizes key order before comparing: `toon-format` enables `serde_json/preserve_order`,
+# which under `--workspace` unifies in and reorders schemars' property map. Without the
+# canonicalization this task passes and `cargo make test` fails on the same snapshots
+# `[verified — 2026-08-03]`. Read the header comment in that file before changing either.
 command = "cargo"
 args = [
   "nextest",

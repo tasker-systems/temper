@@ -1,154 +1,90 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ActInvocation",
-  "description": "One act, invoked.",
-  "type": "object",
-  "properties": {
-    "act": {
-      "$ref": "#/$defs/ActName"
-    },
-    "bounds": {
-      "description": "The only value that crosses a stage boundary. Membership, never rank.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/IdSet"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "bounds_mode": {
-      "description": "How this act consumes `bounds`. Required whenever `bounds` is present.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/BoundsMode"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "edge_filter": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/EdgeFilter"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "resource_filter": {
-      "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ResourceFilter"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "terms": {
-      "description": "Act-level bound terms. A term this act does not admit is refused STATICALLY\n(`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "integer",
-        "format": "int64"
-      }
-    }
-  },
-  "required": [
-    "act"
-  ],
   "$defs": {
     "ActName": {
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive.",
       "anyOf": [
         {
+          "const": "find-exact",
           "description": "*I can quote the exact words.*",
-          "type": "string",
-          "const": "find-exact"
+          "type": "string"
         },
         {
+          "const": "find-about-anywhere",
           "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string",
-          "const": "find-about-anywhere"
+          "type": "string"
         },
         {
+          "const": "find-about-within",
           "description": "*A concept, plus a set to search inside.*",
-          "type": "string",
-          "const": "find-about-within"
+          "type": "string"
         },
         {
+          "const": "follow-from",
           "description": "*A found thing; I want its neighbours.*",
-          "type": "string",
-          "const": "follow-from"
+          "type": "string"
         },
         {
+          "const": "survey",
           "description": "*A question about what a scope knows.*",
-          "type": "string",
-          "const": "survey"
+          "type": "string"
         },
         {
+          "const": "substantiate",
           "description": "*A claim; I want its defensibility.*",
-          "type": "string",
-          "const": "substantiate"
+          "type": "string"
         },
         {
+          "const": "admit",
           "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string",
-          "const": "admit"
+          "type": "string"
         },
         {
           "type": "string"
         }
-      ]
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
     "BoundsMode": {
       "description": "How a receiving act consumes the `IdSet` it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.",
       "oneOf": [
         {
+          "const": "bound",
           "description": "Narrow to within this set.",
-          "type": "string",
-          "const": "bound"
+          "type": "string"
         },
         {
+          "const": "seed",
           "description": "Grow from this set.",
-          "type": "string",
-          "const": "seed"
+          "type": "string"
         }
       ]
     },
     "EdgeFilter": {
       "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.",
-      "type": "object",
       "properties": {
         "edge_kinds": {
-          "type": "array",
           "items": {
             "description": "Structural edge type — the four Semantic-Spacetime primitives. Each kind\ncarries a distinct traversal algebra:\n- `Contains`  — transitive (composition / part-of participation)\n- `LeadsTo`   — antisymmetric, causal/temporal order\n- `Near`      — symmetric (proximity / similarity)\n- `Express`   — leaf attribute (has-property)\n\nMirrors the Postgres `edge_kind` enum.",
-            "type": "string",
             "enum": [
               "express",
               "contains",
               "leads_to",
               "near"
-            ]
-          }
+            ],
+            "type": "string"
+          },
+          "type": "array"
         },
         "labels": {
-          "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         }
-      }
+      },
+      "type": "object"
     },
     "FacetPredicate": {
       "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
-      "type": "object",
       "properties": {
         "key": {
           "type": "string"
@@ -160,83 +96,82 @@
       "required": [
         "key",
         "value"
-      ]
+      ],
+      "type": "object"
     },
     "IdKind": {
-      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table.",
       "anyOf": [
         {
-          "type": "string",
           "enum": [
             "resource",
             "region",
             "cogmap",
             "context"
-          ]
+          ],
+          "type": "string"
         },
         {
           "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
           "type": "string"
         }
-      ]
+      ],
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
     },
     "IdProvenance": {
       "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
       "oneOf": [
         {
-          "type": "object",
           "properties": {
             "anchor": {
-              "type": "string",
-              "const": "cogmap"
+              "const": "cogmap",
+              "type": "string"
             },
             "id": {
               "description": "A `kb_cogmaps.id` value — a cognitive map.",
-              "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "type": "string"
             }
           },
           "required": [
             "anchor",
             "id"
-          ]
+          ],
+          "type": "object"
         },
         {
-          "type": "object",
           "properties": {
             "anchor": {
-              "type": "string",
-              "const": "context"
+              "const": "context",
+              "type": "string"
             },
             "id": {
               "description": "A `kb_contexts.id` value.",
-              "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "type": "string"
             }
           },
           "required": [
             "anchor",
             "id"
-          ]
+          ],
+          "type": "object"
         }
       ]
     },
     "IdSet": {
       "description": "The one value that crosses a stage boundary. Membership, never rank.",
-      "type": "object",
       "properties": {
         "ids": {
-          "type": "array",
           "items": {
-            "type": "string",
-            "format": "uuid"
-          }
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
         },
         "kind": {
           "$ref": "#/$defs/IdKind"
         },
         "provenance": {
-          "description": "Required for `region`; absent for every other kind today.",
           "anyOf": [
             {
               "$ref": "#/$defs/IdProvenance"
@@ -244,31 +179,32 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Required for `region`; absent for every other kind today."
         }
       },
       "required": [
         "kind",
         "ids"
-      ]
+      ],
+      "type": "object"
     },
     "ResourceFilter": {
       "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\nAn unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL\n(`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four\nfilters that accept nonsense and return one.",
-      "type": "object",
       "properties": {
         "doc_type": {
           "description": "`kb_properties` where `property_key = 'doc_type'`.",
-          "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         },
         "facets": {
           "description": "`kb_properties` where `property_key = 'facet'`.",
-          "type": "array",
           "items": {
             "$ref": "#/$defs/FacetPredicate"
-          }
+          },
+          "type": "array"
         },
         "owner": {
           "type": [
@@ -290,10 +226,10 @@
         },
         "tags": {
           "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
-          "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         },
         "title_contains": {
           "type": [
@@ -301,7 +237,71 @@
             "null"
           ]
         }
-      }
+      },
+      "type": "object"
     }
-  }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One act, invoked.",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/ActName"
+    },
+    "bounds": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IdSet"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The only value that crosses a stage boundary. Membership, never rank."
+    },
+    "bounds_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BoundsMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "How this act consumes `bounds`. Required whenever `bounds` is present."
+    },
+    "edge_filter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EdgeFilter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resource_filter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceFilter"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`."
+    },
+    "terms": {
+      "additionalProperties": {
+        "format": "int64",
+        "type": "integer"
+      },
+      "description": "Act-level bound terms. A term this act does not admit is refused STATICALLY\n(`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "act"
+  ],
+  "title": "ActInvocation",
+  "type": "object"
 }

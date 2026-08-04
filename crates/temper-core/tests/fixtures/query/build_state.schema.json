@@ -1,50 +1,50 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BuildState",
   "description": "Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —\nwhich is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`\nfailure: a const beside a registry, with a test holding its own second copy.",
   "oneOf": [
     {
       "description": "Exactly one door invokes this act alone.",
-      "type": "object",
       "properties": {
         "state": {
-          "type": "string",
-          "const": "served"
+          "const": "served",
+          "type": "string"
         }
       },
       "required": [
         "state"
-      ]
+      ],
+      "type": "object"
     },
     {
       "description": "The mechanic runs only inside a named composite; the act has no door, the host has one.",
-      "type": "object",
       "properties": {
         "host": {
           "type": "string"
         },
         "state": {
-          "type": "string",
-          "const": "fused"
+          "const": "fused",
+          "type": "string"
         }
       },
       "required": [
         "state",
         "host"
-      ]
+      ],
+      "type": "object"
     },
     {
       "description": "No mechanic exists.",
-      "type": "object",
       "properties": {
         "state": {
-          "type": "string",
-          "const": "unbuilt"
+          "const": "unbuilt",
+          "type": "string"
         }
       },
       "required": [
         "state"
-      ]
+      ],
+      "type": "object"
     }
-  ]
+  ],
+  "title": "BuildState"
 }

@@ -1,19 +1,192 @@
 {
+  "$defs": {
+    "ActName": {
+      "anyOf": [
+        {
+          "const": "find-exact",
+          "description": "*I can quote the exact words.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-anywhere",
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-within",
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string"
+        },
+        {
+          "const": "follow-from",
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string"
+        },
+        {
+          "const": "survey",
+          "description": "*A question about what a scope knows.*",
+          "type": "string"
+        },
+        {
+          "const": "substantiate",
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string"
+        },
+        {
+          "const": "admit",
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+    },
+    "BoundsSource": {
+      "description": "Where a stage's bounds came from.",
+      "oneOf": [
+        {
+          "description": "Verbatim from an earlier stage's `produced` set.",
+          "properties": {
+            "source": {
+              "const": "upstream",
+              "type": "string"
+            },
+            "stage": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "source",
+            "stage"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Produced by a jaq expression between stages — i.e. the caller sub-selected, and the\nbounds no longer equal any act's output.",
+          "properties": {
+            "source": {
+              "const": "expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Supplied directly by the caller.",
+          "properties": {
+            "source": {
+              "const": "caller",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MetaTruncated": {
+      "description": "A per-resource meta budget that bit.",
+      "properties": {
+        "dropped": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "retained": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "stage": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stage",
+        "retained",
+        "dropped"
+      ],
+      "type": "object"
+    },
+    "NarrowedBy": {
+      "description": "One act-specific threshold, and what applying it did.",
+      "properties": {
+        "admitted": {
+          "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "excluded": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "StageDisposition": {
+      "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
+      "oneOf": [
+        {
+          "const": "answered",
+          "description": "Rows returned.",
+          "type": "string"
+        },
+        {
+          "const": "empty",
+          "description": "Honest zero — the question was asked and nothing matched.",
+          "type": "string"
+        },
+        {
+          "const": "withheld",
+          "description": "Material exists; the asker's standing does not admit disclosure at this depth.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "The act declined a well-formed question.",
+          "type": "string"
+        }
+      ]
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "StageTrace",
   "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.",
-  "type": "object",
   "properties": {
     "act": {
       "$ref": "#/$defs/ActName"
     },
     "bounds_honored": {
-      "type": "integer",
-      "format": "int64"
+      "format": "int64",
+      "type": "integer"
     },
     "bounds_in": {
-      "type": "integer",
-      "format": "int64"
+      "format": "int64",
+      "type": "integer"
     },
     "bounds_source": {
       "anyOf": [
@@ -26,8 +199,8 @@
       ]
     },
     "bounds_withheld": {
-      "type": "integer",
-      "format": "int64"
+      "format": "int64",
+      "type": "integer"
     },
     "disposition": {
       "$ref": "#/$defs/StageDisposition"
@@ -43,15 +216,15 @@
       ]
     },
     "narrowed_by": {
-      "type": "array",
       "items": {
         "$ref": "#/$defs/NarrowedBy"
-      }
+      },
+      "type": "array"
     },
     "stage": {
-      "type": "integer",
       "format": "uint32",
-      "minimum": 0
+      "minimum": 0,
+      "type": "integer"
     }
   },
   "required": [
@@ -63,179 +236,6 @@
     "bounds_withheld",
     "narrowed_by"
   ],
-  "$defs": {
-    "ActName": {
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive.",
-      "anyOf": [
-        {
-          "description": "*I can quote the exact words.*",
-          "type": "string",
-          "const": "find-exact"
-        },
-        {
-          "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string",
-          "const": "find-about-anywhere"
-        },
-        {
-          "description": "*A concept, plus a set to search inside.*",
-          "type": "string",
-          "const": "find-about-within"
-        },
-        {
-          "description": "*A found thing; I want its neighbours.*",
-          "type": "string",
-          "const": "follow-from"
-        },
-        {
-          "description": "*A question about what a scope knows.*",
-          "type": "string",
-          "const": "survey"
-        },
-        {
-          "description": "*A claim; I want its defensibility.*",
-          "type": "string",
-          "const": "substantiate"
-        },
-        {
-          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string",
-          "const": "admit"
-        },
-        {
-          "type": "string"
-        }
-      ]
-    },
-    "BoundsSource": {
-      "description": "Where a stage's bounds came from.",
-      "oneOf": [
-        {
-          "description": "Verbatim from an earlier stage's `produced` set.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "type": "string",
-              "const": "upstream"
-            },
-            "stage": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "required": [
-            "source",
-            "stage"
-          ]
-        },
-        {
-          "description": "Produced by a jaq expression between stages — i.e. the caller sub-selected, and the\nbounds no longer equal any act's output.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "type": "string",
-              "const": "expression"
-            }
-          },
-          "required": [
-            "source"
-          ]
-        },
-        {
-          "description": "Supplied directly by the caller.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "type": "string",
-              "const": "caller"
-            }
-          },
-          "required": [
-            "source"
-          ]
-        }
-      ]
-    },
-    "MetaTruncated": {
-      "description": "A per-resource meta budget that bit.",
-      "type": "object",
-      "properties": {
-        "dropped": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "retained": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "stage": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "stage",
-        "retained",
-        "dropped"
-      ]
-    },
-    "NarrowedBy": {
-      "description": "One act-specific threshold, and what applying it did.",
-      "type": "object",
-      "properties": {
-        "admitted": {
-          "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int64"
-        },
-        "excluded": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int64"
-        },
-        "key": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "value"
-      ]
-    },
-    "StageDisposition": {
-      "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
-      "oneOf": [
-        {
-          "description": "Rows returned.",
-          "type": "string",
-          "const": "answered"
-        },
-        {
-          "description": "Honest zero — the question was asked and nothing matched.",
-          "type": "string",
-          "const": "empty"
-        },
-        {
-          "description": "Material exists; the asker's standing does not admit disclosure at this depth.",
-          "type": "string",
-          "const": "withheld"
-        },
-        {
-          "description": "The act declined a well-formed question.",
-          "type": "string",
-          "const": "refused"
-        }
-      ]
-    }
-  }
+  "title": "StageTrace",
+  "type": "object"
 }

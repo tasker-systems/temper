@@ -1,41 +1,39 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Extent",
   "description": "Whether the caller received everything that matched.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\".",
   "oneOf": [
     {
       "description": "Everything that matched is here.",
-      "type": "object",
       "properties": {
         "extent": {
-          "type": "string",
-          "const": "complete"
+          "const": "complete",
+          "type": "string"
         }
       },
       "required": [
         "extent"
-      ]
+      ],
+      "type": "object"
     },
     {
       "description": "More exists beyond what was returned.",
-      "type": "object",
       "properties": {
         "extent": {
-          "type": "string",
-          "const": "partial"
+          "const": "partial",
+          "type": "string"
         }
       },
       "required": [
         "extent"
-      ]
+      ],
+      "type": "object"
     },
     {
       "description": "Neither is determinable: the candidate set is *produced by* the bound rather than selected\nunder it. `survey` is the worked case — a region-salience traversal has no size prior to\nits own funnel width.",
-      "type": "object",
       "properties": {
         "extent": {
-          "type": "string",
-          "const": "indeterminate"
+          "const": "indeterminate",
+          "type": "string"
         },
         "reason": {
           "type": "string"
@@ -44,7 +42,9 @@
       "required": [
         "extent",
         "reason"
-      ]
+      ],
+      "type": "object"
     }
-  ]
+  ],
+  "title": "Extent"
 }
