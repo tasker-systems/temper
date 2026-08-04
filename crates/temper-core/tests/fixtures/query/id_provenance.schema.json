@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
+  "oneOf": [
+    {
+      "properties": {
+        "anchor": {
+          "const": "cogmap",
+          "type": "string"
+        },
+        "id": {
+          "description": "A `kb_cogmaps.id` value — a cognitive map.",
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "anchor": {
+          "const": "context",
+          "type": "string"
+        },
+        "id": {
+          "description": "A `kb_contexts.id` value.",
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor",
+        "id"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "IdProvenance"
+}

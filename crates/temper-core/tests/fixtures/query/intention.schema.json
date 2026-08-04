@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The question, computed once at composition start and threaded to every stage.\n\nIts ABSENCE is meaningful: a `find-about-*` stage with no intention refuses, rather than the\nserver embedding on the caller's behalf. That is what makes \"I chose not to embed\" and\n\"I cannot embed\" different states instead of one ambiguous one.",
+  "properties": {
+    "embedded": {
+      "description": "Whether an embedding was computed for it. Inspectable in the trace, which is what makes\nparaphrase-stability measurable from outside.",
+      "type": "boolean"
+    },
+    "query": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "query",
+    "embedded"
+  ],
+  "title": "Intention",
+  "type": "object"
+}

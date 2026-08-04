@@ -1,0 +1,242 @@
+{
+  "$defs": {
+    "ActName": {
+      "anyOf": [
+        {
+          "const": "find-exact",
+          "description": "*I can quote the exact words.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-anywhere",
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-within",
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string"
+        },
+        {
+          "const": "follow-from",
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string"
+        },
+        {
+          "const": "survey",
+          "description": "*A question about what a scope knows.*",
+          "type": "string"
+        },
+        {
+          "const": "substantiate",
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string"
+        },
+        {
+          "const": "admit",
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+    },
+    "BoundsSource": {
+      "description": "Where a stage's bounds came from.",
+      "oneOf": [
+        {
+          "description": "Verbatim from an earlier stage's `produced` set.",
+          "properties": {
+            "source": {
+              "const": "upstream",
+              "type": "string"
+            },
+            "stage": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "source",
+            "stage"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Produced by a **compiled predicate** rather than verbatim from an upstream act's output —\nthe caller sub-selected, so the bounds no longer equal any act's produced set.\n\nA composition compiles to ONE SQL statement, so this is a pushed-down predicate inside\nthat statement, NOT a jaq expression evaluated on returned rows between two round-trips.\nv0 first documented it the latter way, which encoded a chained request-response model that\ndecision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1` replaced. An expression the builder cannot\npush down is refused (`RefusalReason::ExpressionNotPushdownable`), never quietly\nmaterialized into a second query.",
+          "properties": {
+            "source": {
+              "const": "expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Supplied directly by the caller.",
+          "properties": {
+            "source": {
+              "const": "caller",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MetaTruncated": {
+      "description": "A per-resource meta budget that bit.",
+      "properties": {
+        "dropped": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "retained": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "stage": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stage",
+        "retained",
+        "dropped"
+      ],
+      "type": "object"
+    },
+    "NarrowedBy": {
+      "description": "One act-specific threshold, and what applying it did.",
+      "properties": {
+        "admitted": {
+          "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "excluded": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "StageDisposition": {
+      "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
+      "oneOf": [
+        {
+          "const": "answered",
+          "description": "Rows returned.",
+          "type": "string"
+        },
+        {
+          "const": "empty",
+          "description": "Honest zero — the question was asked and nothing matched.",
+          "type": "string"
+        },
+        {
+          "const": "withheld",
+          "description": "Material exists; the asker's standing does not admit disclosure at this depth.\n\n**Only safe where existence is ALREADY licensed** — a region the asker can read containing\na node they cannot. It is a statement that something is there, so it discloses existence by\nconstruction.\n\n**Never safe for a caller-supplied id.** An id the caller named and cannot see contributes\nas an honest [`StageDisposition::Empty`], never as a withholding: the alternative is a\nsingle-probe existence oracle. Same doctrine as `CONTEXT_REFUSAL`'s byte-identical\n`NotFound` and the audit gate's denial arms — see decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "The act declined a well-formed question.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/ActName"
+    },
+    "bounds_dropped": {
+      "description": "Conflates invisible / nonexistent / malformed on purpose — see\n[`super::envelope::ActResult::bounds_dropped`]. Naming the invisible case alone would make\nthe trace a single-probe existence oracle.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "bounds_honored": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "bounds_in": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "bounds_source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BoundsSource"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "disposition": {
+      "$ref": "#/$defs/StageDisposition"
+    },
+    "meta_truncated": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MetaTruncated"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "narrowed_by": {
+      "items": {
+        "$ref": "#/$defs/NarrowedBy"
+      },
+      "type": "array"
+    },
+    "stage": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "stage",
+    "act",
+    "disposition",
+    "bounds_in",
+    "bounds_honored",
+    "bounds_dropped",
+    "narrowed_by"
+  ],
+  "title": "StageTrace",
+  "type": "object"
+}

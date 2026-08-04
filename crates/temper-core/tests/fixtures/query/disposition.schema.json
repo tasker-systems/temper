@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
+  "oneOf": [
+    {
+      "const": "answered",
+      "description": "Rows returned.",
+      "type": "string"
+    },
+    {
+      "const": "empty",
+      "description": "Honest zero — the question was asked and nothing matched.",
+      "type": "string"
+    },
+    {
+      "const": "withheld",
+      "description": "Material exists; the asker's standing does not admit disclosure at this depth.\n\n**Only safe where existence is ALREADY licensed** — a region the asker can read containing\na node they cannot. It is a statement that something is there, so it discloses existence by\nconstruction.\n\n**Never safe for a caller-supplied id.** An id the caller named and cannot see contributes\nas an honest [`StageDisposition::Empty`], never as a withholding: the alternative is a\nsingle-probe existence oracle. Same doctrine as `CONTEXT_REFUSAL`'s byte-identical\n`NotFound` and the audit gate's denial arms — see decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
+      "type": "string"
+    },
+    {
+      "const": "refused",
+      "description": "The act declined a well-formed question.",
+      "type": "string"
+    }
+  ],
+  "title": "StageDisposition"
+}
