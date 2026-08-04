@@ -6,6 +6,7 @@ pub mod cogmap_service;
 pub mod connection_service;
 pub mod context_graph_service;
 pub mod context_service;
+pub mod drain_span;
 pub mod edge_service;
 pub mod embed_service;
 pub mod event_service;
