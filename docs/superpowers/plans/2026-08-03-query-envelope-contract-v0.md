@@ -2005,6 +2005,32 @@ git commit -m "feat(query): the composition envelope and its per-stage trace"
 
 Makes the schema artifact a projection of the code. **No schema is hand-written.**
 
+> **⚠️ Found in Task 10, fixed in place `[2026-08-03, T2 build]` — this gate needs key-order
+> canonicalization or it passes scoped and fails workspace-wide.**
+>
+> As specified below, the gate **PASSES** under `cargo make test-schema-core` and **FAILS** under
+> `cargo make test`, on the same types and the same snapshots. Cause: `toon-format` /
+> `serde_toon_format` (the `--format toon` CLI output crates) enable `serde_json/preserve_order`.
+> Under `--workspace` cargo unifies that into temper-core's `serde_json`, switching schemars'
+> property map from `BTreeMap` (alphabetical) to `IndexMap` (declaration order). Same content,
+> different bytes `[verified — 2026-08-03, observed]`.
+>
+> **The asymmetry with the substrate gate is the part worth internalising.** `payload_schema.rs` is
+> `#![cfg(feature = "scenario-schema")]`, which nothing enables under a plain `--workspace` run, so
+> it compiles to nothing there. `query_schema.rs` is `#![cfg(feature = "mcp")]`, and **temper-mcp
+> enables `temper-core/mcp`** — so it compiles *and runs*, under a feature set its snapshots were
+> never generated in. The substrate gate is protected **by accident, not by design**, and copying
+> its structure does not copy its protection.
+>
+> Fixed by sorting object keys before comparison (`canonicalize` in the harness), so the snapshot
+> asserts SHAPE and is invariant to which crates share the build. Arrays are left alone — `anyOf`
+> branch order and `required` order are meaningful; object key order is never semantic in JSON
+> Schema.
+>
+> **Deliberately not fixed by gating the test behind a feature `--workspace` leaves off.** That
+> makes it pass by not running, which is the worse failure: a gate that silently skips looks
+> identical to a gate that holds.
+
 **Files:**
 - Create: `crates/temper-core/tests/query_schema.rs`
 - Create: `crates/temper-core/tests/fixtures/query/*.schema.json` (generated, then committed)
