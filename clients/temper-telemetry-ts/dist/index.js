@@ -10,3 +10,4 @@
  */
 export { forceFlush, getTracer, initTelemetry, isTelemetryEnabled } from './otel.js';
 export { activeTraceparent, extractContext } from './context.js';
+export { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
