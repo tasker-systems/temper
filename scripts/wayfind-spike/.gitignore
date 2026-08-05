@@ -20,6 +20,8 @@ p6-endtoend.sql
 p7-form.sql
 p8-groundtruth.sql
 p11-live.sql
+peranchor_equiv.sql
+peranchor_width.sql
 plan400.sql
 reach.sql
 recall_exact.sql
