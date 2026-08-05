@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*)                                                        AS \"depth!\",\n               (extract(epoch FROM (now() - min(enqueued_at))) * 1000)::bigint AS \"oldest_age_ms\"\n          FROM kb_workflow_jobs\n         WHERE persona = $1\n           AND dispatch_type = $2\n           AND status IN ('pending', 'waiting_for_retry')\n           AND next_visible_at <= now()\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "depth!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "oldest_age_ms",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "fa6ad2bef5e50417d5121c13215616b85daf464d6e5c026a35135774de8522d6"
+}

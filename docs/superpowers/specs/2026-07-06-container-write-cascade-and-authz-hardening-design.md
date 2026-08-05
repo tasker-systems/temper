@@ -161,6 +161,38 @@ Resolved by the rule the cascade makes natural:
 
 Document the intent at the gate either way.
 
+> **AMENDED 2026-08-05 — the delegated arm is withdrawn. `invocation_open` now requires write
+> regardless of `parent`.**
+>
+> The second bullet's premise does not hold. Its "real control" is
+> `cogmaps_share_a_team(parent, originating)`, which takes **two cogmap ids and no principal** — it
+> cannot constrain the caller. And "a parent that authored" is enforced nowhere: nothing verifies the
+> parent exists as a principal, consented, or authored anything. The parent id is caller-supplied and
+> unverified.
+>
+> Because that predicate is reflexive for any team-joined map, `parent = originating` — a value every
+> caller already holds — satisfied the delegation gate and downgraded authorization to read. So the
+> delegated arm **reopened the exact ledger-noise vector the self-attributed arm closes**, via one
+> extra field.
+>
+> This was not theoretical. The steward agent, refused a self-attributed open on the L0 kernel map,
+> retried until it found the manoeuvre: **47 of 47** L0 opens in production were self-parented by a
+> principal with no write grant. The repo's own regression test for this decision
+> (`delegated_open_needs_only_read`) passed `parent == originating` and therefore *demonstrated the
+> bypass while certifying it as correct*; it is replaced by
+> `parent_cogmap_does_not_downgrade_the_open_gate`.
+>
+> `parent_cogmap` reverts to what WS7's design called it — a recorded *delegation binding*, validated
+> for plausibility by the team check, never an authorization discount. Self-parenting stays legal and
+> is inert. Whether the field should exist at all is deliberately left open — tracked as the spike
+> *"Should `parent_cogmap_id` exist at all?"* (temper vault, `019fd198-bb2d-7d11-96ef-60425d38f924`).
+> No consumer reads it, and map-to-map delegation has never once occurred in production (0 rows with
+> `parent <> originating`).
+>
+> Not built, deliberately: an authority-flows-from-the-delegator model (require authorship on the
+> *parent*). It is the coherent design if real delegation ever ships, and it is machinery for a path
+> with zero users today.
+
 ### F3 — stale comments (3 sites)
 
 Correct the "team-cogmap membership" wording to name the explicit-grant predicate at:

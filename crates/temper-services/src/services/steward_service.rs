@@ -116,10 +116,20 @@ pub async fn drift_sweep(
         .collect())
 }
 
-/// All team-joined cogmaps the principal can read (the materialize fan-out candidate set).
+/// All team-joined cogmaps the principal can AUTHOR (the materialize fan-out candidate set).
+///
+/// Authorable, not merely readable: this feeds the hourly materialize cron, whose
+/// `materialize_on_threshold` gate is `cogmap_authorable_by_profile` — an explicit write grant. A
+/// readable-but-unauthorable map handed out here is a guaranteed 403, and the cron fans out with
+/// `Promise.all` and throws on any non-ok, so ONE such map fails the entire tick. The L0 kernel is
+/// exactly that map for every principal (root-team readable, authorable by nobody by design), which
+/// is why it has never once materialized.
+///
+/// The auditor's candidate set is a different question with a different answer and deliberately still
+/// calls `steward_candidate_cogmaps` — see `20260805000010`'s header.
 pub async fn candidate_cogmaps(pool: &PgPool, principal: ProfileId) -> ApiResult<Vec<Uuid>> {
     let ids = sqlx::query_scalar!(
-        r#"SELECT cogmap_id AS "id!: Uuid" FROM steward_candidate_cogmaps($1)"#,
+        r#"SELECT cogmap_id AS "id!: Uuid" FROM steward_authorable_cogmaps($1)"#,
         *principal,
     )
     .fetch_all(pool)
@@ -198,6 +208,10 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+        // NOTE: the member gets team membership and NO write grant. Deliberate — this module has
+        // tests on both sides of that grant (`advance_requires_cogmap_write_grant` needs it withheld;
+        // the sweep tests need it present since `20260805000010`), so the fixture must not pre-decide
+        // it. Tests needing authorship call `grant_cogmap_write` and say why.
 
         let ctx: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
@@ -672,6 +686,8 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn sweep_returns_only_drifted_maps_most_drifted_first(pool: PgPool) {
         let s = seed(&pool).await;
+        // The sweep gates on authorship since `20260805000010`; team membership alone is not enough.
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
         // Settle EVERY boundary, not just this map's — the L0 kernel is a candidate too and would
         // otherwise sweep on the boundary arm. See `settle_all_boundaries`.
         settle_all_boundaries(&pool).await;
@@ -689,6 +705,9 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn sweep_excludes_below_threshold_and_unreadable(pool: PgPool) {
         let s = seed(&pool).await;
+        // Authorship is the sweep's candidacy gate since `20260805000010`; this test is about the
+        // threshold and the read gate, so give the member the grant and vary only those.
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
         // Settle EVERY boundary: this test is about the counted arm and the read gate, and any
         // unsettled map — this one or the L0 kernel — would enter the sweep on the other arm.
         settle_all_boundaries(&pool).await;
@@ -714,6 +733,59 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    /// A map the principal can READ but not AUTHOR is never swept — the regression test for the
+    /// production defect `20260805000010` closes.
+    ///
+    /// The sweep queues work that terminates in `advance_steward_watermark`, whose gate is an
+    /// explicit write grant. While candidacy was readability-scoped, a readable-but-unauthorable map
+    /// was dispatched every run and refused every run. The L0 kernel is exactly that map for every
+    /// principal — joined to the root `temper-system` team so all may read it, authorable by nobody
+    /// by design — which is why its `steward_watermark_event_id` was still NULL after 15 refusals a
+    /// day, and why it had never once materialized.
+    ///
+    /// Drifted hard enough to sweep on the counted arm, so the ONLY thing keeping it out is the
+    /// authorship conjunct.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sweep_skips_a_readable_but_unauthorable_map(pool: PgPool) {
+        let s = seed(&pool).await;
+        settle_all_boundaries(&pool).await;
+        for _ in 0..6 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+
+        // The member reads the map by team membership and holds no write grant — precisely the L0
+        // shape. Assert the read half explicitly, or an excluded map proves nothing: it would be
+        // indistinguishable from a map that was never a candidate.
+        let readable: bool =
+            sqlx::query_scalar("SELECT anchor_readable_by_profile($1, 'kb_cogmaps', $2)")
+                .bind(s.member)
+                .bind(s.cogmap)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(readable, "precondition: the member READS the map");
+
+        assert!(
+            drift_sweep(&pool, s.member.into(), None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a readable but unauthorable map must not be dispatched work it cannot perform"
+        );
+
+        // Grant authorship and nothing else changes — so authorship, not drift or readability, is
+        // what was withholding it.
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        assert_eq!(
+            drift_sweep(&pool, s.member.into(), None)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the same drifted map sweeps once it is authorable"
         );
     }
 
@@ -1080,6 +1152,8 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn sweep_includes_a_map_whose_boundary_moved_below_threshold(pool: PgPool) {
         let s = seed(&pool).await;
+        // The sweep gates on authorship since `20260805000010`; this test varies the boundary arm.
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
         // Every boundary, so the empty baseline below is a real baseline — see `settle_all_boundaries`.
         settle_all_boundaries(&pool).await;
         for _ in 0..2 {

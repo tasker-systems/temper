@@ -6028,7 +6028,7 @@
         "operationId": "candidates",
         "responses": {
           "200": {
-            "description": "Readable team-joined cogmap ids",
+            "description": "Authorable team-joined cogmap ids",
             "content": {
               "application/json": {
                 "schema": {

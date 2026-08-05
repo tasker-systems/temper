@@ -127,7 +127,7 @@ pub async fn sweep(
     path = "/api/steward/candidates",
     tag = "Steward",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "Readable team-joined cogmap ids", body = Vec<Uuid>))
+    responses((status = 200, description = "Authorable team-joined cogmap ids", body = Vec<Uuid>))
 )]
 pub async fn candidates(
     State(state): State<AppState>,

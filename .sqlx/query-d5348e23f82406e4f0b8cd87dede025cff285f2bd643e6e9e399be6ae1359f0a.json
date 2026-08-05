@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT cogmap_id AS \"id!: Uuid\" FROM steward_candidate_cogmaps($1)",
+  "query": "SELECT cogmap_id AS \"id!: Uuid\" FROM steward_authorable_cogmaps($1)",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "11536d4e60e5c11141e356fc48b0aff2a5d2b6b86e371dc4bd127e524b4f65cd"
+  "hash": "d5348e23f82406e4f0b8cd87dede025cff285f2bd643e6e9e399be6ae1359f0a"
 }
