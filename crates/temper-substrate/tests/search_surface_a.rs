@@ -1396,3 +1396,118 @@ async fn fts_norm_is_length_normalized(pool: sqlx::PgPool) {
         "flag 33 retains 32's rank/(rank+1), so the score stays in [0,1): got {s}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// `hnsw.ef_search` vs `vector_k` — the admission truncation (migration 20260804000030)
+//
+// `unified_search` asks `search_vector_candidates` for `vector_k` chunks; the unscoped branch draws
+// them with `ORDER BY embedding <=> p_emb LIMIT p_k` over an HNSW index. `hnsw.ef_search` bounds the
+// dynamic candidate list that scan can build, so when it sits BELOW `vector_k` the LIMIT is
+// unreachable and the arm silently under-draws. Measured on prod before the fix: 33.4 chunks and
+// 24.3 admitted resources per query against an exact scan's 100 and 66.2 (20-query set, 2026-08-04).
+//
+// These read the deployed catalog rather than a corpus deliberately. A behavioural probe would have
+// to seed enough chunks for the planner to actually choose the HNSW index; on a small ephemeral test
+// corpus it prefers a seq-scan, and the probe would pass while exercising the exact-scan regime —
+// the failure mode research 019fbbef Amendment 2 already paid for once
+// (`vec_norm_does_not_pay_for_chunk_count` held 21 chunks against p_k=100, so nothing was ever
+// truncated and it could not observe the thing it named).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// Read the pinned `hnsw.ef_search` off the function's own `proconfig`.
+async fn pinned_ef_search(pool: &sqlx::PgPool) -> Option<i64> {
+    let cfg: Option<Vec<String>> = sqlx::query_scalar(
+        "SELECT proconfig FROM pg_proc WHERE proname = 'search_vector_candidates'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    cfg?.iter()
+        .find_map(|e| e.strip_prefix("hnsw.ef_search=").map(str::to_owned))
+        .map(|v| v.parse().expect("ef_search pin is numeric"))
+}
+
+/// Read `unified_search`'s `vector_k` constant out of its deployed body.
+async fn deployed_vector_k(pool: &sqlx::PgPool) -> i64 {
+    let src: String =
+        sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname='unified_search'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let at = src
+        .find(" AS vector_k")
+        .expect("unified_search declares `<n> AS vector_k`");
+    src[..at]
+        .rsplit(|c: char| !c.is_ascii_digit())
+        .find(|s| !s.is_empty())
+        .expect("a numeric literal precedes `AS vector_k`")
+        .parse()
+        .unwrap()
+}
+
+/// The pin exists at all. Fails against every state before 20260804000030.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_vector_candidates_pins_ef_search(pool: sqlx::PgPool) {
+    let pinned = pinned_ef_search(&pool).await;
+    assert!(
+        pinned.is_some(),
+        "search_vector_candidates must pin hnsw.ef_search on the function itself; \
+         without it the server default (40) applies and the ANN under-draws"
+    );
+}
+
+/// THE INVARIANT. Not `ef_search == 200` — a value assertion pins a number nobody may tune. What
+/// must hold is that the candidate list is at least as large as the k the caller asks for, because
+/// below that the LIMIT is unreachable by construction. Both operands are read from the deployed
+/// catalog, so this bites if EITHER constant drifts: raise `vector_k` past the pin, or lower the
+/// pin below `vector_k`, and the truncation returns silently. That is exactly how it arrived.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn pinned_ef_search_covers_unified_search_vector_k(pool: sqlx::PgPool) {
+    let vector_k = deployed_vector_k(&pool).await;
+    let pinned = pinned_ef_search(&pool)
+        .await
+        .expect("hnsw.ef_search must be pinned (see search_vector_candidates_pins_ef_search)");
+
+    assert!(
+        pinned >= vector_k,
+        "hnsw.ef_search ({pinned}) must be >= unified_search's vector_k ({vector_k}); \
+         below it the ANN cannot return the k rows the caller asks for and admission is \
+         silently truncated"
+    );
+}
+
+/// The pin is function-scoped, not a session or database default. If it ever leaked to the session
+/// it would re-plan every other ANN caller — including ones written after this decision — which is
+/// the reason `ALTER FUNCTION ... SET` was chosen over `ALTER DATABASE ... SET`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn ef_search_pin_is_function_scoped_not_session_wide(pool: sqlx::PgPool) {
+    // BOTH statements must run on ONE connection. pgvector registers its GUCs in _PG_init, which
+    // runs per backend on first use of a vector type, so `current_setting` raises "unrecognized
+    // configuration parameter" on any connection that has not yet touched a vector. Against the
+    // pool these land on different backends and the test fails for a reason unrelated to its claim
+    // — which it did, on first run.
+    let mut conn = pool.acquire().await.unwrap();
+    let _: f64 = sqlx::query_scalar("SELECT '[1,2]'::vector <=> '[1,3]'::vector")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+
+    let session: String = sqlx::query_scalar("SELECT current_setting('hnsw.ef_search')")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        session, "40",
+        "the session must keep the server default; a pin that leaks to the session would \
+         silently re-plan every other ANN caller"
+    );
+    let pinned = pinned_ef_search(&pool)
+        .await
+        .expect("hnsw.ef_search must be pinned on search_vector_candidates");
+    assert!(
+        pinned > session.parse::<i64>().unwrap(),
+        "the function-scoped pin ({pinned}) must actually exceed the session default \
+         ({session}), or this test would pass vacuously against an unpinned function"
+    );
+}
