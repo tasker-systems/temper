@@ -1,0 +1,41 @@
+# What lives in git here, and why — the rule the README's opening section states:
+# a probe is kept only so a LATER task can re-measure the same quantity, and a before/after is
+# worth nothing unless both halves are the same measurement.
+#
+# COMMITTED: hand-written probes (`NN-*.sql`, `pN-*.sql`, `hN-*.sql`), the generators (`gen_*.py`,
+# `*.py`), the runners (`*.sh`), the probe SETS (`queries*.txt`), and the query VECTORS
+# (`vectors-*.tsv` — see the note below, which reverses this file's earlier advice).
+#
+# IGNORED: everything a generator emits, and everything a probe prints.
+
+# ---------------------------------------------------------------------------------------------
+# Generated probe SQL. A pure function of (gen_*.py + vectors-*.tsv), both of which ARE committed,
+# so these carry no independent information — and they run to megabytes of inlined float literals
+# (efsweep2.sql alone is 2.3 MB). Regenerate; never commit.
+# ---------------------------------------------------------------------------------------------
+classify.sql
+efsweep.sql
+efsweep2.sql
+p6-endtoend.sql
+p7-form.sql
+p8-groundtruth.sql
+p11-live.sql
+plan400.sql
+reach.sql
+recall_exact.sql
+recall_hnsw.sql
+returned.sql
+salnorm_reach.sql
+
+# ---------------------------------------------------------------------------------------------
+# Probe OUTPUT. The durable home for a figure is the temper research resource that cites it, with
+# its own provenance stamp naming who measured it and when. The corpus drifts — the self-cognition
+# map read 400 live regions and 399 twenty minutes later — so a stale .txt sitting here is a trap
+# for the next reader, not a record.
+# ---------------------------------------------------------------------------------------------
+out_*.txt
+*_out.txt
+*_rows.csv
+*_ids.txt
+*.jsonl
+*.err
