@@ -154,6 +154,18 @@ jobs:
       - name: Security tripwire — credential types deriving Debug
         run: bash .github/scripts/audit-credential-debug.sh
 
+      # Not a security tripwire — a COVERAGE one, and it sits here because it is the same shape:
+      # a pinned set that makes an exception a declaration rather than a place to put things.
+      #
+      # "Every test must run in CI, or loudly declare why it does not" was enforced on the
+      # ENABLEMENT half only. That half holds: selection is `--workspace`, and every feature gate
+      # maps to a job. The DECLARATION half had nothing, and on 2026-08-05 two of the three
+      # `#[ignore]` reasons that were finally checked turned out to be FALSE — both blaming a
+      # search defect that no longer existed, while the real blocker was a one-line fixture fix.
+      # A stale reason is worse than no reason: it is what stops anyone re-examining.
+      - name: Coverage tripwire — the set of #[ignore]d tests
+        run: bash .github/scripts/audit-ignored-tests.sh
+
       # Not a baseline tripwire either: it reads build-cli-binaries.yml directly. Deleting the
       # `.manifest.json` line from the attestation's `subject-path` is a silent one-line edit —
       # the signing job still succeeds, the archive is still attested — that defeats both
@@ -370,6 +382,13 @@ jobs:
       # and left the old script reporting exactly the allow-list's own size.
       - name: Guard test — audit-sqlx-macro-exceptions
         run: bash .github/scripts/test-audit-sqlx-macro-exceptions.sh
+
+      # Every arm is a mutation: break one thing the tripwire claims to catch and require it to go
+      # red for THAT reason. The bare-`#[ignore]` arm matters most — a bare ignore also changes the
+      # counts, so a weaker script would fail with the set-changed message and the author would
+      # UPDATE_BASELINE it instead of writing down why.
+      - name: Guard test — audit-ignored-tests
+        run: bash .github/scripts/test-audit-ignored-tests.sh
 
   typescript-quality:
     name: TypeScript Quality

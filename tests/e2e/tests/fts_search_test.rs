@@ -366,7 +366,6 @@ async fn search_rejects_empty_params(pool: sqlx::PgPool) {
 
 /// Unified search with both text query and embedding returns results with origin "both".
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: collapsed search_select short-circuits to vector-only when an embedding is present (no unified FTS+vector combine); origin is 'vector', combined_score 0.0 (#7)"]
 async fn unified_search_both_modes(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -397,7 +396,7 @@ async fn unified_search_both_modes(pool: sqlx::PgPool) {
         .search(
             Some("observability tracing".into()),
             Some(vec![0.1_f32; 768]),
-            Some("fts-unified".into()),
+            Some("@me/fts-unified".into()),
             None,
             Some(10),
         )
@@ -408,18 +407,31 @@ async fn unified_search_both_modes(pool: sqlx::PgPool) {
         !results.is_empty(),
         "unified search should find the resource"
     );
-    // With both FTS and vector, the result should come from "both" or at least "fts"
+    // ASSERT THE INTENT, NOT `origin`. This test used to require origin ∈ {"both","fts"}, which
+    // was a real distinction once and is not one now: `origin` is hardcoded to "unified" for every
+    // row (crates/temper-services/src/backend/substrate_read.rs), so it discriminates nothing and
+    // asserting on it can only ever re-test a constant. What the test is actually for — that BOTH
+    // arms contributed to this hit — is carried by the per-arm scores, so that is what is checked.
+    assert_eq!(
+        results[0].origin, "unified",
+        "origin is a constant today; if it becomes informative again, this assertion is the \
+         place that should fail and be rewritten"
+    );
     assert!(
-        results[0].origin == "both" || results[0].origin == "fts",
-        "expected origin 'both' or 'fts', got '{}'",
-        results[0].origin
+        results[0].fts_score > 0.0,
+        "the FTS arm must have contributed: got fts_score {}",
+        results[0].fts_score
+    );
+    assert!(
+        results[0].vector_score > 0.0,
+        "the vector arm must have contributed: got vector_score {}",
+        results[0].vector_score
     );
     assert!(results[0].combined_score > 0.0);
 }
 
 /// FTS search respects context filtering.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: collapsed search_select ignores the context filter (search context scoping #7)"]
 async fn fts_respects_context_filter(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -463,7 +475,7 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
         .search()
         .text_query(
             "specific document",
-            Some("ctx-alpha".into()),
+            Some("@me/ctx-alpha".into()),
             None,
             Some(10),
         )
@@ -477,10 +489,57 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
     let beta_results = app
         .client
         .search()
-        .text_query("specific document", Some("ctx-beta".into()), None, Some(10))
+        .text_query(
+            "specific document",
+            Some("@me/ctx-beta".into()),
+            None,
+            Some(10),
+        )
         .await
         .expect("beta search failed");
 
     assert_eq!(beta_results.len(), 1);
     assert_eq!(beta_results[0].title, "Beta Specific Document");
+}
+
+/// A zero-magnitude embedding is refused with 400, rather than answered with JSON the caller cannot
+/// parse.
+///
+/// This is the exact production repro, at the tier where it actually bit. `temper-client`'s
+/// integration test sends `vec![0.0; 768]`; production answered 200 with
+/// `"vector_score":null,"combined_score":null` and the client died on
+/// `invalid type: null, expected f32` — deserializing into `UnifiedSearchResultRow`, the SHARED type
+/// the server had just used to serialize it. pgvector's `<=>` against a zero-magnitude vector is
+/// NaN, NaN propagates into `combined_score`, and JSON has no NaN literal, so serde emits `null` for
+/// an `f32` field.
+///
+/// It lives here rather than only as a unit test on the predicate because the unit test cannot see
+/// the thing that was wrong: that the SERVER emitted a body its own wire type rejects. Only a real
+/// request through the real handler can witness that.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_zero_vector_embedding_is_refused_not_answered_with_unparseable_json(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let result = app
+        .client
+        .search()
+        .search(None, Some(vec![0.0_f32; 768]), None, None, Some(10))
+        .await;
+
+    let err = result.expect_err("a zero-magnitude embedding must be refused, not answered");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("400") || msg.to_lowercase().contains("bad request"),
+        "must be refused as a bad request, not fail some other way: {msg}"
+    );
+    assert!(
+        !msg.contains("invalid type: null"),
+        "a deserialization failure here means the server still emitted unparseable JSON \
+         instead of refusing the request: {msg}"
+    );
 }
