@@ -134,3 +134,39 @@ assembly: winning regions' members ∪ region-less anchors' homed resources) →
 
 `07-region-orphans.sql` carries one hardcoded resource id — the worked exemplar from the write-up
 (a distilled node that squarely answers a query and never surfaces). Replace it to check another.
+
+## `ef_search` and candidate admission (task `019fbd30`, research `019fcf37`)
+
+A third question re-used this directory: how much material the unscoped vector arm never admits.
+Answer: `hnsw.ef_search` defaults to 40, below `unified_search`'s `vector_k = 100`, so the ANN
+returns ~33 chunks per query instead of 100 and admits 24.3 resources against an exact scan's 66.2.
+
+```bash
+# real query vectors for the 20-query set (artifact, not a source — regenerate, don't commit)
+TEMPER_ONNX_MODEL_PATH=crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx \
+  cargo run --release -p temper-ingest --no-default-features --features embed-download \
+  --example query_vectors < queries.txt > vectors-20.tsv
+
+python3 gen_recall.py  vectors-20.tsv hnsw  > recall_hnsw.sql    # production path
+python3 gen_recall.py  vectors-20.tsv exact > recall_exact.sql   # exact-scan counterfactual
+./prod-readonly.sh recall_hnsw.sql  > out_hnsw.txt
+./prod-readonly.sh recall_exact.sql > out_exact.txt
+python3 analyze_recall.py                                        # reads both out_*.txt
+
+python3 gen_efsweep.py vectors-20.tsv > efsweep.sql              # admission + latency per ef
+```
+
+**Gotchas paid for once, here too:**
+
+- **The ORDER BY must compare against a constant or a correlated parameter.** `ORDER BY e <=> q.e`
+  across a plain join plans as `Seq Scan` + `Sort` — an exact scan wearing an ANN's clothes. Three
+  rounds of local "recall" figures were that, and only `EXPLAIN` caught it. **Print the plan.**
+- **Never probe recall with a document vector.** A query point that is itself in the index sits in a
+  dense neighbourhood and the traversal keeps going; a real query vector sits off the manifold and
+  terminates early. The same query measured 100 chunks with a document vector and 8 with a real one —
+  a document-vector probe would have missed the defect entirely.
+- **`SHOW hnsw.ef_search` fails on a fresh connection.** pgvector registers its GUCs in `_PG_init`,
+  which runs on first use of a vector type in that backend. Run any `<=>` first. This is also why a
+  Rust test must acquire ONE connection rather than using the pool.
+- **Above ~ef 200 the planner abandons the index** for a seq-scan over every chunk. Results stay
+  exact; latency goes up ~40x. Check the plan before reading a high-ef number as an ANN result.
