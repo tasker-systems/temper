@@ -32,6 +32,19 @@ export interface InitTelemetryOptions {
      * never pull the instrumentation packages into their bundle. Default `false`.
      */
     readonly instrumentHttp?: boolean;
+    /**
+     * The MCP endpoint this hop talks to (`TEMPER_MCP_URL`), when it runs an MCP client. Its
+     * only effect is to install {@link McpNegotiationStatusProcessor}, which stops the
+     * spec-mandated `GET` → `405` SSE-negotiation response from being exported as an error
+     * span — see `mcp-negotiation.ts` for why that response exists and what stays visible.
+     *
+     * Passed in rather than read from the environment here, and never defaulted to a hostname,
+     * because a self-hosted deployment's MCP endpoint is not `temperkb.io` — the suppression
+     * has to follow the endpoint the client was actually pointed at. An unparseable value is
+     * reported and ignored; telemetry config never fails a startup. Omit for hops with no MCP
+     * client (temper-ui).
+     */
+    readonly mcpEndpoint?: string;
 }
 /**
  * Build and register the tracer provider — **once**. Idempotent, so a repeated
@@ -43,7 +56,7 @@ export interface InitTelemetryOptions {
  * standard env itself, so the only thing this function decides is *whether* to register
  * (and whether to add HTTP instrumentation).
  */
-export declare function initTelemetry({ serviceName, instrumentHttp }: InitTelemetryOptions): void;
+export declare function initTelemetry({ serviceName, instrumentHttp, mcpEndpoint }: InitTelemetryOptions): void;
 /** Whether span export is registered (endpoint was configured). */
 export declare function isTelemetryEnabled(): boolean;
 /** The tracer for this hop. A no-op tracer until {@link initTelemetry} registers a provider. */

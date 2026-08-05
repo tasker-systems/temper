@@ -20,6 +20,13 @@ import { initTelemetry } from "temper-telemetry-ts";
  * connections therefore drop their static `traceparent` when export is on (see
  * `lib/trace.ts::otlpExportConfigured`), so exactly one, correct `traceparent` is sent.
  *
+ * **`mcpEndpoint`** is passed only so span export can tell the MCP client's SSE-negotiation
+ * probe apart from a real failure. That probe is a `GET` the spec requires our Streamable-HTTP
+ * endpoint to answer `405`, and undici marks every 4xx an error — 446 false error spans a day
+ * from this agent alone, 77% of total system error volume. `mcp-negotiation.ts` explains what
+ * stays visible. Read straight from the env rather than through `requireEnv` because a missing
+ * value must degrade telemetry, never fail startup; the connections already require it.
+ *
  * **`recordInputs`/`recordOutputs: false`** — do NOT export full model message history or
  * outputs. The steward's model I/O carries team knowledge-base content; this extends PR #613's
  * 2a decision (no cross-linkable identifiers on exported spans) from span attributes to model
@@ -29,6 +36,10 @@ export default defineInstrumentation({
   recordInputs: false,
   recordOutputs: false,
   setup: ({ agentName }) => {
-    initTelemetry({ serviceName: agentName, instrumentHttp: true });
+    initTelemetry({
+      serviceName: agentName,
+      instrumentHttp: true,
+      mcpEndpoint: process.env.TEMPER_MCP_URL,
+    });
   },
 });

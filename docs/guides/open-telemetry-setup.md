@@ -305,6 +305,104 @@ difference in place — including a differential test that renders the same even
 `tracing_subscriber::fmt()` builder each `main` used to call and through the stack that replaced it,
 asserting they match.
 
+## Reading the exported spans: what span metrics can and cannot answer
+
+Spans reach Grafana Cloud two ways, and they are not equivalent. **Tempo** holds every span.
+**Span metrics** (`traces_spanmetrics_calls_total`, `traces_spanmetrics_latency`) are a derived
+Prometheus view that Tempo's metrics-generator produces, and everything Prometheus-backed — RED
+panels, alert rules, recording rules — reads only that view. Three things follow, each measured
+rather than assumed.
+
+### An error-rate panel cannot render a healthy zero by accident
+
+`sum(rate(…error)) / sum(rate(…all))` is a binary op between two instant vectors, so PromQL
+requires matching label sets on both sides. When nothing is erroring the numerator is an **empty
+vector**, and empty divided by anything is empty — not zero. The panel reads "No data", which is
+indistinguishable at a glance from a broken exporter. Zero-fill explicitly:
+
+```promql
+# Ungrouped — vector(0) carries no labels, and none are needed.
+(sum(rate(calls{…, status_code="STATUS_CODE_ERROR"}[$__range])) or vector(0))
+  / sum(rate(calls{…}[$__range]))
+
+# Grouped — vector(0) has no `service` label to match on, so zero-fill off the DENOMINATOR,
+# which carries exactly the grouping labels the numerator is missing.
+(  sum by(service) (rate(calls{…, status_code="STATUS_CODE_ERROR"}[$__rate_interval]))
+   or
+   sum by(service) (rate(calls{…}[$__rate_interval])) * 0 )
+/  sum by(service) (rate(calls{…}[$__rate_interval]))
+```
+
+A **zero-traffic** window still yields `NaN` (a gap), and that is left alone deliberately: an error
+*rate* over zero requests is undefined, not zero, and clamping it would assert health for a service
+that said nothing at all.
+
+Separately, span metrics land at roughly **120s** intervals and serverless services drop series
+entirely while idle. `$__rate_interval` over a 6h range resolves to about that same 120s, which sits
+exactly on the sample spacing where `rate()` is flaky. Set **`minStep: 5m`** on any `rate()` panel
+over these metrics.
+
+### `SPAN_KIND_INTERNAL` never reaches span metrics — and we are not changing that
+
+The generator emits only for `CLIENT`, `SERVER`, `CONSUMER` and `PRODUCER`. Confirmed by label
+enumeration: `label_values(traces_spanmetrics_calls_total, span_kind)` returns those four and no
+`SPAN_KIND_INTERNAL`. So **no INTERNAL span can appear in any RED panel or Prometheus alert** —
+including `execute_tool <toolname>` (the agents' MCP tool calls), `region_dispatch` / `region_job`
+(the drain), and `embed_dispatch`.
+
+The obvious fix is to admit INTERNAL to the generator. **Decided against**, and the usual reason
+given for it is the wrong one. The stated worry was `execute_tool`'s `span_name` cardinality; that
+worry does not survive measurement. The tool names come from an enumerated allowlist in code
+(`packages/agent-workflows/steward/agent/lib/tool-allowlists.ts`), 24 named tools, of which 13 were
+observed in 24h — bounded by construction, since adding a resource cannot add a tool name.
+
+What does not survive is the *selector*. Span kind is not a proxy for the spans we want: admitting
+INTERNAL admits **all** of them, 41 distinct span names in a single 6h window, of which only 11 were
+`execute_tool`. The rest come from eve and the AI SDK, and several are genuinely unbounded —
+`invoke_agent minimax/minimax-m3` interpolates the **model id**, which rotates with
+`STEWARD_MODEL_FALLBACKS`; `step.execute <stepName>` and `workflow.run <id>` interpolate from a
+framework we do not own. Expressing "these 24 tool names" would take a `span_name` allowlist living
+in vendor configuration, mirroring a TypeScript constant, with nothing linking the two — a drift
+site by construction, which is the thing this repo files as a defect everywhere else.
+
+### The surface that does cover a failing tool call: TraceQL metrics
+
+Tempo answers it directly, over the spans that already exist, with no generator change and no second
+metrics pipeline:
+
+```traceql
+{resource.service.name="temper-steward" && name=~"execute_tool.*" && status=error} | rate() by (name)
+```
+
+Run against production over 6h this returns per-tool rates —
+`execute_tool temper__invocation_open` at `1.02e-3/s`, `temper__steward_advance_watermark` at
+`2.31e-4/s`. **Grafana accepts this as an alert query**: a rule carrying it as `queryType: "traceql"`
+with a threshold expression bound to it saves and persists intact (verified 2026-08-04 with a paused
+probe rule, since removed). One link is short of proof — the probe was never unpaused, so *save-time
+validation* is established and *evaluation* is not; unpausing a real rule is what would close it.
+
+### The MCP negotiation 405 is suppressed at the client, and only its status
+
+The AI SDK's MCP client probes for an SSE stream with `GET <mcp endpoint>`; we serve Streamable HTTP
+there, and the spec requires `405`. `@opentelemetry/instrumentation-undici` marks every 4xx an error,
+which made a mandated negotiation response **77% of total system error volume** — 446 spans a day.
+`clients/temper-telemetry-ts/src/mcp-negotiation.ts` resets the status of exactly that
+method + status + endpoint combination, keyed on the response shape rather than on which service
+called, so it covers every MCP client we run. The span, its timing and its
+`http.response.status_code=405` all survive, so the per-tool-call round trip stays countable in
+Tempo — suppressing the symptom and eliminating the probe are different fixes, and this is only the
+first.
+
+**On the second fix: worth doing, and the number is why.** The probe is not free. Measured over 12h,
+the round trip runs **p50 708ms, p90 1.04s, p99 2.03s**, and at 446 probes/day against ~361
+`execute_tool` spans/day it is not amortized across a session — it is paid at roughly the rate tool
+calls are made. So an agent run that retries a refused tool 25 times (which
+`019fce6a-75a5-7012-99cb-ca71fb2e7711` observed) spends something like 18s in negotiation alone.
+That is a latency argument, not a telemetry one, and it survives this suppression entirely — which
+is the point of keeping the span. What it needs next is the separate question of whether the AI
+SDK's MCP client can be told not to attempt SSE against a server known not to offer it; that is a
+code question in a dependency we do not own, and it has not been answered here.
+
 ## Where the pieces live
 
 | Concern | Location |
@@ -319,5 +417,7 @@ asserting they match.
 | Act-grain span fields | `temper_services::backend::ACT_SPAN_FIELDS`, declared by `#[act_span]` (`crates/temper-macros`) |
 | Joining a trusted caller's trace (the link) | `crates/temper-telemetry/src/link.rs`; called from each auth gate |
 | What is enforced, and why | [span-field-conventions.md](../development/span-field-conventions.md), gated by `tests/e2e/tests/logging_test.rs` |
+| MCP negotiation 405 status reset | `clients/temper-telemetry-ts/src/mcp-negotiation.ts`, gated by its sibling test; wired via `initTelemetry({ mcpEndpoint })` |
+| Service Traces Overview dashboard | Grafana `jc7b67n` — not in this repo; the query shapes it depends on are above |
 | The trust decision | `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` |
 | Platform findings behind this guide | research `019f943a` §5 |
