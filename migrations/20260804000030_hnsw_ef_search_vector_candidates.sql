@@ -80,6 +80,27 @@
 -- ef=100 is the conservative alternative (83% of exact admission, +0.3 ms/query, further from the
 -- planner cliff). The value below is the single knob under review.
 
+-- ── THE WARMUP IS LOAD-BEARING. DO NOT DELETE IT. ────────────────────────────────────────────────
+--
+-- pgvector registers `hnsw.ef_search` in `_PG_init`, which runs on FIRST USE of a vector type in a
+-- backend. Until that happens the name is an unregistered *placeholder*, and PostgreSQL permits
+-- setting a placeholder only to a SUPERUSER. A migration runs on a cold connection that has touched
+-- no vector, so without this line the next statement fails for an ordinary role with:
+--
+--     ERROR: permission denied to set parameter "hnsw.ef_search"
+--
+-- That is exactly how this migration failed its first Vercel deploy. Touching a vector loads the
+-- library, after which the GUC is `PGC_USERSET` and any role may set it — proven both ways against a
+-- non-superuser role owning its own function: cold session ⇒ denied; warmed ⇒ `{hnsw.ef_search=200}`,
+-- including inside a single transaction, which is how sqlx applies a migration.
+--
+-- **Neither local verification nor CI can catch this class of defect**, and that is worth knowing
+-- rather than discovering twice: the docker `temper` role is `usesuper = t`, as is the role in every
+-- CI Postgres service container, and for a superuser setting a placeholder is permitted. So this
+-- migration passed locally, passed the full test suite, and failed only at deploy. The only
+-- environment that exercises the ordinary-role path is a real deploy against Neon.
+DO $$ BEGIN PERFORM '[1,2]'::vector <=> '[1,3]'::vector; END $$;
+
 ALTER FUNCTION search_vector_candidates(uuid, vector, integer, uuid, uuid[])
     SET hnsw.ef_search = 200;
 
