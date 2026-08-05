@@ -222,6 +222,49 @@ noticed. Do not run it for figures.
 - **The corpus drifts inside one session.** The self-cognition map read 400 live regions during the
   main probe and 399 twenty minutes later. Timestamp every figure; do not reconcile across probes.
 
+## Per-anchor vs global width — what still has a job after the split (task `019fd25e` step 0, research `019fd325`)
+
+A fifth question re-used this directory. `p_regions_n` reaches **exactly one place** in the deployed
+`wayfind_region_scores`: `top_regions … LIMIT (SELECT regions_n FROM n)`. Everything upstream —
+`cand`, `scored` (`sal_norm`), `ranked`, `ranked_rr` (`map_rank`) — is computed over the full
+candidate set regardless of width. So `ranked_rr.map_rank` **is** the per-anchor rank, and a
+per-anchor width is `WHERE map_rank <= n`: a `LIMIT` deleted, not new machinery.
+
+Answer: dissolving the global width leaves round-robin jobless and κ inert, and dissolves the
+`no-structural-shutout` mechanism (`Storyteller System Design` 1 slot of 72 → 72 of 72). It does
+**not** make the per-anchor `sal_norm` frame free — 23 of 360 slots and 14 of 24 queries still
+change at the shipped default width. Scope cost: +60% members for the widest real principal.
+
+```bash
+python3 gen_peranchor_width.py vectors-24.tsv > peranchor_width.sql
+./prod-readonly.sh peranchor_width.sql > out_peranchor_width.txt
+
+# THE GUARD — run it, and read it before reading any figure above.
+python3 gen_peranchor_equiv.py vectors-24.tsv > peranchor_equiv.sql
+./prod-readonly.sh peranchor_equiv.sql            # `differs` must be 0 on every row
+```
+
+**Gotchas paid for once, here too:**
+
+- **Reproducing the deployed body is not the same as validating the model.** `gen_peranchor_width.py`
+  copies the body verbatim from `h3-body.sql` — and that is still only evidence. `gen_peranchor_equiv.py`
+  is the check: it *calls* `wayfind_region_scores` on prod and compares `in_top_n` against the
+  modelled cut (0 differing over 22,080 region-query pairs per width). Every selection figure in the
+  sibling probe is a claim about a model until that guard is green.
+- **A "0 differences" result needs a witness that the probe can see the thing at all.** The κ test
+  asserts κ cannot change a *within-anchor* ordering. Run per-anchor only, `0` is equally consistent
+  with a κ that is inert everywhere and a probe that is broken. It is run in **both** frames, and the
+  global arm must be non-zero (it is: 30 differing selections at width 1) for the per-anchor `0` to
+  mean anything.
+- **A single-anchor shape is a control, not a datum.** Shapes 3/4/6 return exactly 0 delta because
+  with one anchor the two width frames are definitionally the same rule. Their agreement validates
+  the probe; it says nothing about the question.
+- **Two rules that partition on the same set are indistinguishable.** Per-kind and per-anchor
+  `sal_norm` differ only when a kind partition holds >1 anchor. Of the two real principals, only
+  Pete's shape qualifies — shapes 2/3/4/5/6 read 0 in both frames at every width. Any claim about
+  asker experience from this probe is a claim about a population of one; the *width-cost* and
+  *shutout* figures do not inherit that limit.
+
 ## What is committed here, and why the vectors are among it
 
 `.gitignore` carries the rule; this is the reasoning behind its one non-obvious clause.
