@@ -71,6 +71,13 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
             None,
         ),
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        // A refusal that named the capability it withheld — carry the gate's own sentence. The
+        // terse arm below stays exactly as it was, for the caller who may not even read the subject.
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            format!("{action}: {msg}"),
+            None,
+        ),
         TemperError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!("{action}: cannot audit this citation"),

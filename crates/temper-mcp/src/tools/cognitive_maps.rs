@@ -290,6 +290,7 @@ pub async fn cogmap_create(
         .create_cognitive_map(cmd)
         .await
         .map_err(|e| match e {
+            TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
             TemperError::Forbidden => rmcp::ErrorData::invalid_params(
                 "not authorized to create cognitive maps".to_string(),
                 None,
@@ -361,6 +362,9 @@ pub async fn cogmap_materialize(
         .materialize_on_threshold(cmd)
         .await
         .map_err(|e| match e {
+            TemperError::ForbiddenDetail(msg) => {
+                rmcp::ErrorData::invalid_params(format!("cogmap_materialize: {msg}"), None)
+            }
             TemperError::Forbidden => rmcp::ErrorData::invalid_params(
                 "cogmap_materialize: cannot author this cognitive map".to_string(),
                 None,

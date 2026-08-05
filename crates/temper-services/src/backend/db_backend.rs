@@ -61,6 +61,30 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
+/// The one wording of the cogmap-authorship refusal that **names the capability it withheld**.
+///
+/// Three call sites establish "this caller cannot author this map" by two different routes, and they
+/// must not answer it in three voices. `DbBackend::check_cogmap_authorable` establishes it with a
+/// standalone predicate and so has to probe read separately before calling this; the two combined
+/// auth+data lookups (`advance_steward_watermark`, `materialize_on_threshold`) establish it from a
+/// row that came back **only because `anchor_readable_by_profile` held in their `WHERE`** — so those
+/// two have already proven the caller reads the map, and call this unconditionally.
+///
+/// **That precondition is the whole safety argument, and it belongs to the caller.** This function
+/// cannot check it; a site that calls it without having established read turns the refusal into an
+/// existence oracle over maps the caller has no standing to see. See
+/// [`TemperError::ForbiddenDetail`].
+///
+/// The sentence names the capability and the subject, and stops there. It does **not** name the
+/// mechanism by which the caller holds read (team reach vs. an explicit read grant): no site has
+/// asked, and a refusal stating an unmeasured mechanism is worse than one stating none.
+fn cogmap_authorship_refusal(cogmap_id: uuid::Uuid) -> TemperError {
+    TemperError::ForbiddenDetail(format!(
+        "cannot author cognitive map {cogmap_id}: authorship requires an explicit write grant on \
+         the map, which you do not hold. You can read this map; reading confers no authorship."
+    ))
+}
+
 /// Map a typed [`readback::ReadbackError`] to the surface status, splitting the two deny modes the
 /// single-resource reads can return: not-visible is the leak-safe deny → **404** (`NotFound`), never 403
 /// (403 confirms existence) and never 500 (it is not a system failure); a genuine fault stays **500**
@@ -645,10 +669,40 @@ impl DbBackend {
     /// Auth-before-writes gate for authoring INTO a cognitive map: the acting profile must hold an
     /// explicit write grant on the map (`cogmap_authorable_by_profile` =
     /// `profile_explicit_grant(...,'write','kb_cogmaps',...)` — cogmaps have no owner, so authority is
-    /// wholly explicit). Two callers: the backend-side create-into-cogmap gate (F1 — belt-and-suspenders
-    /// for the same predicate the surfaces pre-check, so the shared write path denies even a caller that
-    /// skipped the surface) and `invocation_open` (every open, delegated or not — see that method's
-    /// note on why F2's read gate for delegated opens was amended). Deny → `Forbidden` (403).
+    /// wholly explicit). Three callers: the create-into-cogmap gate (F1), `invocation_open` (every
+    /// open, delegated or not — see that method's note on why F2's read gate for delegated opens was
+    /// amended), and [`Self::check_container_authorable`]'s `kb_cogmaps` arm, which is how the edge
+    /// verbs reach it.
+    ///
+    /// F1 was written as *belt-and-suspenders behind* pre-checks on the MCP create tool and the HTTP
+    /// ingest handler. **Those pre-checks are gone** — holding a bare `bool`, neither could carry the
+    /// refusal below, so each invented its own message and shadowed this gate on the most-used path
+    /// into a map. So this is now the only copy, and it carries the whole load the F1 reasoning
+    /// describes.
+    ///
+    /// **The refusal has two dialects, and which one a caller gets turns on whether they can READ the
+    /// same map.** A principal who reads the map already sees its charter, its ingest delta and every
+    /// invocation on it; withholding *which* capability they lacked withholds no secret from them, and
+    /// costs them the one fact they need in order to stop. Production measured what that costs: refused
+    /// an opaque `403`, the steward agent varied its input — up to 25 attempts in one run — until it
+    /// found `parent_cogmap = originating_cogmap`, which downgraded the gate. **The terse refusal
+    /// withheld the reason but not the capability.**
+    ///
+    /// So: reads the map → [`TemperError::ForbiddenDetail`] naming the missing capability and the
+    /// subject. Cannot read it → the incumbent argument-free [`TemperError::Forbidden`], because for
+    /// that caller the map's existence *is* the secret and a detailed refusal is an existence oracle.
+    ///
+    /// This is not a new disclosure policy; it is one gate catching up with a decision the codebase
+    /// already reasoned through. `ContextAdminAuthority` splits `ReadOnly → 403` from
+    /// `Invisible → 404` on the identical argument (`authz/context_admin.rs`) — *"the 403 is not an
+    /// existence oracle, it reaches only principals who already read the context."* That gate can
+    /// spell the split as two arms of a `ScopedAuthority`; this one is a backend method, so the same
+    /// split lives in the two `TemperError` variants.
+    ///
+    /// The read probe runs **only on the deny path**, so an admitted caller still pays exactly one
+    /// query. `cogmap_readable_by_profile` is called, never restated: it is the predicate
+    /// `anchor_readable_by_profile(_, 'kb_cogmaps', _)` delegates to verbatim (printed live from the
+    /// dev database, 2026-08-05), so the two spellings cannot disagree about who reads a map.
     async fn check_cogmap_authorable(&self, cogmap_id: uuid::Uuid) -> Result<(), TemperError> {
         let can: Option<bool> = sqlx::query_scalar!(
             "SELECT cogmap_authorable_by_profile($1, $2)",
@@ -659,7 +713,19 @@ impl DbBackend {
         .await
         .map_err(api_err)?;
         if can.unwrap_or(false) {
-            Ok(())
+            return Ok(());
+        }
+
+        let readable: Option<bool> = sqlx::query_scalar!(
+            "SELECT cogmap_readable_by_profile($1, $2)",
+            *self.profile_id,
+            cogmap_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if readable.unwrap_or(false) {
+            Err(cogmap_authorship_refusal(cogmap_id))
         } else {
             Err(TemperError::Forbidden)
         }
@@ -2956,7 +3022,10 @@ impl Backend for DbBackend {
             TemperError::NotFound(format!("cognitive map {} not found", cmd.cogmap.uuid()))
         })?;
         if !can_write {
-            return Err(TemperError::Forbidden);
+            // No read probe here, and none is owed: `anchor_readable_by_profile` is in the WHERE
+            // above, so a row reaching this line proves the caller reads the map. This is the
+            // refusal the production steward met once per run on L0 and could not act on.
+            return Err(cogmap_authorship_refusal(cmd.cogmap.uuid()));
         }
 
         // Watermark hygiene (issue #459): the advance target must be a real kb_events row within this
@@ -3299,7 +3368,14 @@ impl Backend for DbBackend {
             }
         };
         if !can_write {
-            return Err(TemperError::Forbidden);
+            // Both arms' `WHERE` carries `anchor_readable_by_profile`, so a row reaching here proves
+            // the caller reads the anchor — the precondition `cogmap_authorship_refusal` requires.
+            // The context arm keeps the argument-free refusal: extending the disclosure to
+            // `context_authorable_by_profile` is a separate decision, deliberately not taken here.
+            return Err(match cmd.anchor {
+                HomeAnchor::Cogmap(cogmap) => cogmap_authorship_refusal(cogmap.uuid()),
+                HomeAnchor::Context(_) => TemperError::Forbidden,
+            });
         }
 
         let formation_events = temper_substrate::replay::formation_touched_count_since(

@@ -458,6 +458,15 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                     request_url: details.request_url,
                     cli_command: details.cli_command,
                 }))
+            } else if parse_error_field(body, "code").as_deref()
+                == Some(temper_core::error::FORBIDDEN_DETAIL_CODE)
+            {
+                // A refusal that named the capability it withheld. Keyed on the CODE, mirroring the
+                // 422 arm below — a message-text heuristic would silently reclassify the message-less
+                // 403 the moment either side reworded it.
+                let message =
+                    parse_error_field(body, "message").unwrap_or_else(|| "forbidden".to_owned());
+                ClientError::ForbiddenDetail { message }
             } else {
                 ClientError::Forbidden
             }
@@ -745,6 +754,38 @@ mod tests {
         let body = r#"{"error":{"code":"FORBIDDEN","message":"Forbidden"}}"#;
         let err = map_status_to_error(status(403), body);
         assert!(matches!(err, ClientError::Forbidden));
+    }
+
+    /// A `403` the server chose to explain carries its explanation through to the CLI.
+    ///
+    /// The pairing with the test above is the point: both are `403`, both carry a `message`, and the
+    /// **code** is the only thing separating them. Keying on anything else — "is the message
+    /// something other than `Forbidden`?" — would reclassify the generic refusal the first time
+    /// either side reworded that constant.
+    #[test]
+    fn test_403_with_detail_code_carries_the_message() {
+        let body = r#"{"error":{"code":"FORBIDDEN_DETAIL","message":"cannot author cognitive map 0198…: authorship requires an explicit write grant on the map, which you do not hold."}}"#;
+        match map_status_to_error(status(403), body) {
+            ClientError::ForbiddenDetail { message } => {
+                assert!(
+                    message.contains("write grant"),
+                    "the server's sentence must survive the hop, not be replaced by a constant: \
+                     {message:?}"
+                );
+            }
+            other => panic!("expected ForbiddenDetail, got {other:?}"),
+        }
+    }
+
+    /// The literal in the test above is the wire contract, so it is pinned to the constant both
+    /// sides are built from. Without this, the test could go on passing against a code the producer
+    /// no longer emits — asserting a string rather than an agreement.
+    #[test]
+    fn the_detail_code_literal_matches_the_shared_constant() {
+        assert_eq!(
+            temper_core::error::FORBIDDEN_DETAIL_CODE,
+            "FORBIDDEN_DETAIL"
+        );
     }
 
     #[tokio::test]

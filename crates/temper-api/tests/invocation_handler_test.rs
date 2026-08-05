@@ -7,10 +7,17 @@
 //! it has a reserved telos resource, so `open` succeeds). Deny path runs against a random
 //! cogmap the acting profile cannot read (open → Forbidden) and a random invocation id
 //! (show → Ok(None), the leak-safe deny/absent contract).
+//!
+//! **The deny path has two dialects, and this suite carries both poles.** A caller who READS the
+//! map but cannot author it is told which capability it lacks (`ForbiddenDetail`); a caller who
+//! cannot read it at all keeps the argument-free `Forbidden`, because for that caller the map's
+//! existence is itself the secret. L0 makes both reachable in one fixture: any approved profile is
+//! root-joined to it (so it reads), and no profile holds write on it until granted.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::error::TemperError;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::invocation::Disposition;
 use temper_services::backend::{substrate_read, DbBackend};
@@ -19,6 +26,34 @@ use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation, Surf
 mod common;
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
+
+/// The reader's dialect: refused, and told **which capability** was missing and **on what**.
+///
+/// Three assertions, and each fails a different wrong implementation. The variant alone would pass
+/// if the sentence were empty or generic; the `write grant` clause alone would pass if the refusal
+/// named no subject, leaving a caller that authors into several maps unable to tell which one it was
+/// refused on; and the subject alone would pass a message that named the map but not the capability
+/// — which is the state this whole change exists to leave, since naming the subject without naming
+/// the missing grant is exactly as unactionable as saying nothing.
+fn assert_names_the_missing_capability<T: std::fmt::Debug>(
+    result: &Result<T, TemperError>,
+    cogmap: Uuid,
+) {
+    let Err(TemperError::ForbiddenDetail(msg)) = result else {
+        panic!(
+            "a principal who READS this map must be refused in the disclosing dialect \
+             (ForbiddenDetail), not the argument-free one: {result:?}"
+        );
+    };
+    assert!(
+        msg.contains("write grant"),
+        "the refusal must name the capability that was missing: {msg:?}"
+    );
+    assert!(
+        msg.contains(&cogmap.to_string()),
+        "the refusal must name the subject it refused: {msg:?}"
+    );
+}
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
@@ -119,6 +154,12 @@ async fn open_on_unreadable_cogmap_is_forbidden(pool: PgPool) {
     let backend = DbBackend::new(pool.clone(), profile_id);
 
     // A random cogmap the profile cannot read → the backend's auth-before-write denies.
+    //
+    // **The NEGATIVE POLE for the disclosure split**, and the reason it asserts the variant rather
+    // than `is_err()`: this caller cannot read the map, so the refusal must stay argument-free.
+    // Naming the missing capability here would confirm to a stranger that they had named a real
+    // subject — an existence oracle over maps they have no standing to see. Without this assertion,
+    // a gate that disclosed to *everyone* would pass the two tests below and nothing would notice.
     let result = backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
@@ -128,8 +169,9 @@ async fn open_on_unreadable_cogmap_is_forbidden(pool: PgPool) {
         })
         .await;
     assert!(
-        result.is_err(),
-        "open against an unreadable cogmap must be denied: {result:?}"
+        matches!(result, Err(temper_core::error::TemperError::Forbidden)),
+        "a caller who cannot READ the map must get the argument-free refusal, never one naming \
+         the capability: {result:?}"
     );
 
     // A random invocation id the profile cannot read → leak-safe Ok(None), never an error.
@@ -161,10 +203,10 @@ async fn self_attributed_open_requires_write(pool: PgPool) {
             origin: Surface::ApiHttp,
         })
         .await;
-    assert!(
-        matches!(denied, Err(temper_core::error::TemperError::Forbidden)),
-        "self-attributed open by a read-only principal must be Forbidden: {denied:?}"
-    );
+    // Still refused — and now the refusal SAYS SO. This principal is root-joined to L0, so it reads
+    // the map; the gate owes it the reason, because withholding one bought no confidentiality and
+    // cost the production steward the fact it needed in order to stop probing.
+    assert_names_the_missing_capability(&denied, L0_COGMAP);
 
     // Grant explicit write → the same open now succeeds.
     common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
@@ -205,11 +247,10 @@ async fn parent_cogmap_does_not_downgrade_the_open_gate(pool: PgPool) {
             origin: Surface::ApiHttp,
         })
         .await;
-    assert!(
-        matches!(denied, Err(temper_core::error::TemperError::Forbidden)),
-        "a self-parented open by a read-only principal must be Forbidden — supplying parent_cogmap \
-         must not swap the write gate for a read gate: {denied:?}"
-    );
+    // Refused, in the reader's dialect — and the message is the point of this pairing. The bypass
+    // this test guards was FOUND by an agent probing an opaque refusal; a refusal that names the
+    // missing grant is what makes the probe pointless rather than merely blocked.
+    assert_names_the_missing_capability(&denied, L0_COGMAP);
 
     // Self-parenting stays LEGAL, it is merely inert: with write, the identical call succeeds. The fix
     // removes the authorization discount, not the ability to record a (meaningless) self-binding.

@@ -25,7 +25,7 @@ use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapDetail, CogmapFoundationRow, CogmapRow,
     UnbindTeamOutcome,
 };
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::ProfileId;
 
 /// List every cognitive map visible to the profile, with identity + charter statement.
 ///
@@ -149,31 +149,16 @@ pub async fn bind_team(
     })
 }
 
-/// Producer write gate: can `profile` author a resource homed in `cogmap`?
-///
-/// The named service seam for the `cogmap_authorable_by_profile` SQL predicate — an explicit
-/// `can_write` grant on the map (`profile_explicit_grant(...,'write','kb_cogmaps',...)`), NOT team
-/// membership: cogmaps have no owner, and the Q-A flip made authorship wholly explicit (membership
-/// confers read only). Surfaces (HTTP ingest, MCP create) call this as their auth-before-writes gate
-/// instead of inlining the `query_scalar!` — SQL stays in the service layer, and the gate is defined
-/// once rather than mirrored across surfaces. `DbBackend::create_resource` also re-enforces the same
-/// predicate on the shared write path (F1), so the surface calls are fast-fail pre-checks. The
-/// nullable scalar is normalized to `false` (deny) here.
-pub async fn authorable_by_profile(
-    pool: &PgPool,
-    profile: ProfileId,
-    cogmap: CogmapId,
-) -> ApiResult<bool> {
-    let ok = sqlx::query_scalar!(
-        "SELECT cogmap_authorable_by_profile($1, $2)",
-        profile.uuid(),
-        cogmap.uuid()
-    )
-    .fetch_one(pool)
-    .await?
-    .unwrap_or(false);
-    Ok(ok)
-}
+// `authorable_by_profile` stood here — the named service seam for `cogmap_authorable_by_profile`,
+// called by exactly two surfaces (HTTP ingest, MCP create) as a fast-fail pre-check ahead of the
+// gate that actually enforces it (`DbBackend::create_resource`'s F1 `check_cogmap_authorable`).
+//
+// Both call sites went away when that gate learned to name the capability it withholds: a seam
+// returning a bare `bool` cannot carry a refusal, so each caller had to invent its own message, and
+// those messages shadowed the gate's on the most-used path into a map. Removing the last caller
+// orphaned this function, and a `pub` orphan raises no warning — so it is deleted rather than left
+// as a seam with nothing on either side of it. The predicate itself is untouched and still enforced;
+// see `db_backend::cogmap_authorship_refusal`.
 
 /// Unbind a cognitive map from a team (delete the `kb_team_cogmaps` row).
 ///

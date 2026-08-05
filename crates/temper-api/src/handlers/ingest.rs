@@ -68,21 +68,13 @@ pub async fn create(
     // is that map and `context_ref` is ignored.
     let home = match payload.home_cogmap_id {
         Some(map) => {
-            // Auth before writes: the producer gate (a named service seam delegating to
-            // `cogmap_authorable_by_profile` = an explicit `can_write` grant, NOT membership — the
-            // Q-A flip made authorship wholly explicit) runs and denies BEFORE any home-row write.
-            // A fast-fail pre-check; `DbBackend::create_resource` re-enforces the same gate (F1).
-            let cogmap = CogmapId::from(map);
-            if !temper_services::services::cogmap_service::authorable_by_profile(
-                &state.pool,
-                profile_id,
-                cogmap,
-            )
-            .await?
-            {
-                return Err(ApiError::Forbidden);
-            }
-            HomeAnchor::Cogmap(cogmap)
+            // Auth before writes still runs, one layer down: `DbBackend::create_resource`'s F1 gate
+            // (`check_cogmap_authorable`) is the ENFORCING copy on the shared write path and denies
+            // before any home row is written. The redundant fast-fail pre-check that used to sit
+            // here was removed with its MCP twin — holding only a `bool`, it could render nothing
+            // but a message-less `403`, which shadowed the gate's own refusal on the most-used path
+            // into a map. See `db_backend::cogmap_authorship_refusal` for what it was shadowing.
+            HomeAnchor::Cogmap(CogmapId::from(map))
         }
         None => {
             // Parse the context ref string (UUID or @owner/slug). Bare names are rejected with 400.

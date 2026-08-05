@@ -21,6 +21,16 @@ pub enum ApiError {
     Unauthorized(String),
     #[error("Forbidden")]
     Forbidden,
+    /// A `403` that **names the capability it refused**, for gates that have established the caller
+    /// already READS the subject. Renders `403` exactly as [`Self::Forbidden`] does, under the
+    /// distinct code [`temper_core::error::FORBIDDEN_DETAIL_CODE`] so a client can tell a
+    /// message-bearing refusal from the message-less one without sniffing the message text.
+    ///
+    /// See [`temper_core::error::TemperError::ForbiddenDetail`] for the disclosure rule and why
+    /// [`Self::Forbidden`] stays the argument-free default. In-tree producer:
+    /// `DbBackend::check_cogmap_authorable`.
+    #[error("{0}")]
+    ForbiddenDetail(String),
     #[error("System access required")]
     SystemAccessRequired {
         details: Box<temper_core::types::access_gate::SystemAccessDetails>,
@@ -83,6 +93,10 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
+            ApiError::ForbiddenDetail(_) => (
+                StatusCode::FORBIDDEN,
+                temper_core::error::FORBIDDEN_DETAIL_CODE,
+            ),
             ApiError::SystemAccessRequired { .. } => {
                 (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED")
             }
@@ -112,7 +126,7 @@ impl IntoResponse for ApiError {
             ApiError::ContentIntegrity(_) => {
                 tracing::warn!(status_code, error_code = code, %message, "content integrity");
             }
-            ApiError::Unauthorized(_) | ApiError::Forbidden => {
+            ApiError::Unauthorized(_) | ApiError::Forbidden | ApiError::ForbiddenDetail(_) => {
                 tracing::warn!(status_code, error_code = code, %message, "auth error");
             }
             ApiError::SystemAccessRequired { .. } => {
@@ -171,6 +185,7 @@ impl From<ApiError> for temper_core::error::TemperError {
         match err {
             ApiError::NotFound(s) => TemperError::NotFound(s),
             ApiError::Forbidden => TemperError::Forbidden,
+            ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
             ApiError::Conflict(s) => TemperError::Conflict(s),
@@ -198,6 +213,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             // Clean cases that mirror the inbound conversion
             TemperError::NotFound(s) => ApiError::NotFound(s),
             TemperError::Forbidden => ApiError::Forbidden,
+            TemperError::ForbiddenDetail(s) => ApiError::ForbiddenDetail(s),
             TemperError::Unauthorized(s) => ApiError::Unauthorized(s),
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
             TemperError::Conflict(s) => ApiError::Conflict(s),

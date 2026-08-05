@@ -306,6 +306,14 @@ mod tests {
     /// The trigger is auth-before-write: a member who can READ the cogmap but has no WRITE grant is
     /// Forbidden; an outsider who cannot read it is NotFound (no existence oracle) — both checked
     /// before the threshold gate, so neither touches the substrate.
+    ///
+    /// **The 403 now names the capability it withheld, and the pairing below is why that is safe.**
+    /// The gate's `WHERE` carries `anchor_readable_by_profile`, so the outsider never reaches the
+    /// refusal at all — they get the existence-hiding 404 asserted at the bottom. Which means every
+    /// caller who *does* reach the 403 has already proven they read the map, and telling them which
+    /// grant they lack discloses nothing a successful read would not have. The two halves of this
+    /// test are the disclosure boundary: neither is meaningful without the other, since a gate that
+    /// disclosed to everyone would still satisfy the first assertion alone.
     #[sqlx::test(migrations = "../../migrations")]
     async fn trigger_requires_cogmap_write_grant(pool: PgPool) {
         let s = seed(&pool).await;
@@ -320,9 +328,12 @@ mod tests {
             .materialize_on_threshold(cmd())
             .await
             .unwrap_err();
+        let TemperError::ForbiddenDetail(msg) = &err else {
+            panic!("read but not write → 403, in the disclosing dialect: {err:?}");
+        };
         assert!(
-            matches!(err, TemperError::Forbidden),
-            "read but not write → 403"
+            msg.contains("write grant") && msg.contains(&s.cogmap.to_string()),
+            "the refusal must name the missing capability AND the map it was refused on: {msg:?}"
         );
 
         let outsider_backend = DbBackend::new(pool.clone(), s.outsider.into());
