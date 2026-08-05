@@ -642,35 +642,13 @@ impl DbBackend {
         .map_err(api_err)
     }
 
-    /// Auth-before-writes gate for the invocation envelope: the acting profile (`self.profile_id`)
-    /// must be able to READ the originating cognitive map. Calls the canonical visibility predicate
-    /// `anchor_readable_by_profile(profile, 'kb_cogmaps', cogmap_id)` directly (the retired
-    /// `cogmap_readable_by_profile` is reached only via this anchor arm; `require_cogmap_write_admin`
-    /// is the wrong gate — it is a structural L0/root-team gate that admits ordinary cogmaps). Deny →
-    /// `Forbidden` (403). The substrate's `invocation_open` enforces the parent→originating delegation
-    /// gate itself, so this is ONLY the acting-profile-can-access-originating check.
-    async fn check_can_read_cogmap(&self, cogmap_id: uuid::Uuid) -> Result<(), TemperError> {
-        let can: Option<bool> = sqlx::query_scalar!(
-            "SELECT anchor_readable_by_profile($1, 'kb_cogmaps', $2)",
-            *self.profile_id,
-            cogmap_id,
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(api_err)?;
-        if can.unwrap_or(false) {
-            Ok(())
-        } else {
-            Err(TemperError::Forbidden)
-        }
-    }
-
     /// Auth-before-writes gate for authoring INTO a cognitive map: the acting profile must hold an
     /// explicit write grant on the map (`cogmap_authorable_by_profile` =
     /// `profile_explicit_grant(...,'write','kb_cogmaps',...)` — cogmaps have no owner, so authority is
     /// wholly explicit). Two callers: the backend-side create-into-cogmap gate (F1 — belt-and-suspenders
     /// for the same predicate the surfaces pre-check, so the shared write path denies even a caller that
-    /// skipped the surface) and the self-attributed `invocation_open` gate (F2). Deny → `Forbidden` (403).
+    /// skipped the surface) and `invocation_open` (every open, delegated or not — see that method's
+    /// note on why F2's read gate for delegated opens was amended). Deny → `Forbidden` (403).
     async fn check_cogmap_authorable(&self, cogmap_id: uuid::Uuid) -> Result<(), TemperError> {
         let can: Option<bool> = sqlx::query_scalar!(
             "SELECT cogmap_authorable_by_profile($1, $2)",
@@ -2829,16 +2807,26 @@ impl Backend for DbBackend {
     }
 
     /// Open an agent-invocation envelope, returning the server-minted invocation id. AUTH BEFORE
-    /// WRITE, split by delegation (F2):
-    /// * **self-attributed** (`parent_cogmap` is `None`): the acting profile must be able to AUTHOR the
-    ///   originating cogmap (`check_cogmap_authorable`, an explicit write grant). Claiming a slot on a
-    ///   map's accountability ledger under one's own name is an authoring act — read-to-open would let a
-    ///   mere reader post self-attributed (inert) envelopes as ledger noise. In production the only
-    ///   self-attributed opener is the steward, which holds write on its map, so this regresses no real
-    ///   caller.
-    /// * **delegated** (`parent_cogmap` is `Some`): the READ gate (`check_can_read_cogmap`) suffices; the
-    ///   substrate's `invocation_open` enforces the parent→originating delegation lineage internally, so
-    ///   a parent that authored may delegate an open the sub-agent principal need not itself hold write for.
+    /// WRITE: the acting profile must be able to AUTHOR the originating cogmap
+    /// (`check_cogmap_authorable`, an explicit write grant), **regardless of `parent_cogmap`**.
+    /// Claiming a slot on a map's accountability ledger is an authoring act; read-to-open lets a mere
+    /// reader post (inert) envelopes as ledger noise.
+    ///
+    /// **This deliberately amends F2**, which kept a READ gate for delegated opens
+    /// (`docs/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`
+    /// §"self-attributed vs delegated"). That split was justified by "the substrate's parent→originating
+    /// delegation lineage is the real control" — but the substrate check is
+    /// `cogmaps_share_a_team(parent, originating)`, which takes **two cogmap ids and no principal**, so it
+    /// cannot constrain the caller at all; and its premise, "a parent that authored may delegate", is
+    /// enforced nowhere — nothing verifies the parent consented, authored, or exists as a principal.
+    /// Worse, `cogmaps_share_a_team` is reflexive for any team-joined map, so `parent == originating` —
+    /// a value every caller already holds — downgraded the gate and reopened the exact ledger-noise
+    /// vector F2 existed to close. Production bore this out: 47 of 47 opens on the L0 kernel map were
+    /// self-parented by a principal with no write grant on it.
+    ///
+    /// `parent_cogmap` therefore reverts to what the WS7 design called it — a recorded *delegation
+    /// binding*, validated for plausibility by the substrate's team check, never an authorization
+    /// discount. Self-parenting stays legal and is simply inert.
     ///
     /// Deny → 403, before any `writes::` call. The id is minted by `writes::open_invocation`
     /// (server-mint v1, never caller-supplied).
@@ -2846,14 +2834,9 @@ impl Backend for DbBackend {
         &self,
         cmd: OpenInvocation,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
-        // Auth before any write: self-attributed opens require write on the originating cogmap;
-        // delegated opens require only read (delegation lineage is checked in the substrate).
+        // Auth before any write. One gate, not two: `parent_cogmap` is provenance, not authority.
         let originating = uuid::Uuid::from(cmd.originating_cogmap);
-        if cmd.parent_cogmap.is_none() {
-            self.check_cogmap_authorable(originating).await?;
-        } else {
-            self.check_can_read_cogmap(originating).await?;
-        }
+        self.check_cogmap_authorable(originating).await?;
 
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await

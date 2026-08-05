@@ -8939,7 +8939,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Readable team-joined cogmap ids */
+            /** @description Authorable team-joined cogmap ids */
             200: {
                 headers: {
                     [name: string]: unknown;
