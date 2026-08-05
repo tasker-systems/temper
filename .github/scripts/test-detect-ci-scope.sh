@@ -445,6 +445,155 @@ run_test "no-diff fallback: rust-quality runs" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
+# ---------------------------------------------------------------------------
+# NON-PRODUCT ROOTS — scripts/wayfind-spike/ is consumed by nothing, so a change
+# confined to it skips the whole pipeline exactly as docs do. DOCS_ONLY stays
+# FALSE throughout: the summary must not call a pile of .sql and .tsv "docs".
+# ---------------------------------------------------------------------------
+run_test "non-product only: whole pipeline skipped, but NOT reported as docs" \
+    "scripts/wayfind-spike/h1-orient.sql
+scripts/wayfind-spike/gen_salnorm_reach.py
+scripts/wayfind-spike/vectors-24.tsv" \
+    "SKIP_ALL=true" \
+    "DOCS_ONLY=false" \
+    "NON_PRODUCT=true" \
+    "RUN_CODE_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=false"
+
+run_test "non-product + its own README: still skipped, still not docs-only" \
+    "scripts/wayfind-spike/README.md
+scripts/wayfind-spike/h6-mechanism.sql" \
+    "SKIP_ALL=true" \
+    "DOCS_ONLY=false" \
+    "RUN_CODE_QUALITY=false" \
+    "RUN_TEST_RUST=false"
+
+# The load-bearing direction: one real file anywhere else and the skip is off.
+run_test "non-product + a crate file: full CI" \
+    "scripts/wayfind-spike/h1-orient.sql
+crates/temper-api/src/lib.rs" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# A sibling under scripts/ is NOT covered — inertness is proven per tree, never
+# inherited from a top-level directory name.
+run_test "a different scripts/ subtree is not non-product" \
+    "scripts/install/install.sh" \
+    "SKIP_ALL=false" \
+    "NON_PRODUCT=false" \
+    "RUN_TEST_RUST=true"
+
+# Mixed non-product + inert TS is still rust-inert (probes cannot reach a crate).
+run_test "non-product + inert TS: rust-inert, TS still runs" \
+    "scripts/wayfind-spike/h1-orient.sql
+packages/temper-cloud/src/x.ts" \
+    "SKIP_ALL=false" \
+    "RUST_INERT=true" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=true"
+
+# A self-edit still forces a full run, even with everything else inert.
+run_test "self-edit + non-product: full run (exercised, not skipped)" \
+    ".github/scripts/detect-ci-scope.sh
+scripts/wayfind-spike/h1-orient.sql" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# ---------------------------------------------------------------------------
+# REGRESSION — doc-extension files a Rust gate OWNS must never be docs-only.
+# All three were measured skipping the ENTIRE pipeline, including the very gate
+# that reads them. Each assertion below fails against the pre-fix script.
+# ---------------------------------------------------------------------------
+run_test "skill-content .md: source of the agent-skills projection, runs skills-drift" \
+    "crates/temper-cli/skill-content/workflows/plan-small.md" \
+    "DOCS_ONLY=false" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+run_test "containment corpus .txt: include_str!d by the path-traversal tests" \
+    "scripts/install/containment-corpus.txt" \
+    "DOCS_ONLY=false" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+run_test "migration-declaration corpus .txt: held by both parsers" \
+    "scripts/migration-declaration-corpus.txt" \
+    "DOCS_ONLY=false" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# A RUST_COUPLED doc cannot be laundered by pairing it with a non-product file.
+run_test "coupled doc + non-product: veto survives the wider predicate" \
+    "scripts/install/containment-corpus.txt
+scripts/wayfind-spike/h1-orient.sql" \
+    "SKIP_ALL=false" \
+    "RUN_TEST_RUST=true"
+
+# ---------------------------------------------------------------------------
+# CLASS TRIPWIRE — the three fixes above are instances. This guards the CLASS by
+# deriving the set from the SOURCE: every doc-extension file `include_str!`d
+# anywhere in the Rust corpus must be vetoed. A new one added later reopens the
+# hole silently, and the enumerated list in detect-ci-scope.sh cannot notice.
+# ---------------------------------------------------------------------------
+assert_every_compiled_in_doc_is_vetoed() {
+    local repo_root unresolved="" checked=0
+    repo_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+    # grep, not ripgrep: `rg` is not guaranteed on a CI runner (and in some local
+    # shells it is a function, not a binary, so `command -v` lies). There is
+    # deliberately NO "tool missing -> skip" arm. A gate that can silently
+    # no-op is the dead-gate failure this suite exists to prevent, so if the
+    # scan cannot run it must go RED.
+    local hits
+    hits="$(cd "$repo_root" && grep -rn --include='*.rs' -E 'include_str!|include_bytes!' \
+              crates tests 2>/dev/null | grep -E '"[^"]*\.(md|txt|adoc)"' || true)"
+
+    if [ -z "$hits" ]; then
+        echo "  FAIL: compiled-in-doc scan found NOTHING — the scan itself is broken"
+        echo "    (agent-skills/knowledge-base.md and the two corpora are known to exist)"
+        FAIL=$((FAIL + 1))
+        return 0
+    fi
+
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        local src rel abs resolved out
+        src="${hit%%:*}"
+        rel="$(echo "$hit" | sed -E 's/.*"([^"]*\.(md|txt|adoc))".*/\1/')"
+        abs="$(cd "${repo_root}/$(dirname "$src")" 2>/dev/null && cd "$(dirname "$rel")" 2>/dev/null && pwd || true)"
+        [ -n "$abs" ] || continue
+        resolved="${abs#"${repo_root}/"}/$(basename "$rel")"
+        checked=$((checked + 1))
+
+        # Ask the detector directly: would a lone edit to this file skip CI?
+        out="$(printf '%s\n' "$resolved" | bash "$DETECT_SCRIPT" --stdin 2>/dev/null)"
+        if echo "$out" | grep -q '^SKIP_ALL=true'; then
+            unresolved="${unresolved}    ${resolved} (compiled into ${src}, yet SKIP_ALL=true)
+"
+        fi
+    done <<EOF
+$hits
+EOF
+
+    if [ -z "$unresolved" ]; then
+        echo "  PASS: all ${checked} include_str!d doc files are vetoed out of the skip"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: a doc file is compiled into Rust but still skips CI"
+        echo "$unresolved"
+        echo "    -> add it to RUST_COUPLED in detect-ci-scope.sh"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+assert_every_compiled_in_doc_is_vetoed
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

@@ -95,7 +95,8 @@ TEMPER_ONNX_MODEL_PATH=crates/temper-ingest/models/bge-base-en-v1.5/model_quanti
   cargo run --release -p temper-ingest --no-default-features --features embed-download \
   --example query_vectors < queries-24.txt > vectors-24.tsv
 
-# 2. probes (generated — vectors-24.tsv, reach.sql, returned.sql are artifacts, not sources)
+# 2. probes (reach.sql / returned.sql are generated artifacts — regenerate, don't commit.
+#    vectors-24.tsv IS committed; see "Why the vectors are committed" below.)
 python3 gen_reach.py    vectors-24.tsv 'Temper — self-cognition' > reach.sql      # scope level
 python3 gen_returned.py vectors-24.tsv 'Temper — self-cognition' > returned.sql   # returned rows
 
@@ -142,7 +143,7 @@ Answer: `hnsw.ef_search` defaults to 40, below `unified_search`'s `vector_k = 10
 returns ~33 chunks per query instead of 100 and admits 24.3 resources against an exact scan's 66.2.
 
 ```bash
-# real query vectors for the 20-query set (artifact, not a source — regenerate, don't commit)
+# real query vectors for the 20-query set (committed — see "Why the vectors are committed" below)
 TEMPER_ONNX_MODEL_PATH=crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx \
   cargo run --release -p temper-ingest --no-default-features --features embed-download \
   --example query_vectors < queries.txt > vectors-20.tsv
@@ -170,3 +171,82 @@ python3 gen_efsweep.py vectors-20.tsv > efsweep.sql              # admission + l
   Rust test must acquire ONE connection rather than using the pool.
 - **Above ~ef 200 the planner abandons the index** for a seq-scan over every chunk. Results stay
   exact; latency goes up ~40x. Check the plan before reading a high-ef number as an ANN result.
+
+## The `sal_norm` hinge — is salience a property of the region or of the asker? (task `019fd25e`, research `019fd275`)
+
+A fourth question re-used this directory, and it is the hinge research `019fbd21` named and left
+unrun. `wayfind_region_scores` normalizes salience with
+`percent_rank() OVER (PARTITION BY home_anchor_table ORDER BY sal_eff)` over `cand`, and `cand`
+joins `visible_region_anchors(p_principal)` — so the normalization **domain is the asker's visible
+set**. The candidate alternative is one line: `PARTITION BY home_anchor_table, home_anchor_id`.
+
+Answer: the candidate is **exactly** principal-invariant (0 differing regions across every reach
+shape measured), so salience normalization *can* be a property of the region — but adopting it
+re-allocates 16.7% of slots at the shipped default width and swaps a large-anchor top-of-scale
+guarantee for a small-anchor one. A re-allocation, not a refactor.
+
+```bash
+./prod-readonly.sh h1-orient.sql        # deployed signatures + the reach landscape, per principal
+./prod-readonly.sh h2-reach-shapes.sql  # which anchors each principal holds; pairwise overlap
+./prod-readonly.sh h3-body.sql          # the full deployed body — reproduce from THIS
+./prod-readonly.sh h5-narrow-real.sql   # the one real narrow principal: resolution, not delta
+./prod-readonly.sh h6-mechanism.sql     # per-anchor salience distribution under both rules
+
+# the differential itself — 8 reach shapes x 2 sal_eff arms x 24 queries, ONE candidate set
+python3 gen_salnorm_reach.py vectors-24.tsv > salnorm_reach.sql
+./prod-readonly.sh salnorm_reach.sql > out_salnorm_reach.txt
+```
+
+`gen_salnorm_alt.py` is the **earlier, unrun draft** of the same probe. It is superseded by
+`gen_salnorm_reach.py` and kept only as the record of what was drafted before the arm below was
+noticed. Do not run it for figures.
+
+**Gotchas paid for once, here too:**
+
+- **`p_lens IS NULL` does NOT mean "the default lens".** It means `sal_eff = r.salience`, the stored
+  column — a different quantity from the telos blend. And NULL *is* the shipped default: `lens_id`
+  is `None` unless the caller passes `--lens` (`crates/temper-cli/src/actions/search.rs:97`). A probe
+  that models only the lens path is not measuring what a caller gets. Run both arms.
+- **A real narrow principal is not automatically a usable one.** `lohjishan` has the narrowest reach
+  in the corpus and shares **zero** regions with anyone else, so it admits no cross-principal
+  differential at all. Check the overlap (`h2` §B) before designing around a principal; the
+  narrow-reach deltas have to come from controlled restrictions of a *shared* anchor set.
+- **`count(*)` over a `LEFT JOIN` to `kb_cogmap_region_members` counts region–MEMBER pairs, not
+  regions.** They coincide only while every selected region holds exactly one member — which is the
+  thing being measured, so it cannot be assumed. Count regions from the pre-join CTE.
+- **`aggregate function calls cannot contain window function calls`** — `count(DISTINCT percent_rank()
+  OVER …)` is rejected. Compute the window in a CTE, aggregate over it.
+- **psql `\set` with a multi-line quoted value is fragile.** A shared CTE preamble cannot be hoisted
+  into a variable *or* a view (read-only forbids views and temp tables), so emit it inline into every
+  statement from the generator.
+- **The corpus drifts inside one session.** The self-cognition map read 400 live regions during the
+  main probe and 399 twenty minutes later. Timestamp every figure; do not reconcile across probes.
+
+## What is committed here, and why the vectors are among it
+
+`.gitignore` carries the rule; this is the reasoning behind its one non-obvious clause.
+
+Committed: hand-written probes (`NN-*.sql`, `pN-*.sql`, `hN-*.sql`), generators (`*.py`), runners
+(`*.sh`), the probe sets (`queries*.txt`), and **the query vectors (`vectors-*.tsv`)**.
+Ignored: generated SQL (a pure function of generator + vectors, and megabytes of inlined floats) and
+all probe output (whose durable home is the temper research resource that cites it, provenance
+stamp attached).
+
+### Why the vectors are committed
+
+**This reverses what earlier sections of this README said**, and the reversal is the point.
+
+"Regenerate, don't commit" is right whenever regeneration is deterministic. For the vectors it is
+not — or rather, it is deterministic only with respect to a **110 MB ONNX model that is not in git**.
+`vectors-24.tsv` is produced by `cargo run … --features embed-download`, so the model is fetched, not
+versioned. Ship a new quantized BAAI release and the same command emits *different* vectors from the
+same `queries-24.txt`.
+
+That breaks the one rule this directory exists to serve — *a before/after is worth nothing unless
+both halves are the same measurement*. And it breaks it in the worst available way: **silently**. The
+regenerated probe runs fine, prints plausible numbers, and is not comparable with the figures any
+prior research note cites. Committing 420 KB of float text that should never change buys a loud
+failure (a diff) in place of a silent one.
+
+So: **the vectors are the identity of a probe set, not a build output.** Treat a change to
+`vectors-*.tsv` as an event that invalidates cross-note comparability, not as noise.
