@@ -801,6 +801,17 @@ mod tests {
         );
     }
 
+    /// **This is the production refusal.** The steward met exactly this — read on L0 via the root
+    /// team, no write grant on it, once per run for eight days — and because the `403` named nothing,
+    /// it could not form a corrective hypothesis and probed until it found a real bypass. So the
+    /// member half below asserts the refusal *says which grant is missing*, not merely that it
+    /// refused.
+    ///
+    /// The outsider half is what makes that safe, and neither half means anything alone: the gate's
+    /// `WHERE` carries `anchor_readable_by_profile`, so a caller who cannot read the map never
+    /// reaches the `403` at all — they get the existence-hiding `404`. Every caller who *does* reach
+    /// it has already proven they read the map, which is precisely the standing that makes naming
+    /// the capability a disclosure of nothing new.
     #[sqlx::test(migrations = "../../migrations")]
     async fn advance_requires_cogmap_write_grant(pool: PgPool) {
         let s = seed(&pool).await;
@@ -812,15 +823,18 @@ mod tests {
             origin: Surface::ApiHttp,
         };
 
-        // Member can READ the cogmap (team join) but has no WRITE grant → Forbidden (403).
+        // Member can READ the cogmap (team join) but has no WRITE grant → 403, and the 403 talks.
         let member_backend = DbBackend::new(pool.clone(), s.member.into());
         let err = member_backend
             .advance_steward_watermark(cmd())
             .await
             .unwrap_err();
+        let TemperError::ForbiddenDetail(msg) = &err else {
+            panic!("read but not write → 403, in the disclosing dialect: {err:?}");
+        };
         assert!(
-            matches!(err, TemperError::Forbidden),
-            "read but not write → 403"
+            msg.contains("write grant") && msg.contains(&s.cogmap.to_string()),
+            "the refusal must name the missing capability AND the map it was refused on: {msg:?}"
         );
 
         // Outsider cannot even read the cogmap → NotFound (404), no existence oracle.

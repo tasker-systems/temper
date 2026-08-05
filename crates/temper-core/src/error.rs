@@ -1,5 +1,14 @@
 use thiserror::Error;
 
+/// The wire `error.code` a [`TemperError::ForbiddenDetail`] travels under — a `403` whose message
+/// is load-bearing rather than the constant `"Forbidden"`.
+///
+/// It lives here, in the crate both sides already depend on, rather than as a literal spelled once
+/// in `temper-services`' `IntoResponse` and again in `temper-client`'s status mapper. The sibling
+/// `"CONTENT_INTEGRITY"` is spelled that second way and is the reason not to: a code the producer
+/// and the consumer each name independently is a wire contract nothing checks.
+pub const FORBIDDEN_DETAIL_CODE: &str = "FORBIDDEN_DETAIL";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
@@ -73,6 +82,25 @@ pub enum TemperError {
 
     #[error("Forbidden")]
     Forbidden,
+
+    /// A `403` that **names the capability it refused** — admissible only where the caller already
+    /// holds READ standing on the same subject, so the detail discloses nothing a successful read
+    /// would not have told them. Same status and same class as [`Self::Forbidden`]; it differs only
+    /// in carrying a message, and travels the wire under [`FORBIDDEN_DETAIL_CODE`].
+    ///
+    /// **[`Self::Forbidden`] stays the default, and stays argument-free.** That is what keeps *"a
+    /// refusal cannot name the subject it refused"* a property of the type rather than of everyone
+    /// remembering — the same reasoning `ScopedAuthority::denial` records for its static signature.
+    /// Producing this variant on a path that has NOT probed the subject's own read predicate turns
+    /// the refusal into an existence oracle, which is the whole thing the terse arm exists to
+    /// prevent.
+    ///
+    /// The precedent is `ContextAdminAuthority`, which splits `ReadOnly → 403` from
+    /// `Invisible → 404` on exactly this reasoning: *"the 403 is not an existence oracle — it
+    /// reaches only principals who already read the context."* This variant is what lets a gate
+    /// that is not a `ScopedAuthority` say the same thing.
+    #[error("{0}")]
+    ForbiddenDetail(String),
 
     #[error("Unauthorized: {0}")]
     Unauthorized(String),

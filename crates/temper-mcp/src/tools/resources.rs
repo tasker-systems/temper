@@ -583,24 +583,19 @@ pub(crate) async fn build_create_command(
                     rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
                 })?
                 .0;
-            let cogmap = temper_core::types::ids::CogmapId::from(map);
-            // Auth before writes: producer gate (service seam → an explicit `can_write` grant on the
-            // map; `cogmap_authorable_by_profile`, NOT membership — membership confers read only, per
-            // the Q-A flip). Shares the one `cogmap_service::authorable_by_profile` seam with the HTTP
-            // handler; no inline SQL on the surface. This is a fast-fail pre-check — `DbBackend::
-            // create_resource` re-enforces the same predicate on the shared write path (F1).
-            let ok = temper_services::services::cogmap_service::authorable_by_profile(
-                pool, profile_id, cogmap,
-            )
-            .await
-            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
-            if !ok {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "not authorized to author in this cognitive map".to_string(),
-                    None,
-                ));
-            }
-            HomeAnchor::Cogmap(cogmap)
+            // Auth before writes is unchanged and still runs — it lives one layer down, in
+            // `DbBackend::create_resource`'s F1 gate (`check_cogmap_authorable`), which is the
+            // ENFORCING copy on the shared write path and denies before any row is written.
+            //
+            // What used to be here was a second, redundant `cogmap_service::authorable_by_profile`
+            // pre-check whose only job was to fail fast — and which, because it held a bare `bool`,
+            // could only render *"not authorized to author in this cognitive map"*. That string
+            // shadowed the gate: the create path is the most-used way into a map, and it answered in
+            // the opaque voice this change exists to retire, no matter what the gate below decided.
+            // A pre-check cannot be taught the disclosure rule without re-deriving the read probe
+            // beside it — two copies of one policy, which is the drift this file's own conventions
+            // forbid. So the fast-fail goes and the gate speaks.
+            HomeAnchor::Cogmap(temper_core::types::ids::CogmapId::from(map))
         }
         (None, Some(context_ref)) => {
             // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
@@ -690,6 +685,10 @@ pub async fn create_resource(
         // here), but a context home has no surface pre-check — without this arm an authorization
         // refusal would fall through to `other` and render as an internal error, telling an agent its
         // permission problem was a server fault.
+        // The cogmap home reaches this match now that the surface pre-check is gone, and it
+        // arrives naming the capability it withheld — carry that sentence rather than the context
+        // arm's, which would describe the wrong container entirely.
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Not authorized to create in this context: placing a resource requires write access, \
              and read access alone (watcher role, a read-only grant, a shared context, or \
@@ -1022,6 +1021,7 @@ pub async fn update_resource(
 
     let backend = DbBackend::new(pool.clone(), profile_id);
     backend.update_resource(cmd).await.map_err(|e| match e {
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
             None,
@@ -1083,6 +1083,7 @@ pub async fn annotate_resource(
 
     let backend = DbBackend::new(pool.clone(), profile_id);
     backend.annotate_resource(cmd).await.map_err(|e| match e {
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
             None,
@@ -1149,6 +1150,7 @@ pub async fn update_resource_meta(
 
     let backend = DbBackend::new(pool.clone(), profile_id);
     backend.update_resource(cmd).await.map_err(|e| match e {
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
             None,
@@ -1195,6 +1197,7 @@ pub async fn delete_resource(
 
     let backend = DbBackend::new(pool.clone(), profile_id);
     backend.delete_resource(cmd).await.map_err(|e| match e {
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
             None,

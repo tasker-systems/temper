@@ -936,11 +936,19 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
 
 // ── (F1) the create-into-cogmap gate lives on the BACKEND, not only the surfaces ─────
 
-/// F1 — `DbBackend::create_resource` denies a non-granted principal on a `Cogmap` home DIRECTLY, not
-/// only via the surface pre-checks. This is the belt-and-suspenders the surfaces (mcp create tool, api
-/// ingest) also enforce: the shared write path must not trust callers to pre-check (one new caller away
-/// from a silent bypass — the SAML `is_active` failure mode). A granted principal succeeds; the denial
-/// writes no home row (auth before writes).
+/// F1 — `DbBackend::create_resource` denies a non-granted principal on a `Cogmap` home DIRECTLY.
+///
+/// This was written as the belt-and-suspenders *behind* two surface pre-checks (the MCP create tool
+/// and the HTTP ingest handler), on the reasoning that the shared write path must not trust callers
+/// to pre-check — one new caller away from a silent bypass, the SAML `is_active` failure mode. Those
+/// two pre-checks are now **gone**, so this is no longer the second line of defence: it is the only
+/// one, and the whole load the reasoning above describes rests here. They were removed because a
+/// pre-check holding a bare `bool` could not carry the gate's refusal and so had to invent its own,
+/// shadowing the real one on the most-used path into a map.
+///
+/// A granted principal succeeds; the denial writes no home row (auth before writes — and still true
+/// with the pre-checks gone, since everything the command does ahead of the container gate is a
+/// `SELECT`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn create_into_cogmap_denied_at_backend_for_nongranted(pool: PgPool) {
     let email = format!("f1-backend-{}@example.com", Uuid::new_v4());

@@ -25,15 +25,33 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Render a backend error as an MCP protocol error.
+///
+/// **The `Forbidden` arm is reachable only from `invocation_open`**, which is why its text names the
+/// cognitive map rather than the invocation. `invocation_close` puts its gate in the `WHERE` of the
+/// lookup, so an unreadable or absent envelope collapses to `NotFound` there and it never produces a
+/// `403` at all. The incumbent text — *"cannot access this invocation"* — was wrong on both counts:
+/// `open` checks the **map**, and it does so against an invocation that does not yet exist. The
+/// phrasing here is `steward.rs`'s, which already renders this same refusal.
+///
+/// `ForbiddenDetail` carries the gate's own sentence, which names the missing capability. It is a
+/// distinct arm rather than a widened `Forbidden` so the terse refusal below stays byte-stable for
+/// the caller who cannot read the map — see [`TemperError::ForbiddenDetail`] for why that split is
+/// the disclosure boundary and not a formatting choice.
 fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
     match e {
         TemperError::NotFound(msg) => {
             rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
         }
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            format!("{action}: {msg}"),
+            None,
+        ),
         TemperError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: cannot access this invocation"),
+            format!("{action}: cannot author this cognitive map"),
             None,
         ),
         other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
@@ -173,6 +191,8 @@ pub async fn invocation_list(
 
 #[cfg(test)]
 mod tests {
+    use super::map_err;
+    use temper_core::error::TemperError;
     use temper_core::types::invocation::{
         Disposition, InvocationCloseInput, InvocationListInput, InvocationOpenInput,
         InvocationShowInput,
@@ -217,5 +237,46 @@ mod tests {
         let input: InvocationListInput = serde_json::from_value(json).unwrap();
         assert!(input.cogmap.is_none());
         assert_eq!(input.status.as_deref(), Some("open"));
+    }
+
+    /// The refusal an agent actually reads names **the cognitive map**, which is what
+    /// `invocation_open` checks — not the invocation, which does not exist yet when the gate runs.
+    ///
+    /// The incumbent text said *"cannot access this invocation"* and was wrong twice over: wrong
+    /// subject, and wrong about a record that had not been minted. Asserting the absence of the old
+    /// wording as well as the presence of the new one is deliberate — a message that appended the
+    /// map to the old sentence would satisfy a contains-check on its own and still be misleading.
+    #[test]
+    fn the_terse_refusal_names_the_map_not_the_invocation() {
+        let rendered = map_err(TemperError::Forbidden, "invocation_open").message;
+        assert!(
+            rendered.contains("cognitive map"),
+            "the refusal must name what was actually checked: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("this invocation"),
+            "the retired wording named a record that does not exist at gate time: {rendered:?}"
+        );
+    }
+
+    /// The disclosing dialect is passed through, not replaced.
+    ///
+    /// This arm exists so the terse refusal above can stay terse: the gate decides *whether* a
+    /// caller has standing to hear the reason, and the surface's only job is to not discard it.
+    /// A surface that collapsed both variants into one message would move that decision here, where
+    /// nothing knows whether the caller can read the subject.
+    #[test]
+    fn a_disclosing_refusal_is_carried_verbatim() {
+        let detail = "cannot author cognitive map 0198-…: authorship requires an explicit write \
+                      grant on the map, which you do not hold.";
+        let rendered = map_err(
+            TemperError::ForbiddenDetail(detail.to_string()),
+            "invocation_open",
+        )
+        .message;
+        assert!(
+            rendered.contains(detail),
+            "the gate's sentence must reach the agent intact: {rendered:?}"
+        );
     }
 }

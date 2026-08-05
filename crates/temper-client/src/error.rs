@@ -13,6 +13,19 @@ pub enum ClientError {
     #[error("forbidden")]
     Forbidden,
 
+    /// A `403` whose message is load-bearing — the server named the capability it refused, which it
+    /// does only for a caller who already reads the subject (see
+    /// [`temper_core::error::TemperError::ForbiddenDetail`]).
+    ///
+    /// Discriminated by the wire `code` being [`temper_core::error::FORBIDDEN_DETAIL_CODE`], exactly
+    /// as the `422` arm discriminates `CONTENT_INTEGRITY` — never by sniffing whether the message
+    /// happens to differ from the constant `"Forbidden"`.
+    ///
+    /// Renders bare, like [`Self::NotFound`]: the server's sentence is the whole message, so
+    /// `client_err_to_temper` carries it through to the CLI without a label stacked on a label.
+    #[error("{message}")]
+    ForbiddenDetail { message: String },
+
     #[error("system access required")]
     SystemAccessRequired(Box<CliAccessDetails>),
 
