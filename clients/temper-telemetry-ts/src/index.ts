@@ -17,3 +17,4 @@ export {
 	type InitTelemetryOptions
 } from './otel.js';
 export { activeTraceparent, extractContext } from './context.js';
+export { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';

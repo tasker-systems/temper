@@ -21,8 +21,10 @@ import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
+import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { BatchSpanProcessor, NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
 
 export interface InitTelemetryOptions {
 	/**
@@ -40,6 +42,19 @@ export interface InitTelemetryOptions {
 	 * never pull the instrumentation packages into their bundle. Default `false`.
 	 */
 	readonly instrumentHttp?: boolean;
+	/**
+	 * The MCP endpoint this hop talks to (`TEMPER_MCP_URL`), when it runs an MCP client. Its
+	 * only effect is to install {@link McpNegotiationStatusProcessor}, which stops the
+	 * spec-mandated `GET` → `405` SSE-negotiation response from being exported as an error
+	 * span — see `mcp-negotiation.ts` for why that response exists and what stays visible.
+	 *
+	 * Passed in rather than read from the environment here, and never defaulted to a hostname,
+	 * because a self-hosted deployment's MCP endpoint is not `temperkb.io` — the suppression
+	 * has to follow the endpoint the client was actually pointed at. An unparseable value is
+	 * reported and ignored; telemetry config never fails a startup. Omit for hops with no MCP
+	 * client (temper-ui).
+	 */
+	readonly mcpEndpoint?: string;
 }
 
 let provider: NodeTracerProvider | null = null;
@@ -56,7 +71,11 @@ let tracerName = 'temper-telemetry-ts';
  * standard env itself, so the only thing this function decides is *whether* to register
  * (and whether to add HTTP instrumentation).
  */
-export function initTelemetry({ serviceName, instrumentHttp = false }: InitTelemetryOptions): void {
+export function initTelemetry({
+	serviceName,
+	instrumentHttp = false,
+	mcpEndpoint
+}: InitTelemetryOptions): void {
 	if (provider) return;
 
 	const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
@@ -75,12 +94,30 @@ export function initTelemetry({ serviceName, instrumentHttp = false }: InitTelem
 	// stays in one place (env) shared with the Rust side.
 	const exporter = new OTLPTraceExporter();
 
+	const spanProcessors: SpanProcessor[] = [];
+
+	// Runs ahead of the exporting processor for readability only — it acts in `onEnding`,
+	// which fires before any processor's `onEnd`, so the outcome does not depend on order.
+	if (mcpEndpoint) {
+		const key = negotiationKey(mcpEndpoint);
+		if (key) {
+			spanProcessors.push(new McpNegotiationStatusProcessor(key));
+		} else {
+			console.warn(
+				`[telemetry] mcpEndpoint is not a URL (${mcpEndpoint}); ` +
+					'MCP negotiation 405s will export as errors'
+			);
+		}
+	}
+
+	// BatchSpanProcessor + a per-request flush (the consumer's job) is the JS mirror of
+	// the Rust `flush_within_budget`. The batch timer alone is unsafe on Vercel: the
+	// sandbox freezes between invocations and the timer may never fire.
+	spanProcessors.push(new BatchSpanProcessor(exporter));
+
 	const built = new NodeTracerProvider({
 		resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: resolvedServiceName }),
-		// BatchSpanProcessor + a per-request flush (the consumer's job) is the JS mirror of
-		// the Rust `flush_within_budget`. The batch timer alone is unsafe on Vercel: the
-		// sandbox freezes between invocations and the timer may never fire.
-		spanProcessors: [new BatchSpanProcessor(exporter)]
+		spanProcessors
 	});
 
 	built.register({
@@ -101,7 +138,8 @@ export function initTelemetry({ serviceName, instrumentHttp = false }: InitTelem
 
 	console.info(
 		`[telemetry] span export enabled: service.name=${resolvedServiceName} → ${endpoint}` +
-			(instrumentHttp ? ' (+http instrumentation)' : '')
+			(instrumentHttp ? ' (+http instrumentation)' : '') +
+			(spanProcessors.length > 1 ? ` (+mcp negotiation status reset for ${mcpEndpoint})` : '')
 	);
 }
 

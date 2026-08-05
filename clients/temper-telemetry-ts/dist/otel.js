@@ -22,6 +22,7 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { BatchSpanProcessor, NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
 let provider = null;
 let enabled = false;
 let tracerName = 'temper-telemetry-ts';
@@ -35,7 +36,7 @@ let tracerName = 'temper-telemetry-ts';
  * standard env itself, so the only thing this function decides is *whether* to register
  * (and whether to add HTTP instrumentation).
  */
-export function initTelemetry({ serviceName, instrumentHttp = false }) {
+export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint }) {
     if (provider)
         return;
     const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
@@ -51,12 +52,26 @@ export function initTelemetry({ serviceName, instrumentHttp = false }) {
     // `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS` natively, so config
     // stays in one place (env) shared with the Rust side.
     const exporter = new OTLPTraceExporter();
+    const spanProcessors = [];
+    // Runs ahead of the exporting processor for readability only — it acts in `onEnding`,
+    // which fires before any processor's `onEnd`, so the outcome does not depend on order.
+    if (mcpEndpoint) {
+        const key = negotiationKey(mcpEndpoint);
+        if (key) {
+            spanProcessors.push(new McpNegotiationStatusProcessor(key));
+        }
+        else {
+            console.warn(`[telemetry] mcpEndpoint is not a URL (${mcpEndpoint}); ` +
+                'MCP negotiation 405s will export as errors');
+        }
+    }
+    // BatchSpanProcessor + a per-request flush (the consumer's job) is the JS mirror of
+    // the Rust `flush_within_budget`. The batch timer alone is unsafe on Vercel: the
+    // sandbox freezes between invocations and the timer may never fire.
+    spanProcessors.push(new BatchSpanProcessor(exporter));
     const built = new NodeTracerProvider({
         resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: resolvedServiceName }),
-        // BatchSpanProcessor + a per-request flush (the consumer's job) is the JS mirror of
-        // the Rust `flush_within_budget`. The batch timer alone is unsafe on Vercel: the
-        // sandbox freezes between invocations and the timer may never fire.
-        spanProcessors: [new BatchSpanProcessor(exporter)]
+        spanProcessors
     });
     built.register({
         contextManager: new AsyncHooksContextManager().enable(),
@@ -72,7 +87,8 @@ export function initTelemetry({ serviceName, instrumentHttp = false }) {
         void enableHttpInstrumentation();
     }
     console.info(`[telemetry] span export enabled: service.name=${resolvedServiceName} → ${endpoint}` +
-        (instrumentHttp ? ' (+http instrumentation)' : ''));
+        (instrumentHttp ? ' (+http instrumentation)' : '') +
+        (spanProcessors.length > 1 ? ` (+mcp negotiation status reset for ${mcpEndpoint})` : ''));
 }
 async function enableHttpInstrumentation() {
     try {
