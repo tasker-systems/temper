@@ -2,7 +2,8 @@
 //!
 //! Writes (`open`/`close`) dispatch ONE operations command through the `Backend` trait — never calling
 //! services or `sqlx::query!` directly. Auth-before-write lives INSIDE the backend
-//! (`DbBackend::{open,close}_invocation` gate on `check_can_read_cogmap`), so the handlers do NOT add a
+//! (`open_invocation` gates on `check_cogmap_authorable` — every open, delegated or not;
+//! `close_invocation` gates on readability inside its own lookup), so the handlers do NOT add a
 //! handler-level auth gate; they just dispatch and let the backend return `Forbidden`/404.
 //!
 //! Reads (`show`/`list`) are service-direct via the `substrate_read` wrappers (the Backend-trait
@@ -52,7 +53,7 @@ pub async fn open(
     RequestSurface(surface): RequestSurface,
     Json(req): Json<OpenInvocationRequest>,
 ) -> ApiResult<Json<InvocationAck>> {
-    // Auth-before-write lives inside DbBackend::open_invocation (check_can_read_cogmap) — just dispatch.
+    // Auth-before-write lives inside DbBackend::open_invocation (check_cogmap_authorable) — just dispatch.
     let cmd = OpenInvocation {
         trigger_kind: req.trigger_kind,
         originating_cogmap: CogmapId::from(req.originating_cogmap),

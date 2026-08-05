@@ -90,6 +90,22 @@ async fn seed_drifted_map(pool: &sqlx::PgPool, principal: Uuid) -> Uuid {
         .execute(pool)
         .await
         .unwrap();
+    // The principal must AUTHOR the map, not merely read it: since `20260805000010` the sweep
+    // selects through `steward_authorable_cogmaps`, because the work it enqueues terminates in
+    // `advance_steward_watermark`, whose gate is an explicit write grant. Team membership alone
+    // makes the map readable and leaves it unclaimable — which is exactly the production defect
+    // that migration fixes (the L0 kernel, readable by everyone and authorable by nobody).
+    // Write implies read (kb_access_grants monotonic check): grant both.
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, $2)",
+    )
+    .bind(cogmap)
+    .bind(principal)
+    .execute(pool)
+    .await
+    .unwrap();
 
     let ctx: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \

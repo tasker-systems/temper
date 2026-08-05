@@ -179,16 +179,41 @@ async fn self_attributed_open_requires_write(pool: PgPool) {
         .expect("self-attributed open with write must succeed");
 }
 
-/// F2 — a DELEGATED open (`parent_cogmap: Some`) needs only READ on the originating map; the substrate's
-/// parent→originating lineage is the control for delegated sub-agents, so a read-only principal (no write
-/// grant) may open a delegated envelope where it could not open a self-attributed one.
+/// Supplying `parent_cogmap` must NOT downgrade the gate — the regression test for the production
+/// bypass, and the inversion of the retired `delegated_open_needs_only_read`.
+///
+/// That test asserted a read-only principal may open a DELEGATED envelope, on F2's reasoning that "the
+/// substrate's parent→originating lineage is the control". It is not a control over the caller:
+/// `cogmaps_share_a_team(parent, originating)` takes two cogmap ids and **no principal**, and is
+/// reflexive for any team-joined map. So the retired test passed `parent == originating` — a value every
+/// caller already holds — and thereby demonstrated the bypass it was certifying as correct.
+///
+/// The steward found the same manoeuvre in production independently: 47 of 47 opens on L0 were
+/// self-parented by a principal with no write grant on it, after being refused self-attributed.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn delegated_open_needs_only_read(pool: PgPool) {
+async fn parent_cogmap_does_not_downgrade_the_open_gate(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "delegate@example.com").await;
     common::fixtures::approve_standing(&pool, profile).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
 
-    // Read-only principal, but delegated (parent set) → read gate suffices → succeeds.
+    // The exact production manoeuvre: read-only principal, parent == originating. Must be refused.
+    let denied = backend
+        .open_invocation(OpenInvocation {
+            trigger_kind: "manual".to_string(),
+            originating_cogmap: CogmapId::from(L0_COGMAP),
+            parent_cogmap: Some(CogmapId::from(L0_COGMAP)),
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(denied, Err(temper_core::error::TemperError::Forbidden)),
+        "a self-parented open by a read-only principal must be Forbidden — supplying parent_cogmap \
+         must not swap the write gate for a read gate: {denied:?}"
+    );
+
+    // Self-parenting stays LEGAL, it is merely inert: with write, the identical call succeeds. The fix
+    // removes the authorization discount, not the ability to record a (meaningless) self-binding.
+    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
     backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
@@ -197,5 +222,5 @@ async fn delegated_open_needs_only_read(pool: PgPool) {
             origin: Surface::ApiHttp,
         })
         .await
-        .expect("delegated open by a read-only principal must succeed");
+        .expect("a self-parented open by an authoring principal must still succeed");
 }
