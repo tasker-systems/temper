@@ -15,22 +15,30 @@ and [OpenTelemetry setup](open-telemetry-setup.md). Datasource: the Tempo dataso
 
 | Mark | Means |
 |---|---|
-| **`[live]`** | Executed against production Tempo on 2026-08-03 and returned real data. The output is quoted. |
-| **`[shape]`** | The *aggregation form* was executed live against an existing attribute and works; the specific attribute it names does not exist yet. |
+| **`[live]`** | Executed against production Tempo and returned real data. The output is quoted, with its date. |
+| **`[shape]`** | The *aggregation form* was executed live and works, and the attribute is confirmed present — but this exact query has not itself been run. |
 | **`[blind]`** | Written against the design, never executed. Names spans and attributes the instrumentation has not shipped. |
 
-> **Field presence was verified locally on 2026-08-03**, by
-> `crates/temper-services/tests/drain_span_test.rs`: every name in `DRAIN_DISPATCH_FIELDS` and
-> `DRAIN_JOB_FIELDS` is carried by a real exported span, and `queue_wait_ms` was mutation-tested to
-> confirm it fails on a wrong value rather than only on a missing one. **That verifies the fields
-> exist, not that any query below returns what you want** — local spans never reach Tempo, so no
-> TraceQL on this page has been run against the new spans. The marks are unchanged accordingly.
+> **Field presence was verified locally on 2026-08-03** — kept for the record, and superseded by the
+> production pass below. `crates/temper-services/tests/drain_span_test.rs` confirms every name in
+> `DRAIN_DISPATCH_FIELDS` and `DRAIN_JOB_FIELDS` is carried by a real exported span, and
+> `queue_wait_ms` is mutation-tested to fail on a wrong value rather than only on a missing one. That
+> gate still runs in CI and is what keeps the fields from drifting; what it could never do is tell you
+> whether a query returns something useful, because local spans never reach Tempo.
 
-Most queries here are `[blind]`, and **that is the expected state of this file until the
-instrumentation merges** — it was written alongside the design so the field set could be checked
-against real operator questions rather than invented and then rationalized. A `[blind]` query is a
-statement of intent, not a working artifact. Re-run and re-mark them when the spans land; a query
-that stays `[blind]` after the spans are flowing is a query nobody has ever run.
+**Updated 2026-08-04, after the spans went live** (PR #642, merged; production deploy Ready 13:01Z).
+The instrumentation was verified end to end — the full three-level tree arrives with correct
+parenting, `SPAN_KIND_INTERNAL` on both children, and no job fields on the request root. A1, B1 and
+D1 have now been **run against production** and re-marked, with their real output quoted.
+
+**The remaining `[blind]` queries are still `[blind]` on purpose.** They need traffic this drain has
+not produced yet — a deferred job, a failed one, a second anchor under load. Re-run and re-mark each
+as its case actually occurs. A query that stays `[blind]` indefinitely is one nobody has ever run,
+and *"is the drain keeping up?"* should not rest on one of those.
+
+**Two traps came out of running them, both in this file where you will hit them:** B1's quantiles are
+exponentially bucketed and read high (see B1), and A2's series has legitimate gaps rather than missing
+data (see A2). Both were invisible until the queries met real spans.
 
 **These spans are `internal` kind, so none of this is in `traces_spanmetrics_*`.** That is by design
 — see the instrumentation spec, §G3. TraceQL metrics is the aggregation route and does not need
@@ -48,23 +56,35 @@ The headline question. Backlog depth is the one number that distinguishes *slow*
 behind* — a drain can be slow forever and still keep up, and a fast drain can fall behind if arrivals
 outpace it.
 
-**A1 — Backlog depth over time** `[blind]`
+**A1 — Backlog depth over time** `[live]`
 
 ```traceql
 { name = "region_dispatch" } | max_over_time(span.backlog_depth)
 ```
 
+> Run against production 2026-08-04, ~10 min after the spans went live: returned **1**, matching the
+> single queued job a write had just produced. `max_over_time` is exact — unlike the quantiles, see B1.
+
 Read as: how many jobs were waiting each time a tick arrived. Flat-and-low is healthy. A rising
 floor is the falling-behind signal — not a spike, which is just a burst the next tick absorbs.
 
-**A2 — Age of the oldest waiting job** `[blind]`
+**A2 — Age of the oldest waiting job** `[shape]`
 
 ```traceql
 { name = "region_dispatch" } | quantile_over_time(span.oldest_pending_age_ms, .95)
 ```
 
+> The attribute is confirmed present in production (`oldest_pending_age_ms: 9210` on a tick that found
+> one job waiting). The quantile form itself is B1's, verified there.
+
 The companion to A1 and the more honest of the two. Depth 1 with an age of 40 minutes is a *stuck*
 job, which A1 alone reports as a healthy queue.
+
+> **This series has gaps, and they are not missing data.** `oldest_pending_age_ms` is recorded ONLY
+> when the queue was non-empty — "nothing waiting" is not an age of zero, and writing one would put a
+> false floor under every aggregate. Confirmed in production: ticks with `backlog_depth: 0` carry no
+> such attribute at all. So this query aggregates over *ticks that found work*, which is the right
+> denominator, and a panel reading "no data" on a quiet drain is correct rather than broken.
 
 **A3 — Both drains side by side** `[blind]`
 
@@ -79,11 +99,21 @@ visible here and nowhere else.
 
 ## B. How far behind is a settled shape?
 
-**B1 — Queue wait distribution** `[blind]`
+**B1 — Queue wait distribution** `[live]`
 
 ```traceql
 { name = "region_job" } | quantile_over_time(span.queue_wait_ms, .5, .95, .99)
 ```
+
+> Run against production 2026-08-04. Returned p50 = p95 = **16384** over a window whose only sample
+> was a real `queue_wait_ms` of **9216**.
+>
+> **That is not a bug, and it is the most important caveat on this page.** TraceQL's
+> `quantile_over_time` buckets exponentially, so a 9.2s sample reports in the 16.384s bucket — a 78%
+> overstatement at this magnitude, converging only as sample count grows. **Never set an alert
+> threshold on this query's absolute value**, and never quote it as *the* queue wait. For a real
+> number, read a `region_job` span directly (C3 gets you to one). Use this for *shape and trend*,
+> which is what it is good for.
 
 Enqueue-to-lease. Measured directly from `kb_workflow_jobs` on 2026-08-03 at **0.84–60s**, bounded
 by the 1-minute cron plus a consistent ~24s-past-the-minute landing — so a p95 near 60s is the
@@ -140,15 +170,14 @@ Use this to get from "the p95 moved" to an actual trace with its job spans under
 
 ## D. Is it failing?
 
-**D1 — Outcome mix** `[shape]`
+**D1 — Outcome mix** `[live]`
 
 ```traceql
-{ name = "region_job" } | count_over_time() by (span.outcome)
+{ name =~ "region_job|embed_job" } | count_over_time() by (span.outcome)
 ```
 
-> The aggregation form is `[live]`: the same shape keyed on an existing attribute
-> (`count_over_time() by (span.http.route)`) returned `/api/region/dispatch` 356 and
-> `/api/embed/dispatch` 1431 over 6h.
+> Run against production 2026-08-04: returned `completed` **1**. Counts are exact (unlike B1's
+> quantiles). Widened to both drains — the outcome vocabulary is shared, so one panel covers the pair.
 
 `outcome` is `completed` | `deferred` | `partial` | `failed` (`JobOutcome` in
 `crates/temper-services/src/services/drain_span.rs`, asserted against these exact strings).
