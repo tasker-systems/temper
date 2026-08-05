@@ -338,6 +338,19 @@ export type StageTrace = { stage: number, act: ActName, disposition: StageDispos
 bounds_dropped: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
 
 /**
- * Where the principal constraint applies to an act's mechanic.
+ * Where the principal constraint applies to **the fragment that produces this act's ordering** —
+ * not to its serving function as a whole.
+ *
+ * The granularity is stated because it is not inferable and was once got wrong in both
+ * directions. **Every** serving function in the family takes `p_principal` and joins a visibility
+ * relation, so "does the mechanic read the principal" is not the question — answering *that* one
+ * collapses all three variants into `PrincipalRelative` and deletes the distinction this type
+ * exists to draw. The question is whether the quantity the act **orders by** would change if a
+ * different set of rows were fed to it.
+ *
+ * A consequence worth carrying: one function can emit fragments in different classes at once
+ * (`cogmap_list_rows` returns principal-agnostic counts beside principal-relative-in-domain team
+ * rollups), so this field is lossy by construction for any act whose output has more than one
+ * ordering-bearing quantity. No act in the search family does today.
  */
 export type VisibilityProfile = "principal-agnostic" | "agnostic-in-value-relative-in-domain" | "principal-relative";

@@ -83,7 +83,16 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Edge],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            // CORRECTED 2026-08-05 (was PrincipalRelative). `graph_score` is `MAX(score) GROUP BY
+            // node` over `walk`, whose `adj` admits an edge only when BOTH endpoints are visible —
+            // so a severed intermediate node changes a surviving node's score. Bite-proven: a 25%
+            // row-set cut with the seeds held fixed moves 42 of 415 shared nodes, max delta
+            // 0.2016. The cross-principal differential missed it (0 differing) because this
+            // corpus's two real principals are NESTED, not merely different.
+            //
+            // No `scoring_revision` bump: the body did not change, only what we correctly say
+            // about it. A revision records a change in the scale or meaning of the quantity.
+            visibility_profile: VisibilityProfile::AgnosticInValueRelativeInDomain,
             scoring_revision: 1,
         },
         ActDeclaration {
@@ -287,15 +296,51 @@ mod tests {
     }
 
     #[test]
-    fn survey_is_the_only_act_relative_in_domain() {
-        // sal_norm is a percent_rank whose window frame is the asker's visible set — measured,
-        // 382 of 385 regions score differently across two visible-anchor sets. No other act in
-        // the family has that property, and claiming one did would be a false declaration.
+    fn exactly_survey_and_follow_from_are_relative_in_domain() {
+        // WAS `survey_is_the_only_act_relative_in_domain`, and it was green for the wrong reason.
+        //
+        // `survey`'s sal_norm is a percent_rank framed on the asker's visible anchor set —
+        // measured, 836 of 848 shared regions score differently across two real principals.
+        // `follow-from`'s graph_score has the same property and was declared PrincipalRelative:
+        // one class too strict, which is the SAFE direction, so nothing caught it. The old
+        // assertion's sentence — "no other act in the family has that property" — was false about
+        // the deployed system while its `assert_eq!` passed.
+        //
+        // Kept as an EXACT set rather than a `contains`, because the value of this test is that
+        // adding or reclassifying an act must be a deliberate edit here. A `contains` would have
+        // admitted the very drift that produced the correction.
         let relative: Vec<ActName> = search_family()
             .into_iter()
             .filter(|a| a.visibility_profile == VisibilityProfile::AgnosticInValueRelativeInDomain)
             .map(|a| a.name)
             .collect();
-        assert_eq!(relative, vec![ActName::Survey]);
+        assert_eq!(relative, vec![ActName::FollowFrom, ActName::Survey]);
+    }
+
+    #[test]
+    fn the_two_find_acts_order_by_a_principal_agnostic_quantity() {
+        // The other half of the same correction, and the half with no code change: both `find`
+        // acts' ORDERING quantities are principal-agnostic — `ts_rank` is document-local (0
+        // differing over 185 shared resources) and the vector arm's shrunk order statistic is
+        // framed `GROUP BY resource_id` over that resource's own chunks (0 over 93). Their
+        // `PrincipalRelative` declarations describe their result SETS, which is true and is not
+        // what this field asks.
+        //
+        // So this test does NOT assert those declarations are wrong. It pins the fact that makes
+        // them a judgment rather than an oversight, so a later reader re-deriving the
+        // classification finds the measurement instead of repeating it.
+        for name in [
+            ActName::FindExact,
+            ActName::FindAboutAnywhere,
+            ActName::FindAboutWithin,
+        ] {
+            let a = declaration(&name).unwrap();
+            assert_ne!(
+                a.visibility_profile,
+                VisibilityProfile::AgnosticInValueRelativeInDomain,
+                "{name:?} orders by a document-local or resource-local quantity; \
+                 declaring it relative-in-domain would claim a frame it does not have"
+            );
+        }
     }
 }

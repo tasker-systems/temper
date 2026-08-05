@@ -138,7 +138,7 @@
       "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
     },
     "VisibilityProfile": {
-      "description": "Where the principal constraint applies to an act's mechanic.",
+      "description": "Where the principal constraint applies to **the fragment that produces this act's ordering** —\nnot to its serving function as a whole.\n\nThe granularity is stated because it is not inferable and was once got wrong in both\ndirections. **Every** serving function in the family takes `p_principal` and joins a visibility\nrelation, so \"does the mechanic read the principal\" is not the question — answering *that* one\ncollapses all three variants into `PrincipalRelative` and deletes the distinction this type\nexists to draw. The question is whether the quantity the act **orders by** would change if a\ndifferent set of rows were fed to it.\n\nA consequence worth carrying: one function can emit fragments in different classes at once\n(`cogmap_list_rows` returns principal-agnostic counts beside principal-relative-in-domain team\nrollups), so this field is lossy by construction for any act whose output has more than one\nordering-bearing quantity. No act in the search family does today.",
       "oneOf": [
         {
           "enum": [
@@ -149,7 +149,7 @@
         },
         {
           "const": "agnostic-in-value-relative-in-domain",
-          "description": "Every input and operation is principal-free, but the fragment is a window or aggregate\nwhose frame is the principal's read-set. `survey`'s `sal_norm` is the worked example.",
+          "description": "The ordering fragment's own expression and predicates are principal-free, but it is a\nwindow or aggregate whose **frame** is the principal's read-set — so the value is a\nfunction of *a row set*, and which row set is the principal's business. Extractable only\nwith that domain made an explicit input.\n\nTwo worked examples, because one taught the wrong lesson. `survey`'s `sal_norm` is a\n`percent_rank` over the visible anchor set. `follow-from`'s `graph_score` is a\n`MAX(score) GROUP BY node` over a walk whose adjacency requires **both** edge endpoints\nvisible — arithmetic principal-free, path set principal-scoped.\n\n**The discriminator against `PrincipalAgnostic` is gate vs filter, and the two look\nidentical to a grep.** A visibility *gate* (`WHERE subject IN (visible)`) is all-or-nothing\non the subject and cannot change the answer — `resource_standing_shape` is gated and is\nagnostic, measured. A visibility *filter* (`JOIN vis ON vis.id = m.member_id`) removes rows\nfrom the aggregate's own input and does.",
           "type": "string"
         }
       ]
