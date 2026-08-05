@@ -22,7 +22,9 @@ permissions:
 jobs:
   # ==========================================================================
   # Stage 0: Detect change scope
-  # Analyzes changed files so a docs-only change skips the whole pipeline.
+  # Analyzes changed files so a change with nothing load-bearing in it — pure
+  # docs, or a non-product tree like scripts/wayfind-spike — skips the whole
+  # pipeline.
   # Everything else runs the full pipeline. ~15s.
   # ==========================================================================
   detect-scope:
@@ -30,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs-only: ${{ steps.detect.outputs.docs-only }}
+      skip-all: ${{ steps.detect.outputs.skip-all }}
+      non-product: ${{ steps.detect.outputs.non-product }}
       rust-inert: ${{ steps.detect.outputs.rust-inert }}
       run-code-quality: ${{ steps.detect.outputs.run-code-quality }}
       run-rust-quality: ${{ steps.detect.outputs.run-rust-quality }}

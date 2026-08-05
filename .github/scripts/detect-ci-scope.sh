@@ -6,8 +6,12 @@
 # Temper's pipeline is small (code-quality + test-rust + test-typescript, gated
 # by ci-success). Two unimpeachably-safe optimizations live here:
 #
-#   1. DOCS-ONLY — a change touching ONLY *.md/*.txt/*.adoc skips the WHOLE
-#      pipeline.
+#   1. SKIP-ALL — a change touching only files that NOTHING consumes skips the
+#      WHOLE pipeline. Two disjoint classes qualify: documentation
+#      (*.md/*.txt/*.adoc, reported separately as DOCS_ONLY) and the
+#      NON_PRODUCT_ROOTS trees, which no build, test or gate reaches. The
+#      extension test alone is not sufficient and never was — see RUST_COUPLED,
+#      which vetoes both classes for the doc-extension files a Rust gate owns.
 #
 #   2. RUST-INERT — a change whose every non-doc file lives in a tree that is
 #      provably inert to the Rust corpus (the TS packages and the SDK clients)
@@ -60,7 +64,8 @@
 # merges green and every later PR inherits a dead check.
 #
 # Keep this script conservative: for every OTHER job it only ever turns things
-# OFF for pure-docs changes, and a self-referential edit forces a full run.
+# OFF for a change with nothing load-bearing in it — pure docs, or a
+# NON_PRODUCT_ROOTS tree — and a self-referential edit forces a full run.
 #
 # Usage:
 #   .github/scripts/detect-ci-scope.sh [OPTIONS]
@@ -72,7 +77,8 @@
 #   --verbose         Print debug info to stderr
 #
 # Output (stdout, eval-safe KEY=VALUE):
-#   DOCS_ONLY, RUST_INERT, RUN_CODE_QUALITY, RUN_RUST_QUALITY, RUN_TEST_RUST,
+#   DOCS_ONLY, SKIP_ALL, NON_PRODUCT, RUST_INERT, RUN_CODE_QUALITY,
+#   RUN_RUST_QUALITY, RUN_TEST_RUST,
 #   RUN_TEST_TYPESCRIPT, RUN_TEST_RUBY, RUN_TEST_AGENTS_TS, SCOPE_SUMMARY
 #
 # Bash 3.2 compatible (macOS default): no ${var^^}, no mapfile, no assoc arrays.
@@ -145,8 +151,15 @@ HAS_DOCS=false
 HAS_SELF=false
 HAS_NON_DOC=false
 
-# Documentation: markdown / text files anywhere (including CLAUDE.md, READMEs,
-# docs/** and per-crate doc files — none of these affect a build or test).
+# Documentation: markdown / text files anywhere (CLAUDE.md, READMEs, docs/**,
+# per-crate doc files).
+#
+# This is an EXTENSION test, and an extension is not a guarantee: some `.md` and
+# `.txt` files are compiled into Rust with `include_str!` or read by a gate as
+# its fixture, and for those "it's only a doc" is false. They are enumerated in
+# RUST_COUPLED below, whose veto is what makes this test safe rather than merely
+# usually-right. Do not restate the old claim that a doc file cannot affect a
+# build — it can, and three of them did.
 if changes_match '\.(md|txt|adoc)$'; then
     HAS_DOCS=true
 fi
@@ -164,6 +177,57 @@ if [ -n "$NON_DOC_FILES" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# NON_PRODUCT_ROOTS: trees that no build, test or gate can reach — inert to
+# cargo (`members = ["crates/*", "tests/e2e"]`), inert to bun (a two-entry
+# `workspaces` list), referenced by no workflow, and read by no `include_str!`.
+# A change confined to them cannot move ANY job's outcome, so it is treated
+# exactly as docs are: skip the whole pipeline.
+#
+# This is a different claim from RUST_INERT_ROOTS, which says only "cannot move
+# the RUST half" (those trees are live TypeScript, so TS jobs still run). Here
+# nothing at all consumes the tree, so nothing at all needs to run.
+#
+#   scripts/wayfind-spike/  — the read-only measurement harness. Its `.sql` is
+#     fed to `psql` by hand, its `.py` generates that SQL, its `.tsv` are probe
+#     vectors, and its `.sh` shell out to `neonctl`/`psql`. Nothing in the repo
+#     imports, compiles, lints or executes any of it. Verified: the only
+#     reference from outside the directory is a provenance COMMENT in migration
+#     20260804000030 naming `queries.txt`.
+#
+# THE BAR FOR ADDING A ROOT HERE IS THE ONE `scripts/` ITSELF FAILS. Do not be
+# tempted to widen this to `^scripts/`: three files under it are `include_str!`d
+# into Rust (`install/install.sh`, `install/containment-corpus.txt`,
+# `migration-declaration-corpus.txt`), so `scripts/` as a whole is emphatically
+# NOT inert, and two of those are the doc-extension holes RUST_COUPLED now
+# vetoes. Inertness is a property of a specific tree, proven by grep, never of a
+# top-level directory name.
+# ---------------------------------------------------------------------------
+NON_PRODUCT_ROOTS='^scripts/wayfind-spike/'
+
+# FAIL CLOSED on an empty pattern. `grep -vE ''` matches EVERY line, so an empty
+# NON_PRODUCT_ROOTS would strip the whole changed-file list, leave
+# LOAD_BEARING_FILES empty, and silently turn off the entire pipeline for every
+# PR. That is the worst reachable failure of this script, and it is one deleted
+# string away — so it is checked rather than trusted. Erroring here fails
+# detect-scope, which ci-success treats as FATAL.
+if [ -z "$NON_PRODUCT_ROOTS" ]; then
+    echo "FATAL: NON_PRODUCT_ROOTS is empty — an empty pattern would skip ALL CI." >&2
+    echo "       Delete the root's USE here, not the pattern, if the class is retired." >&2
+    exit 1
+fi
+
+# Files that are neither documentation nor inside a non-product root — i.e. the
+# ones that can actually move a job outcome. Empty means nothing load-bearing
+# changed. `__force_full_ci__` (the no-diff safety fallback) has no doc
+# extension and matches no root, so it lands here and correctly forces a run.
+LOAD_BEARING_FILES="$(echo "$CHANGED_FILES" | grep -vE '\.(md|txt|adoc)$' | grep -vE "$NON_PRODUCT_ROOTS" || true)"
+
+HAS_NON_PRODUCT=false
+if changes_match "$NON_PRODUCT_ROOTS"; then
+    HAS_NON_PRODUCT=true
+fi
+
+# ---------------------------------------------------------------------------
 # Rust-inert detection (optimization 2 in the header).
 #
 # RUST_INERT_ROOTS: trees cargo's `members` and bun's `workspaces` prove cannot
@@ -173,14 +237,42 @@ fi
 # Rust corpus.
 RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-workflows/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^clients/temper-rb/'
 
-# RUST_COUPLED: committed artifacts that a Rust quality gate regenerates and
-# diffs. Two of them live UNDER an inert root (the ts-rs generated trees), so
-# the inert-roots test alone would wave them through — but a manual edit to any
-# of them must run the Rust gate that owns it (ts-rs-drift, skills-drift,
-# openapi-check). Their presence therefore VETOES the rust-inert skip. This is
-# the send-side of the one-directional coupling explained in the header:
-# Rust → TS is real, so a TS-surface edit pulls Rust back on.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/'
+# RUST_COUPLED: files a Rust gate OWNS — either it regenerates and diffs them,
+# or it compiles them in and asserts against them. Two of them live UNDER an
+# inert root (the ts-rs generated trees), so the inert-roots test alone would
+# wave them through — but a manual edit to any of them must run the Rust gate
+# that owns it (ts-rs-drift, skills-drift, openapi-check). Their presence
+# therefore VETOES the rust-inert skip. This is the send-side of the
+# one-directional coupling explained in the header: Rust → TS is real, so a
+# TS-surface edit pulls Rust back on.
+#
+# IT ALSO VETOES DOCS-ONLY, and that is the clause carrying the most weight,
+# because the docs-only rule keys on the EXTENSION and several files a gate
+# depends on are `.md` or `.txt`. Each entry below with a doc extension is a
+# measured hole, not a hypothetical:
+#
+#   crates/temper-cli/skill-content/**  — `include_str!`d into `commands/skill.rs`
+#     and rendered into the committed `agent-skills/` projection that skills-drift
+#     diffs. All `.md`, and sitting under `crates/`, so the one tree where "it's
+#     just markdown" is most obviously wrong is also the one the extension test
+#     most confidently waved through. `agent-skills/` (the RECEIVE side) was
+#     already here; this is the SEND side, and a gate needs both or it only ever
+#     catches an edit to the copy.
+#   scripts/install/containment-corpus.txt — `include_str!`d by manifest.rs's
+#     path-containment tests AND read by install.sh's parity check. It encodes a
+#     path-traversal security rule; editing it alone skipped the entire pipeline.
+#   scripts/migration-declaration-corpus.txt — `include_str!`d by temper-migrate
+#     and read by code-quality's awk-side parity check.
+#
+# `scripts/install/install.sh` is `include_str!`d too but needs no entry: `.sh`
+# is not a doc extension, so it already forces a full run.
+#
+# THE RESIDUAL RISK, stated rather than assumed away: a NEW `include_str!` of a
+# doc-extension file outside these paths reopens the hole silently. That is what
+# `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
+# it derives the set from the source rather than trusting this list to stay
+# complete.
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then
@@ -193,9 +285,13 @@ fi
 # An UNRECOGNIZED non-doc file (anything outside the inert roots — a crate, a
 # migration, a workflow, a githook) fails this test, so the default stays
 # conservative: unknown → run the full Rust corpus.
+# NON_PRODUCT_ROOTS is stripped here too: a file nothing consumes at all is a
+# fortiori unable to reach a crate, so a change mixing spike probes with a
+# TypeScript package is still rust-inert rather than being dragged to full CI by
+# the probes.
 ALL_NON_DOC_INERT=false
 if [ "$HAS_NON_DOC" = "true" ]; then
-    NON_INERT_FILES="$(echo "$NON_DOC_FILES" | grep -vE "$RUST_INERT_ROOTS" || true)"
+    NON_INERT_FILES="$(echo "$NON_DOC_FILES" | grep -vE "$RUST_INERT_ROOTS" | grep -vE "$NON_PRODUCT_ROOTS" || true)"
     if [ -z "$NON_INERT_FILES" ]; then
         ALL_NON_DOC_INERT=true
     fi
@@ -279,7 +375,24 @@ if [ "$HAS_DOCS" = "true" ] && [ "$HAS_NON_DOC" = "false" ] && \
     DOCS_ONLY=true
 fi
 
-debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_RUBY=$HAS_RUBY HAS_AGENTS_TS=$HAS_AGENTS_TS HAS_RUST_COUPLED=$HAS_RUST_COUPLED ALL_NON_DOC_INERT=$ALL_NON_DOC_INERT -> DOCS_ONLY=$DOCS_ONLY RUST_INERT=$RUST_INERT"
+# skip_all: NOTHING load-bearing changed — every file is documentation or lives
+# in a non-product root. This is the predicate the job flags gate on; DOCS_ONLY
+# is the strictly narrower "and they were all docs", kept as its own output
+# because it is what the annotation and the historical consumers mean by it.
+# Reporting DOCS_ONLY=true for a change full of `.sql` and `.tsv` would be a
+# summary that lies about its own subject, which is the failure this repo pays
+# most attention to — hence two keys rather than one widened one.
+#
+# The vetoes are re-applied here rather than inherited: SKIP_ALL is a superset
+# of DOCS_ONLY, so every escape hatch DOCS_ONLY honours must be honoured again
+# or the wider predicate would quietly reopen what the narrower one closed.
+SKIP_ALL=false
+if [ -z "$LOAD_BEARING_FILES" ] && [ "$HAS_SELF" = "false" ] && \
+   [ "$HAS_RUST_COUPLED" = "false" ]; then
+    SKIP_ALL=true
+fi
+
+debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PRODUCT=$HAS_NON_PRODUCT HAS_RUBY=$HAS_RUBY HAS_AGENTS_TS=$HAS_AGENTS_TS HAS_RUST_COUPLED=$HAS_RUST_COUPLED ALL_NON_DOC_INERT=$ALL_NON_DOC_INERT -> DOCS_ONLY=$DOCS_ONLY SKIP_ALL=$SKIP_ALL RUST_INERT=$RUST_INERT"
 
 # ---------------------------------------------------------------------------
 # Compute job flags.
@@ -300,14 +413,21 @@ debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_RUBY=$
 # self-referential change to this script forces both on, matching the
 # conservative posture above.
 # ---------------------------------------------------------------------------
-if [ "$DOCS_ONLY" = "true" ]; then
+if [ "$SKIP_ALL" = "true" ]; then
     RUN_CODE_QUALITY=false
     RUN_RUST_QUALITY=false
     RUN_TEST_RUST=false
     RUN_TEST_TYPESCRIPT=false
     RUN_TEST_RUBY=false
     RUN_TEST_AGENTS_TS=false
-    SCOPE_SUMMARY="docs-only: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
+    if [ "$DOCS_ONLY" = "true" ]; then
+        SKIP_REASON="docs-only"
+    elif [ "$HAS_DOCS" = "true" ]; then
+        SKIP_REASON="docs + non-product trees only"
+    else
+        SKIP_REASON="non-product trees only"
+    fi
+    SCOPE_SUMMARY="${SKIP_REASON}: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
 else
     # code-quality.yml is invoked for every non-docs change so its TypeScript
     # and guard-test jobs always run; the Rust half is the part that scopes off.
@@ -338,6 +458,8 @@ fi
 # Output
 # ---------------------------------------------------------------------------
 printf 'DOCS_ONLY=%s\n' "$DOCS_ONLY"
+printf 'SKIP_ALL=%s\n' "$SKIP_ALL"
+printf 'NON_PRODUCT=%s\n' "$HAS_NON_PRODUCT"
 printf 'RUST_INERT=%s\n' "$RUST_INERT"
 printf 'RUN_CODE_QUALITY=%s\n' "$RUN_CODE_QUALITY"
 printf 'RUN_RUST_QUALITY=%s\n' "$RUN_RUST_QUALITY"
@@ -350,6 +472,8 @@ printf 'SCOPE_SUMMARY=%s\n' "$SCOPE_SUMMARY"
 if [ "$USE_GITHUB_OUTPUT" = "true" ] && [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
         echo "docs-only=${DOCS_ONLY}"
+        echo "skip-all=${SKIP_ALL}"
+        echo "non-product=${HAS_NON_PRODUCT}"
         echo "rust-inert=${RUST_INERT}"
         echo "run-code-quality=${RUN_CODE_QUALITY}"
         echo "run-rust-quality=${RUN_RUST_QUALITY}"
