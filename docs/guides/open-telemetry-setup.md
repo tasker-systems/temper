@@ -390,8 +390,18 @@ which made a mandated negotiation response **77% of total system error volume** 
 method + status + endpoint combination, keyed on the response shape rather than on which service
 called, so it covers every MCP client we run. The span, its timing and its
 `http.response.status_code=405` all survive, so the per-tool-call round trip stays countable in
-Tempo — suppressing the symptom and eliminating the probe remain different fixes, and this is only
-the first.
+Tempo — suppressing the symptom and eliminating the probe are different fixes, and this is only the
+first.
+
+**On the second fix: worth doing, and the number is why.** The probe is not free. Measured over 12h,
+the round trip runs **p50 708ms, p90 1.04s, p99 2.03s**, and at 446 probes/day against ~361
+`execute_tool` spans/day it is not amortized across a session — it is paid at roughly the rate tool
+calls are made. So an agent run that retries a refused tool 25 times (which
+`019fce6a-75a5-7012-99cb-ca71fb2e7711` observed) spends something like 18s in negotiation alone.
+That is a latency argument, not a telemetry one, and it survives this suppression entirely — which
+is the point of keeping the span. What it needs next is the separate question of whether the AI
+SDK's MCP client can be told not to attempt SSE against a server known not to offer it; that is a
+code question in a dependency we do not own, and it has not been answered here.
 
 ## Where the pieces live
 
