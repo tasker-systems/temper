@@ -43,6 +43,28 @@
       ],
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
+    "ActQuantity": {
+      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. `unified_search` is the worked failure — it\nrenames `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then sums them into\n`combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is the\nexact expression the frame register forbids.",
+      "properties": {
+        "field": {
+          "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it.",
+          "type": "string"
+        },
+        "means": {
+          "description": "What the number measures, in this act's own terms.",
+          "type": "string"
+        },
+        "scale": {
+          "$ref": "#/$defs/QuantityScale"
+        }
+      },
+      "required": [
+        "field",
+        "means",
+        "scale"
+      ],
+      "type": "object"
+    },
     "BoundTerm": {
       "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
       "oneOf": [
@@ -64,10 +86,10 @@
       ]
     },
     "BuildState": {
-      "description": "Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —\nwhich is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`\nfailure: a const beside a registry, with a test holding its own second copy.",
+      "description": "Whether a mechanic for this act exists, and whether the act has a door of its own or only its\nhost's. Every value is mechanically checkable by T3's gate — which is the whole point, because a\nhand-maintained build-state is the `ADMIN_EVENT_TYPES` failure: a const beside a registry, with\na test holding its own second copy.\n\n**This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is\n[`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A\n`served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and\nCLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts\nare **fused**, reachable from all three doors, and still door-partial — they declare\n[`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`\n`[verified — crates/temper-cli/src/cli.rs:286-336]`. Door-partiality is finer-grained than the\nact and orthogonal to whether a mechanic exists, so it cannot ride on this enum.",
       "oneOf": [
         {
-          "description": "Exactly one door invokes this act alone.",
+          "description": "A door invokes this act alone, rather than only as part of a composite. Says nothing about\nHOW MANY doors, or which — that is [`ActDeclaration::door_coverage`].",
           "properties": {
             "state": {
               "const": "served",
@@ -111,6 +133,44 @@
         }
       ]
     },
+    "DoorReach": {
+      "description": "How much of an act one door can reach.\n\nTwo variants, not three: `Serves` with an empty shortfall IS full reach, so \"full\" needs no\nvariant of its own and cannot disagree with the lists beside it. An act absent from a door has\nno shortfall to state, which is why `Absent` carries nothing.\n\n**Absence is declared, never inferred from an omitted entry.** That is the whole point of the\nfield: goal `019fa618` (*surface parity — no door offers less than another without saying so*)\nhas no witnesses because no mechanical inventory of who-offers-what exists, and a declaration\nthat simply left a door out would reproduce exactly that hole in a new place.",
+      "oneOf": [
+        {
+          "description": "This door cannot invoke the act at all.",
+          "properties": {
+            "reach": {
+              "const": "absent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reach"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "This door invokes the act, minus whatever it lists as unreachable. Empty lists mean it\nreaches everything the act declares.",
+          "properties": {
+            "reach": {
+              "const": "serves",
+              "type": "string"
+            },
+            "terms_unreachable": {
+              "description": "Bound terms the act admits that a caller at this door has no way to supply. Every entry\nmust be a term the act actually admits — an unreachable term the act never accepted is\na contradiction, not a gap.",
+              "items": {
+                "$ref": "#/$defs/BoundTerm"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "reach"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "FilterField": {
       "description": "Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.",
       "enum": [
@@ -136,6 +196,54 @@
         }
       ],
       "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+    },
+    "QuantityScale": {
+      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_vector_candidates` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260801000010:186-189]`, while `wayfind_region_scores` rescales *the\nsame* `<=>` distance as `1 - d` into `[-1,1]` `[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
+      "oneOf": [
+        {
+          "description": "`[0,1]`, bounded by the expression's own arithmetic.",
+          "properties": {
+            "scale": {
+              "const": "unit_interval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Bounded, but NOT to `[0,1]`. `bounds` states the actual range.",
+          "properties": {
+            "bounds": {
+              "type": "string"
+            },
+            "scale": {
+              "const": "other_range",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale",
+            "bounds"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Nothing in the expression or in the schema bounds it.",
+          "properties": {
+            "scale": {
+              "const": "unbounded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "VisibilityProfile": {
       "description": "Where the principal constraint applies to **the fragment that produces this act's ordering** —\nnot to its serving function as a whole.\n\nThe granularity is stated because it is not inferable and was once got wrong in both\ndirections. **Every** serving function in the family takes `p_principal` and joins a visibility\nrelation, so \"does the mechanic read the principal\" is not the question — answering *that* one\ncollapses all three variants into `PrincipalRelative` and deletes the distinction this type\nexists to draw. The question is whether the quantity the act **orders by** would change if a\ndifferent set of rows were fed to it.\n\nA consequence worth carrying: one function can emit fragments in different classes at once\n(`cogmap_list_rows` returns principal-agnostic counts beside principal-relative-in-domain team\nrollups), so this field is lossy by construction for any act whose output has more than one\nordering-bearing quantity. No act in the search family does today.",
@@ -199,8 +307,35 @@
     "build_state": {
       "$ref": "#/$defs/BuildState"
     },
+    "door_coverage": {
+      "additionalProperties": false,
+      "description": "Which surfaces reach this act, and how much of it. **Every [`Door`] carries an entry** —\nabsence from a door is stated as [`DoorReach::Absent`], never by leaving the door out, so\n\"this declaration says nothing about MCP\" cannot be mistaken for \"MCP serves it\".",
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/DoorReach"
+        },
+        "cli": {
+          "$ref": "#/$defs/DoorReach"
+        },
+        "mcp": {
+          "$ref": "#/$defs/DoorReach"
+        }
+      },
+      "type": "object"
+    },
     "name": {
       "$ref": "#/$defs/ActName"
+    },
+    "orders_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActQuantity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The quantity this act orders by. `None` for an act that orders nothing — an unbuilt act, the\nanti-act, or an act that annotates rather than selects."
     },
     "produces": {
       "anyOf": [
@@ -226,7 +361,15 @@
       ]
     },
     "visibility_profile": {
-      "$ref": "#/$defs/VisibilityProfile"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VisibilityProfile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Where the principal constraint applies to the ordering fragment.\n\n`None` exactly when [`ActDeclaration::orders_by`] is `None`, and the two move together by\ninvariant rather than by convention: this field's own definition is *\"where the principal\nconstraint applies to **the fragment that produces this act's ordering**\"*, so an act with no\nordering has no such fragment and any value here would be a claim with no referent. v0\nshipped `substantiate` and `admit` — both unbuilt, both ordering nothing — declaring\n`PrincipalRelative`, which is not a conservative default but a sentence about a function that\ndoes not exist."
     }
   },
   "required": [
@@ -238,7 +381,7 @@
     "accepts_bound_terms",
     "accepts_filters",
     "bound_ceilings",
-    "visibility_profile",
+    "door_coverage",
     "scoring_revision"
   ],
   "title": "ActDeclaration",

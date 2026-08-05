@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "BoundTerm": {
+      "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
+      "oneOf": [
+        {
+          "const": "limit",
+          "description": "Rows returned.",
+          "type": "string"
+        },
+        {
+          "const": "offset",
+          "description": "Rows skipped.",
+          "type": "string"
+        },
+        {
+          "const": "regions",
+          "description": "Funnel width, in regions. `survey`'s only bound term — it has no rows to limit.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How much of an act one door can reach.\n\nTwo variants, not three: `Serves` with an empty shortfall IS full reach, so \"full\" needs no\nvariant of its own and cannot disagree with the lists beside it. An act absent from a door has\nno shortfall to state, which is why `Absent` carries nothing.\n\n**Absence is declared, never inferred from an omitted entry.** That is the whole point of the\nfield: goal `019fa618` (*surface parity — no door offers less than another without saying so*)\nhas no witnesses because no mechanical inventory of who-offers-what exists, and a declaration\nthat simply left a door out would reproduce exactly that hole in a new place.",
+  "oneOf": [
+    {
+      "description": "This door cannot invoke the act at all.",
+      "properties": {
+        "reach": {
+          "const": "absent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reach"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "This door invokes the act, minus whatever it lists as unreachable. Empty lists mean it\nreaches everything the act declares.",
+      "properties": {
+        "reach": {
+          "const": "serves",
+          "type": "string"
+        },
+        "terms_unreachable": {
+          "description": "Bound terms the act admits that a caller at this door has no way to supply. Every entry\nmust be a term the act actually admits — an unreachable term the act never accepted is\na contradiction, not a gap.",
+          "items": {
+            "$ref": "#/$defs/BoundTerm"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "reach"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "DoorReach"
+}

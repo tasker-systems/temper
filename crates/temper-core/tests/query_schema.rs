@@ -85,6 +85,10 @@ fn query_contract_schemas_match_snapshots() {
     check::<q::RefusalDisposition>("refusal_disposition");
     check::<q::ActName>("act_name");
     check::<q::BuildState>("build_state");
+    check::<q::Door>("door");
+    check::<q::DoorReach>("door_reach");
+    check::<q::QuantityScale>("quantity_scale");
+    check::<q::ActQuantity>("act_quantity");
     check::<q::ActDeclaration>("act_declaration");
     check::<q::ActInvocation>("act_invocation");
     check::<q::ActResult>("act_result");

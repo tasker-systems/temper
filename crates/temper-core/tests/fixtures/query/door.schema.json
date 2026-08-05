@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One of Temper's three surfaces. Named as doors rather than as transports because the question\nthis vocabulary answers is *can a caller standing here ask this*, not *what protocol carries it*.",
+  "enum": [
+    "cli",
+    "api",
+    "mcp"
+  ],
+  "title": "Door",
+  "type": "string"
+}
