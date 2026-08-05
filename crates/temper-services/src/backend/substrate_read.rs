@@ -831,11 +831,59 @@ fn search_hint(
 /// `search` — Surface A general search (Beat 2): one composed `unified_search` readback blending FTS +
 /// vector + graph into ranked, scored hits, then per-row display enrichment. Replaces the either/or,
 /// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
+/// Refuse an embedding that cannot have a cosine direction, BEFORE it reaches the database.
+///
+/// pgvector's `<=>` against a zero-magnitude vector is **NaN**. That NaN propagates through
+/// `vec_norm` into `combined_score`, and JSON has no NaN literal — so serde emits `null` for a field
+/// the shared [`UnifiedSearchResultRow`] declares as `f32`, and the response cannot be deserialized
+/// by the very type the server used to produce it. Measured against production on 2026-08-05: a
+/// 768-dimension zero vector returns `"vector_score":null,"combined_score":null`, and
+/// `temper-client` fails with `invalid type: null, expected f32`.
+///
+/// So this is refused at the door rather than repaired downstream. Coercing NaN to 0.0 at
+/// serialization would make a degenerate request look like a successful one that simply matched
+/// nothing, which is a worse answer than a 400 naming the problem.
+///
+/// The predicate is the squared magnitude in `f64`, not an all-zeros comparison, so that non-finite
+/// components are caught by the same test — they reach `<=>` and come back NaN just as a zero does.
+///
+/// **`f64` is not arbitrary: it is what pgvector itself uses.** Measured 2026-08-05 on pgvector
+/// 0.8.2 — a 768-dimension vector of `1e-30` (every component non-zero, but every *square*
+/// underflowing in `f32`) against an ordinary embedding returns `0`, not NaN, which means pgvector
+/// accumulates the norm in double precision. Computing this predicate in `f32` would therefore
+/// reject inputs the database handles perfectly well. An earlier draft asserted the opposite and
+/// its test failed, which is how this came to be measured instead of assumed.
+///
+/// **Declared remainder:** this guards the *query* side only. A zero-magnitude **stored** chunk
+/// embedding would produce the same NaN from the other direction, and nothing guards that — the
+/// analogous "T7 NaN trap" guard exists in `wayfind_region_scores` for zero-vector region centroids
+/// but has no counterpart for chunks. Measured on production 2026-08-05: **0 zero-norm current
+/// chunks and 0 zero-norm live centroids**, so the case is not live today. It is unguarded, not
+/// impossible.
+fn reject_degenerate_embedding(embedding: Option<&[f32]>) -> ApiResult<()> {
+    let Some(emb) = embedding else {
+        return Ok(());
+    };
+    if emb.is_empty() {
+        return Ok(()); // dimension mismatch is the database's error to give, not this one's
+    }
+    let norm_sq: f64 = emb.iter().map(|c| f64::from(*c) * f64::from(*c)).sum();
+    if !norm_sq.is_finite() || norm_sq <= 0.0 {
+        return Err(ApiError::BadRequest(
+            "embedding has no direction (zero magnitude or non-finite components); \
+             cosine distance against it is undefined"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn search_select(
     pool: &PgPool,
     profile_id: ProfileId,
     mut params: SearchParams,
 ) -> ApiResult<SearchResponse> {
+    reject_degenerate_embedding(params.embedding.as_deref())?;
     let degraded = embed_query_if_missing(&mut params).await;
     let scope = classify_scope(&params);
     let clamped = clamp_search_params(&params);
@@ -1645,5 +1693,76 @@ uses_lenses: [telos-default]
             denied.is_empty(),
             "non-owner must see no charter blocks: {denied:?}"
         );
+    }
+}
+
+/// Pure-predicate tests for [`reject_degenerate_embedding`] — deliberately NOT behind `test-db`,
+/// because the predicate needs no database and this is what puts it in the Unit CI job rather than
+/// only the DB-backed one.
+#[cfg(test)]
+mod degenerate_embedding_tests {
+    use super::reject_degenerate_embedding;
+
+    #[test]
+    fn a_zero_vector_is_refused() {
+        // The exact production repro: `temper-client`'s integration test sends `vec![0.0; 768]`,
+        // prod answers `"vector_score":null`, and the client cannot deserialize its own wire type.
+        let err = reject_degenerate_embedding(Some(&vec![0.0_f32; 768])).unwrap_err();
+        assert!(
+            err.to_string().contains("no direction"),
+            "the refusal must name the problem, got: {err}"
+        );
+    }
+
+    #[test]
+    fn non_finite_components_are_refused() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut v = vec![0.1_f32; 8];
+            v[3] = bad;
+            assert!(
+                reject_degenerate_embedding(Some(&v)).is_err(),
+                "{bad} must be refused: it reaches `<=>` and comes back NaN just as a zero does"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tiny_but_nonzero_embedding_is_admitted_because_pgvector_agrees() {
+        // This test asserted the OPPOSITE first, on the reasoning that squares of `1e-30` underflow
+        // in `f32` and so the magnitude is "really" zero. It failed, and measuring settled it:
+        //
+        //     SELECT '[1e-30, ...768]'::vector <=> '[0.05, ...768]'::vector  -->  0     (not NaN)
+        //     SELECT '[1e-30, ...768]'::vector <=> '[1e-30, ...768]'::vector -->  NaN
+        //
+        // pgvector accumulates the norm in double, so a tiny query vector against a real embedding
+        // is answered with a number and nothing breaks. Refusing it here would reject an input the
+        // database handles — this guard exists to stop unparseable JSON, not to police oddity.
+        //
+        // The second line is the STORED-side case, which needs a tiny embedding in `kb_chunks`.
+        // That is the declared remainder on `reject_degenerate_embedding`, measured at 0 rows on
+        // production; this guard does not and cannot cover it.
+        let v = vec![1.0e-30_f32; 768];
+        assert_eq!(v.iter().filter(|c| **c == 0.0).count(), 0, "none are zero");
+        assert!(
+            reject_degenerate_embedding(Some(&v)).is_ok(),
+            "must match pgvector's own double-precision arithmetic, not a stricter f32 story"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_embedding_passes() {
+        let mut v = vec![0.0_f32; 768];
+        v[0] = 1.0;
+        assert!(reject_degenerate_embedding(Some(&v)).is_ok());
+        assert!(reject_degenerate_embedding(Some(&vec![0.05_f32; 768])).is_ok());
+    }
+
+    #[test]
+    fn absent_and_empty_embeddings_are_not_this_functions_business() {
+        // No embedding at all is an FTS-only search. An empty vector is a dimension mismatch, which
+        // the database reports with a better message than this could — refusing it here would move
+        // that error somewhere less informative.
+        assert!(reject_degenerate_embedding(None).is_ok());
+        assert!(reject_degenerate_embedding(Some(&[])).is_ok());
     }
 }
