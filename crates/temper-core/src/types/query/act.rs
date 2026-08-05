@@ -71,7 +71,20 @@ impl BuildState {
     }
 }
 
-/// Where the principal constraint applies to an act's mechanic.
+/// Where the principal constraint applies to **the fragment that produces this act's ordering** —
+/// not to its serving function as a whole.
+///
+/// The granularity is stated because it is not inferable and was once got wrong in both
+/// directions. **Every** serving function in the family takes `p_principal` and joins a visibility
+/// relation, so "does the mechanic read the principal" is not the question — answering *that* one
+/// collapses all three variants into `PrincipalRelative` and deletes the distinction this type
+/// exists to draw. The question is whether the quantity the act **orders by** would change if a
+/// different set of rows were fed to it.
+///
+/// A consequence worth carrying: one function can emit fragments in different classes at once
+/// (`cogmap_list_rows` returns principal-agnostic counts beside principal-relative-in-domain team
+/// rollups), so this field is lossy by construction for any act whose output has more than one
+/// ordering-bearing quantity. No act in the search family does today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -80,8 +93,21 @@ impl BuildState {
 #[serde(rename_all = "kebab-case")]
 pub enum VisibilityProfile {
     PrincipalAgnostic,
-    /// Every input and operation is principal-free, but the fragment is a window or aggregate
-    /// whose frame is the principal's read-set. `survey`'s `sal_norm` is the worked example.
+    /// The ordering fragment's own expression and predicates are principal-free, but it is a
+    /// window or aggregate whose **frame** is the principal's read-set — so the value is a
+    /// function of *a row set*, and which row set is the principal's business. Extractable only
+    /// with that domain made an explicit input.
+    ///
+    /// Two worked examples, because one taught the wrong lesson. `survey`'s `sal_norm` is a
+    /// `percent_rank` over the visible anchor set. `follow-from`'s `graph_score` is a
+    /// `MAX(score) GROUP BY node` over a walk whose adjacency requires **both** edge endpoints
+    /// visible — arithmetic principal-free, path set principal-scoped.
+    ///
+    /// **The discriminator against `PrincipalAgnostic` is gate vs filter, and the two look
+    /// identical to a grep.** A visibility *gate* (`WHERE subject IN (visible)`) is all-or-nothing
+    /// on the subject and cannot change the answer — `resource_standing_shape` is gated and is
+    /// agnostic, measured. A visibility *filter* (`JOIN vis ON vis.id = m.member_id`) removes rows
+    /// from the aggregate's own input and does.
     AgnosticInValueRelativeInDomain,
     PrincipalRelative,
 }
