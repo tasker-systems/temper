@@ -44,9 +44,19 @@ pub enum ActName {
     Other(String),
 }
 
-/// Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —
-/// which is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`
-/// failure: a const beside a registry, with a test holding its own second copy.
+/// Whether a mechanic for this act exists, and whether the act has a door of its own or only its
+/// host's. Every value is mechanically checkable by T3's gate — which is the whole point, because a
+/// hand-maintained build-state is the `ADMIN_EVENT_TYPES` failure: a const beside a registry, with
+/// a test holding its own second copy.
+///
+/// **This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is
+/// [`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A
+/// `served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and
+/// CLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts
+/// are **fused**, reachable from all three doors, and still door-partial — they declare
+/// [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`
+/// `[verified — crates/temper-cli/src/cli.rs:286-336]`. Door-partiality is finer-grained than the
+/// act and orthogonal to whether a mechanic exists, so it cannot ride on this enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -54,7 +64,8 @@ pub enum ActName {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum BuildState {
-    /// Exactly one door invokes this act alone.
+    /// A door invokes this act alone, rather than only as part of a composite. Says nothing about
+    /// HOW MANY doors, or which — that is [`ActDeclaration::door_coverage`].
     Served,
     /// The mechanic runs only inside a named composite; the act has no door, the host has one.
     Fused { host: String },
@@ -64,11 +75,112 @@ pub enum BuildState {
 
 impl BuildState {
     pub fn host(&self) -> Option<&str> {
+        // Exhaustive on purpose — no `_` arm. Both matches on this enum used a wildcard, so a new
+        // variant would have compiled silently and landed in whichever arm the wildcard caught,
+        // which is the failure mode a widening is supposed to surface rather than absorb.
         match self {
             BuildState::Fused { host } => Some(host.as_str()),
-            _ => None,
+            BuildState::Served | BuildState::Unbuilt => None,
         }
     }
+}
+
+/// One of Temper's three surfaces. Named as doors rather than as transports because the question
+/// this vocabulary answers is *can a caller standing here ask this*, not *what protocol carries it*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Door {
+    Cli,
+    Api,
+    Mcp,
+}
+
+impl Door {
+    /// Every door. A declaration must account for all of them — see
+    /// [`ActDeclaration::door_coverage`].
+    pub const ALL: [Door; 3] = [Door::Cli, Door::Api, Door::Mcp];
+}
+
+/// How much of an act one door can reach.
+///
+/// Two variants, not three: `Serves` with an empty shortfall IS full reach, so "full" needs no
+/// variant of its own and cannot disagree with the lists beside it. An act absent from a door has
+/// no shortfall to state, which is why `Absent` carries nothing.
+///
+/// **Absence is declared, never inferred from an omitted entry.** That is the whole point of the
+/// field: goal `019fa618` (*surface parity — no door offers less than another without saying so*)
+/// has no witnesses because no mechanical inventory of who-offers-what exists, and a declaration
+/// that simply left a door out would reproduce exactly that hole in a new place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case", tag = "reach")]
+pub enum DoorReach {
+    /// This door cannot invoke the act at all.
+    Absent,
+    /// This door invokes the act, minus whatever it lists as unreachable. Empty lists mean it
+    /// reaches everything the act declares.
+    Serves {
+        /// Bound terms the act admits that a caller at this door has no way to supply. Every entry
+        /// must be a term the act actually admits — an unreachable term the act never accepted is
+        /// a contradiction, not a gap.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        terms_unreachable: Vec<BoundTerm>,
+    },
+}
+
+/// The scale of an act's ordering quantity.
+///
+/// Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
+/// `search_vector_candidates` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`
+/// `[verified — migrations/20260801000010:186-189]`, while `wayfind_region_scores` rescales *the
+/// same* `<=>` distance as `1 - d` into `[-1,1]` `[verified — migrations/20260731000050:120]`.
+/// Neither column name says so, and one of the two feeds a weighted sum everyone reads as a
+/// `[0,1]` score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case", tag = "scale")]
+pub enum QuantityScale {
+    /// `[0,1]`, bounded by the expression's own arithmetic.
+    UnitInterval,
+    /// Bounded, but NOT to `[0,1]`. `bounds` states the actual range.
+    OtherRange { bounds: String },
+    /// Nothing in the expression or in the schema bounds it.
+    Unbounded,
+}
+
+/// The quantity an act orders its answer by, named so that summing it with another act's reads as
+/// the category error it is.
+///
+/// This is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.
+/// Research [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *"Act responses never
+/// expose commensurable score fields — no bare `score: f64` shared across acts; each quantity
+/// carries its act's name and shape."* Arithmetic follows names: two fields called `score` invite
+/// `a.score + b.score` and no reviewer catches it. `unified_search` is the worked failure — it
+/// renames `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then sums them into
+/// `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is the
+/// exact expression the frame register forbids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ActQuantity {
+    /// The DEPLOYED column name the serving function emits. Not a name invented here — a
+    /// declaration is a description, so a caller who greps the SQL for this string finds it.
+    pub field: String,
+    /// What the number measures, in this act's own terms.
+    pub means: String,
+    pub scale: QuantityScale,
 }
 
 /// Where the principal constraint applies to **the fragment that produces this act's ordering** —
@@ -140,7 +252,25 @@ pub struct ActDeclaration {
     /// the clamping. A term with no entry here has no ceiling.
     pub bound_ceilings: BTreeMap<BoundTerm, i64>,
     pub produces: Option<IdKind>,
-    pub visibility_profile: VisibilityProfile,
+    /// Which surfaces reach this act, and how much of it. **Every [`Door`] carries an entry** —
+    /// absence from a door is stated as [`DoorReach::Absent`], never by leaving the door out, so
+    /// "this declaration says nothing about MCP" cannot be mistaken for "MCP serves it".
+    pub door_coverage: BTreeMap<Door, DoorReach>,
+    /// The quantity this act orders by. `None` for an act that orders nothing — an unbuilt act, the
+    /// anti-act, or an act that annotates rather than selects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orders_by: Option<ActQuantity>,
+    /// Where the principal constraint applies to the ordering fragment.
+    ///
+    /// `None` exactly when [`ActDeclaration::orders_by`] is `None`, and the two move together by
+    /// invariant rather than by convention: this field's own definition is *"where the principal
+    /// constraint applies to **the fragment that produces this act's ordering**"*, so an act with no
+    /// ordering has no such fragment and any value here would be a claim with no referent. v0
+    /// shipped `substantiate` and `admit` — both unbuilt, both ordering nothing — declaring
+    /// `PrincipalRelative`, which is not a conservative default but a sentence about a function that
+    /// does not exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility_profile: Option<VisibilityProfile>,
     /// Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4
     /// reds when the body hash moves and this does not.
     pub scoring_revision: u32,
@@ -215,13 +345,89 @@ mod tests {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            door_coverage: BTreeMap::from([
+                (
+                    Door::Cli,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![BoundTerm::Offset],
+                    },
+                ),
+                (
+                    Door::Api,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                    },
+                ),
+                (
+                    Door::Mcp,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                    },
+                ),
+            ]),
+            orders_by: Some(ActQuantity {
+                field: "fts_norm".to_string(),
+                means: "postgres ts_rank over the resource's own document".to_string(),
+                scale: QuantityScale::UnitInterval,
+            }),
+            visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 1,
         };
         assert!(!d.asker_holds.is_empty());
         assert_eq!(
             serde_json::from_str::<ActDeclaration>(&serde_json::to_string(&d).unwrap()).unwrap(),
             d
+        );
+    }
+
+    #[test]
+    fn a_door_that_serves_nothing_is_distinguishable_from_one_that_serves_everything() {
+        // The failure this shape exists to prevent is a reader treating an omitted door as an
+        // unremarkable one. `Absent` and `Serves {}` must not render alike.
+        let absent = serde_json::to_string(&DoorReach::Absent).unwrap();
+        let full = serde_json::to_string(&DoorReach::Serves {
+            terms_unreachable: vec![],
+        })
+        .unwrap();
+        assert_ne!(absent, full);
+        assert_eq!(
+            serde_json::from_str::<DoorReach>(&absent).unwrap(),
+            DoorReach::Absent
+        );
+    }
+
+    #[test]
+    fn build_state_host_is_exhaustive_over_the_enum() {
+        // Both matches on `BuildState` used a `_` arm before door coverage landed, so a new variant
+        // would have compiled silently into a wildcard. This pins the answer for every variant that
+        // exists, so removing the wildcard cannot be quietly undone.
+        assert_eq!(
+            BuildState::Fused {
+                host: "unified_search".to_string()
+            }
+            .host(),
+            Some("unified_search")
+        );
+        assert_eq!(BuildState::Served.host(), None);
+        assert_eq!(BuildState::Unbuilt.host(), None);
+    }
+
+    #[test]
+    fn a_quantity_states_a_scale_that_is_not_assumed_to_be_zero_to_one() {
+        // `OtherRange` exists because `region_score` really is `[-0.6, 1.0]` — 0.4·sal_norm (a
+        // percent_rank in [0,1]) + 0.6·query_cos, where query_cos is `1 - (centroid <=> emb)` and
+        // a cosine DISTANCE spans [0,2], so the similarity spans [-1,1]. Collapsing that into
+        // `UnitInterval` would be the assumption this variant exists to refuse.
+        let r = QuantityScale::OtherRange {
+            bounds: "[-0.6, 1.0]".to_string(),
+        };
+        assert_ne!(
+            serde_json::to_string(&r).unwrap(),
+            serde_json::to_string(&QuantityScale::UnitInterval).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_str::<QuantityScale>(&serde_json::to_string(&r).unwrap()).unwrap(),
+            r
         );
     }
 }

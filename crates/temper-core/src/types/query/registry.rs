@@ -10,7 +10,10 @@
 
 use std::collections::BTreeMap;
 
-use super::act::{ActDeclaration, ActName, BuildState, VisibilityProfile};
+use super::act::{
+    ActDeclaration, ActName, ActQuantity, BuildState, Door, DoorReach, QuantityScale,
+    VisibilityProfile,
+};
 use super::filter::FilterField;
 use super::id_set::IdKind;
 use super::scalars::BoundTerm;
@@ -18,6 +21,57 @@ use super::scalars::BoundTerm;
 fn fused() -> BuildState {
     BuildState::Fused {
         host: "unified_search".to_string(),
+    }
+}
+
+/// Door coverage for the five acts fused into `unified_search`.
+///
+/// All three doors reach the host: `temper search`
+/// `[verified — crates/temper-cli/src/cli.rs:287]`, `POST /api/search`
+/// `[verified — crates/temper-api/src/routes.rs:164]`, and the MCP `search` tool
+/// `[verified — crates/temper-mcp/src/service.rs:351-360]`.
+///
+/// The MCP tool takes the whole [`crate::types::api::SearchParams`] as its `Parameters`, so every
+/// wire field is reachable from it — worth stating because grepping the `temper-mcp` crate for a
+/// param name finds nothing and reads as absence.
+fn unified_doors(cli_unreachable: Vec<BoundTerm>) -> BTreeMap<Door, DoorReach> {
+    BTreeMap::from([
+        (
+            Door::Cli,
+            DoorReach::Serves {
+                terms_unreachable: cli_unreachable,
+            },
+        ),
+        (
+            Door::Api,
+            DoorReach::Serves {
+                terms_unreachable: vec![],
+            },
+        ),
+        (
+            Door::Mcp,
+            DoorReach::Serves {
+                terms_unreachable: vec![],
+            },
+        ),
+    ])
+}
+
+/// Both `find-about` acts are served by the same function and order by the same column, so the
+/// quantity is written once. Two declarations sharing a quantity is not the thing
+/// `no-cross-act-ranking` forbids — they are the same mechanic under two askers, and comparing
+/// their values is meaningful in a way comparing `vec_norm` to `graph_score` is not.
+fn vec_norm_quantity() -> ActQuantity {
+    ActQuantity {
+        field: "vec_norm".to_string(),
+        means: "best-of-N cosine similarity over the resource's OWN current chunks, shrunk toward \
+                that resource's chunk mean by the number of draws — framed per resource, so it \
+                does not move with who is asking"
+            .to_string(),
+        // `1.0 - shrunk_distance / 2.0`, and `<=>` cosine distance spans [0,2]
+        // `[verified — migrations/20260801000010:186-189, :211-214]`. Contrast `region_score`,
+        // which rescales the same operator's output as `1 - d` and lands in [-1,1].
+        scale: QuantityScale::UnitInterval,
     }
 }
 
@@ -37,7 +91,24 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            // The CLI's `search` command has no `--offset` — the flag list runs query, context,
+            // cogmap, wayfind, lens, regions, doc_type, limit, text_only, seed, edge-type, depth,
+            // no_graph, seed-only and stops `[verified — crates/temper-cli/src/cli.rs:286-336]`.
+            // So the CLI can only ever read page 1, and this act's declared `Offset` term is
+            // unreachable from it. Fused, reachable from every door, and still door-partial — the
+            // case a `BuildState` variant could not have carried.
+            door_coverage: unified_doors(vec![BoundTerm::Offset]),
+            orders_by: Some(ActQuantity {
+                field: "fts_norm".to_string(),
+                means: "postgres ts_rank of the query against the resource's own search vector — \
+                        document-local, so it does not move with who is asking"
+                    .to_string(),
+                // Flag 33 = 1 | 32, and flag 32 is `rank / (rank + 1)`
+                // `[verified — migrations/20260801000010:129]`. The `_norm` in the column name is
+                // earned, unlike `origin`'s claim to name the producing arm.
+                scale: QuantityScale::UnitInterval,
+            }),
+            visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2, // ts_rank flag 32 -> 33, migration 20260801000010
         },
         ActDeclaration {
@@ -52,7 +123,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            door_coverage: unified_doors(vec![BoundTerm::Offset]),
+            orders_by: Some(vec_norm_quantity()),
+            visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2, // best-of-N shrunk toward the chunk mean, 20260801000010
         },
         ActDeclaration {
@@ -66,7 +139,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            door_coverage: unified_doors(vec![BoundTerm::Offset]),
+            orders_by: Some(vec_norm_quantity()),
+            visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2,
         },
         ActDeclaration {
@@ -92,7 +167,25 @@ pub fn search_family() -> Vec<ActDeclaration> {
             //
             // No `scoring_revision` bump: the body did not change, only what we correctly say
             // about it. A revision records a change in the scale or meaning of the quantity.
-            visibility_profile: VisibilityProfile::AgnosticInValueRelativeInDomain,
+            //
+            // `Limit` only, and the CLI has one — so no shortfall here.
+            door_coverage: unified_doors(vec![]),
+            orders_by: Some(ActQuantity {
+                field: "graph_score".to_string(),
+                means: "the best decayed path from any seed to this node — \
+                        MAX(gamma^hop * product of edge weights) over walks of at least one hop"
+                    .to_string(),
+                // NOT [0,1], and not merely un-normalized: `kb_edges.weight` is
+                // `DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK constraint
+                // `[verified — migrations/20260624000001_canonical_schema.sql:637]`. The walk
+                // multiplies weights `[verified — migrations/20260711000030:45]`, so any edge
+                // written with a weight above 1 lifts this above 1. Today's corpus stays under it
+                // because nothing writes such a weight — which is a property of the DATA, not of
+                // the quantity, and declaring `UnitInterval` would claim the schema enforces
+                // something it does not.
+                scale: QuantityScale::Unbounded,
+            }),
+            visibility_profile: Some(VisibilityProfile::AgnosticInValueRelativeInDomain),
             scoring_revision: 1,
         },
         ActDeclaration {
@@ -107,21 +200,91 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::from([(BoundTerm::Regions, 20)]),
             produces: Some(IdKind::Region),
-            visibility_profile: VisibilityProfile::AgnosticInValueRelativeInDomain,
+            // `--wayfind` and `--regions` are both CLI flags
+            // `[verified — crates/temper-cli/src/cli.rs:298, :305]`, and `survey` does not admit
+            // `Offset`, so the CLI's missing `--offset` costs this act nothing.
+            door_coverage: unified_doors(vec![]),
+            orders_by: Some(ActQuantity {
+                field: "region_score".to_string(),
+                means: "0.4 * sal_norm + 0.6 * query_cos — the region's per-kind salience rank \
+                        blended with its centroid's similarity to the query"
+                    .to_string(),
+                // The surprise, and the reason this variant exists. `sal_norm` is a `percent_rank`
+                // in [0,1], but `query_cos` is `1 - (centroid <=> p_emb)` and a cosine DISTANCE
+                // spans [0,2], so the similarity spans [-1,1]
+                // `[verified — migrations/20260731000050:114-121]`. The composite therefore spans
+                // [-0.6, 1.0] and CAN BE NEGATIVE. Every discussion of this number in the arc's
+                // research treats it as a [0,1] score.
+                //
+                // Note what this is next to: `vec_norm` rescales the SAME `<=>` operator as
+                // `1 - d/2` into [0,1]. Two rescales of one distance, in one search family, with
+                // neither column name disclosing which it is.
+                scale: QuantityScale::OtherRange {
+                    bounds: "[-0.6, 1.0]".to_string(),
+                },
+            }),
+            visibility_profile: Some(VisibilityProfile::AgnosticInValueRelativeInDomain),
             scoring_revision: 1,
         },
         ActDeclaration {
             name: ActName::Substantiate,
             asker_holds: "a claim; I want its defensibility".to_string(),
-            served_by: None,
-            build_state: BuildState::Unbuilt,
+            // CORRECTED 2026-08-05 (was `None` / `Unbuilt`). This act SHIPS, and the declaration
+            // said no mechanic exists: `GET /api/resources/{id}/evidence`
+            // `[verified — crates/temper-api/src/routes.rs:63]` calls
+            // `evidential_standing_service::resource_evidence`
+            // `[verified — crates/temper-api/src/handlers/evidence.rs:24-31]`, which reads SQL
+            // `resource_standing_shape`. `temper resource evidence <ref>` is the CLI door
+            // `[verified — crates/temper-cli/src/cli.rs:615]`.
+            //
+            // The function was never hidden — `VisibilityProfile`'s own doc comment cites
+            // `resource_standing_shape` BY NAME as the worked gated-and-therefore-agnostic example,
+            // three declarations above the one claiming it did not exist.
+            //
+            // Same defect shape as the `follow-from` misclassification corrected the same day, and
+            // again in the safe direction: `Unbuilt` under-claims, so nothing broke and nothing
+            // caught it.
+            served_by: Some("resource_standing_shape".to_string()),
+            build_state: BuildState::Served,
+            // Takes ONE resource id today, not a set. Declaring `accepts_bounds: [Resource]` would
+            // claim a batch affordance the audit specifically recorded as absent — "a caller
+            // holding 40 search hits issues 40 requests", T1 columns 1-3 §6.1. The act is served;
+            // its COMPOSABLE form is what is unbuilt, and that distinction is exactly what
+            // `build_state` and these slots are for.
             accepts_bounds: vec![],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![],
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::new(),
+            // Annotates rather than selects: it returns a standing shape over the id it was handed
+            // and narrows nothing, so there is no produced set to hand onward. `None` here is a
+            // real statement about the act and not a placeholder — and it is why the frame's
+            // `claims-carry-standing` clause has nowhere to land yet, since `ActResult.produced`
+            // is a required `IdSet` and an annotating act has no result shape in v0.
             produces: None,
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            door_coverage: BTreeMap::from([
+                (
+                    Door::Cli,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                    },
+                ),
+                (
+                    Door::Api,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                    },
+                ),
+                // Absent from MCP, which is the door agents use — so the substantiate act is
+                // thinnest exactly where it is most needed. Nothing in `crates/temper-mcp` reads
+                // standing `[verified — 2026-08-05]`; T1 columns 1-3 §6.2 recorded the same.
+                (Door::Mcp, DoorReach::Absent),
+            ]),
+            // Standing is THREE axes and a band, never one number — `citation_magnitude`,
+            // `audit_coverage`, `citation_quality`. There is no single ordering quantity here, and
+            // inventing one would be the exact collapse the standing model forbids.
+            orders_by: None,
+            visibility_profile: None,
             scoring_revision: 0,
         },
         ActDeclaration {
@@ -137,7 +300,19 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::new(),
             produces: None,
-            visibility_profile: VisibilityProfile::PrincipalRelative,
+            // The anti-act is absent from every door BY DECLARATION, and that is the point: the
+            // cold-start admission it names still runs inside `unified_search`, but no door offers
+            // it AS an act. Promoting it means writing `Serves` here, deliberately.
+            door_coverage: BTreeMap::from([
+                (Door::Cli, DoorReach::Absent),
+                (Door::Api, DoorReach::Absent),
+                (Door::Mcp, DoorReach::Absent),
+            ]),
+            orders_by: None,
+            // The anti-act orders nothing, so it has no ordering fragment to classify. v0 declared
+            // `PrincipalRelative` here, which reads as a conservative default and is actually a
+            // sentence about a function that does not exist.
+            visibility_profile: None,
             scoring_revision: 0,
         },
     ]
@@ -171,15 +346,91 @@ mod tests {
     }
 
     #[test]
-    fn nothing_in_the_search_family_is_served() {
-        // This is the FINDING, not an omission: every mechanic is reachable only through
-        // unified_search. When a real door lands, this test changes deliberately.
+    fn substantiate_is_the_only_act_with_a_door_of_its_own() {
+        // WAS `nothing_in_the_search_family_is_served`, whose comment read "every mechanic is
+        // reachable only through unified_search". That sentence was FALSE about the deployed
+        // system while its `assert_ne!` passed on all seven acts — the same shape as
+        // `survey_is_the_only_act_relative_in_domain`, and the same safe direction.
+        //
+        // `substantiate` has had its own door since Set 5: `GET /api/resources/{id}/evidence`
+        // -> `resource_standing_shape`, plus `temper resource evidence`. It reaches
+        // `unified_search` not at all — T1 called its total absence from search "the most
+        // consequential `none` in the document".
+        //
+        // Kept as an EXACT set for the same reason the visibility-profile test is: an act
+        // acquiring or losing a door must be a deliberate edit here, and `build_state` moving
+        // `served` -> `fused`/`unbuilt` is a BREAKING change under the semver table (design §6.2).
+        let served: Vec<ActName> = search_family()
+            .into_iter()
+            .filter(|a| a.build_state == BuildState::Served)
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(served, vec![ActName::Substantiate]);
+    }
+
+    #[test]
+    fn every_declaration_accounts_for_every_door() {
+        // Absence is DECLARED, never inferred from an omitted entry. Goal `019fa618` (surface
+        // parity) has no witnesses precisely because no inventory of who-offers-what exists; a
+        // declaration allowed to stay silent about a door would rebuild that hole here.
         for a in search_family() {
-            assert_ne!(
-                a.build_state,
-                BuildState::Served,
-                "{:?} claims served",
-                a.name
+            for door in Door::ALL {
+                assert!(
+                    a.door_coverage.contains_key(&door),
+                    "{:?} says nothing about {door:?} — silence is not a reach claim",
+                    a.name
+                );
+            }
+            assert_eq!(a.door_coverage.len(), Door::ALL.len());
+        }
+    }
+
+    #[test]
+    fn an_unreachable_term_is_always_a_term_the_act_admits() {
+        // Mirrors `every_ceiling_is_published_for_a_term_the_act_admits`. A door cannot fall short
+        // on a term the act never accepted — that is a contradiction, not a parity gap, and it
+        // would put a term in the contract twice with two different meanings.
+        for a in search_family() {
+            for (door, reach) in &a.door_coverage {
+                let DoorReach::Serves { terms_unreachable } = reach else {
+                    continue;
+                };
+                for term in terms_unreachable {
+                    assert!(
+                        a.accepts_bound_terms.contains(term),
+                        "{:?} claims {door:?} cannot reach {term:?}, which it does not admit",
+                        a.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_cli_cannot_page_the_find_acts_and_that_is_declared() {
+        // The concrete parity gap that forced door coverage to be its own axis rather than a
+        // `BuildState` variant: these three acts are FUSED — reachable from all three doors
+        // through `unified_search` — and still door-partial, because `temper search` has no
+        // `--offset` and so can only ever read page 1.
+        for name in [
+            ActName::FindExact,
+            ActName::FindAboutAnywhere,
+            ActName::FindAboutWithin,
+        ] {
+            let a = declaration(&name).unwrap();
+            assert!(matches!(a.build_state, BuildState::Fused { .. }));
+            assert_eq!(
+                a.door_coverage.get(&Door::Cli),
+                Some(&DoorReach::Serves {
+                    terms_unreachable: vec![BoundTerm::Offset]
+                }),
+                "{name:?} must declare the CLI's missing --offset"
+            );
+            assert_eq!(
+                a.door_coverage.get(&Door::Api),
+                Some(&DoorReach::Serves {
+                    terms_unreachable: vec![]
+                })
             );
         }
     }
@@ -198,13 +449,15 @@ mod tests {
     #[test]
     fn unbuilt_acts_name_no_serving_function_and_built_ones_do() {
         for a in search_family() {
+            // Exhaustive, no `_` arm: a future `BuildState` variant must be classified here
+            // deliberately rather than inheriting whichever answer a wildcard happened to give.
             match a.build_state {
                 BuildState::Unbuilt => assert!(
                     a.served_by.is_none(),
                     "{:?} is unbuilt but names a function",
                     a.name
                 ),
-                _ => assert!(
+                BuildState::Served | BuildState::Fused { .. } => assert!(
                     a.served_by.is_some(),
                     "{:?} is built but names no function",
                     a.name
@@ -311,10 +564,151 @@ mod tests {
         // admitted the very drift that produced the correction.
         let relative: Vec<ActName> = search_family()
             .into_iter()
-            .filter(|a| a.visibility_profile == VisibilityProfile::AgnosticInValueRelativeInDomain)
+            .filter(|a| {
+                a.visibility_profile == Some(VisibilityProfile::AgnosticInValueRelativeInDomain)
+            })
             .map(|a| a.name)
             .collect();
         assert_eq!(relative, vec![ActName::FollowFrom, ActName::Survey]);
+    }
+
+    #[test]
+    fn an_act_that_orders_nothing_classifies_no_ordering_fragment() {
+        // `visibility_profile` is defined as a statement about "the fragment that produces this
+        // act's ordering". An act that orders nothing has no such fragment, so any value there is
+        // a claim with no referent — which is what v0 shipped for `substantiate` and `admit`,
+        // both declaring `PrincipalRelative`. That reads as a conservative default and is instead
+        // a sentence about a function that does not exist.
+        //
+        // The two fields move together by INVARIANT, so the vacuous claim is unrepresentable
+        // rather than merely absent today.
+        for a in search_family() {
+            assert_eq!(
+                a.orders_by.is_none(),
+                a.visibility_profile.is_none(),
+                "{:?} classifies an ordering fragment it does not have, or vice versa",
+                a.name
+            );
+        }
+        assert!(declaration(&ActName::Substantiate)
+            .unwrap()
+            .visibility_profile
+            .is_none());
+        assert!(declaration(&ActName::Admit)
+            .unwrap()
+            .visibility_profile
+            .is_none());
+    }
+
+    #[test]
+    fn no_two_acts_order_by_the_same_name_and_none_of_them_is_a_bare_score() {
+        // This is `no-cross-act-ranking` with structural teeth rather than a rule someone
+        // remembers. Research `019fbd9b` delta 5: "no bare `score: f64` shared across acts; each
+        // quantity carries its act's name and shape."
+        //
+        // The worked failure is in the shipped host: `unified_search` renames `fts_norm` and
+        // `vec_norm` to `fts_score`/`vector_score` and sums them into `combined_score`
+        // (migrations/20260714000001_ingest_state.sql:294-299). Once both are called `*_score`,
+        // adding them LOOKS like arithmetic instead of a category error.
+        let mut seen: Vec<String> = Vec::new();
+        for a in search_family() {
+            let Some(q) = a.orders_by else { continue };
+            assert_ne!(q.field, "score", "{:?} orders by a bare `score`", a.name);
+            assert_ne!(
+                q.field, "combined_score",
+                "{:?} claims the cross-act sum as its own quantity",
+                a.name
+            );
+            assert!(
+                !q.means.trim().is_empty(),
+                "{:?} names a quantity without saying what it measures",
+                a.name
+            );
+            seen.push(q.field);
+        }
+        // `vec_norm` is deliberately shared by the two `find-about` acts — one mechanic, two
+        // askers — so dedupe before asserting rather than forbidding repeats outright.
+        let mut distinct = seen.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(
+            distinct,
+            vec![
+                "fts_norm".to_string(),
+                "graph_score".to_string(),
+                "region_score".to_string(),
+                "vec_norm".to_string()
+            ]
+        );
+        assert_eq!(
+            seen.len(),
+            5,
+            "five acts order by something; four names do it"
+        );
+    }
+
+    #[test]
+    fn the_two_quantities_built_from_one_cosine_distance_do_not_share_a_scale() {
+        // The finding this field exists to carry. `vec_norm` and `region_score`'s `query_cos` are
+        // both rescales of the SAME pgvector `<=>` cosine distance, and they disagree:
+        //   vec_norm  = 1.0 - d/2  -> [0,1]   (migrations/20260801000010:186-189)
+        //   query_cos = 1   - d    -> [-1,1]  (migrations/20260731000050:120)
+        // so `region_score` = 0.4*sal_norm + 0.6*query_cos spans [-0.6, 1.0] and CAN BE NEGATIVE,
+        // while every discussion of it in this arc's research treats it as a [0,1] score.
+        //
+        // Neither column name discloses which rescale it is. That is the incommensurability thesis
+        // showing up one level below where the arc had been looking for it.
+        let vec_scale = declaration(&ActName::FindAboutAnywhere)
+            .unwrap()
+            .orders_by
+            .unwrap()
+            .scale;
+        let region_scale = declaration(&ActName::Survey)
+            .unwrap()
+            .orders_by
+            .unwrap()
+            .scale;
+        assert_eq!(vec_scale, QuantityScale::UnitInterval);
+        assert_eq!(
+            region_scale,
+            QuantityScale::OtherRange {
+                bounds: "[-0.6, 1.0]".to_string()
+            }
+        );
+        assert_ne!(vec_scale, region_scale);
+    }
+
+    #[test]
+    fn graph_score_is_unbounded_because_the_schema_does_not_bound_edge_weight() {
+        // Declared `Unbounded`, not `UnitInterval`, and the distinction is not pedantic: the walk
+        // multiplies `kb_edges.weight` at every hop (migrations/20260711000030:45), and that
+        // column is `DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK
+        // (migrations/20260624000001_canonical_schema.sql:637). Today's values stay under 1
+        // because nothing writes a larger one — a property of the DATA, not of the quantity.
+        assert_eq!(
+            declaration(&ActName::FollowFrom)
+                .unwrap()
+                .orders_by
+                .unwrap()
+                .scale,
+            QuantityScale::Unbounded
+        );
+    }
+
+    #[test]
+    fn substantiate_is_absent_from_the_door_agents_use() {
+        // Served on API and CLI, absent from MCP — so the one act about defensibility is missing
+        // from the surface agents actually hold. Declared rather than discovered on a 404.
+        let a = declaration(&ActName::Substantiate).unwrap();
+        assert_eq!(a.door_coverage.get(&Door::Mcp), Some(&DoorReach::Absent));
+        assert!(matches!(
+            a.door_coverage.get(&Door::Api),
+            Some(DoorReach::Serves { .. })
+        ));
+        assert_eq!(a.served_by.as_deref(), Some("resource_standing_shape"));
+        // Annotates rather than selects: no produced set, which is why `claims-carry-standing`
+        // has no result shape to land in while `ActResult.produced` is a required `IdSet`.
+        assert_eq!(a.produces, None);
     }
 
     #[test]
@@ -337,7 +731,7 @@ mod tests {
             let a = declaration(&name).unwrap();
             assert_ne!(
                 a.visibility_profile,
-                VisibilityProfile::AgnosticInValueRelativeInDomain,
+                Some(VisibilityProfile::AgnosticInValueRelativeInDomain),
                 "{name:?} orders by a document-local or resource-local quantity; \
                  declaring it relative-in-domain would claim a frame it does not have"
             );

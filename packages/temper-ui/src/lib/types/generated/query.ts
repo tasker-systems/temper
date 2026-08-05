@@ -32,7 +32,30 @@ accepts_filters: Array<FilterField>,
  * `terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not
  * the clamping. A term with no entry here has no ceiling.
  */
-bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null, visibility_profile: VisibilityProfile, 
+bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null, 
+/**
+ * Which surfaces reach this act, and how much of it. **Every [`Door`] carries an entry** —
+ * absence from a door is stated as [`DoorReach::Absent`], never by leaving the door out, so
+ * "this declaration says nothing about MCP" cannot be mistaken for "MCP serves it".
+ */
+door_coverage: { [key in Door]?: DoorReach }, 
+/**
+ * The quantity this act orders by. `None` for an act that orders nothing — an unbuilt act, the
+ * anti-act, or an act that annotates rather than selects.
+ */
+orders_by: ActQuantity | null, 
+/**
+ * Where the principal constraint applies to the ordering fragment.
+ *
+ * `None` exactly when [`ActDeclaration::orders_by`] is `None`, and the two move together by
+ * invariant rather than by convention: this field's own definition is *"where the principal
+ * constraint applies to **the fragment that produces this act's ordering**"*, so an act with no
+ * ordering has no such fragment and any value here would be a claim with no referent. v0
+ * shipped `substantiate` and `admit` — both unbuilt, both ordering nothing — declaring
+ * `PrincipalRelative`, which is not a conservative default but a sentence about a function that
+ * does not exist.
+ */
+visibility_profile: VisibilityProfile | null, 
 /**
  * Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4
  * reds when the body hash moves and this does not.
@@ -69,6 +92,30 @@ resource_filter: ResourceFilter | null, edge_filter: EdgeFilter | null, };
  * OPEN discriminator — adding an act is additive.
  */
 export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within" | "follow-from" | "survey" | "substantiate" | "admit" | string;
+
+/**
+ * The quantity an act orders its answer by, named so that summing it with another act's reads as
+ * the category error it is.
+ *
+ * This is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.
+ * Research [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *"Act responses never
+ * expose commensurable score fields — no bare `score: f64` shared across acts; each quantity
+ * carries its act's name and shape."* Arithmetic follows names: two fields called `score` invite
+ * `a.score + b.score` and no reviewer catches it. `unified_search` is the worked failure — it
+ * renames `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then sums them into
+ * `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is the
+ * exact expression the frame register forbids.
+ */
+export type ActQuantity = { 
+/**
+ * The DEPLOYED column name the serving function emits. Not a name invented here — a
+ * declaration is a description, so a caller who greps the SQL for this string finds it.
+ */
+field: string, 
+/**
+ * What the number measures, in this act's own terms.
+ */
+means: string, scale: QuantityScale, };
 
 /**
  * A refusal, distinct from a failure and from an honest empty.
@@ -149,9 +196,19 @@ export type BoundsMode = "bound" | "seed";
 export type BoundsSource = { "source": "upstream", stage: number, } | { "source": "expression" } | { "source": "caller" };
 
 /**
- * Whether an act is reachable, and how. Every value is mechanically checkable by T3's gate —
- * which is the whole point, because a hand-maintained build-state is the `ADMIN_EVENT_TYPES`
- * failure: a const beside a registry, with a test holding its own second copy.
+ * Whether a mechanic for this act exists, and whether the act has a door of its own or only its
+ * host's. Every value is mechanically checkable by T3's gate — which is the whole point, because a
+ * hand-maintained build-state is the `ADMIN_EVENT_TYPES` failure: a const beside a registry, with
+ * a test holding its own second copy.
+ *
+ * **This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is
+ * [`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A
+ * `served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and
+ * CLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts
+ * are **fused**, reachable from all three doors, and still door-partial — they declare
+ * [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`
+ * `[verified — crates/temper-cli/src/cli.rs:286-336]`. Door-partiality is finer-grained than the
+ * act and orthogonal to whether a mechanic exists, so it cannot ride on this enum.
  */
 export type BuildState = { "state": "served" } | { "state": "fused", host: string, } | { "state": "unbuilt" };
 
@@ -178,6 +235,32 @@ stages: Array<ActInvocation>, };
  * The whole composition's disclosure: an ordered per-stage record array.
  */
 export type CompositionTrace = { meta_detail: MetaDetail, stages: Array<StageTrace>, };
+
+/**
+ * One of Temper's three surfaces. Named as doors rather than as transports because the question
+ * this vocabulary answers is *can a caller standing here ask this*, not *what protocol carries it*.
+ */
+export type Door = "cli" | "api" | "mcp";
+
+/**
+ * How much of an act one door can reach.
+ *
+ * Two variants, not three: `Serves` with an empty shortfall IS full reach, so "full" needs no
+ * variant of its own and cannot disagree with the lists beside it. An act absent from a door has
+ * no shortfall to state, which is why `Absent` carries nothing.
+ *
+ * **Absence is declared, never inferred from an omitted entry.** That is the whole point of the
+ * field: goal `019fa618` (*surface parity — no door offers less than another without saying so*)
+ * has no witnesses because no mechanical inventory of who-offers-what exists, and a declaration
+ * that simply left a door out would reproduce exactly that hole in a new place.
+ */
+export type DoorReach = { "reach": "absent" } | { "reach": "serves", 
+/**
+ * Bound terms the act admits that a caller at this door has no way to supply. Every entry
+ * must be a term the act actually admits — an unreachable term the act never accepted is
+ * a contradiction, not a gap.
+ */
+terms_unreachable: Array<BoundTerm>, };
 
 /**
  * Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
@@ -280,6 +363,18 @@ description: string,
  * The kind the whole composition yields, when it is fixed.
  */
 produces: IdKind | null, };
+
+/**
+ * The scale of an act's ordering quantity.
+ *
+ * Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
+ * `search_vector_candidates` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`
+ * `[verified — migrations/20260801000010:186-189]`, while `wayfind_region_scores` rescales *the
+ * same* `<=>` distance as `1 - d` into `[-1,1]` `[verified — migrations/20260731000050:120]`.
+ * Neither column name says so, and one of the two feeds a weighted sum everyone reads as a
+ * `[0,1]` score.
+ */
+export type QuantityScale = { "scale": "unit_interval" } | { "scale": "other_range", bounds: string, } | { "scale": "unbounded" };
 
 /**
  * What a composition does when a stage refuses. Declared BEFORE execution; the executor never
