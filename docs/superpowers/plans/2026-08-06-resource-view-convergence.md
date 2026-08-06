@@ -435,16 +435,25 @@ deleting models for types that no longer exist, and checking the UI, which no ga
 - [ ] **Step 2:** Inspect the diff **entry by entry**. `hit_identities`' widened query will appear. Do **not** `git add` untracked bulk — session `019fd454` records `prepare-e2e` emitting 364 files of dependency closure into a cache holding 10 real entries.
 - [ ] **Step 3: Commit** only the verified entries.
 
-### Task 15: the two stale-prose defects
+### Task 15: the stale-prose defects
+
+`[widened — 2026-08-06, after Task 7]` Was "the two stale-prose defects"; a third class was found
+while answering a question about the search hit shape, and it is the same defect as the other two —
+prose describing a thing that no longer exists, with no gate able to notice.
 
 **Files:**
 - Modify: `crates/temper-cli/skill-content/cognitive-maps.md:42,268,274`
 - Modify: `agent-skills/temper-knowledge-base/knowledge-base.md:146-147`
+- Modify: `crates/temper-substrate/src/readback/mod.rs:119,142`, `crates/temper-workflow/src/types/resource.rs:19`
 
 - [ ] **Step 1:** `cognitive-maps.md` still teaches `temper search "<query>" --wayfind --regions 20`. Those flags were deleted in `05b025c7`. Rewrite the cross-map section to describe what actually exists. **`skills-drift` is green on this** — it compares source template to projection, and both are stale, so they agree. The gate cannot catch this; a human must.
 - [ ] **Step 2:** `knowledge-base.md:146-147` describes `search` as returning "scored results with snippets." It returns two arms carrying `fts_norm` / `vec_norm`, and has carried no snippet since `UnifiedSearchResultRow`. Hand-written and gate-uncovered by design.
-- [ ] **Step 3:** `temper skill emit --path agent-skills/temper-knowledge-base` and confirm `cargo make check`'s `skills-drift` step is green.
-- [ ] **Step 4: Commit.**
+- [ ] **Step 3: Three doc comments name a database view that does not exist** `[found — 2026-08-06]`. `readback/mod.rs:119` and `:142` and `resource.rs:19` cite `vault_resources_browse` as the source of the resource projection — `resource.rs:19` says "managed_meta projections from `vault_resources_browse` view", which is the stated reason `ResourceRow` hoists `stage`/`seq`/`mode`/`effort`. **The view was real** (added `682e10c1`, PR #35) and was **dropped by `2fc0412e`** (WS6 endgame collapse, PR #166) as collateral of rebuilding the migration baseline — the commit never mentions it. Verified absent: `SELECT viewname FROM pg_views WHERE viewname = 'vault_resources_browse'` returns nothing.
+  - ⚠️ **`resource.rs:19` may already be gone** — it is `ResourceRow`'s doc comment, and Task 9 retires `ResourceRow`. Check before editing; if the type is gone, say so rather than reinstating a comment to fix it.
+  - The other two describe `readback` functions that outlive the type. Rewrite them to name what those functions actually read, not a dropped view.
+  - Reviving the view **as a `ResourceView`-shaped source** is filed separately as task `019fd8f3-4955-7c20-be57-bc90b60d5122`, sequenced after Task 9. **This step is prose only** — do not build a view here.
+- [ ] **Step 4:** `temper skill emit --path agent-skills/temper-knowledge-base` and confirm `cargo make check`'s `skills-drift` step is green.
+- [ ] **Step 5: Commit.**
 
 ---
 
