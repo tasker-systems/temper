@@ -21,10 +21,6 @@ scenario-schema = ["schemars", "temper-core/scenario-schema"]
 
 [dependencies]
 temper-core = { path = "../temper-core" }
-# `ResourceView` — the one shape a resource has. The readback's enrichment read
-# (`hit_identities`) answers in it directly rather than in a search-local projection, so the
-# type has to be reachable from here. Acyclic: temper-workflow depends on temper-core alone.
-temper-workflow = { path = "../temper-workflow" }
 # MIGRATOR + the ledger runner. Light on purpose (sqlx/tokio/clap/anyhow) so the deploy can
 # compile the migrate binary without ort — see crates/temper-migrate/Cargo.toml.
 temper-migrate = { path = "../temper-migrate" }

@@ -11544,7 +11544,7 @@
         "properties": {
           "id": {
             "$ref": "#/components/schemas/ResourceId",
-            "description": "UUID of the resource.\n\nNamed `id` (not `resource_id`) so this response is a literal strict subset of\n[`crate::types::resource::ResourceDetail`]: `--meta-only` returns the same keys the\nfull `show` does, and nothing else. With two different anchor names the subset\nrelation is unachievable."
+            "description": "UUID of the resource.\n\nNamed `id` (not `resource_id`) so this response is a literal strict subset of\n`temper_workflow::types::resource::ResourceDetail`: `--meta-only` returns the same\nkeys the full `show` does, and nothing else. With two different anchor names the\nsubset relation is unachievable."
           },
           "managed_meta": {
             "oneOf": [

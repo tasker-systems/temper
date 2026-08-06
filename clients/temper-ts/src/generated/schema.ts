@@ -4421,9 +4421,9 @@ export interface components {
              * @description UUID of the resource.
              *
              *     Named `id` (not `resource_id`) so this response is a literal strict subset of
-             *     [`crate::types::resource::ResourceDetail`]: `--meta-only` returns the same keys the
-             *     full `show` does, and nothing else. With two different anchor names the subset
-             *     relation is unachievable.
+             *     `temper_workflow::types::resource::ResourceDetail`: `--meta-only` returns the same
+             *     keys the full `show` does, and nothing else. With two different anchor names the
+             *     subset relation is unachievable.
              */
             id: components["schemas"]["ResourceId"];
             managed_meta?: null | components["schemas"]["ManagedMeta"];

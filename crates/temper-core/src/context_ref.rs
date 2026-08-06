@@ -1,6 +1,6 @@
 //! Context addressing by ref: a bare UUID or a decorated `@owner/slug` form.
 //!
-//! UUID-primary, mirroring resource refs (`temper_workflow::operations::parse_ref`).
+//! UUID-primary, mirroring resource refs ([`crate::refs::parse_ref`]).
 //! Pure string parsing — no DB, no principal. Resolution to a `ContextId`
 //! (owner lookup + visibility gate) lives server-side in temper-api.
 

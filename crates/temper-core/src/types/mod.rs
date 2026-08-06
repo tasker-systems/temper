@@ -37,6 +37,7 @@ pub mod invocation;
 pub mod invocation_requests;
 pub mod lineage;
 pub mod machine;
+pub mod managed_meta;
 pub mod materialize;
 pub mod merge;
 pub mod ownership;
@@ -48,7 +49,9 @@ pub mod reassign;
 pub mod reconcile;
 pub mod relationship_events;
 pub mod relationship_requests;
+pub mod resource;
 pub mod resource_grant;
+pub mod resource_view;
 pub mod search;
 pub mod slack;
 pub mod standing;
@@ -88,6 +91,10 @@ pub use invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationStatus, TeamInvitation,
 };
 pub use lineage::{LineageNode, ResourceLineage};
+pub use managed_meta::{
+    ManagedMeta, MetaUpdatePayload, ResourceManifestRow, ResourceMetaResponse,
+    PROVENANCE_LLM_DISCOVERED, PROVENANCE_USER_CREATED,
+};
 pub use materialize::{
     ContextMaterializeInput, MaterializeAck, MaterializeDelta, MaterializeDeltaInput,
     MaterializeRequest, MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,
@@ -96,6 +103,8 @@ pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
 pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest};
+pub use resource::{BodyStorage, IngestState};
+pub use resource_view::{ResourceSection, ResourceView, SectionSet};
 pub use slack::{
     IdpRevocation, SlackDisconnectRequest, SlackDisconnectResponse, SlackDisconnectedPrincipal,
 };

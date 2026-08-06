@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Response body for the metadata-only GET endpoint.  Returns the current managed_meta / open_meta / hashes from a resource's manifest row without reconstructing the markdown body from `kb_chunks`. Used by the CLI sync pull path to fetch just the meta tier when the body side already agrees.
   class ResourceMetaResponse < ApiModelBase
-    # UUID of the resource.  Named `id` (not `resource_id`) so this response is a literal strict subset of [`crate::types::resource::ResourceDetail`]: `--meta-only` returns the same keys the full `show` does, and nothing else. With two different anchor names the subset relation is unachievable.
+    # UUID of the resource.  Named `id` (not `resource_id`) so this response is a literal strict subset of `temper_workflow::types::resource::ResourceDetail`: `--meta-only` returns the same keys the full `show` does, and nothing else. With two different anchor names the subset relation is unachievable.
     attr_accessor :id
 
     # Typed managed (temper-*) frontmatter from the manifest — the closed Property vocabulary. Only the named `temper-*` keys are represented; there is no catch-all (a stored non-Property key is not surfaced here). `None` only if the manifest row predates meta population.

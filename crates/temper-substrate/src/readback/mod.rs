@@ -57,9 +57,9 @@ use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId,
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
-use temper_workflow::types::managed_meta::ManagedMeta;
-use temper_workflow::types::resource::{BodyStorage, IngestState};
-use temper_workflow::types::ResourceView;
+use temper_core::types::managed_meta::ManagedMeta;
+use temper_core::types::resource::{BodyStorage, IngestState};
+use temper_core::types::ResourceView;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
 /// the surface can map each mode to the right HTTP status. The alternative — string-matching one
