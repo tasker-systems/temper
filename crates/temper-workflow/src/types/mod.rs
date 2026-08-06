@@ -7,6 +7,7 @@
 pub mod graph;
 pub mod managed_meta;
 pub mod resource;
+pub mod resource_view;
 
 pub use graph::{
     EdgeReconciliation, EdgeType, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow, ResolvedEdge,
@@ -18,3 +19,4 @@ pub use resource::{
     ResourceFacets, ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
     ResourceUpdateRequest, SortOrder,
 };
+pub use resource_view::ResourceView;
