@@ -108,9 +108,65 @@ what this phase exists to stop.$c$;
 -- cannot. Carried forward deliberately and unchanged; disclosing it is the read path's problem, and
 -- it is named in the task's Still open.
 --
--- The only edit is the scope predicate: the anchor pair replaces `p_context_id` + `p_scope_ids`,
+-- The only edit to the scope predicate is the anchor pair replacing `p_context_id` + `p_scope_ids`,
 -- guarded by the same cogmap-readability gate `search_exact` carries (see there for why it is a
 -- separate predicate and why it is keyed on the anchor kind).
+--
+-- ── AN UNEMBEDDED CHUNK IS NOT A DISTANT ONE. IT IS AN ABSENT OPINION. ───────────────────────────
+--
+-- `kb_chunks.embedding` is NULLABLE, and it is NULL for the whole window between a resource being
+-- created and the embed pass draining. `c.embedding <=> p_emb` is NULL for such a chunk, and NULLs
+-- SORT LAST — so they enter `ann` only once there are fewer than `p_k` embedded chunks to fill the
+-- draw. That is not an exotic state: it is a small corpus, a new tenant, a fresh context, and the
+-- very first search anyone runs against a new deployment. A resource whose current chunks are ALL
+-- unembedded then aggregates to a NULL `vec_norm`, and `WideHit.vec_norm` is a non-nullable `f32`:
+--   500 search stage=search_wide: decoding column "vec_norm": unexpected null
+--
+-- THIS FLAW IS INHERITED, NOT INTRODUCED HERE. `search_vector_candidates` — still live, still the
+-- body `unified_search` calls — carries the identical unguarded shape. What made it harmless was one
+-- layer up: `unified_search`'s blend wraps the arm in `COALESCE(v.vec_norm, 0)`, so no NULL ever
+-- reached a decoder. Splitting the arms removed the blend, and with it the coalesce that had been
+-- masking this the whole time. The reshape EXPOSED the bug; it did not write it.
+--
+-- SO THE FIX IS NOT TO PUT THE COALESCE BACK. `COALESCE(vec_norm, 0)` would score an unembedded
+-- resource as maximally distant — an assertion the data does not support — and would place it IN
+-- this arm's results, ranked last, rather than absent from them. That is precisely the confident-
+-- empty answer the two-arm split exists to stop: an arm that cannot yet have an opinion about a
+-- resource must return nothing about it, not a manufactured worst-case one. The chunks are excluded
+-- from the arm instead.
+--
+-- THE EXCLUSION GOES IN BOTH PLACES ON THE UNSCOPED BRANCH, but they are not equally load-bearing,
+-- and the difference was MEASURED by removing each one separately rather than reasoned about:
+--
+--   1. The final AGGREGATE is the one that fixes the 500, and it fixes it twice over. A resource
+--      with no embedded current chunks produces no join rows, so `GROUP BY` emits no group and it
+--      is absent rather than NULL. And `MIN`/`AVG` skip NULLs while `count(*)` DOES NOT, so an
+--      unembedded chunk left here inflates the shrinkage factor `1 - 1/sqrt(count(*))`: a resource
+--      with 2 embedded and 2 unembedded current chunks scores 0.875 where its embedded evidence
+--      alone says 0.9268. That second failure is a wrong NUMBER rather than a NULL — no error, no
+--      symptom — and it is the half a fix aimed only at the draw would have left behind.
+--   2. The `ann` DRAW is REDUNDANT FOR CORRECTNESS HERE and is kept deliberately, not by oversight.
+--      Removing it alone leaves every test green, because NULLs sort last and so can never displace
+--      an embedded chunk from the top-k — they only ever fill slots nothing else claimed, and the
+--      aggregate then drops them anyway. It stays for three reasons: it avoids running admission
+--      (the `resources_visible_to` join, the expensive part) over chunks that cannot contribute; it
+--      keeps this branch's draw identical to the scoped branch's, where the same predicate IS the
+--      only guard; and it makes the aggregate's correctness stop depending on the implicit
+--      "inner join yields no rows ⇒ no group" mechanism, which a later change to that join would
+--      silently break. Measured cost: none — the plan is unchanged (below).
+--
+-- The scoped branch carries no top-k and aggregates over its own `ann`, so the one guard on that
+-- `ann` is strictly load-bearing there and discharges both obligations at once.
+--
+-- THE HNSW INDEX IS NOT DEFEATED, which is the live hazard whenever a predicate is added to this
+-- draw (see the asymmetry note above — the whole reason visibility lands AFTER `LIMIT p_k`).
+-- Measured, not assumed: at 20k embedded + 50 unembedded chunks the plan is byte-identical either
+-- way — `Index Scan using idx_kb_chunks_embedding`, `Index Searches: 1`, 100 rows — the guard
+-- attaching only as a recheck `Filter` on the same index scan. It cannot cost a scan: the partial
+-- index is `WHERE is_current`, which the guarded predicate still implies, and pgvector's HNSW never
+-- indexes a NULL vector, so an index path could not have returned one regardless. The NULLs were
+-- only ever reachable through the seq-scan path a small corpus selects — which is exactly why this
+-- reproduces on a fresh database and not on a warm one.
 CREATE OR REPLACE FUNCTION search_wide(
     p_principal    uuid,
     p_emb          vector,
@@ -125,7 +181,12 @@ BEGIN
     WITH ann AS (
       SELECT c.resource_id, (c.embedding <=> p_emb) AS dist
         FROM kb_chunks c
-       WHERE p_emb IS NOT NULL AND c.is_current
+       -- `c.embedding IS NOT NULL` keeps unembedded chunks out of the draw entirely. Redundant for
+       -- correctness on THIS branch — the aggregate below drops them regardless, and a NULL
+       -- distance sorts last so it never displaces a real candidate — and kept anyway, to spare
+       -- admission the work and to keep this draw identical to the scoped branch's, where the same
+       -- predicate is the only guard. See the header for the measurement that says so.
+       WHERE p_emb IS NOT NULL AND c.is_current AND c.embedding IS NOT NULL
        ORDER BY c.embedding <=> p_emb
        LIMIT p_k
     ),
@@ -137,8 +198,15 @@ BEGIN
         JOIN resources_visible_to(p_principal) v ON v.resource_id = a.resource_id
     )
     -- Order statistic shrunk toward the mean by the draws that produced it, re-derived over the
-    -- resource's FULL current chunk set rather than over `ann` — `ann` is the top-k, so aggregating
-    -- there conditions on the winners and the correction collapses to a no-op.
+    -- resource's full current EMBEDDED chunk set rather than over `ann` — `ann` is the top-k, so
+    -- aggregating there conditions on the winners and the correction collapses to a no-op.
+    --
+    -- "EMBEDDED" is THE load-bearing half of this migration's NULL guard, and it carries two jobs.
+    -- A resource with no embedded current chunks joins to nothing and so emits no group at all —
+    -- absent, which is the fix for the 500. And `MIN`/`AVG` skip NULLs while `count(*)` does not,
+    -- so any unembedded chunk reaching here would inflate the shrinkage denominator and drag the
+    -- score toward a mean it never contributed to: a wrong number rather than a NULL, invisible
+    -- from the error, and the half that survives a fix aimed only at the draw (header).
     SELECT ad.resource_id,
            (1.0 - (MIN(c.embedding <=> p_emb)
                  + (AVG(c.embedding <=> p_emb) - MIN(c.embedding <=> p_emb))
@@ -146,6 +214,7 @@ BEGIN
                   ) / 2.0)::real
       FROM admitted ad
       JOIN kb_chunks c ON c.resource_id = ad.resource_id AND c.is_current
+                      AND c.embedding IS NOT NULL
      GROUP BY ad.resource_id;
   ELSE
     -- The same anchor-readability gate `search_exact` carries, in the form this arm can express:
@@ -176,7 +245,12 @@ BEGIN
       SELECT c.resource_id, (c.embedding <=> p_emb) AS dist
         FROM kb_chunks c
         JOIN scoped_res s ON s.id = c.resource_id
-       WHERE p_emb IS NOT NULL AND c.is_current
+       -- The same guard the unscoped branch carries, and it is needed here too even though this
+       -- branch has no top-k to be crowded out of: a resource whose current chunks are all
+       -- unembedded would otherwise aggregate to a NULL `vec_norm`, and a partially embedded one
+       -- would carry unembedded chunks into `count(*)`. ONE guard discharges both obligations on
+       -- this branch, because its aggregate reads `ann` rather than re-reading `kb_chunks`.
+       WHERE p_emb IS NOT NULL AND c.is_current AND c.embedding IS NOT NULL
     )
     -- Aggregating over `ann` is correct HERE and only here: this branch carries no top-k, so `ann`
     -- already holds the full draw set.
@@ -224,11 +298,17 @@ $c$The wide arm of /api/search: nearest-neighbour retrieval over chunk embedding
 [-1,1]; the two are not the same quantity and neither column name says so. This arm's number is
 never combined with the exact arm's `fts_norm`.
 
+A resource whose current chunks carry no embedding yet is ABSENT from this arm — not present with a
+low score. An unembedded chunk is an absent opinion, not a distant one, so scoring it (COALESCE to 0
+being the tempting form) would assert a maximal distance the data does not support. Orthogonal to
+`ingest_state`: that arm-level gate asks whether the bytes are all here, this one asks whether the
+vectors are ready.
+
 `hnsw.ef_search` is pinned on this function because the server default (40) sits below the k callers
 ask for. The pin does NOT inherit from search_vector_candidates — proconfig binds to a signature.$c$;
 
 SELECT declare_migration(
     20260805000020,
     'additive',
-    'Phase 1 (task 019fd25e): search_exact and search_wide, the two arms of /api/search, added beside unified_search. Each returns its own quantity (fts_norm, vec_norm) with no weight and no companion to rank it against. Scoping is the anchor pair (anchor_table, anchor_id) for both, replacing the context-EXISTS/cogmap-uuid[] split, and is guarded by cogmap_readable_by_profile on the cogmap kind — the conjunct cogmap_scope_ids carried, which resources_visible_to does NOT imply for an ex-member who still owns a homed resource. New names rather than replaces because a parameter change makes a new function in PostgreSQL; overloading would also make search_surface_a.rs pinned_ef_search read a nondeterministic pg_proc row. hnsw.ef_search is re-pinned on search_wide because proconfig binds to a signature and does not inherit. Nothing is dropped or altered, so a binary either side of this is unaffected.'
+    'Phase 1 (task 019fd25e): search_exact and search_wide, the two arms of /api/search, added beside unified_search. Each returns its own quantity (fts_norm, vec_norm) with no weight and no companion to rank it against. Scoping is the anchor pair (anchor_table, anchor_id) for both, replacing the context-EXISTS/cogmap-uuid[] split, and is guarded by cogmap_readable_by_profile on the cogmap kind — the conjunct cogmap_scope_ids carried, which resources_visible_to does NOT imply for an ex-member who still owns a homed resource. New names rather than replaces because a parameter change makes a new function in PostgreSQL; overloading would also make search_surface_a.rs pinned_ef_search read a nondeterministic pg_proc row. hnsw.ef_search is re-pinned on search_wide because proconfig binds to a signature and does not inherit. search_wide additionally excludes unembedded chunks (embedding IS NOT NULL) from both its ANN draw and its aggregate: search_vector_candidates carries the same unguarded shape but unified_search masked it with COALESCE(vec_norm, 0), and without the blend a resource whose current chunks are all unembedded returned a NULL vec_norm into a non-nullable f32. Excluded rather than coalesced, because an unembedded chunk is an absent opinion rather than a distant one. Nothing is dropped or altered, so a binary either side of this is unaffected.'
 );

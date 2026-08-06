@@ -162,15 +162,19 @@ async fn exact(
         .collect()
 }
 
-/// A single-chunk resource carrying `emb`. The wide arm scores chunks, so these need embeddings
-/// where the exact arm's needed only a body.
-async fn mk_embedded(
+/// A resource with one chunk per entry of `embs` — `None` meaning that chunk carries NO vector.
+///
+/// `None` is not a synthetic state: it is what `prepare_block_deferred` emits on every chunk of an
+/// async-embedded create, and `content.rs:31-36` documents it mapping to a NULL
+/// `kb_chunks.embedding` until the backfill runs (issue #299). Every resource passes through it.
+/// A MIXED slice is the partially-drained case — some chunks embedded, some not yet.
+async fn mk_chunked(
     pool: &sqlx::PgPool,
     home: AnchorRef,
     owner: ProfileId,
     emitter: EntityId,
     title: &str,
-    emb: Vec<f32>,
+    embs: Vec<Option<Vec<f32>>>,
 ) -> Uuid {
     let blocks = vec![PreparedBlock {
         incorporated: vec![],
@@ -178,16 +182,20 @@ async fn mk_embedded(
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,
-        chunks: vec![PreparedChunk {
-            chunk_id: ChunkId::from(Uuid::now_v7()),
-            chunk_index: 0,
-            content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
-            content: title.to_string(),
-            embedding: Some(emb),
-            embedded_with: None,
-            header_path: None,
-            heading_depth: None,
-        }],
+        chunks: embs
+            .into_iter()
+            .enumerate()
+            .map(|(i, emb)| PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
+                chunk_index: i as i32,
+                content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+                content: title.to_string(),
+                embedding: emb,
+                embedded_with: None,
+                header_path: None,
+                heading_depth: None,
+            })
+            .collect(),
     }];
     let mut tx = pool.begin().await.unwrap();
     let id = fire(
@@ -211,6 +219,30 @@ async fn mk_embedded(
     .unwrap();
     tx.commit().await.unwrap();
     id.uuid()
+}
+
+/// A single-chunk resource carrying `emb`. The wide arm scores chunks, so these need embeddings
+/// where the exact arm's needed only a body. Shorthand for [`mk_chunked`].
+async fn mk_embedded(
+    pool: &sqlx::PgPool,
+    home: AnchorRef,
+    owner: ProfileId,
+    emitter: EntityId,
+    title: &str,
+    emb: Vec<f32>,
+) -> Uuid {
+    mk_chunked(pool, home, owner, emitter, title, vec![Some(emb)]).await
+}
+
+/// A single-chunk resource created but NOT yet embedded — [`mk_chunked`] with no vector.
+async fn mk_unembedded(
+    pool: &sqlx::PgPool,
+    home: AnchorRef,
+    owner: ProfileId,
+    emitter: EntityId,
+    title: &str,
+) -> Uuid {
+    mk_chunked(pool, home, owner, emitter, title, vec![None]).await
 }
 
 /// pgvector text literal for binding a query embedding.
@@ -556,6 +588,162 @@ async fn an_in_progress_resource_appears_in_neither_arm(pool: sqlx::PgPool) {
             .iter()
             .any(|(id, _)| *id == partial),
         "an in_progress resource must not surface in the wide arm"
+    );
+}
+
+/// A resource that is not embedded yet is ABSENT from the wide arm — not present with a low score,
+/// and not a 500.
+///
+/// The corpus is deliberately TINY, because that is the only shape in which this bites. A NULL
+/// `embedding <=> p_emb` sorts LAST, so an unembedded chunk reaches the top-k only once there are
+/// fewer than `k` embedded chunks to fill it: a new tenant, a fresh context, the first search after
+/// a deploy. One embedded chunk against `k = 100` is that corpus. On a warm database the NULLs are
+/// crowded out and everything looks fine, which is exactly why this shipped.
+///
+/// Two failures are asserted at once because the guard fixes one by preventing the other:
+///
+/// 1. **No error.** `wide()` decodes `vec_norm` as a non-nullable `f32` (as `WideHit` does), so a
+///    NULL aggregate panics here in the same place production returned
+///    `500 search stage=search_wide: decoding column "vec_norm": unexpected null`. Reaching the
+///    assertions below at all is the first half of the claim.
+/// 2. **No hit.** The resource must not appear — an unembedded chunk is an absent opinion, not a
+///    distant one, so `COALESCE(vec_norm, 0)` would have satisfied (1) while ranking a resource this
+///    arm cannot yet have an opinion about.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_resource_whose_chunks_are_not_embedded_yet_is_absent_from_the_wide_arm(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "unembedded").await;
+
+    let embedded = mk_embedded(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "kestrel",
+        unit(0),
+    )
+    .await;
+    let pending = mk_unembedded(&pool, AnchorRef::context(home), owner, emitter, "merlin").await;
+
+    // The fixture is what the test claims it is. Without this the assertions below could pass
+    // because the write path quietly stored no chunk at all, which is a different (and vacuous)
+    // fact than "its chunk carries no vector".
+    let unembedded_current: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND is_current AND embedding IS NULL",
+    )
+    .bind(pending)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unembedded_current, 1,
+        "precondition: the pending resource has exactly one current chunk and it carries no vector"
+    );
+
+    // And it is otherwise a perfectly good, visible, complete resource — so its absence from the
+    // wide arm below is about the missing vector and nothing else.
+    assert!(
+        exact(&pool, owner, "merlin", None)
+            .await
+            .iter()
+            .any(|(id, _)| *id == pending),
+        "precondition: the pending resource is visible and complete — the exact arm finds it"
+    );
+
+    // `k` far exceeds the one embedded chunk in the corpus, so the NULL-distance chunks are not
+    // crowded out of the draw. This call panics on the unfixed body.
+    let rows = wide(&pool, owner, &unit(0), 100, None).await;
+
+    assert!(
+        !rows.iter().any(|(id, _)| *id == pending),
+        "a resource whose current chunks carry no embedding must not appear in the wide arm at \
+         all — not even scored 0, which would assert a maximal distance the data does not support"
+    );
+    assert!(
+        rows.iter().any(|(id, _)| *id == embedded),
+        "the embedded resource must still be found — otherwise the assertion above passes \
+         vacuously because the arm returned nothing"
+    );
+
+    // The SCOPED branch is a different query with its own guard, not a filtered version of the one
+    // above: it pre-filters into `scoped_res`, carries no top-k, and aggregates over its own `ann`.
+    // An unguarded copy of it returns the same NULL, so the property is asserted on both branches
+    // rather than assumed to transfer.
+    let scoped = wide(
+        &pool,
+        owner,
+        &unit(0),
+        100,
+        Some(("kb_contexts", home.uuid())),
+    )
+    .await;
+    assert!(
+        !scoped.iter().any(|(id, _)| *id == pending),
+        "the scoped branch must exclude the unembedded resource too — it is a separate query with \
+         its own guard, and adding a scope must not resurrect a resource the arm has no opinion on"
+    );
+    assert!(
+        scoped.iter().any(|(id, _)| *id == embedded),
+        "precondition: the scoped branch reaches this context's embedded resource at all"
+    );
+}
+
+/// A partially embedded resource is scored on its embedded chunks ALONE.
+///
+/// The second, quieter half of the same flaw. `MIN`/`AVG` skip NULLs but `count(*)` does not, so an
+/// unembedded chunk left in the final aggregate inflates the shrinkage denominator
+/// `1 - 1/sqrt(count(*))` and drags the score toward a mean the chunk never contributed to. That is
+/// a wrong NUMBER rather than a NULL — no error, no symptom — so a guard placed only on the `ann`
+/// draw would fix the 500 and leave this behind.
+///
+/// Asserted against the twin that carries the SAME two embedded chunks and nothing else, rather
+/// than against a hardcoded constant: the claim is "the unembedded chunks did not count", which is
+/// an equality between two resources, not a particular float. That also keeps the test honest if
+/// the shrinkage formula is ever retuned.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn unembedded_chunks_do_not_dilute_a_partially_embedded_resources_score(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "partial-embed").await;
+
+    // Two chunks embedded on orthogonal axes, so MIN and AVG genuinely differ and the shrinkage
+    // term is not multiplied by zero — with MIN == AVG the dilution would be unobservable.
+    let drained = mk_chunked(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "harrier",
+        vec![Some(unit(0)), Some(unit(1))],
+    )
+    .await;
+    let draining = mk_chunked(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "goshawk",
+        vec![Some(unit(0)), Some(unit(1)), None, None],
+    )
+    .await;
+
+    let rows = wide(&pool, owner, &unit(0), 100, None).await;
+    let score = |id: Uuid| rows.iter().find(|(r, _)| *r == id).map(|(_, s)| *s);
+    let (d, p) = (score(drained), score(draining));
+    assert!(
+        d.is_some() && p.is_some(),
+        "both resources carry embedded chunks, so both are candidates: drained={d:?} draining={p:?}"
+    );
+    let (d, p) = (d.unwrap(), p.unwrap());
+
+    assert_eq!(
+        d, p,
+        "a resource with two embedded chunks and two unembedded ones must score exactly as one \
+         with the same two embedded chunks and nothing else; a difference means the unembedded \
+         chunks entered count(*) and diluted the score toward a mean they never contributed to"
     );
 }
 
