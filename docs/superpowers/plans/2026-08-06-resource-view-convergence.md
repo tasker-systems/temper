@@ -230,7 +230,8 @@ are simply ignored there."
 - Test: in-file
 
 **Interfaces:**
-- Produces: `ResourceListResponse { rows: Vec<ResourceView>, total: i64, returned: i64, truncated: bool, limit: Option<i64>, offset: i64, facets: ResourceFacets }`
+- Produces: `ResourceListResponse` gains `returned: i64`, `truncated: bool`, `limit: Option<i64>`, `offset: i64`.
+- ⚠️ **`rows` stays `Vec<ResourceRow>` in this task.** `[corrected — 2026-08-06, after Task 1]` The plan originally swapped the row type here; that breaks every `ResourceListResponse` construction site and leaves the workspace uncompilable until Task 7, violating "each task ends with an independently testable deliverable". **The row-type swap is Task 7's.** This task adds paging state only.
 - **AMEND** — `returned`/`truncated` move from CLI injection (`commands/resource.rs:1016-1017`) onto the wire. Authorized by the decision's CLI-side-injection finding.
 
 - [ ] **Step 1: Failing tests** — `truncated_is_true_when_a_page_hides_rows` (total 100, returned 20, offset 0); `truncated_is_false_on_the_last_page` (total 25, returned 5, offset 20 — the off-by-one case, and the one a naive `total > returned` gets wrong); `all_returns_untruncated` (`limit: None`, returned == total).
@@ -253,6 +254,7 @@ are simply ignored there."
 **Interfaces:**
 - Consumes: `ResourceView` (Task 1).
 - Produces: `pub async fn hit_identities(pool: &PgPool, principal: ProfileId, ids: &[ResourceId]) -> Result<Vec<ResourceView>>` — signature unchanged but for the return type. `HitIdentity` is deleted.
+- ⚠️ **Do NOT `query_as` into `ResourceView`.** `[corrected — 2026-08-06, after Task 1]` It has no `FromRow` derive, deliberately: `ref` and `context_ref` are derived and `content` comes from a different read, so a `query_as` could never be complete. Verified during Task 1: there are **zero** `query_as` call sites for `ResourceRow` or `ResourceView` anywhere in `crates/` or `tests/`. Assemble by hand as `substrate_read` already does, then call `.with_derived_refs()`.
 - **CONFORM** — the batched single-round-trip property (`readback/mod.rs:1486-1489`: "This replaces a per-hit `resource_row` call — 50 results meant 51 queries"). **The widened SELECT must not reintroduce the N+1.**
 
 - [ ] **Step 1: Failing test** — `hit_identities_is_one_round_trip_and_carries_both_meta_tiers`: enrich 10 ids, assert every returned view has `managed_meta` populated and `content: None`.
@@ -324,6 +326,7 @@ are simply ignored there."
 **Interfaces:**
 - Produces: `pub struct ExactHit { pub resource: ResourceView, pub fts_norm: f32 }`; `pub struct WideHit { pub resource: ResourceView, pub vec_norm: f32 }`. The inlined identity fields (`api.rs:161-168` comment) are deleted along with the comment explaining why they were inlined.
 - **CONFORM** — the quantity stays on the hit, never on `ResourceView`. Frame register `no-cross-act-ranking`.
+- ⚠️ **`kb_uri` is already gone** `[resolved — 2026-08-06, Task 1]`. It was a verbatim copy of `origin_uri` (`substrate_read.rs:898,912`) whose doc promised a `kb://` URI from `kb_resource_uri` — a function that does not exist in `migrations/`. Dropped on the same grounds as `origin` and `slug`. Do not reintroduce it; do not carry it on the hit.
 
 - [ ] **Step 1: Failing tests** — `hit_carries_the_same_shape_as_list` (assert an `ExactHit`'s `resource` serializes identically to a list row for the same id); `no_quantity_field_exists_on_resource_view` (assert the serialized `resource` object has neither `fts_norm` nor `vec_norm`).
 - [ ] **Step 2–4:** red, implement, green.
@@ -408,7 +411,7 @@ are simply ignored there."
 - [ ] **Step 1:** `cargo make fix` — **before** `openapi`, per Global Constraints.
 - [ ] **Step 2:** `cargo make generate-ts-types`, then `cargo make openapi`.
 - [ ] **Step 3:** Delete by hand the orphaned `.rb` models for retired types — `unified_search_result_row.rb` is already gone; expect `resource_row.rb`, `resource_detail.rb`, `resource_meta_list_response.rb`. `cargo make openapi` adds models but never deletes them.
-- [ ] **Step 4:** `cd packages/temper-ui && bun install && bun run check`. **`cargo make check` does not cover temper-ui.** `ResourceListResponse` now codegens for the first time (it could not while `ResourceDetail` used `flatten`), so the UI may newly type-error where it previously accepted a structural superset — that is the bug being fixed, not a regression.
+- [ ] **Step 4:** `cd packages/temper-ui && bun install && bun run check`. **Note a wire behaviour change from Task 1:** every `Option` on `ResourceView` carries `skip_serializing_if`, which `ResourceRow` did **not**. Absent optionals now vanish rather than emitting `null`, so any consumer testing `=== null` sees `undefined` instead. **`cargo make check` does not cover temper-ui.** `ResourceListResponse` now codegens for the first time (it could not while `ResourceDetail` used `flatten`), so the UI may newly type-error where it previously accepted a structural superset — that is the bug being fixed, not a regression.
 - [ ] **Step 5:** `cargo make check` → green.
 - [ ] **Step 6: Commit** all regenerated artifacts together (they ride along; a partial commit leaves the drift gate red).
 
