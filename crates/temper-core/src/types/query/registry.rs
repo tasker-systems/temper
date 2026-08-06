@@ -18,7 +18,24 @@ use super::filter::FilterField;
 use super::id_set::IdKind;
 use super::scalars::BoundTerm;
 
-fn fused() -> BuildState {
+/// `follow-from` and `survey` are in a state `BuildState` cannot currently express, and this helper
+/// is where that is recorded rather than hidden.
+///
+/// Their mechanics are live — `search_graph_expand` and `wayfind_region_scores` are both still
+/// deployed — but as of phase 1 steps 2-3 **no door reaches either one**. `/api/search` no longer
+/// expands across edges and no longer runs the region funnel, and `unified_search` itself, the host
+/// named below, is now called from tests only. So `Fused` is imprecise in its second clause ("the
+/// host has one" — it does not), `Unbuilt` would be false about a function that is right there, and
+/// `Served` would be false about a door that does not exist.
+///
+/// **A fourth variant is deliberately NOT added.** `/api/query` is the next phase and is being taken
+/// up immediately; it gives both acts doors and expresses this remainder properly, so a variant
+/// minted here would be born obsolete — churn on a shipped contract type, and a semver-breaking
+/// widening at that. The declarations and their `served_by` mechanics are kept intact so the record
+/// that these functions exist and are stranded is not lost in the meantime.
+///
+/// `[provisional — 2026-08-05; resolve in phase 4]`
+fn provisionally_unexpressed() -> BuildState {
     BuildState::Fused {
         host: "unified_search".to_string(),
     }
@@ -81,8 +98,8 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::FindExact,
             asker_holds: "I can quote the exact words".to_string(),
-            served_by: Some("search_fts_candidates".to_string()),
-            build_state: fused(),
+            served_by: Some("search_exact".to_string()),
+            build_state: BuildState::Served,
             // Post-filter in unified_search's `corpus` CTE. Membership-equivalent to a pre-filter
             // because the FTS arm carries no top-k, so nothing can be crowded out of it.
             accepts_bounds: vec![IdKind::Resource],
@@ -114,8 +131,8 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::FindAboutAnywhere,
             asker_holds: "a concept, no exact words; search everything I can see".to_string(),
-            served_by: Some("search_vector_candidates".to_string()),
-            build_state: fused(),
+            served_by: Some("search_wide".to_string()),
+            build_state: BuildState::Served,
             // A bound would make this find-about-within. Definitional exclusion, not a hole.
             accepts_bounds: vec![],
             accepts_seeds: vec![],
@@ -131,8 +148,8 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::FindAboutWithin,
             asker_holds: "a concept, plus a set to search inside".to_string(),
-            served_by: Some("search_vector_candidates".to_string()),
-            build_state: fused(),
+            served_by: Some("search_wide".to_string()),
+            build_state: BuildState::Served,
             accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
@@ -148,7 +165,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             name: ActName::FollowFrom,
             asker_holds: "a found thing; I want its neighbours".to_string(),
             served_by: Some("search_graph_expand".to_string()),
-            build_state: fused(),
+            build_state: provisionally_unexpressed(),
             // Bounded follow-from is UNBUILT: search_graph_expand has no scope parameter, so
             // "walk from these seeds but stay inside this set" is unstatable. The one genuine
             // foreclosure — the act itself is fused, only its bounded form is missing.
@@ -192,7 +209,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             name: ActName::Survey,
             asker_holds: "a question about what a scope knows".to_string(),
             served_by: Some("wayfind_region_scores".to_string()),
-            build_state: fused(),
+            build_state: provisionally_unexpressed(),
             // Takes (p_anchor_table, p_anchor_id) — an anchor, which a typed IdSet can name.
             accepts_bounds: vec![IdKind::Cogmap, IdKind::Context],
             accepts_seeds: vec![],
@@ -346,26 +363,34 @@ mod tests {
     }
 
     #[test]
-    fn substantiate_is_the_only_act_with_a_door_of_its_own() {
-        // WAS `nothing_in_the_search_family_is_served`, whose comment read "every mechanic is
-        // reachable only through unified_search". That sentence was FALSE about the deployed
-        // system while its `assert_ne!` passed on all seven acts — the same shape as
-        // `survey_is_the_only_act_relative_in_domain`, and the same safe direction.
+    fn the_served_set_is_the_three_find_acts_plus_substantiate() {
+        // WAS `substantiate_is_the_only_act_with_a_door_of_its_own`, and before that
+        // `nothing_in_the_search_family_is_served`, whose comment read "every mechanic is reachable
+        // only through unified_search". That sentence was FALSE about the deployed system while its
+        // assertion passed — the same shape as `survey_is_the_only_act_relative_in_domain`, and the
+        // same safe direction. It is recorded here because the set has now moved twice.
         //
-        // `substantiate` has had its own door since Set 5: `GET /api/resources/{id}/evidence`
-        // -> `resource_standing_shape`, plus `temper resource evidence`. It reaches
-        // `unified_search` not at all — T1 called its total absence from search "the most
-        // consequential `none` in the document".
+        // Phase 1 steps 2-3 gave the three `find` acts doors of their own: `/api/search` invokes
+        // `search_exact` and `search_wide` directly, neither fused into anything. `substantiate`
+        // keeps the door it has had since Set 5 (`GET /api/resources/{id}/evidence`).
         //
-        // Kept as an EXACT set for the same reason the visibility-profile test is: an act
-        // acquiring or losing a door must be a deliberate edit here, and `build_state` moving
-        // `served` -> `fused`/`unbuilt` is a BREAKING change under the semver table (design §6.2).
+        // Kept as an EXACT set: an act acquiring or losing a door must be a deliberate edit here,
+        // and `build_state` moving is BREAKING under the semver table (design §6.2). Order follows
+        // `search_family()`.
         let served: Vec<ActName> = search_family()
             .into_iter()
             .filter(|a| a.build_state == BuildState::Served)
             .map(|a| a.name)
             .collect();
-        assert_eq!(served, vec![ActName::Substantiate]);
+        assert_eq!(
+            served,
+            vec![
+                ActName::FindExact,
+                ActName::FindAboutAnywhere,
+                ActName::FindAboutWithin,
+                ActName::Substantiate,
+            ]
+        );
     }
 
     #[test]
@@ -409,16 +434,20 @@ mod tests {
     #[test]
     fn the_cli_cannot_page_the_find_acts_and_that_is_declared() {
         // The concrete parity gap that forced door coverage to be its own axis rather than a
-        // `BuildState` variant: these three acts are FUSED — reachable from all three doors
-        // through `unified_search` — and still door-partial, because `temper search` has no
-        // `--offset` and so can only ever read page 1.
+        // `BuildState` variant. The original form of this test noted the three acts were FUSED and
+        // still door-partial; they are `Served` now, and the gap is UNCHANGED — which is the
+        // stronger version of the same argument. Door-partiality is orthogonal to build state, so no
+        // `BuildState` variant could ever have carried it.
+        //
+        // `temper search` still has no `--offset` and can only ever read page 1. Note that offset is
+        // now applied PER ARM (`substrate_read::search_select`), so the CLI cannot page either arm.
         for name in [
             ActName::FindExact,
             ActName::FindAboutAnywhere,
             ActName::FindAboutWithin,
         ] {
             let a = declaration(&name).unwrap();
-            assert!(matches!(a.build_state, BuildState::Fused { .. }));
+            assert_eq!(a.build_state, BuildState::Served);
             assert_eq!(
                 a.door_coverage.get(&Door::Cli),
                 Some(&DoorReach::Serves {

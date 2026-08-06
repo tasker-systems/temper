@@ -137,3 +137,68 @@ async fn search_returns_two_arms_each_with_its_own_quantity_and_no_sum(pool: PgP
          bare array"
     );
 }
+
+/// `offset` pages EACH ARM through its own order, and is not silently ignored.
+///
+/// The arms are incommensurable, so there is no combined sequence for a caller to be at position N
+/// of — per-arm is the only reading that means anything. This exists because the first cut of the
+/// two-arm read path applied `limit` and dropped `offset` on the floor, which is precisely the
+/// "flag that silently does nothing" the same change removed the graph parameters for.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn offset_pages_each_arm_and_is_not_ignored(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("offset-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+
+    for n in 0..3 {
+        let resp = app
+            .client
+            .post(app.url("/api/resources"))
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&json!({
+                "kb_context_id": context_id.to_string(),
+                "doc_type": "research",
+                "origin_uri": format!("test://offset-{}-{}", n, uuid::Uuid::new_v4()),
+                "title": format!("ztmpoffsetword entry number {n}"),
+            }))
+            .send()
+            .await
+            .expect("create resource");
+        assert!(resp.status().is_success(), "seed {n} must be created");
+    }
+
+    async fn page(app: &common::TestApp, token: &str, offset: i64) -> Vec<String> {
+        let resp = post_search(
+            app,
+            token,
+            json!({ "query": "ztmpoffsetword", "limit": 2, "offset": offset }),
+        )
+        .await;
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: Value = resp.json().await.expect("search JSON");
+        body["exact"]["hits"]
+            .as_array()
+            .expect("exact hits")
+            .iter()
+            .map(|h| h["resource_id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    let first = page(&app, &token, 0).await;
+    let second = page(&app, &token, 2).await;
+
+    assert_eq!(first.len(), 2, "limit 2 must yield 2 on the first page");
+    assert_eq!(
+        second.len(),
+        1,
+        "three seeded resources, offset 2 leaves exactly one"
+    );
+    assert!(
+        second.iter().all(|id| !first.contains(id)),
+        "offset must advance the arm's own order, not re-serve page 1: {first:?} vs {second:?}"
+    );
+}

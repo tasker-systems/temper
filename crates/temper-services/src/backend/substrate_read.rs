@@ -769,6 +769,11 @@ pub async fn search_select(
     let degraded = embed_query_if_missing(&mut params).await;
     let scope = classify_scope(&params);
     let clamped = clamp_search_params(&params);
+    // Offset and limit apply PER ARM, never to a merged list — each arm is paginated through its own
+    // order. A caller asking offset 10 gets each arm's second page, which is the only reading that
+    // survives the arms being incommensurable: there is no combined sequence to be at position 10 of.
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let limit = clamped.limit as usize;
     let anchor = resolve_search_anchor(pool, profile_id, &params).await?;
 
     let (exact_hits, wide_hits) = tokio::try_join!(
@@ -812,7 +817,7 @@ pub async fn search_select(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.resource_id.cmp(&b.resource_id))
     });
-    exact.truncate(clamped.limit as usize);
+    let exact: Vec<ExactHit> = exact.into_iter().skip(offset).take(limit).collect();
 
     let mut wide: Vec<WideHit> = wide_hits
         .into_iter()
@@ -828,7 +833,7 @@ pub async fn search_select(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.resource_id.cmp(&b.resource_id))
     });
-    wide.truncate(clamped.limit as usize);
+    let wide: Vec<WideHit> = wide.into_iter().skip(offset).take(limit).collect();
 
     let scope_size: Option<i64> = None;
     let exact_reason = arm_reason(exact.len());
