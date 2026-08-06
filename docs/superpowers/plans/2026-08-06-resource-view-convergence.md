@@ -42,6 +42,8 @@ Copied verbatim from repo CLAUDE.md and the decision. Every task's requirements 
 - **`cargo make fix` BEFORE `cargo make openapi`.** `fix` re-wraps the utoipa `description` string that is embedded in `openapi.json`; regenerating first and formatting after silently re-stales the artifact. Recorded in session `019fd454-0105-75a1-8cfe-d027c7623ad4`.
 - **`cargo make openapi` adds models but never deletes them.** Orphaned `.rb` files for retired types must be removed by hand.
 - **Drift gates compare against COMMITTED state.** Correctly-regenerated artifacts stay red until committed. Expected; do not chase.
+- **⚠️ ARTIFACTS RIDE WITH THE COMMIT THAT STALES THEM — they cannot be batched into Beat E** `[corrected — 2026-08-06, after Task 3]`. The pre-commit hook runs `check-openapi-spec.sh`, which regenerates from the **working tree** and fails the commit if `openapi.json` disagrees. So any task touching a `utoipa::ToSchema` or `ts_rs::TS` type must run `cargo make fix && cargo make generate-ts-types && cargo make openapi` and stage the results **in its own commit**. Task 3 discovered this by being rejected. A second consequence: because the hook reads the **working tree and not the index**, an unrelated task's unstaged changes will fail *your* commit — so do not leave a sibling task's work dirty in the tree while committing.
+- **These builds exceed a 10-minute foreground timeout.** `cargo make fix` alone did not finish in 10m on a warm tree. Run them detached/backgrounded, and expect a SIGTERM'd run to orphan a `cargo` process that holds the build lock — later builds then block on "Blocking waiting for file lock on build directory". Queue behind it rather than killing it.
 - **Never run `cargo make prepare-e2e` and commit the result blind** — it emitted 364 files of dependency closure into `tests/e2e/.sqlx` (which holds 10 real entries). Verify each cache diff entry individually.
 - **`cargo nextest run -p temper-api` with no test filter HANGS** at list enumeration. Always scope to an integration test target: `--test <name>`.
 - **Capture output as `cmd > log 2>&1; echo $?`.** The harness's task-completion exit code is unreliable for compound commands, and a pipe through `tail` returns tail's status.
@@ -404,14 +406,19 @@ are simply ignored there."
 
 ## Beat E — artifacts and prose
 
-### Task 13: regenerate every drift-gated artifact
+### Task 13: final artifact sweep, orphan cleanup, and the UI check
+
+`[reframed — 2026-08-06, after Task 3]` **This is no longer the only regeneration point** — the
+pre-commit hook forces each schema-touching task to regenerate and stage artifacts in its own commit
+(see Global Constraints). What is left for the end is the work the per-commit runs cannot do:
+deleting models for types that no longer exist, and checking the UI, which no gate covers.
 
 **Files:** `openapi.json`, `clients/temper-rb/**`, `clients/temper-ts/src/generated/schema.ts`, `packages/temper-ui/src/lib/types/generated/*.ts`
 
 **REQUIRED SUB-SKILL:** read the `generated-artifacts` skill before starting.
 
 - [ ] **Step 1:** `cargo make fix` — **before** `openapi`, per Global Constraints.
-- [ ] **Step 2:** `cargo make generate-ts-types`, then `cargo make openapi`.
+- [ ] **Step 2:** `cargo make generate-ts-types`, then `cargo make openapi`. Expect **no diff** if every prior task regenerated correctly; a diff here means a task committed a stale artifact and is worth tracing rather than just committing.
 - [ ] **Step 3:** Delete by hand the orphaned `.rb` models for retired types — `unified_search_result_row.rb` is already gone; expect `resource_row.rb`, `resource_detail.rb`, `resource_meta_list_response.rb`. `cargo make openapi` adds models but never deletes them.
 - [ ] **Step 4:** `cd packages/temper-ui && bun install && bun run check`. **Note a wire behaviour change from Task 1:** every `Option` on `ResourceView` carries `skip_serializing_if`, which `ResourceRow` did **not**. Absent optionals now vanish rather than emitting `null`, so any consumer testing `=== null` sees `undefined` instead. **`cargo make check` does not cover temper-ui.** `ResourceListResponse` now codegens for the first time (it could not while `ResourceDetail` used `flatten`), so the UI may newly type-error where it previously accepted a structural superset — that is the bug being fixed, not a regression.
 - [ ] **Step 5:** `cargo make check` → green.
