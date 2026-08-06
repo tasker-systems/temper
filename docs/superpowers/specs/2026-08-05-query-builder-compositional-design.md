@@ -543,6 +543,16 @@ plan is precisely a rate-shaped exposure, and the generative harness measures **
 **`ActRefusal` composing with `temper_principal::Refusal`** — carried open from contract §5.1, and
 still not answered here.
 
+**The `ResourceFilter` overlap — named, and deliberately not resolved here** `[2026-08-05, Pete]`.
+§12 admits an open property predicate while `ResourceFilter` keeps typed slots for `doc_type`,
+`stage` and `status` whose whole purpose is closed-vocabulary refusal. A caller can therefore address
+one of those keys through the open predicate and receive a confident empty where the slot would have
+raised `UnknownFilterValue`. **This is a real hole, left open on purpose:** `ResourceFilter` is a
+stopgap for queryability that §12's semantics supersede, and bolting a guard onto a struct we are
+moving beyond would entrench it. The convergence — `temper resource list --properties` and the
+composition predicate sharing one semantics — is its own work. Recorded so the gap reads as a
+decision rather than an oversight, and so whoever takes that work knows it is the first thing to close.
+
 **The act-vocabulary growth risk, named because it is the live version of the GraphQL worry.** If the
 vocabulary grows to twenty acts each with their own params, this *is* a hand-rolled query language and
 the "more steps" critique lands. Nothing structural prevents that drift — only the discipline of
@@ -563,3 +573,121 @@ sentence.
 - **`unified_search`'s retirement is phase 1's**, not this phase's, and this design takes no
   dependency on its internals — consistent with the standing note that it *"must not be treated as a
   stable substrate to build against."*
+
+---
+
+## 12. Properties are queryable — open keys, closed operators
+
+`[added — 2026-08-05, Pete]` A scope addition taken during plan authoring. It **grows the surface and
+does not change its shape**: a property predicate is one more typed narrowing slot alongside
+`ResourceFilter` and `EdgeFilter`, validated statically and compiled into the same statement.
+
+### What the data says
+
+`[measured on prod — 2026-08-05, temper-cloud]` `kb_properties` is polymorphic — `(owner_table,
+owner_id, property_key, property_value jsonb, weight)`. Live, unfolded: **15,732 rows over 71 distinct
+keys**, values spanning `string`, `array`, `object`, `number` and `null`.
+
+**The indexes already exist, and they are key-agnostic** `[verified — pg_indexes, 2026-08-05]`:
+
+```
+idx_kb_properties_key        btree (property_key)          WHERE NOT is_folded
+idx_kb_properties_owner      btree (owner_table, owner_id) WHERE NOT is_folded
+idx_kb_properties_value_gin  gin   (property_value jsonb_path_ops)
+```
+
+**This is the fact that decides the design.** Declaring a first-class list of supported keys and
+building GIN indexes for them — the obvious approach — solves a problem the schema already solved
+generically: the GIN covers values across *all* keys, and the btree makes key-filtering cheap for any
+key. A declared list would buy nothing and would go stale against a vault whose keys are user-defined
+by design.
+
+**So: the key space is OPEN and the operator set is CLOSED.**
+
+### The operators
+
+| operator | compiles to | index |
+|---|---|---|
+| `has_key` | `EXISTS (… WHERE property_key = $k)` | the `property_key` btree |
+| `contains` | `property_value @> $v::jsonb` | the `jsonb_path_ops` GIN |
+| `weight_at_least` *(phase 2)* | `weight >= $w` | none — see below |
+
+Both v1 operators take **bound parameters only**. No identifier, no operator and no fragment of
+Postgres JSON syntax is ever assembled from caller text — which is the whole reason a jsonpath or
+jq-shaped string parameter was refused rather than sandboxed.
+
+**`has_key` needs no jsonb operator at all**, and that is worth stating because the obvious reach is
+wrong: `jsonb_path_ops` deliberately does **not** support the key-existence operators (`?`, `?|`,
+`?&`), so `?` would have meant a second GIN index for a question the `property_key` btree already
+answers as a row-existence check.
+
+### The subject is carried by the predicate, and its vocabulary is open
+
+`[decided — 2026-08-05, Pete]` A predicate names what it addresses:
+
+```
+PropertyPredicate { subject: PropertySubject, key: String, op: PropertyOp }
+```
+
+**Carried, not inferred**, because inference is ambiguous exactly where it matters: a `follow-from`
+stage walks **edges** and produces **resources**, so "the properties of this stage's subject" has two
+answers.
+
+**`PropertySubject` is OPEN** — `resource`, `edge`, and an unknown value renders
+`RefusalReason::UnknownFilterValue` rather than failing to deserialize. This is the **opposite** call
+from `EdgeKind` (contract §4.1.2, closed so that `"advances"` cannot be constructed), and the
+difference is principled rather than inconsistent: `EdgeKind` mirrors a **DDL enum**, so its
+closedness is a fact about the database; `owner_table` is a **varchar** that mirrors nothing, so a
+closed set here would be a claim the schema does not make.
+
+**Edge-owned properties are in scope even though this deployment has none.**
+`[corrected — 2026-08-05, Pete]` The measurement returned **zero** rows with
+`owner_table = 'kb_edges'`, and the first draft of this section concluded an edge-property filter was
+a declared-empty affordance. That was wrong: **edge properties are used extensively in deployments
+beyond this one**, and the polymorphic owner is the design intent rather than an accident. A zero
+count on one dataset is evidence about that dataset, never about the schema's affordances. The shape
+is identical for both subjects, so admitting `edge` costs a variant and no mechanism.
+
+### Content-block properties are addressable but not queryable
+
+`[decided — 2026-08-05, Pete]` `kb_content_blocks` is the third owner in the data (`block_role`, 37
+rows) and is **deliberately excluded**. Block-level properties exist so that provenance can attach to
+*part* of a resource or claim rather than the whole of it — addressability, which is a different
+affordance from being a queryable subject. Naming the exclusion so its absence reads as a decision.
+
+### Two measured hazards
+
+**The key space is not type-stable.** Three of the 71 keys carry more than one JSON type:
+`derived_from` is an `array` on 112 resources and a `string` on 21; `temper-pr` is a `string` on 57
+and `null` on 7 `[measured on prod — 2026-08-05]`.
+
+Containment is honest about this rather than coercing — `@> '"x"'` matches the string rows, `@>
+'["x"]'` matches the array rows, and `'["x"]'::jsonb @> '"x"'::jsonb` is **false**. So a caller
+asking the natural way against a type-unstable key gets a partial answer with no signal. The
+mitigation is that **the predicate's value carries its own shape**: the caller sends the JSON they
+mean, so scalar-vs-array is explicit in the request rather than guessed by the server. `contains`
+takes a **list** of values, OR-composed within the predicate — matching the established
+within-field-OR of `doc_type` and `EdgeFilter.labels` — so one predicate can span both shapes of a
+type-unstable key.
+
+> **Unverified, and a build step rather than a claim:** whether `property_value @> ANY($1::jsonb[])`
+> uses `idx_kb_properties_value_gin`, or degrades to a scan. If it does not, the OR is emitted as
+> repeated containment terms instead. Measure with `EXPLAIN` before choosing the emission.
+
+**`weight` is real and phase-2.** `facet` is the only weighted key — **342 of its 1,233 rows carry
+`weight <> 1.0`** `[measured on prod — 2026-08-05]`. Contract §4.1.2 declared a richer facet
+predicate "not undertaken… nothing in the search family needs it"; that is now superseded in
+direction, since a caller does. `[decided — 2026-08-05, Pete: build it, but it may be a later phase
+so long as the design admits it.]` The design admits it by making `PropertyOp` an enum with room for
+`weight_at_least`; **no index serves it today**, so whether it needs one is a measurement that
+belongs with its build and not before.
+
+### What this does not do
+
+- It does not touch `ResourceFilter`'s existing typed slots. The overlap and the closed-vocabulary
+  bypass it creates are recorded in §10 as a deliberate open hole with its convergence direction.
+- It admits no operator whose value is a fragment of a query language. `has_key` and `contains` are
+  the whole vocabulary, and both bind.
+- It does not make properties **orderable**. A property is a narrowing predicate, never a quantity an
+  act orders by — admitting one would put a caller-chosen number beside an act's declared quantity,
+  which is the cross-act comparison the frame register forbids.

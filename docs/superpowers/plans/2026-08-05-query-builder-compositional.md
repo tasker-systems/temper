@@ -889,6 +889,166 @@ git commit -m "query: the declarations decide what is chainable, and nothing res
 
 ---
 
+## Task 7b: The property predicate — open keys, closed operators
+
+**GD-3: EXTEND.** Spec §12, authorized as a scope addition that *"grows the surface and does not
+change its shape."* **Read §12 before starting** — the design turns on three measured facts (the
+existing key-agnostic indexes, the open subject vocabulary, and the type-unstable keys), and none of
+them is inferable from the code.
+
+**Files:**
+- Modify: `crates/temper-core/src/types/query/filter.rs`, `validate.rs`, `envelope.rs`
+
+**Interfaces:**
+- Produces:
+  ```rust
+  /// What a predicate addresses. OPEN, deliberately — `kb_properties.owner_table` is a varchar
+  /// mirroring no DDL enum, so a closed set would be a claim the schema does not make. Contrast
+  /// `EdgeKind`, which is closed BECAUSE it mirrors one.
+  #[serde(rename_all = "snake_case")]
+  pub enum PropertySubject {
+      Resource,
+      /// Empty in this deployment's data and NOT empty in others — the polymorphic owner is design
+      /// intent, not accident. Spec §12.
+      Edge,
+      #[serde(untagged)]
+      Other(String),
+  }
+
+  #[serde(rename_all = "snake_case", tag = "op")]
+  pub enum PropertyOp {
+      /// The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb
+      /// operator, because `jsonb_path_ops` does not index key-existence and the btree already
+      /// answers it.
+      HasKey,
+      /// `property_value @> $v` for any listed value. OR within the predicate, matching the
+      /// established within-field OR of `doc_type` and `EdgeFilter.labels`.
+      ///
+      /// The caller supplies the JSON shape they mean. Containment does not coerce:
+      /// `'["x"]'::jsonb @> '"x"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.
+      Contains { values: Vec<serde_json::Value> },
+  }
+
+  pub struct PropertyPredicate {
+      pub subject: PropertySubject,
+      pub key: String,
+      pub op: PropertyOp,
+  }
+  ```
+  and `ActInvocation` gains `#[serde(default, skip_serializing_if = "Vec::is_empty")] pub properties: Vec<PropertyPredicate>`.
+
+> **`serde_json::Value` here is not a violation of the typed-structs rule.** The rule forbids
+> `json!()` for data with a *known* structure. A property value's structure is the vault's, not
+> ours — 71 keys spanning five JSON types, user-defined by design. Typing it would be the invention.
+
+- [ ] **Step 1: Write the failing tests** in `filter.rs`
+
+```rust
+#[test]
+fn a_property_subject_is_open_because_owner_table_is_a_varchar() {
+    // The opposite call from EdgeKind, and principled rather than inconsistent: EdgeKind mirrors a
+    // DDL enum so closedness is a FACT; owner_table mirrors nothing, so closedness would be a
+    // claim the schema does not make.
+    assert_eq!(serde_json::to_string(&PropertySubject::Edge).unwrap(), "\"edge\"");
+    let unknown: PropertySubject = serde_json::from_str("\"block\"").expect("open, so it parses");
+    assert_eq!(unknown, PropertySubject::Other("block".to_string()));
+}
+
+#[test]
+fn has_key_and_contains_are_the_whole_v1_vocabulary() {
+    // No operator takes a fragment of a query language. Both bind.
+    let hk = PropertyPredicate {
+        subject: PropertySubject::Resource,
+        key: "keywords".to_string(),
+        op: PropertyOp::HasKey,
+    };
+    let ct = PropertyPredicate {
+        subject: PropertySubject::Edge,
+        key: "confidence".to_string(),
+        op: PropertyOp::Contains { values: vec![serde_json::json!("high")] },
+    };
+    for p in [hk, ct] {
+        assert_eq!(
+            serde_json::from_str::<PropertyPredicate>(&serde_json::to_string(&p).unwrap()).unwrap(),
+            p
+        );
+    }
+}
+
+#[test]
+fn contains_carries_a_list_so_one_predicate_spans_a_type_unstable_key() {
+    // Measured: `derived_from` is an array on 112 resources and a string on 21. Containment does
+    // not coerce, so a single-shape predicate silently answers for one population and not the
+    // other. The list is what lets a caller ask for both.
+    let p = PropertyPredicate {
+        subject: PropertySubject::Resource,
+        key: "derived_from".to_string(),
+        op: PropertyOp::Contains {
+            values: vec![serde_json::json!("abc"), serde_json::json!(["abc"])],
+        },
+    };
+    let PropertyOp::Contains { values } = &p.op else { panic!("wrong op") };
+    assert_eq!(values.len(), 2);
+}
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cargo nextest run -p temper-core --features mcp filter::tests`
+Expected: FAIL — `PropertyPredicate` not found.
+
+- [ ] **Step 3: Implement the types**
+
+Declare the three types in `filter.rs` with the four cfg-gated derives; add `properties` to
+`ActInvocation`.
+
+- [ ] **Step 4: Write the failing validation tests** in `validate.rs`
+
+```rust
+#[test]
+fn a_content_block_subject_is_refused_because_blocks_are_addressable_not_queryable() {
+    // Spec §12: block properties exist so provenance can attach to PART of a resource. That is
+    // addressability, a different affordance from being a queryable subject.
+    let c = plan_with_property(PropertySubject::Other("content_block".to_string()), "block_role", PropertyOp::HasKey);
+    let errs = validate(&c).unwrap_err();
+    assert!(errs.iter().any(|e| e.reason == RefusalReason::UnknownFilterValue));
+}
+
+#[test]
+fn an_empty_property_key_is_refused_rather_than_matching_everything() {
+    let c = plan_with_property(PropertySubject::Resource, "", PropertyOp::HasKey);
+    assert!(validate(&c).is_err());
+}
+
+#[test]
+fn contains_with_no_values_is_refused_because_it_narrows_nothing() {
+    // An empty list is not "match all" and is not "match none" — it is a caller mistake, and
+    // silently treating it as either is the confident-empty failure this contract exists to end.
+    let c = plan_with_property(
+        PropertySubject::Resource,
+        "tags",
+        PropertyOp::Contains { values: vec![] },
+    );
+    assert!(validate(&c).is_err());
+}
+```
+
+- [ ] **Step 5: Run, implement the validation, run again**
+
+Run: `cargo nextest run -p temper-core --features mcp validate::tests`
+Expected: FAIL, then PASS after implementing.
+
+- [ ] **Step 6: Regenerate artifacts and commit**
+
+```bash
+UPDATE_SCHEMA=1 cargo nextest run -p temper-core --features mcp --test query_schema
+cargo make generate-ts-types && cargo make openapi && cargo make check
+git add -A
+git commit -m "query: properties are queryable — open keys, two bound operators"
+```
+
+---
+
 ## Task 8: The `BuildState` gap — a fused act the caller cannot reach
 
 **GD-3: EXTEND.** Spec §7, *"The state between C and D, and the `BuildState` gap it lands on."*
@@ -1171,6 +1331,93 @@ Expected: PASS.
 ```bash
 git add crates/temper-substrate/
 git commit -m "query: bind survey and follow-from, and name the second runtime-sqlx class"
+```
+
+---
+
+## Task 10b: Emit property predicates, and measure whether the OR uses the index
+
+**GD-3: CONFORM.** Conforms to the three existing `kb_properties` indexes rather than adding any.
+Spec §12 — *"the indexes are already there, and they are key-agnostic… a declared list would buy
+nothing."*
+
+**Files:**
+- Modify: `crates/temper-substrate/src/readback/query_plan.rs`
+- Modify: `crates/temper-substrate/tests/query_plan_compile.rs`
+- Modify: `docs/superpowers/specs/2026-08-05-query-builder-compositional-design.md` (§12's open measurement)
+
+- [ ] **Step 1: Measure the OR emission before choosing it**
+
+Spec §12 flags this as unverified and a build step. Against a real database:
+
+```bash
+psql "$DATABASE_URL" -c "EXPLAIN SELECT owner_id FROM kb_properties WHERE NOT is_folded AND property_key = 'tags' AND property_value @> ANY(ARRAY['\"search\"','\"ci\"']::jsonb[])"
+psql "$DATABASE_URL" -c "EXPLAIN SELECT owner_id FROM kb_properties WHERE NOT is_folded AND property_key = 'tags' AND (property_value @> '\"search\"'::jsonb OR property_value @> '\"ci\"'::jsonb)"
+```
+
+Record which form uses `idx_kb_properties_value_gin` and which falls back to a scan. **The measured
+form is the one to emit.** Write the result into §12's blockquote with a `[verified — <date>]` tag,
+replacing the open question.
+
+> A local dev database has far less data than prod, so the planner may choose a seq scan for reasons
+> of size rather than of index eligibility. Read the plan for **whether the index is considered**, not
+> only for whether it is chosen — and say which you observed.
+
+- [ ] **Step 2: Write the failing tests**
+
+```rust
+#[test]
+fn a_has_key_predicate_binds_the_key_and_touches_no_jsonb_operator() {
+    // has_key is a row-existence check on the property_key btree. Reaching for `?` would need a
+    // second GIN index that jsonb_path_ops deliberately does not provide.
+    let c = compile(&plan_with_has_key("keywords"), test_profile());
+    assert!(!c.sql.contains("keywords"), "the key is bound, not interpolated");
+    assert!(c.binds.iter().any(|b| matches!(b, QueryBind::Text(t) if t == "keywords")));
+    assert!(!c.sql.contains(" ? "), "no key-existence operator");
+}
+
+#[test]
+fn a_contains_predicate_binds_every_value_as_jsonb() {
+    let c = compile(&plan_with_contains("tags", vec!["search", "ci"]), test_profile());
+    assert!(c.sql.contains("@>"));
+    assert!(!c.sql.contains("search"), "values are bound, not interpolated");
+}
+
+#[test]
+fn a_property_predicate_on_an_edge_subject_targets_the_edge_owner() {
+    // Edge-owned properties are empty in the community dataset and not in others. The emitted SQL
+    // must scope by owner_table, or a resource property would satisfy an edge predicate.
+    let c = compile(&plan_with_edge_property("confidence"), test_profile());
+    assert!(c.sql.contains("owner_table"));
+    assert!(c.binds.iter().any(|b| matches!(b, QueryBind::Text(t) if t == "kb_edges")));
+}
+
+#[test]
+fn folded_properties_never_satisfy_a_predicate() {
+    // Every kb_properties index is partial on `NOT is_folded`. Omitting the predicate both returns
+    // retracted data and forfeits the index.
+    let c = compile(&plan_with_has_key("keywords"), test_profile());
+    assert!(c.sql.contains("is_folded"));
+}
+```
+
+- [ ] **Step 3: Run to verify they fail**
+
+Run: `cargo nextest run -p temper-substrate --test query_plan_compile`
+Expected: FAIL.
+
+- [ ] **Step 4: Implement emission in the measured form**
+
+Emit predicates as `EXISTS` subqueries against `kb_properties`, AND-composed across predicates,
+OR-composed within a `Contains` list per Step 1's measurement. Every predicate carries
+`NOT is_folded` and an `owner_table` bind.
+
+- [ ] **Step 5: Run to verify they pass, then commit**
+
+```bash
+cargo nextest run -p temper-substrate --test query_plan_compile
+git add crates/temper-substrate/ docs/superpowers/specs/
+git commit -m "query: emit property predicates against the indexes that already exist"
 ```
 
 ---
@@ -1530,7 +1777,7 @@ git commit -m "query: every legal shape plans, and every illegal one is refused 
 Task 7's kind-changing-hop test covers requirement 3; requirement 2 is Task 7's provenance test).
 §5 → Tasks 6, 7, 8. §6 → Tasks 9, 10, 14. §7 → Task 8, plus the beat structure. §8 → the measured
 numbers inform Task 12's fixtures. §9 → no task; it is a recorded decision with nothing to build.
-§9.1 → Tasks 5, 13. §10 → Task 4 (tagged union), Task 11 (the open check).
+§9.1 → Tasks 5, 13. §10 → Task 4 (tagged union), Task 11 (the open check). §12 → Tasks 7b, 10b.
 
 **Known gaps, stated rather than left to be discovered:**
 
@@ -1544,3 +1791,11 @@ numbers inform Task 12's fixtures. §9 → no task; it is a recorded decision wi
 3. **Tier-2 `MetaDetail::Full` per-id participation** is asserted only for trace presence (Task 13),
    not for its retained content. Full coverage needs a plan where ids drop mid-composition, which
    needs a bounding act — beat D.
+4. **`PropertyOp::WeightAtLeast` is designed-for and not built.** Spec §12 records the decision to
+   build it as a later phase; `PropertyOp` is an enum with room for it, and no index serves it today.
+   Whether one is needed is a measurement that belongs with its build.
+5. **Edge-owned property predicates compile and are untested against real edge properties**, because
+   the community dataset has none (spec §12). Task 10b asserts the emitted SQL scopes by
+   `owner_table`; it cannot assert a match. **Declared uncovered** — an integration test needs a
+   fixture that writes an edge property, which is worth adding when the first such deployment is
+   exercised, not simulated here.
