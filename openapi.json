@@ -11463,15 +11463,36 @@
       },
       "ResourceListResponse": {
         "type": "object",
-        "description": "Paginated response for resource list endpoints, with doc-type facets.",
+        "description": "Paginated response for resource list endpoints, with doc-type facets.\n\nThe envelope carries its own paging state, so a caller can tell a whole set from a\npage of one without knowing what it asked for. `returned` and `truncated` used to be\ninjected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP\nand raw-HTTP callers never received them — while the shipped agent skill instructs\nevery agent that \"every list response carries `total`, `returned`, and `truncated`\".\nSame defect class as the `ref` the CLI was likewise the only surface to emit.\n\nBuild through [`ResourceListResponse::new`], which derives `returned` and `truncated`\nfrom the page rather than trusting a caller to keep them consistent with `rows`.",
         "required": [
           "rows",
           "total",
-          "facets"
+          "facets",
+          "returned",
+          "truncated",
+          "offset"
         ],
         "properties": {
           "facets": {
             "$ref": "#/components/schemas/ResourceFacets"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The effective page size the server applied, or `None` for an uncapped page\n(`--all`). An echo of what the caller asked for, not a clamp — no server-side\nclamp exists."
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The offset this page starts at; `0` when the caller sent none."
+          },
+          "returned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "This page's row count. Always `rows.len()`; carried explicitly so the count\nsurvives a projection that drops or summarizes the rows."
           },
           "rows": {
             "type": "array",
@@ -11481,7 +11502,12 @@
           },
           "total": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "The FILTERED match count — every row the filters admit, before `limit`/`offset`."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Are there matching rows beyond this page? `offset + returned < total`.\n\nDeliberately not `total > returned`, which is true on the last page of a walk\n(total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is\nwhat tells a caller it may not conclude a resource is absent from what it sees."
           }
         }
       },

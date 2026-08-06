@@ -303,6 +303,16 @@ pub struct ResourceFacets {
 }
 
 /// Paginated response for resource list endpoints, with doc-type facets.
+///
+/// The envelope carries its own paging state, so a caller can tell a whole set from a
+/// page of one without knowing what it asked for. `returned` and `truncated` used to be
+/// injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP
+/// and raw-HTTP callers never received them — while the shipped agent skill instructs
+/// every agent that "every list response carries `total`, `returned`, and `truncated`".
+/// Same defect class as the `ref` the CLI was likewise the only surface to emit.
+///
+/// Build through [`ResourceListResponse::new`], which derives `returned` and `truncated`
+/// from the page rather than trusting a caller to keep them consistent with `rows`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,8 +320,50 @@ pub struct ResourceFacets {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListResponse {
     pub rows: Vec<ResourceRow>,
+    /// The FILTERED match count — every row the filters admit, before `limit`/`offset`.
     pub total: i64,
     pub facets: ResourceFacets,
+    /// This page's row count. Always `rows.len()`; carried explicitly so the count
+    /// survives a projection that drops or summarizes the rows.
+    pub returned: i64,
+    /// Are there matching rows beyond this page? `offset + returned < total`.
+    ///
+    /// Deliberately not `total > returned`, which is true on the last page of a walk
+    /// (total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is
+    /// what tells a caller it may not conclude a resource is absent from what it sees.
+    pub truncated: bool,
+    /// The effective page size the server applied, or `None` for an uncapped page
+    /// (`--all`). An echo of what the caller asked for, not a clamp — no server-side
+    /// clamp exists.
+    pub limit: Option<i64>,
+    /// The offset this page starts at; `0` when the caller sent none.
+    pub offset: i64,
+}
+
+impl ResourceListResponse {
+    /// Assemble a page and derive its paging state from it.
+    ///
+    /// The one place `returned` and `truncated` are computed. `returned` comes from the
+    /// page itself rather than from a parameter, so it cannot disagree with `rows`.
+    #[must_use]
+    pub fn new(
+        rows: Vec<ResourceRow>,
+        total: i64,
+        facets: ResourceFacets,
+        limit: Option<i64>,
+        offset: i64,
+    ) -> Self {
+        let returned = rows.len() as i64;
+        Self {
+            rows,
+            total,
+            facets,
+            returned,
+            truncated: offset + returned < total,
+            limit,
+            offset,
+        }
+    }
 }
 
 /// Request body for creating a resource.
@@ -517,7 +569,7 @@ pub struct DeleteResponse {
 mod resource_detail_tests {
     use super::*;
 
-    fn sample_resource_row() -> ResourceRow {
+    pub(super) fn sample_resource_row() -> ResourceRow {
         ResourceRow {
             id: ResourceId::from(Uuid::nil()),
             kb_context_id: None,
@@ -723,5 +775,62 @@ mod tests {
         assert!(!serialized.contains("\"context_to\""));
         assert!(!serialized.contains("\"content_block\""));
         assert!(serialized.contains("\"managed_meta\""));
+    }
+}
+
+/// The list envelope's paging state — the three quantities an agent is instructed to
+/// read (`total`, `returned`, `truncated`) and the two that say what page it is
+/// looking at (`limit`, `offset`).
+#[cfg(test)]
+mod list_paging_tests {
+    use super::resource_detail_tests::sample_resource_row;
+    use super::*;
+
+    /// A page of `n` rows. Only the count matters here — `returned` is `rows.len()`
+    /// and nothing in the derivation reads a row's fields.
+    fn page_of(n: usize) -> Vec<ResourceRow> {
+        vec![sample_resource_row(); n]
+    }
+
+    /// The default page of a large set hides rows, and says so.
+    #[test]
+    fn truncated_is_true_when_a_page_hides_rows() {
+        let page =
+            ResourceListResponse::new(page_of(20), 100, ResourceFacets::default(), Some(20), 0);
+
+        assert_eq!(page.returned, 20, "`returned` is this page's row count");
+        assert!(
+            page.truncated,
+            "80 of 100 matching rows are beyond this page"
+        );
+    }
+
+    /// The off-by-one case: the last page of a walk shows the tail of the set, so
+    /// nothing is hidden even though `total` still exceeds `returned`. This is what
+    /// makes the derivation `offset + returned < total` rather than `total > returned`.
+    #[test]
+    fn truncated_is_false_on_the_last_page() {
+        let page =
+            ResourceListResponse::new(page_of(5), 25, ResourceFacets::default(), Some(20), 20);
+
+        assert_eq!(page.offset, 20, "the page starts where the caller asked");
+        assert!(
+            !page.truncated,
+            "rows 21-25 of 25 are the tail of the set — nothing is beyond this page"
+        );
+    }
+
+    /// `--all` sends no limit and receives the whole filtered set, so there is nothing
+    /// to warn about.
+    #[test]
+    fn all_returns_untruncated() {
+        let page = ResourceListResponse::new(page_of(7), 7, ResourceFacets::default(), None, 0);
+
+        assert_eq!(
+            page.limit, None,
+            "`--all` is an absent limit, not a large one"
+        );
+        assert_eq!(page.returned, page.total, "the whole set came back");
+        assert!(!page.truncated);
     }
 }

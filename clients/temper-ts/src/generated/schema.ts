@@ -4336,12 +4336,53 @@ export interface components {
              */
             resource_id: string;
         };
-        /** @description Paginated response for resource list endpoints, with doc-type facets. */
+        /**
+         * @description Paginated response for resource list endpoints, with doc-type facets.
+         *
+         *     The envelope carries its own paging state, so a caller can tell a whole set from a
+         *     page of one without knowing what it asked for. `returned` and `truncated` used to be
+         *     injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP
+         *     and raw-HTTP callers never received them — while the shipped agent skill instructs
+         *     every agent that "every list response carries `total`, `returned`, and `truncated`".
+         *     Same defect class as the `ref` the CLI was likewise the only surface to emit.
+         *
+         *     Build through [`ResourceListResponse::new`], which derives `returned` and `truncated`
+         *     from the page rather than trusting a caller to keep them consistent with `rows`.
+         */
         ResourceListResponse: {
             facets: components["schemas"]["ResourceFacets"];
+            /**
+             * Format: int64
+             * @description The effective page size the server applied, or `None` for an uncapped page
+             *     (`--all`). An echo of what the caller asked for, not a clamp — no server-side
+             *     clamp exists.
+             */
+            limit?: number | null;
+            /**
+             * Format: int64
+             * @description The offset this page starts at; `0` when the caller sent none.
+             */
+            offset: number;
+            /**
+             * Format: int64
+             * @description This page's row count. Always `rows.len()`; carried explicitly so the count
+             *     survives a projection that drops or summarizes the rows.
+             */
+            returned: number;
             rows: components["schemas"]["ResourceRow"][];
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The FILTERED match count — every row the filters admit, before `limit`/`offset`.
+             */
             total: number;
+            /**
+             * @description Are there matching rows beyond this page? `offset + returned < total`.
+             *
+             *     Deliberately not `total > returned`, which is true on the last page of a walk
+             *     (total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is
+             *     what tells a caller it may not conclude a resource is absent from what it sees.
+             */
+            truncated: boolean;
         };
         /**
          * @description Paginated response for the `?meta_only=true` list mode.

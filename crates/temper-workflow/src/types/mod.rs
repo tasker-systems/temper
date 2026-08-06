@@ -19,4 +19,4 @@ pub use resource::{
     ResourceFacets, ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
     ResourceUpdateRequest, SortOrder,
 };
-pub use resource_view::ResourceView;
+pub use resource_view::{ResourceSection, ResourceView, SectionSet};

@@ -33,7 +33,7 @@ WORKSPACE_PATH = { value = ".", relative = true }
 PDFIUM_VERSION = "7947"
 
 [profile.dev]
-incremental = true
+incremental = false 
 split-debuginfo = "unpacked"
 
 [profile.release]

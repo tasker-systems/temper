@@ -63,10 +63,18 @@ fn search_stage_err(stage: &str, e: impl std::fmt::Display) -> ApiError {
 /// One page of the filtered, visible resource set: the page's substrate ids (already
 /// sorted + paginated), the FILTERED total (before limit/offset), and the doc_type
 /// histogram over the filtered set (`ResourceFacets` = "current filter set").
+///
+/// `offset`/`limit` are the values this page was actually cut with, not the caller's raw
+/// params — a negative offset is floored at 0 and a negative limit means "no limit". The
+/// list envelope reports them, so they are returned rather than re-normalized there:
+/// two derivations of "the effective page" would drift, and the reported one would be
+/// the one that is not the truth.
 struct VisiblePage {
     page_ids: Vec<Uuid>,
     total: i64,
     facets: HashMap<String, i64>,
+    offset: i64,
+    limit: Option<i64>,
 }
 
 /// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
@@ -290,20 +298,23 @@ async fn filtered_visible_page(
         all_ids.push(id);
     }
 
-    let offset = params.offset.unwrap_or(0).max(0) as usize;
-    let page_ids: Vec<Uuid> = match params.limit {
-        Some(limit) if limit >= 0 => all_ids
+    let offset = params.offset.unwrap_or(0).max(0);
+    let limit = params.limit.filter(|l| *l >= 0);
+    let page_ids: Vec<Uuid> = match limit {
+        Some(limit) => all_ids
             .into_iter()
-            .skip(offset)
+            .skip(offset as usize)
             .take(limit as usize)
             .collect(),
-        _ => all_ids.into_iter().skip(offset).collect(),
+        None => all_ids.into_iter().skip(offset as usize).collect(),
     };
 
     Ok(VisiblePage {
         page_ids,
         total,
         facets,
+        offset,
+        limit,
     })
 }
 
@@ -322,13 +333,15 @@ pub async fn list_select(
     for new_id in page.page_ids {
         rows.push(native_resource_row(pool, profile_id, ResourceId::from(new_id)).await?);
     }
-    Ok(ResourceListResponse {
+    Ok(ResourceListResponse::new(
         rows,
-        total: page.total,
-        facets: ResourceFacets {
+        page.total,
+        ResourceFacets {
             doc_type: page.facets,
         },
-    })
+        page.limit,
+        page.offset,
+    ))
 }
 
 /// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.

@@ -14,20 +14,37 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Paginated response for resource list endpoints, with doc-type facets.
+  # Paginated response for resource list endpoints, with doc-type facets.  The envelope carries its own paging state, so a caller can tell a whole set from a page of one without knowing what it asked for. `returned` and `truncated` used to be injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP and raw-HTTP callers never received them — while the shipped agent skill instructs every agent that \"every list response carries `total`, `returned`, and `truncated`\". Same defect class as the `ref` the CLI was likewise the only surface to emit.  Build through [`ResourceListResponse::new`], which derives `returned` and `truncated` from the page rather than trusting a caller to keep them consistent with `rows`.
   class ResourceListResponse < ApiModelBase
     attr_accessor :facets
 
+    # The effective page size the server applied, or `None` for an uncapped page (`--all`). An echo of what the caller asked for, not a clamp — no server-side clamp exists.
+    attr_accessor :limit
+
+    # The offset this page starts at; `0` when the caller sent none.
+    attr_accessor :offset
+
+    # This page's row count. Always `rows.len()`; carried explicitly so the count survives a projection that drops or summarizes the rows.
+    attr_accessor :returned
+
     attr_accessor :rows
 
+    # The FILTERED match count — every row the filters admit, before `limit`/`offset`.
     attr_accessor :total
+
+    # Are there matching rows beyond this page? `offset + returned < total`.  Deliberately not `total > returned`, which is true on the last page of a walk (total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is what tells a caller it may not conclude a resource is absent from what it sees.
+    attr_accessor :truncated
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'facets' => :'facets',
+        :'limit' => :'limit',
+        :'offset' => :'offset',
+        :'returned' => :'returned',
         :'rows' => :'rows',
-        :'total' => :'total'
+        :'total' => :'total',
+        :'truncated' => :'truncated'
       }
     end
 
@@ -45,14 +62,19 @@ module Temper::Generated
     def self.openapi_types
       {
         :'facets' => :'ResourceFacets',
+        :'limit' => :'Integer',
+        :'offset' => :'Integer',
+        :'returned' => :'Integer',
         :'rows' => :'Array<ResourceRow>',
-        :'total' => :'Integer'
+        :'total' => :'Integer',
+        :'truncated' => :'Boolean'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'limit',
       ])
     end
 
@@ -78,6 +100,22 @@ module Temper::Generated
         self.facets = nil
       end
 
+      if attributes.key?(:'limit')
+        self.limit = attributes[:'limit']
+      end
+
+      if attributes.key?(:'offset')
+        self.offset = attributes[:'offset']
+      else
+        self.offset = nil
+      end
+
+      if attributes.key?(:'returned')
+        self.returned = attributes[:'returned']
+      else
+        self.returned = nil
+      end
+
       if attributes.key?(:'rows')
         if (value = attributes[:'rows']).is_a?(Array)
           self.rows = value
@@ -91,6 +129,12 @@ module Temper::Generated
       else
         self.total = nil
       end
+
+      if attributes.key?(:'truncated')
+        self.truncated = attributes[:'truncated']
+      else
+        self.truncated = nil
+      end
     end
 
     # Show invalid properties with the reasons. Usually used together with valid?
@@ -102,12 +146,24 @@ module Temper::Generated
         invalid_properties.push('invalid value for "facets", facets cannot be nil.')
       end
 
+      if @offset.nil?
+        invalid_properties.push('invalid value for "offset", offset cannot be nil.')
+      end
+
+      if @returned.nil?
+        invalid_properties.push('invalid value for "returned", returned cannot be nil.')
+      end
+
       if @rows.nil?
         invalid_properties.push('invalid value for "rows", rows cannot be nil.')
       end
 
       if @total.nil?
         invalid_properties.push('invalid value for "total", total cannot be nil.')
+      end
+
+      if @truncated.nil?
+        invalid_properties.push('invalid value for "truncated", truncated cannot be nil.')
       end
 
       invalid_properties
@@ -118,8 +174,11 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @facets.nil?
+      return false if @offset.nil?
+      return false if @returned.nil?
       return false if @rows.nil?
       return false if @total.nil?
+      return false if @truncated.nil?
       true
     end
 
@@ -131,6 +190,26 @@ module Temper::Generated
       end
 
       @facets = facets
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] offset Value to be assigned
+    def offset=(offset)
+      if offset.nil?
+        fail ArgumentError, 'offset cannot be nil'
+      end
+
+      @offset = offset
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] returned Value to be assigned
+    def returned=(returned)
+      if returned.nil?
+        fail ArgumentError, 'returned cannot be nil'
+      end
+
+      @returned = returned
     end
 
     # Custom attribute writer method with validation
@@ -153,14 +232,28 @@ module Temper::Generated
       @total = total
     end
 
+    # Custom attribute writer method with validation
+    # @param [Object] truncated Value to be assigned
+    def truncated=(truncated)
+      if truncated.nil?
+        fail ArgumentError, 'truncated cannot be nil'
+      end
+
+      @truncated = truncated
+    end
+
     # Checks equality by comparing each attribute.
     # @param [Object] Object to be compared
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
           facets == o.facets &&
+          limit == o.limit &&
+          offset == o.offset &&
+          returned == o.returned &&
           rows == o.rows &&
-          total == o.total
+          total == o.total &&
+          truncated == o.truncated
     end
 
     # @see the `==` method
@@ -172,7 +265,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [facets, rows, total].hash
+      [facets, limit, offset, returned, rows, total, truncated].hash
     end
 
     # Builds the object from hash

@@ -1,5 +1,9 @@
 //! `ResourceView` — the one shape a resource has.
 
+use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -7,6 +11,7 @@ use uuid::Uuid;
 use super::managed_meta::ManagedMeta;
 use super::resource::{BodyStorage, IngestState};
 use crate::operations::decorated_ref;
+use temper_core::error::TemperError;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 /// Everything a resource is, except its body — one shape for every read and write
@@ -159,6 +164,115 @@ impl ResourceView {
             _ => None,
         };
         self
+    }
+}
+
+// ─── Sections ───────────────────────────────────────────────────────────────
+
+/// One addable or removable part of a [`ResourceView`].
+///
+/// Replaces `--meta-only`, which conflated two axes because the two commands differ in
+/// what they otherwise return: on `show` it means *drop the body*
+/// (`temper-cli/src/cli.rs:571-575` — "Show everything except the body"), on `list` it
+/// means *add both meta tiers* (`:537-542` — "each row carries both the managed and open
+/// meta tiers ... on top of the usual row fields"). Once both commands answer in one
+/// shape, that flag has two meanings and no coherent one.
+///
+/// Naming the parts lets a caller add or remove each independently — including
+/// `show --with edges --without body`, which is **unreachable today**: `meta_only`
+/// carries `conflicts_with = "edges"` (`temper-cli/src/cli.rs:574`), so the present
+/// design needs a rule to forbid a combination that is merely useful.
+///
+/// The managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is
+/// always present, which is what makes dropping the hoisted workflow fields lossless.
+///
+/// The names are **kebab-case** (`open-meta`), not the `open_meta` of the field the
+/// section fills. They are values a human or agent types after `--with`, and the CLI's
+/// vocabulary is kebab throughout; the `snake_case` enums in `resource.rs`
+/// ([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's
+/// rename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`
+/// asserts both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourceSection {
+    /// The reconstructed markdown body — [`ResourceView::content`].
+    Body,
+    /// The open (user-defined) frontmatter tier — [`ResourceView::open_meta`].
+    OpenMeta,
+    /// The resource's graph edges, fetched alongside the view rather than carried on it.
+    Edges,
+}
+
+impl ResourceSection {
+    /// Every section, in the order a refusal lists them.
+    ///
+    /// The **one** enumeration of the set: [`FromStr`] matches over it and the refusal
+    /// message is built from it, so a section cannot be accepted without also being
+    /// named. Public so a surface's help text lists the same three rather than
+    /// hand-copying them into a fourth place that then drifts.
+    pub const ALL: [Self; 3] = [Self::Body, Self::OpenMeta, Self::Edges];
+
+    /// The canonical wire/CLI name — the same string serde emits.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Body => "body",
+            Self::OpenMeta => "open-meta",
+            Self::Edges => "edges",
+        }
+    }
+}
+
+impl fmt::Display for ResourceSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ResourceSection {
+    type Err = TemperError;
+
+    /// Parse a section name. Unknown input is refused with the whole valid set named —
+    /// the caller is usually an agent that guessed, with nothing else to consult
+    /// mid-call.
+    ///
+    /// The error is [`TemperError::BadRequest`], not the [`TemperError::Project`] that
+    /// [`crate::operations::parse_ref`] returns for the same class of failure:
+    /// `Project` maps to `ApiError::Internal` (`temper-services/src/error.rs:242`),
+    /// and a mistyped section name is the caller's `400`, never the server's `500`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|section| section.as_str() == s)
+            .ok_or_else(|| {
+                TemperError::BadRequest(format!(
+                    "unknown section {s:?} (expected one of: {})",
+                    Self::ALL.map(Self::as_str).join(", ")
+                ))
+            })
+    }
+}
+
+/// The set of sections a caller asked for.
+///
+/// A [`BTreeSet`] rather than a `HashSet` so iteration is deterministic: this set gets
+/// rendered — into a refusal, a log line, or a serialized request — and an order that
+/// varies run to run makes those unreadable and undiffable for no gain at a size of
+/// three.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SectionSet(BTreeSet<ResourceSection>);
+
+impl SectionSet {
+    /// Was this section asked for?
+    #[must_use]
+    pub fn contains(&self, section: ResourceSection) -> bool {
+        self.0.contains(&section)
+    }
+}
+
+impl FromIterator<ResourceSection> for SectionSet {
+    fn from_iter<I: IntoIterator<Item = ResourceSection>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
     }
 }
 
@@ -361,5 +475,83 @@ mod tests {
         let obj = v.as_object().expect("object");
         assert!(obj.contains_key("ref"), "{v}");
         assert!(!obj.contains_key("r#ref"), "{v}");
+    }
+
+    /// Section names are kebab-case on **both** wire surfaces.
+    ///
+    /// `open-meta` is the whole reason this test exists. The Rust variant is `OpenMeta`
+    /// and the field it names is `open_meta`, so either of the two plausible-looking
+    /// spellings would serialize "sensibly" while being the wrong string for
+    /// `--with open-meta` to accept. Serde's rename table and [`FromStr`] are two
+    /// independent mappings, so both are asserted in the same loop: a drift between them
+    /// is what a caller experiences as "the documented name is not the accepted name".
+    #[test]
+    fn section_names_are_kebab_case() {
+        for (section, name) in [
+            (ResourceSection::Body, "body"),
+            (ResourceSection::OpenMeta, "open-meta"),
+            (ResourceSection::Edges, "edges"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(section).expect("serialize"),
+                serde_json::Value::String(name.to_string()),
+                "{section:?} serializes as `{name}`"
+            );
+            assert_eq!(
+                name.parse::<ResourceSection>().expect("parse"),
+                section,
+                "`{name}` parses back to {section:?}"
+            );
+        }
+
+        // The two spellings a reader would otherwise reach for are not accepted — the
+        // field name and the Rust variant name are both wrong on the wire.
+        assert!("open_meta".parse::<ResourceSection>().is_err());
+        assert!("openMeta".parse::<ResourceSection>().is_err());
+    }
+
+    /// A rejected name is rejected with the whole valid set in the message.
+    ///
+    /// The caller here is usually an agent that guessed, and it has no schema to consult
+    /// mid-call — so the refusal has to be sufficient on its own to get the next attempt
+    /// right. Naming only *what was wrong* leaves it guessing a second time.
+    #[test]
+    fn unknown_section_name_is_rejected_naming_the_valid_set() {
+        let err = "openMeta"
+            .parse::<ResourceSection>()
+            .expect_err("`openMeta` is not a section name");
+        let msg = err.to_string();
+
+        for valid in ["body", "open-meta", "edges"] {
+            assert!(
+                msg.contains(valid),
+                "the refusal must name `{valid}` so the caller can recover from it alone: {msg}"
+            );
+        }
+        assert!(
+            msg.contains("openMeta"),
+            "and it repeats the rejected input back: {msg}"
+        );
+    }
+
+    /// [`SectionSet::contains`] answers for a member and for a non-member.
+    ///
+    /// New logic introduced by this task, so it carries its own witness (the precedent
+    /// `with_derived_refs` set above). The negative half is the load-bearing one: every
+    /// caller of this asks "was this section requested?", and a set that answered `true`
+    /// for everything would read as correct on the `--with` path and silently defeat
+    /// `--without`.
+    #[test]
+    fn section_set_contains_only_its_members() {
+        let set: SectionSet = [ResourceSection::Body, ResourceSection::Edges]
+            .into_iter()
+            .collect();
+
+        assert!(set.contains(ResourceSection::Body));
+        assert!(set.contains(ResourceSection::Edges));
+        assert!(
+            !set.contains(ResourceSection::OpenMeta),
+            "a section that was never added is not in the set"
+        );
     }
 }
