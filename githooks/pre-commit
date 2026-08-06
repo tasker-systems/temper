@@ -15,8 +15,25 @@ set -euo pipefail
 #       file is staged (a crate, e2e, Cargo.*, .sqlx, a migration, openapi.json,
 #       or the cargo-make wiring).
 #   temper-cloud TS battery (typecheck, biome)      — only if a file under
-#       packages/temper-cloud/ is staged (that is all this hook checks; the UI
-#       and SDK trees are covered in CI, not here).
+#       packages/temper-cloud/ is staged.
+#   temper-ui battery (svelte-check)                — only if a file under
+#       packages/temper-ui/ is staged.
+#
+# The temper-ui battery was added after this hook said "the UI and SDK trees are
+# covered in CI, not here" and a break proved covered-in-CI insufficient:
+# `e226fce2` added four required fields to `ResourceListResponse`, staling a
+# fallback cast in vault/search/+page.server.ts, and it stayed red for two
+# commits because NOTHING local looks at temper-ui — not this hook, and not
+# `cargo make check`, whose TypeScript step is tsc-over-temper-cloud.
+#
+# The trigger is `^packages/temper-ui/` rather than a hand-picked source glob,
+# and that is the load-bearing part. The break above staged NO hand-written UI
+# file — it staged `src/lib/types/generated/resource.ts`. Because the ts-rs
+# output tree lives INSIDE temper-ui, "a shared Rust type was regenerated" and
+# "a temper-ui file is staged" are the same event, and regenerating a shared
+# type is exactly what stales a UI consumer. Measured over this branch: the one
+# commit that broke the UI staged a temper-ui file; the one that did not, did
+# not. Cost is ~3.4s, and only on commits that touch the tree.
 #
 # A commit that touches neither — docs, other TS packages, workflow YAML — runs
 # nothing and returns instantly. Conservative by construction: the classifier is
@@ -47,18 +64,23 @@ staged_match() { echo "$STAGED" | grep -qE "$1"; }
 # move how the gates themselves run.
 RUST_RE='^crates/|^tests/e2e/|^Cargo\.(toml|lock)$|^\.sqlx/|^migrations/|^openapi\.json$|^tools/cargo-make/|^Makefile\.toml$|^rust-toolchain'
 
-# temper-cloud is the only TypeScript this hook checks (typecheck + biome).
 TS_RE='^packages/temper-cloud/'
+
+# The whole tree, deliberately: the ts-rs generated types live under
+# src/lib/types/generated/, so this also fires for "a shared Rust type was
+# regenerated" — the case that motivated the battery.
+UI_RE='^packages/temper-ui/'
 
 HAS_RUST=false; staged_match "$RUST_RE" && HAS_RUST=true
 HAS_TS=false;   staged_match "$TS_RE"   && HAS_TS=true
+HAS_UI=false;   staged_match "$UI_RE"   && HAS_UI=true
 
-if [ "$HAS_RUST" = "false" ] && [ "$HAS_TS" = "false" ]; then
-  echo "==> pre-commit: no Rust or temper-cloud TypeScript staged — skipping (docs/other only)."
+if [ "$HAS_RUST" = "false" ] && [ "$HAS_TS" = "false" ] && [ "$HAS_UI" = "false" ]; then
+  echo "==> pre-commit: no Rust, temper-cloud TypeScript or temper-ui staged — skipping (docs/other only)."
   exit 0
 fi
 
-echo "==> Running pre-commit checks (rust=${HAS_RUST}, temper-cloud-ts=${HAS_TS})..."
+echo "==> Running pre-commit checks (rust=${HAS_RUST}, temper-cloud-ts=${HAS_TS}, temper-ui=${HAS_UI})..."
 
 if [ "$HAS_RUST" = "true" ]; then
   echo "  Checking formatting..."
@@ -101,6 +123,29 @@ if [ "$HAS_TS" = "true" ]; then
   echo "  Biome lint & format..."
   (cd packages/temper-cloud && bun run check)
   echo "  ✓ Biome OK"
+fi
+
+if [ "$HAS_UI" = "true" ]; then
+  # An absent install means this developer has not set the UI up — that is not a
+  # broken commit, and failing here would say it was. Skip LOUDLY: a silent skip
+  # would make the battery look present when it is not, which is the failure this
+  # battery exists to end. A stale install is a different matter and is left to
+  # fail: it reds with `d3-*` "implicit any" / "cannot find package" under
+  # src/lib/graph/atlas/layout/, and the fix is `bun install` (see CLAUDE.md).
+  if [ ! -d packages/temper-ui/node_modules ]; then
+    echo "  ! temper-ui staged but packages/temper-ui/node_modules is absent — SKIPPING svelte-check." >&2
+    echo "    Run 'cd packages/temper-ui && bun install' to enable it. CI checks this tree regardless." >&2
+  else
+    # svelte-check ONLY. `bun run biome` is deliberately not run here: this tree
+    # carries 46 standing lint warnings and biome exits 0 on warnings, so it
+    # gates nothing while printing a screen of output on every UI commit — and a
+    # hook whose output is noise is a hook people stop reading, which this file's
+    # own header names as the thing that trains `--no-verify`. CI runs biome over
+    # this tree (test-typescript.yml) with the same non-blocking result.
+    echo "  temper-ui svelte-check..."
+    (cd packages/temper-ui && bun run check)
+    echo "  ✓ temper-ui types OK"
+  fi
 fi
 
 echo "==> All applicable pre-commit checks passed."
