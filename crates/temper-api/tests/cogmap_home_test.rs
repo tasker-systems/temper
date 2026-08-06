@@ -632,7 +632,11 @@ async fn cogmap_search_scopes_to_map(pool: PgPool) {
 // ── (5) non-member searching the same cogmap gets 200 with zero results ─────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
+async fn cogmap_search_denied_for_non_member_is_refused(pool: PgPool) {
+    // Was `..._returns_zero`, asserting `200` deny-as-empty. That contract is superseded: an
+    // unreadable cogmap anchor is now refused at `resolve_search_anchor`, the same way an
+    // unreadable `context_ref` on this same endpoint has always been refused by
+    // `resolve_context_ref`. Cogmaps were the outlier, not the rule.
     let app = common::setup_test_app(pool).await;
 
     // Owner/member sets up the cogmap and homes a resource in it.
@@ -676,8 +680,7 @@ async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
         .unwrap();
     assert!(!readable, "outsider must NOT be able to read the map");
 
-    // Non-member searches the same cogmap — must get 200 with empty results (deny-as-empty,
-    // not an error: cogmap_scope_ids returns zero rows for non-members).
+    // Non-member searches the same cogmap — refused, and refused as absence.
     let resp = app
         .client
         .post(app.url("/api/search"))
@@ -693,27 +696,35 @@ async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
         .expect("search request failed");
     assert_eq!(
         resp.status().as_u16(),
-        200,
-        "non-member cogmap search must return 200 (deny-as-empty)"
+        404,
+        "non-member cogmap search must be refused"
     );
 
-    let ids = search_hit_ids(resp).await;
+    let body = resp.text().await.expect("refusal body");
     assert!(
-        ids.is_empty(),
-        "non-member cogmap search must return zero results; got {ids:?}"
+        body.contains("cognitive map not found or not readable"),
+        "refusal must read the same for an unreadable map as for an absent one; got {body}"
     );
 }
 
-// ── (6) ex-member who STILL OWNS a homed resource gets zero — readability gate is load-bearing ──
+// ── (6) LAYER 2 WITNESS — an unreadable cogmap anchor is REFUSED, not silently emptied ──
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
+async fn cogmap_search_by_ex_member_who_owns_resource_is_refused_not_emptied(pool: PgPool) {
     // Unlike test (5)'s outsider — who never owned the resource, so `resources_visible_to` alone
-    // empties the set — this searcher AUTHORS (owns) a cogmap-homed resource and is only THEN
-    // removed from the map's team. Ownership keeps the row in `resources_visible_to`, so the empty
-    // result here is carried solely by the `cogmap_readable_by_profile` clause inside
-    // `cogmap_scope_ids`. Deleting that clause would surface the owned row and FAIL this test —
-    // which test (5) would not catch. This is the ex-member-still-owns regression the gate guards.
+    // would empty the set — this searcher AUTHORS (owns) a cogmap-homed resource and is only THEN
+    // removed from the map's team. Ownership keeps the row in `resources_visible_to`, so nothing
+    // except map-readability can withhold it. This is the ex-member-still-owns regression, and it
+    // is the case that made the dropped gate observable at all.
+    //
+    // THIS TEST WITNESSES THE RUST PRE-CHECK IN `resolve_search_anchor`, NOT THE SQL. Both layers
+    // withhold the row, so "the row is absent" cannot tell them apart; what tells them apart is
+    // the STATUS. The arms' SQL conjunct yields `200` with an empty list — indistinguishable from
+    // "the map is readable and holds nothing you match". The pre-check REFUSES, before either arm
+    // runs. Deleting the pre-check turns this back into a `200` and fails here; deleting the SQL
+    // conjunct does not affect this test at all (the pre-check still refuses). The SQL side is
+    // witnessed separately and at its own layer, by
+    // `temper-substrate/tests/search_exact_and_wide.rs::an_unreadable_cogmap_anchor_scopes_nothing_in_either_arm`.
     let app = common::setup_test_app(pool).await;
 
     let email = format!("cogmap-search-6-{}@example.com", Uuid::new_v4());
@@ -783,8 +794,9 @@ async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
         "ex-member must no longer be able to read the map"
     );
 
-    // A `--cogmap` search by the ex-member returns ZERO rows — the readability clause empties the
-    // scope set even though the searcher still owns a resource homed in the map.
+    // A `--cogmap` search by the ex-member is REFUSED. `resolve_search_anchor` gates the cogmap id
+    // the way it already gated a `context_ref`, so scoping to a map you cannot read is a request
+    // that cannot be honoured — not a search that happened to match nothing.
     let resp = app
         .client
         .post(app.url("/api/search"))
@@ -800,18 +812,22 @@ async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
         .expect("search request failed");
     assert_eq!(
         resp.status().as_u16(),
-        200,
-        "ex-member cogmap search must return 200 (deny-as-empty)"
+        404,
+        "scoping a search to an unreadable cogmap must be refused, not answered with an empty list"
     );
 
-    let ids = search_hit_ids(resp).await;
+    // NotFound, not Forbidden: the refusal must not distinguish "exists but you may not read it"
+    // from "no such map", or `cogmap_id` becomes an existence oracle over every cogmap uuid. Same
+    // wording `graph_service` renders for the same condition.
+    let body = resp.text().await.expect("refusal body");
     assert!(
-        !ids.contains(&resource_id.to_string()),
-        "an ex-member who still owns the resource must get zero cogmap-scoped hits; got {ids:?}"
+        body.contains("cognitive map not found or not readable"),
+        "refusal must not disclose that the map exists; got {body}"
     );
+    // And the refusal must be the WHOLE answer — the owned resource must not ride along in it.
     assert!(
-        ids.is_empty(),
-        "ex-member cogmap search must be empty; got {ids:?}"
+        !body.contains(&resource_id.to_string()),
+        "the refusal must not leak the resource the ex-member still owns; got {body}"
     );
 }
 
@@ -909,7 +925,9 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
     );
 
     // DENY PATH (additive fix, never a leak): a principal who is NOT a member of any team joined to
-    // the map sees nothing — the readability gate empties the scope set, so zero rows.
+    // the map gets nothing from it. That refusal is now rendered by `resolve_search_anchor` rather
+    // than by an emptied scope set — see `cogmap_search_denied_for_non_member_is_refused`. The
+    // claim this tail makes is unchanged (an outsider learns nothing); only the status is.
     let outsider_email = format!("cogmap-search-7-outsider-{}@example.com", Uuid::new_v4());
     let (outsider, _oc) =
         common::fixtures::create_test_profile_with_context(&app.pool, &outsider_email).await;
@@ -939,13 +957,13 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
         .expect("search request failed");
     assert_eq!(
         resp.status().as_u16(),
-        200,
-        "outsider cogmap search must return 200 (deny-as-empty)"
+        404,
+        "outsider cogmap search must be refused"
     );
-    let ids = search_hit_ids(resp).await;
+    let body = resp.text().await.expect("refusal body");
     assert!(
-        ids.is_empty(),
-        "non-member cogmap search must be empty; got {ids:?}"
+        !body.contains(&peer_resource_id.to_string()),
+        "the refusal must not leak the peer resource a co-member can see; got {body}"
     );
 }
 

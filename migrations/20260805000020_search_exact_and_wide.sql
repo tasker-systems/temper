@@ -27,6 +27,14 @@
 -- `unified_search`'s `corpus` CTE adds `ingest_state` on top for the graph and seed arms, which have
 -- no gate of their own; it is redundant for this arm and dies with those arms, not with this one.
 --
+-- ANCHOR READABILITY IS A FOURTH PREDICATE, AND IT IS NOT IMPLIED BY THE OTHER THREE. The first
+-- draft of this migration carried the anchor pair and `resources_visible_to` but dropped the
+-- readability conjunct that `cogmap_scope_ids` had always carried, because replacing a function
+-- with an inline predicate silently drops whatever the function did beyond the part being inlined.
+-- `resources_visible_to` MASKS that for almost every principal, which is why it very nearly shipped:
+-- it bites only where a principal is admitted to the resource by some OTHER path while having lost
+-- the map — an ex-member who still OWNS a resource homed there. See the conjunct on each arm.
+--
 -- Body derived from `search_fts_candidates`' live definition, INCLUDING `websearch_to_tsquery` and
 -- ts_rank flag 33 (log-length normalization, 20260801000010). Re-deriving from an older migration
 -- silently reverts both.
@@ -51,11 +59,29 @@ LANGUAGE sql STABLE AS $$
        -- idx_kb_resource_homes_anchor(anchor_table, anchor_id) — which is why a cogmap no longer
        -- needs its members materialized into a uuid[] first. Keyed on the id, not the table: an
        -- anchor_table with no id names nothing, so it scopes nothing.
-       AND (p_anchor_id IS NULL OR EXISTS (
-             SELECT 1 FROM kb_resource_homes h
-              WHERE h.resource_id = r.id
-                AND h.anchor_table = p_anchor_table
-                AND h.anchor_id = p_anchor_id));
+       --
+       -- Guarded by the anchor's own READABILITY: an anchor you cannot read scopes nothing, however
+       -- visible the resources homed in it are to you. This is the conjunct `cogmap_scope_ids`
+       -- carried and this arm's first draft dropped.
+       --
+       -- Cogmap-only BY KIND. `cogmap_readable_by_profile` is CALLED, never restated — it is the
+       -- predicate. It is guarded by the kind rather than applied unconditionally because this
+       -- pair is generic over `p_anchor_table`, and a context anchor must not be run through a
+       -- cogmap function. A context anchor is already gated in Rust, by `resolve_context_ref`
+       -- (`substrate_read.rs`), and is deliberately left alone here — restoring one dropped
+       -- conjunct is not the moment to add a gate the incumbent never had.
+       --
+       -- `IS DISTINCT FROM` rather than `<>` so a NULL `p_anchor_table` is a clean TRUE instead of
+       -- a NULL that has to be reasoned about; such a row is then excluded by the EXISTS anyway,
+       -- since `h.anchor_table = NULL` matches nothing.
+       AND (p_anchor_id IS NULL OR (
+             (p_anchor_table IS DISTINCT FROM 'kb_cogmaps'
+                OR cogmap_readable_by_profile(p_principal, p_anchor_id))
+             AND EXISTS (
+               SELECT 1 FROM kb_resource_homes h
+                WHERE h.resource_id = r.id
+                  AND h.anchor_table = p_anchor_table
+                  AND h.anchor_id = p_anchor_id)));
 $$;
 
 COMMENT ON FUNCTION search_exact(uuid, text, varchar, uuid) IS
@@ -82,7 +108,9 @@ what this phase exists to stop.$c$;
 -- cannot. Carried forward deliberately and unchanged; disclosing it is the read path's problem, and
 -- it is named in the task's Still open.
 --
--- The only edit is the scope predicate: the anchor pair replaces `p_context_id` + `p_scope_ids`.
+-- The only edit is the scope predicate: the anchor pair replaces `p_context_id` + `p_scope_ids`,
+-- guarded by the same cogmap-readability gate `search_exact` carries (see there for why it is a
+-- separate predicate and why it is keyed on the anchor kind).
 CREATE OR REPLACE FUNCTION search_wide(
     p_principal    uuid,
     p_emb          vector,
@@ -120,6 +148,18 @@ BEGIN
       JOIN kb_chunks c ON c.resource_id = ad.resource_id AND c.is_current
      GROUP BY ad.resource_id;
   ELSE
+    -- The same anchor-readability gate `search_exact` carries, in the form this arm can express:
+    -- a guard clause, because `p_anchor_id` is non-NULL on this branch by construction and
+    -- `cogmap_readable_by_profile` does not depend on the row. An unreadable map returns the empty
+    -- set WITHOUT scanning — the ANN work is never started rather than filtered afterwards.
+    --
+    -- Cogmap-only by kind, and the predicate is CALLED not restated, for the reasons given at
+    -- length on `search_exact`'s conjunct above.
+    IF p_anchor_table = 'kb_cogmaps'
+       AND NOT cogmap_readable_by_profile(p_principal, p_anchor_id) THEN
+      RETURN;
+    END IF;
+
     RETURN QUERY
     WITH scoped_res AS (
       SELECT v.resource_id AS id
@@ -190,5 +230,5 @@ ask for. The pin does NOT inherit from search_vector_candidates — proconfig bi
 SELECT declare_migration(
     20260805000020,
     'additive',
-    'Phase 1 (task 019fd25e): search_exact and search_wide, the two arms of /api/search, added beside unified_search. Each returns its own quantity (fts_norm, vec_norm) with no weight and no companion to rank it against. Scoping is the anchor pair (anchor_table, anchor_id) for both, replacing the context-EXISTS/cogmap-uuid[] split. New names rather than replaces because a parameter change makes a new function in PostgreSQL; overloading would also make search_surface_a.rs pinned_ef_search read a nondeterministic pg_proc row. hnsw.ef_search is re-pinned on search_wide because proconfig binds to a signature and does not inherit. Nothing is dropped or altered, so a binary either side of this is unaffected.'
+    'Phase 1 (task 019fd25e): search_exact and search_wide, the two arms of /api/search, added beside unified_search. Each returns its own quantity (fts_norm, vec_norm) with no weight and no companion to rank it against. Scoping is the anchor pair (anchor_table, anchor_id) for both, replacing the context-EXISTS/cogmap-uuid[] split, and is guarded by cogmap_readable_by_profile on the cogmap kind — the conjunct cogmap_scope_ids carried, which resources_visible_to does NOT imply for an ex-member who still owns a homed resource. New names rather than replaces because a parameter change makes a new function in PostgreSQL; overloading would also make search_surface_a.rs pinned_ef_search read a nondeterministic pg_proc row. hnsw.ef_search is re-pinned on search_wide because proconfig binds to a signature and does not inherit. Nothing is dropped or altered, so a binary either side of this is unaffected.'
 );

@@ -645,6 +645,12 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
 ///
 /// A multi-map scope is likewise gone. One anchor is one anchor; asking several maps at once is a
 /// composition, which is `/api/query`'s job, not a comma in this parameter.
+///
+/// **Both anchor kinds are gated here before they become an anchor**: a `context_ref` by
+/// `resolve_context_ref`, a cogmap uuid by `cogmap_readable_by_profile`. Both refuse with
+/// `NotFound`. The cogmap arms' SQL carries its own readability conjunct as well — that is defence
+/// in depth, not duplication, and the two are witnessed separately because they say different
+/// things (this refuses; the SQL empties).
 async fn resolve_search_anchor(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -674,6 +680,38 @@ async fn resolve_search_anchor(
         return Ok(Some(HomeAnchor::Context(ContextId::from(id))));
     }
     if let [one] = effective_cogmaps.as_slice() {
+        // Deny-as-absence, symmetric with the context branch above: `resolve_context_ref` gates a
+        // `context_ref` before it can become an anchor, and a raw cogmap uuid arrives from the
+        // caller with no gate of its own. Without this the only thing standing between an
+        // unreadable map and a scoped search is the arm's own SQL — which is a real gate, but one
+        // layer, and this parameter is the caller's unvalidated input.
+        //
+        // THE SQL GATE AND THIS ONE ARE NOT REDUNDANT, THEY DIFFER IN WHAT THEY SAY. The arm's
+        // conjunct yields an EMPTY RESULT — indistinguishable from "the map is readable and holds
+        // nothing you match". This refuses. Asking to search a map you cannot read is not a search
+        // that found nothing, it is a request that cannot be honoured, and a caller that cannot
+        // tell those apart will retry against a wider query forever.
+        //
+        // `cogmap_readable_by_profile` is called, never restated — the same predicate the arm's SQL
+        // calls, so the two layers cannot disagree about who reads a map. `readable!`: sqlx types a
+        // function-call column as nullable, but the function is `SELECT EXISTS (...) OR
+        // profile_explicit_grant(...)` and both arms are total, so it can never be NULL (the
+        // argument spelled out at `graph_service::cogmap_neighborhood_slice`'s identical gate).
+        let readable: bool = sqlx::query_scalar!(
+            r#"SELECT cogmap_readable_by_profile($1, $2) AS "readable!""#,
+            profile_id.as_uuid(),
+            *one,
+        )
+        .fetch_one(pool)
+        .await?;
+        if !readable {
+            // Byte-identical to `graph_service`'s refusal for the same condition. NotFound, not
+            // Forbidden: a refusal that distinguished "exists but you may not read it" from "no
+            // such map" would make this parameter an existence oracle over every cogmap uuid.
+            return Err(ApiError::NotFound(
+                "cognitive map not found or not readable".to_string(),
+            ));
+        }
         return Ok(Some(HomeAnchor::Cogmap(CogmapId::from(*one))));
     }
     Ok(None)

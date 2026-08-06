@@ -118,6 +118,24 @@ async fn mk(
     mk_at(pool, AnchorRef::context(home), owner, emitter, title, body).await
 }
 
+/// Make `cogmap` READABLE by `profile`: a fresh team, joined to the map, with `profile` in it.
+///
+/// This is the only path `cogmap_readable_by_profile` recognizes short of an explicit grant, and
+/// `common::genesis_cogmap` does NOT take it — a genesis'd map is joined to no team, so nobody
+/// reads it. Any test that means "a cogmap anchor scopes to its members" must call this; a test
+/// that omits it is asserting on a map it cannot read, which is a different (and much weaker)
+/// claim. Raw inserts, in the same fixture idiom as `citation_audits.rs:join_principal_to_cogmap`.
+async fn make_cogmap_readable(pool: &sqlx::PgPool, cogmap: Uuid, profile: ProfileId) {
+    let team = common::create_team(pool, &format!("t-{}", &Uuid::now_v7().to_string()[..8])).await;
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(cogmap)
+        .bind(team)
+        .execute(pool)
+        .await
+        .expect("join cogmap to team");
+    common::add_team_member(pool, team, profile.uuid()).await;
+}
+
 /// Rows from `search_exact`, as (id, fts_norm). `anchor` is the `(anchor_table, anchor_id)` pair —
 /// `None` for unscoped.
 async fn exact(
@@ -349,6 +367,11 @@ async fn search_exact_scopes_to_a_cogmap_anchor_by_the_same_pair(pool: sqlx::PgP
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let (cogmap, _telos) = common::genesis_cogmap(&pool, "Falconry Map", "Know the birds").await;
+    // The map must be READABLE for this test to be about anchor scoping at all. Without this the
+    // arm's readability conjunct empties the scope and the test would assert nothing about the
+    // anchor pair — see `an_unreadable_cogmap_anchor_scopes_nothing_in_either_arm`, which is the
+    // same fixture MINUS this line and expects the opposite.
+    make_cogmap_readable(&pool, cogmap, owner).await;
     let elsewhere = ctx(&pool, owner, "elsewhere").await;
 
     let in_map = mk_at(
@@ -667,5 +690,113 @@ async fn hit_identities_omits_a_resource_the_principal_cannot_see(pool: sqlx::Pg
         theirs.is_empty(),
         "a principal with no grant, no team and no home ownership must be enriched nothing: {:?}",
         theirs.iter().map(|v| &v.title).collect::<Vec<_>>()
+    );
+}
+
+/// LAYER 1 WITNESS — the readability conjunct on each arm, isolated from the Rust pre-check.
+///
+/// An anchor you cannot READ scopes nothing, even when the resources homed in it are visible to you
+/// by some other path. `resources_visible_to` does NOT imply map-readability: here the principal
+/// OWNS the homed resource, so the row stays visible, and the unscoped assertions below prove that
+/// empirically rather than assuming it. Only `cogmap_readable_by_profile` can empty the scoped
+/// result — which is exactly the conjunct `cogmap_scope_ids` carried and this migration's first
+/// draft dropped when it inlined the anchor pair.
+///
+/// This lives at the SQL layer ON PURPOSE. `resolve_search_anchor` now refuses an unreadable cogmap
+/// before either function is called, so no request-level test can reach these predicates with an
+/// unreadable anchor — an HTTP test would witness the pre-check and leave the SQL unwitnessed.
+/// Deleting the Rust pre-check does not affect this test; deleting either arm's conjunct fails it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unreadable_cogmap_anchor_scopes_nothing_in_either_arm(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    // Genesis and NO team join: `cogmap_readable_by_profile` is false for everyone, including the
+    // profile that owns the map's contents.
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "Sealed Map", "Know the birds").await;
+
+    let homed = mk_at(
+        &pool,
+        AnchorRef::cogmap(CogmapId::from(cogmap)),
+        owner,
+        emitter,
+        "Sealed",
+        "The gyrfalcon is distilled here.",
+    )
+    .await;
+
+    let unreadable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(owner.uuid())
+        .bind(cogmap)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !unreadable,
+        "precondition: a genesis'd map joined to no team is readable by nobody"
+    );
+
+    // Precondition, and the whole reason this bites: the resource IS visible to this principal
+    // (they own it), so an unscoped search finds it. Anything the scoped search then withholds is
+    // withheld by readability alone.
+    let unscoped: Vec<Uuid> = exact(&pool, owner, "gyrfalcon", None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        unscoped.contains(&homed),
+        "precondition: the owner must see their own resource unscoped, or this test proves nothing"
+    );
+
+    let scoped: Vec<Uuid> = exact(&pool, owner, "gyrfalcon", Some(("kb_cogmaps", cogmap)))
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        scoped.is_empty(),
+        "search_exact must scope to nothing through an unreadable cogmap anchor; got {scoped:?}"
+    );
+}
+
+/// LAYER 1 WITNESS, wide arm. Same claim as the exact-arm witness above, against the guard clause
+/// in `search_wide`'s scoped branch — a separate predicate in a separate function, so it needs its
+/// own witness rather than riding on the exact arm's.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_wide_returns_nothing_through_an_unreadable_cogmap_anchor(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "Sealed Wide", "Know the birds").await;
+
+    let axis = unit(7);
+    let homed = mk_embedded(
+        &pool,
+        AnchorRef::cogmap(CogmapId::from(cogmap)),
+        owner,
+        emitter,
+        "SealedWide",
+        axis.clone(),
+    )
+    .await;
+
+    // Unscoped first: the owner sees their own chunk, so the vector arm can reach it at all.
+    let unscoped: Vec<Uuid> = wide(&pool, owner, &axis, 50, None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        unscoped.contains(&homed),
+        "precondition: the owner must reach their own embedded resource unscoped"
+    );
+
+    let scoped: Vec<Uuid> = wide(&pool, owner, &axis, 50, Some(("kb_cogmaps", cogmap)))
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        scoped.is_empty(),
+        "search_wide must return nothing through an unreadable cogmap anchor; got {scoped:?}"
     );
 }
