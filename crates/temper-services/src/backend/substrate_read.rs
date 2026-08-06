@@ -2,10 +2,12 @@
 //! search + the MCP enrichment list/meta-batch) over the one schema.
 //!
 //! These reads bypass the `Backend` trait by design (the trait projections are lossy and don't cover
-//! meta/body/content); they resolve against `temper_substrate::readback`, producing native `ResourceRow`s
-//! (real timestamps, name-only doc type, no fabricated fields) via `native_resource_row`. Visibility
-//! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
-//! is unqualified against the one schema (the connection carries the search_path).
+//! meta/body/content); they resolve against `temper_substrate::readback`. The resource read paths
+//! answer in [`ResourceView`] — the one shape a resource has — assembled from the batched
+//! `readback::hit_identities` and then given whatever [`SectionSet`] the caller asked for by
+//! `fill_sections`. Visibility is scoped to the caller's profile (WS2) — the readbacks gate
+//! through `resources_visible_to`. SQL is unqualified against the one schema (the connection
+//! carries the search_path).
 //!
 //! `list`/`list_meta` filter (context_ref/doc_type_name/stage/status/tags/owner/`q`-title), sort, and paginate the
 //! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
@@ -37,6 +39,7 @@ use temper_core::types::invocation::{
     Disposition, InvocationActRow, InvocationSummary, InvocationView,
 };
 use temper_core::types::provenance::BlockProvenanceRow;
+use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -44,7 +47,6 @@ use temper_workflow::types::managed_meta::{
 use temper_workflow::types::resource::{
     ContentResponse, ResourceDetail, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
-use temper_workflow::types::ResourceView;
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))
@@ -319,30 +321,194 @@ async fn filtered_visible_page(
     })
 }
 
-/// `list` — the resources VISIBLE to the principal (WS2 — `resources_visible_to`), filtered + sorted +
-/// paginated per `ResourceListParams`, each reconstructed to a full `ResourceRow`. The filter/sort/page
-/// happen in SQL (`filtered_visible_page`); only the page's ids are reconstructed (no all-rows N+1).
-/// `total` = the FILTERED count (before limit/offset); `facets.doc_type` = the doctype histogram over the
-/// filtered set.
+/// One page of [`ResourceView`]s plus the paging state the page was actually cut with.
+///
+/// The list read path's own shape, not a wire type. `ResourceListResponse` still carries
+/// `Vec<ResourceRow>` — the row-type swap is Task 7's, deliberately, because doing it here would
+/// leave every construction site uncompilable — so the envelope is assembled *from* this rather
+/// than the other way round.
+#[derive(Debug)]
+pub struct ResourceViewPage {
+    /// This page's rows, in the order `filtered_visible_page`'s ORDER BY produced.
+    pub views: Vec<ResourceView>,
+    /// The FILTERED match count — every row the filters admit, before `limit`/`offset`.
+    pub total: i64,
+    /// The doc-type histogram over the filtered set (`ResourceFacets` = "current filter set").
+    pub facets: ResourceFacets,
+    /// The effective page size applied, or `None` for an uncapped page.
+    pub limit: Option<i64>,
+    /// The offset this page starts at; `0` when the caller sent none.
+    pub offset: i64,
+}
+
+/// Fill onto an assembled view the sections the caller asked for, and only those.
+///
+/// The **one** mapping from a section to the read that serves it, so `list` and `show` cannot
+/// disagree about what `body` or `open-meta` means. Each fill is its own round-trip by
+/// construction — that is what makes these sections rather than columns, and why the default
+/// (empty) set costs nothing beyond the batched identity read.
+///
+/// `content: None` and `open_meta: None` mean **not requested**, never "empty": an empty body is
+/// `Some(String::new())` and an empty open tier is `Some({})`. Both distinctions survive the wire
+/// (`ResourceView`'s `body_absent_is_distinguishable_from_body_empty`).
+///
+/// [`ResourceSection::Edges`] is deliberately unhandled. Edges are fetched *alongside* a view, not
+/// carried on it — [`ResourceView`] has no edges field — so there is nothing here to fill; the
+/// surface that serves `--with edges` composes the edge read itself.
+///
+/// The managed tier is **not** a section and so is not filled here: it arrives already populated
+/// from `hit_identities`' joined aggregate. That is what makes dropping the hoisted
+/// `stage`/`mode`/`effort`/`seq` columns lossless.
+async fn fill_sections(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    view: &mut ResourceView,
+    sections: &SectionSet,
+) -> ApiResult<()> {
+    if sections.contains(ResourceSection::OpenMeta) {
+        let rb = readback::meta(pool, profile_id, view.id)
+            .await
+            .map_err(|e| ApiError::from(map_readback_err(e)))?;
+        view.open_meta = Some(serde_json::Value::Object(rb.open));
+    }
+    if sections.contains(ResourceSection::Body) {
+        view.content = Some(
+            readback::body(pool, profile_id, view.id)
+                .await
+                .map_err(|e| ApiError::from(map_readback_err(e)))?,
+        );
+    }
+    Ok(())
+}
+
+/// `list`, as [`ResourceView`]s — the resources VISIBLE to the principal (WS2 —
+/// `resources_visible_to`), filtered + sorted + paginated per `ResourceListParams`, each carrying
+/// the always-present managed tier plus whatever `sections` asks for.
+///
+/// **The page costs one statement per PAGE, not one per row.** `filtered_visible_page` cuts the
+/// page in SQL; `readback::hit_identities` then reconstructs the whole page in ONE round-trip —
+/// the same batched call search already used ("50 results meant 51 queries",
+/// `temper-substrate/src/readback/mod.rs`). The predecessor of this function looped
+/// `native_resource_row` per page id, which measured **27 statements for a 13-row page**; the doc
+/// comment above it claimed "no all-rows N+1", which was true about *all rows* and silent about
+/// the page. Do not reintroduce the loop — `list_page_is_one_batched_read_not_one_query_per_row`
+/// measures it.
+///
+/// `total` = the FILTERED count (before limit/offset); `facets.doc_type` = the doctype histogram
+/// over the filtered set.
+pub async fn list_views_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    params: &ResourceListParams,
+    sections: &SectionSet,
+) -> ApiResult<ResourceViewPage> {
+    let page = filtered_visible_page(pool, profile_id, params).await?;
+    let ids: Vec<ResourceId> = page
+        .page_ids
+        .iter()
+        .copied()
+        .map(ResourceId::from)
+        .collect();
+    let mut by_id: HashMap<Uuid, ResourceView> = readback::hit_identities(pool, profile_id, &ids)
+        .await
+        .map_err(api_err)?
+        .into_iter()
+        .map(|view| (view.id.uuid(), view))
+        .collect();
+
+    // `hit_identities` answers `WHERE r.id = ANY($2)` — a SET, with no ORDER BY. The page's order
+    // is the one `filtered_visible_page`'s ORDER BY produced, so it is restored by walking the page
+    // ids rather than by trusting the readback's row order (which is the planner's to choose).
+    let mut views = Vec::with_capacity(page.page_ids.len());
+    for new_id in &page.page_ids {
+        // An id absent from the batch means the row stopped being visible between the two
+        // statements — a dropped row, not a fault. Same convention as the readback's own.
+        if let Some(mut view) = by_id.remove(new_id) {
+            fill_sections(pool, profile_id, &mut view, sections).await?;
+            views.push(view);
+        }
+    }
+
+    Ok(ResourceViewPage {
+        views,
+        total: page.total,
+        facets: ResourceFacets {
+            doc_type: page.facets,
+        },
+        limit: page.limit,
+        offset: page.offset,
+    })
+}
+
+/// `list` — the incumbent envelope over [`list_views_select`].
+///
+/// Asks for no sections: the default list row carries neither meta tier nor the body, exactly as
+/// before. `ResourceListResponse` still carries `Vec<ResourceRow>`, so each view is narrowed by
+/// `view_to_row` at the envelope until Task 7 swaps the row type.
 pub async fn list_select(
     pool: &PgPool,
     profile_id: ProfileId,
     params: ResourceListParams,
 ) -> ApiResult<ResourceListResponse> {
-    let page = filtered_visible_page(pool, profile_id, &params).await?;
-    let mut rows: Vec<ResourceRow> = Vec::with_capacity(page.page_ids.len());
-    for new_id in page.page_ids {
-        rows.push(native_resource_row(pool, profile_id, ResourceId::from(new_id)).await?);
-    }
+    let page = list_views_select(pool, profile_id, &params, &SectionSet::default()).await?;
     Ok(ResourceListResponse::new(
-        rows,
+        page.views.into_iter().map(view_to_row).collect(),
         page.total,
-        ResourceFacets {
-            doc_type: page.facets,
-        },
+        page.facets,
         page.limit,
         page.offset,
     ))
+}
+
+/// Narrow a [`ResourceView`] back onto the incumbent `ResourceRow`.
+///
+/// **Transitional — deleted by Task 7**, which swaps `ResourceListResponse::rows` to
+/// `Vec<ResourceView>`. Until then the read path assembles views (one batched round-trip) and the
+/// envelope narrows them here.
+///
+/// The four workflow columns come back out of `managed_meta`, which is exactly the losslessness
+/// claim `ResourceView` makes: they did not go away, they went home.
+fn view_to_row(view: ResourceView) -> ResourceRow {
+    ResourceRow {
+        id: view.id,
+        kb_context_id: view.kb_context_id,
+        origin_uri: view.origin_uri,
+        title: view.title,
+        originator_profile_id: view.originator_profile_id,
+        owner_profile_id: view.owner_profile_id,
+        is_active: view.is_active,
+        created: view.created,
+        updated: view.updated,
+        context_name: view.context_name,
+        doc_type_name: view.doc_type_name,
+        owner_handle: view.owner_handle,
+        context_slug: view.context_slug,
+        context_owner_ref: view.context_owner_ref,
+        cogmap_id: view.cogmap_id,
+        cogmap_name: view.cogmap_name,
+        stage: view.managed_meta.stage,
+        seq: view.managed_meta.seq,
+        mode: view.managed_meta.mode,
+        effort: view.managed_meta.effort,
+        body_hash: view.body_hash,
+        ingest_state: view.ingest_state,
+        body_storage: view.body_storage,
+    }
+}
+
+/// Narrow a [`ResourceView`] onto the incumbent `ResourceDetail` (row + both meta tiers).
+///
+/// **Transitional — deleted by Task 7**, alongside `view_to_row`. `managed_meta` is `Some`
+/// unconditionally because on the view it is not an `Option` at all; `open_meta` rides through as
+/// the caller's section request left it.
+fn view_to_detail(mut view: ResourceView) -> ResourceDetail {
+    let managed_meta = view.managed_meta.clone();
+    let open_meta = view.open_meta.take();
+    ResourceDetail {
+        row: view_to_row(view),
+        managed_meta: Some(managed_meta),
+        open_meta,
+    }
 }
 
 /// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
@@ -358,31 +524,53 @@ pub async fn show_select(
         .map_err(ApiError::from)
 }
 
-/// `show_detail` — one resource with both metadata tiers.
+/// `show`, as a [`ResourceView`] — one resource, the always-present managed tier, plus whatever
+/// `sections` asks for.
 ///
-/// Composes the two existing readbacks rather than introducing a joined query: that keeps
-/// this free of a new `sqlx::query!` macro (and therefore of the `.sqlx` cache regeneration
-/// ritual). Two round-trips for a single resource is not an N+1.
+/// Reads through the same batched `readback::hit_identities` the list path uses, at a batch of
+/// one: a resource's identity does not depend on how it was reached, so a second per-resource
+/// query would be a second definition of the same shape. Visibility is gated inside that readback
+/// (WS2 — `resources_visible_to`); an id the principal cannot see comes back as no row, rendered
+/// here as the same `NotFound` message `map_readback_err` produces, so this door and
+/// `native_resource_row`'s cannot disagree about how a miss reads.
 ///
-/// Visibility is gated by `native_resource_row` (WS2); `get_meta_select` re-gates through
-/// `readback::meta`, so an unreadable resource 404s before either tier is assembled.
+/// Deliberately **not** gated on `ingest_state`: an interrupted segmented ingest stays fully
+/// addressable and readable via `show` (which reports the state) even though list and search
+/// exclude it.
+pub async fn show_view_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+    sections: &SectionSet,
+) -> ApiResult<ResourceView> {
+    let mut view = readback::hit_identities(pool, profile_id, &[id])
+        .await
+        .map_err(api_err)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::NotFound(format!("resource {id} not found")))?;
+    fill_sections(pool, profile_id, &mut view, sections).await?;
+    Ok(view)
+}
+
+/// `show_detail` — the incumbent envelope over [`show_view_select`], with the open tier asked for.
 ///
-/// This is the composition `temper-mcp`'s `get_resource` performed inline.
+/// `ResourceDetail` carries both meta tiers, so the section request is `open-meta` (the managed
+/// tier is not a section — it is always present). The body is not part of this shape and is not
+/// requested; `GET /api/resources/{id}/content` remains its door.
+///
+/// This is the composition `temper-mcp`'s `get_resource` performed inline. It used to compose
+/// `native_resource_row` + `get_meta_select` — two round-trips whose managed tiers were read by two
+/// different queries; one view assembly plus one open-tier read is the same answer from one shape.
 pub async fn show_detail_select(
     pool: &PgPool,
     profile_id: ProfileId,
     id: ResourceId,
 ) -> ApiResult<ResourceDetail> {
-    let row = native_resource_row(pool, profile_id, id)
-        .await
-        .map_err(ApiError::from)?;
-    let meta = get_meta_select(pool, profile_id, id).await?;
-
-    Ok(ResourceDetail {
-        row,
-        managed_meta: meta.managed_meta,
-        open_meta: meta.open_meta,
-    })
+    let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
+    Ok(view_to_detail(
+        show_view_select(pool, profile_id, id, &sections).await?,
+    ))
 }
 
 /// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`
@@ -426,26 +614,24 @@ pub async fn get_meta_select(
     })
 }
 
-/// `list_meta` — the `?meta_only=true` projection. Same WS2-scoped, filtered + sorted + paginated set as
-/// `list` (`filtered_visible_page`); each page id maps to a full [`ResourceDetail`] via `show_detail_select`
-/// (row + both meta tiers — the whole per-resource view minus the body). `total`/`facets` mirror `list`
-/// (the FILTERED set).
+/// `list_meta` — the `?meta_only=true` projection, i.e. `list` with the `open-meta` section asked
+/// for. Same WS2-scoped, filtered + sorted + paginated set as `list` (`filtered_visible_page`),
+/// each row a full [`ResourceDetail`] (row + both meta tiers — the whole per-resource view minus
+/// the body). `total`/`facets` mirror `list` (the FILTERED set).
+///
+/// The identity + managed tier come from the page's single batched readback; only the open tier
+/// costs a statement per row, and only because it was asked for.
 pub async fn list_meta_select(
     pool: &PgPool,
     profile_id: ProfileId,
     params: ResourceListParams,
 ) -> ApiResult<ResourceMetaListResponse> {
-    let page = filtered_visible_page(pool, profile_id, &params).await?;
-    let mut out = Vec::with_capacity(page.page_ids.len());
-    for new_id in page.page_ids {
-        out.push(show_detail_select(pool, profile_id, ResourceId::from(new_id)).await?);
-    }
+    let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
+    let page = list_views_select(pool, profile_id, &params, &sections).await?;
     Ok(ResourceMetaListResponse {
-        rows: out,
+        rows: page.views.into_iter().map(view_to_detail).collect(),
         total: page.total,
-        facets: ResourceFacets {
-            doc_type: page.facets,
-        },
+        facets: page.facets,
     })
 }
 
