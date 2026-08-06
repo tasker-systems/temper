@@ -264,6 +264,8 @@ are simply ignored there."
 - [ ] **Step 5: Bite-check the visibility gate** — remove the `resources_visible_to` join; confirm an existing visibility test fails. Restore, `git diff`.
 - [ ] **Step 6: Commit.**
 
+> **The list path still has an N+1, and Task 5 is where it gets fixed** `[found — 2026-08-06, during Task 3]`. `list_select` loops `native_resource_row(pool, profile_id, id).await?` once per row (`crates/temper-services/src/backend/substrate_read.rs:333-334`) — the same defect `hit_identities` already fixed for search (`readback/mod.rs:1486-1489`: "50 results meant 51 queries"). Search was fixed; list was not. Since Task 4 widens `hit_identities` to return `ResourceView` and this task rebuilds the read paths on the same type, the batched call is already there to use. **Do not port the loop forward.**
+
 ### Task 5: read paths build `ResourceView`
 
 **Files:**
@@ -355,7 +357,7 @@ are simply ignored there."
 
 **Files:**
 - Create: `crates/temper-cli/src/commands/resource_sections.rs`
-- Modify: `crates/temper-cli/src/cli.rs:538-546,556-580` — delete `meta_only` from both `List` and `Show`; delete the three `conflicts_with = "meta_only"` edges at `:565,569,574`; add `--with` / `--without` (both `value_delimiter = ','`)
+- Modify: `crates/temper-cli/src/cli.rs:538-546,556-580` — delete `meta_only` from both `List` and `Show`; delete all three conflict edges — **two** are `conflicts_with = "meta_only"` (on `lineage` at `:565` and `provenance` at `:569`) and **one** is the inverse, `conflicts_with = "edges"` on `meta_only` itself at `:574` `[corrected — 2026-08-06, Task 2]`. Clap conflicts are symmetric so the behaviour is unaffected, but do not go looking for a third `conflicts_with = "meta_only"` that does not exist; add `--with` / `--without` (both `value_delimiter = ','`)
 - Modify: `crates/temper-cli/src/commands/resource.rs`
 - Test: `crates/temper-cli/src/cli.rs` `mod meta_only_flag_tests` at `:1966` — rewrite, do not delete
 
