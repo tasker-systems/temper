@@ -28,20 +28,8 @@ module Temper::Generated
     # Filter by document type.
     attr_accessor :doc_type
 
-    # Edge type filter for graph expansion (empty = all types).
-    attr_accessor :edge_types
-
     # Pre-computed 768-dim embedding vector.
     attr_accessor :embedding
-
-    # Max hops for graph traversal (default 2, max 3 — clamped for Surface A).
-    attr_accessor :graph_depth
-
-    # Whether to expand results via graph edges (default true).
-    attr_accessor :graph_expand
-
-    # Optional lens override for wayfind region selection (resolved client-side, trailing-UUID). `None` ⇒ each region's memoized salience under its own lens.
-    attr_accessor :lens_id
 
     # Maximum results (default 10, max 50).
     attr_accessor :limit
@@ -52,20 +40,8 @@ module Temper::Generated
     # Plain-text query for full-text search.
     attr_accessor :query
 
-    # Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless `wayfind`.  **Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per anchor per round, so a width of N reaches at most N maps/contexts. The width actually applied is reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a scope-width knob, not an output rollup — no response carries a region list.
-    attr_accessor :regions
-
     # Postgres text-search configuration (default \"english\").  NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates` (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     attr_accessor :search_config
-
-    # Explicit seed resource IDs for graph expansion.
-    attr_accessor :seed_ids
-
-    # Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed union (issue #357). No effect unless `seed_ids` is non-empty. Default false.
-    attr_accessor :seed_only
-
-    # Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the principal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`.
-    attr_accessor :wayfind
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
@@ -74,19 +50,11 @@ module Temper::Generated
         :'cogmap_ids' => :'cogmap_ids',
         :'context_ref' => :'context_ref',
         :'doc_type' => :'doc_type',
-        :'edge_types' => :'edge_types',
         :'embedding' => :'embedding',
-        :'graph_depth' => :'graph_depth',
-        :'graph_expand' => :'graph_expand',
-        :'lens_id' => :'lens_id',
         :'limit' => :'limit',
         :'offset' => :'offset',
         :'query' => :'query',
-        :'regions' => :'regions',
-        :'search_config' => :'search_config',
-        :'seed_ids' => :'seed_ids',
-        :'seed_only' => :'seed_only',
-        :'wayfind' => :'wayfind'
+        :'search_config' => :'search_config'
       }
     end
 
@@ -107,19 +75,11 @@ module Temper::Generated
         :'cogmap_ids' => :'Array<String>',
         :'context_ref' => :'String',
         :'doc_type' => :'String',
-        :'edge_types' => :'Array<String>',
         :'embedding' => :'Array<Float>',
-        :'graph_depth' => :'Integer',
-        :'graph_expand' => :'Boolean',
-        :'lens_id' => :'String',
         :'limit' => :'Integer',
         :'offset' => :'Integer',
         :'query' => :'String',
-        :'regions' => :'Integer',
-        :'search_config' => :'String',
-        :'seed_ids' => :'Array<String>',
-        :'seed_only' => :'Boolean',
-        :'wayfind' => :'Boolean'
+        :'search_config' => :'String'
       }
     end
 
@@ -130,15 +90,10 @@ module Temper::Generated
         :'cogmap_ids',
         :'context_ref',
         :'doc_type',
-        :'edge_types',
         :'embedding',
-        :'graph_depth',
-        :'lens_id',
         :'limit',
         :'offset',
         :'query',
-        :'regions',
-        :'seed_ids',
       ])
     end
 
@@ -176,28 +131,10 @@ module Temper::Generated
         self.doc_type = attributes[:'doc_type']
       end
 
-      if attributes.key?(:'edge_types')
-        if (value = attributes[:'edge_types']).is_a?(Array)
-          self.edge_types = value
-        end
-      end
-
       if attributes.key?(:'embedding')
         if (value = attributes[:'embedding']).is_a?(Array)
           self.embedding = value
         end
-      end
-
-      if attributes.key?(:'graph_depth')
-        self.graph_depth = attributes[:'graph_depth']
-      end
-
-      if attributes.key?(:'graph_expand')
-        self.graph_expand = attributes[:'graph_expand']
-      end
-
-      if attributes.key?(:'lens_id')
-        self.lens_id = attributes[:'lens_id']
       end
 
       if attributes.key?(:'limit')
@@ -212,26 +149,8 @@ module Temper::Generated
         self.query = attributes[:'query']
       end
 
-      if attributes.key?(:'regions')
-        self.regions = attributes[:'regions']
-      end
-
       if attributes.key?(:'search_config')
         self.search_config = attributes[:'search_config']
-      end
-
-      if attributes.key?(:'seed_ids')
-        if (value = attributes[:'seed_ids']).is_a?(Array)
-          self.seed_ids = value
-        end
-      end
-
-      if attributes.key?(:'seed_only')
-        self.seed_only = attributes[:'seed_only']
-      end
-
-      if attributes.key?(:'wayfind')
-        self.wayfind = attributes[:'wayfind']
       end
     end
 
@@ -259,19 +178,11 @@ module Temper::Generated
           cogmap_ids == o.cogmap_ids &&
           context_ref == o.context_ref &&
           doc_type == o.doc_type &&
-          edge_types == o.edge_types &&
           embedding == o.embedding &&
-          graph_depth == o.graph_depth &&
-          graph_expand == o.graph_expand &&
-          lens_id == o.lens_id &&
           limit == o.limit &&
           offset == o.offset &&
           query == o.query &&
-          regions == o.regions &&
-          search_config == o.search_config &&
-          seed_ids == o.seed_ids &&
-          seed_only == o.seed_only &&
-          wayfind == o.wayfind
+          search_config == o.search_config
     end
 
     # @see the `==` method
@@ -283,7 +194,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, cogmap_ids, context_ref, doc_type, edge_types, embedding, graph_depth, graph_expand, lens_id, limit, offset, query, regions, search_config, seed_ids, seed_only, wayfind].hash
+      [cogmap_id, cogmap_ids, context_ref, doc_type, embedding, limit, offset, query, search_config].hash
     end
 
     # Builds the object from hash

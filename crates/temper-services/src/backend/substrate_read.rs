@@ -24,8 +24,8 @@ use crate::services::resource_service::{ResourceListParams, ResourceListResponse
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{
-    SearchDiagnostics, SearchParams, SearchReason, SearchResponse, SearchScope,
-    UnifiedSearchResultRow,
+    ExactArm, ExactHit, SearchParams, SearchReason, SearchResponse, SearchScope, SearchScopeInfo,
+    WideArm, WideHit,
 };
 use temper_core::types::cognitive_maps::{
     CharterBlock, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow, CogmapRegulationRow,
@@ -459,15 +459,14 @@ pub async fn get_meta_batch_select(
 
 /// Surface A caps resolved once, before the SQL call (pure → unit-tested).
 pub(crate) struct ClampedSearch {
-    pub depth: i32,
     pub limit: i64,
 }
 
-/// graph_depth → \[1,3\] (deep traversal is a Surface-B concern; a 10-hop fan-out would threaten the DB);
-/// limit → \[1,50\] (the documented API ceiling). Defaults: depth 2, limit 10.
+/// limit → \[1,50\] (the documented API ceiling), default 10. The graph-depth clamp is gone with the
+/// graph arm; the limit now bounds EACH arm independently rather than one merged list, so a caller
+/// asking for 10 can receive up to 10 exact and 10 wide.
 pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
     ClampedSearch {
-        depth: params.graph_depth.unwrap_or(2).clamp(1, 3),
         limit: params.limit.unwrap_or(10).clamp(1, 50),
     }
 }
@@ -482,25 +481,21 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
 /// regions over both anchor kinds, `--context X --wayfind` is no longer a contradiction, it means
 /// *"wayfind within this context"* — the anchor scopes the region pool. That composition is the whole
 /// point of T7, so the old three-way exclusion is gone.
-/// What [`resolve_search_scope`] settled on: the corpus bounds, plus — for `wayfind` only — the
-/// reach scalars the diagnostics report (issue #585 Task 4). `reach` is `None` for every other
-/// scope because no other scope pools across anchors, so "how many anchors did this touch" has no
-/// meaning to report rather than a zero to report.
-struct ResolvedScope {
-    context_id: Option<uuid::Uuid>,
-    scope_ids: Option<Vec<Uuid>>,
-    reach: Option<readback::WayfindScopeReach>,
-}
-
-async fn resolve_search_scope(
+/// Resolve the scope selectors into the single thing both arms take: an anchor, or nothing.
+///
+/// `context_ref` and `cogmap_id` name two different homes, so asking for both is incoherent and is a
+/// `400`. Everything else that used to live here is gone with wayfind: there is no id-set to
+/// assemble, because the arms scope by the anchor pair inside SQL rather than by a flattened pile of
+/// resource ids handed down from Rust.
+///
+/// A multi-map scope is likewise gone. One anchor is one anchor; asking several maps at once is a
+/// composition, which is `/api/query`'s job, not a comma in this parameter.
+async fn resolve_search_anchor(
     pool: &PgPool,
     profile_id: ProfileId,
     params: &SearchParams,
-) -> ApiResult<ResolvedScope> {
-    // Effective cogmap set: the plural `cogmap_ids` wins when present; otherwise a scalar `cogmap_id`
-    // is a one-element set. Empty ⇒ no cogmap scope. Reconciling the two wire fields ONCE, here, means
-    // every downstream check (exclusion, wayfind anchor, scope resolution) sees a single shape.
-    let effective_cogmaps: Vec<Uuid> = match params.cogmap_ids.as_deref() {
+) -> ApiResult<Option<HomeAnchor>> {
+    let effective_cogmaps: Vec<uuid::Uuid> = match params.cogmap_ids.as_deref() {
         Some(ids) if !ids.is_empty() => ids.to_vec(),
         _ => params.cogmap_id.into_iter().collect(),
     };
@@ -510,93 +505,23 @@ async fn resolve_search_scope(
             "context_ref and cogmap scope are mutually exclusive".into(),
         ));
     }
-    // Wayfind anchors on a SINGLE home, so a multi-map wayfind has no anchor to pool regions within.
-    // The CLI rejects it pre-flight; reject it here too so a raw caller gets a 400 rather than a
-    // silent global wayfind with the cogmap set dropped.
-    if params.wayfind && effective_cogmaps.len() > 1 {
+    if effective_cogmaps.len() > 1 {
         return Err(ApiError::BadRequest(
-            "wayfind anchors on a single map; supply at most one cogmap with wayfind".into(),
+            "search scopes to a single anchor; ask several maps as a composition instead".into(),
         ));
     }
 
-    // Resolve context_ref → context UUID. A bare name is rejected by `parse_context_ref` (spec
-    // Decision 1); an @owner/slug or UUID ref resolves via `resolve_context_ref` (visibility-gated).
-    let context_id: Option<uuid::Uuid> = match params.context_ref.as_deref() {
-        Some(s) => {
-            let cref = temper_core::context_ref::parse_context_ref(s)
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-            Some(
-                *crate::services::context_service::resolve_context_ref(pool, profile_id, &cref)
-                    .await?,
-            )
-        }
-        None => None,
-    };
-
-    // `wayfind` runs the region-salience funnel over every visible anchor of both kinds; the cogmap
-    // set alone is the (single- OR multi-)map scope. Both visibility-gate inside the SQL; an empty
-    // result is deny → zero rows, never an error.
-    // Wayfind resolves scope and reach in ONE call (`wayfind_scope_reach`); every other scope has no
-    // reach to report, so `reach` stays `None` and the diagnostics omit the fields entirely.
-    let mut reach: Option<readback::WayfindScopeReach> = None;
-    let scope_ids: Option<Vec<Uuid>> = if params.wayfind {
-        // A named anchor scopes the region pool to itself ("wayfind within this context/cogmap").
-        // Wayfind's anchor is a single home, so only a one-element cogmap set anchors it; a multi-map
-        // wayfind is rejected client-side, and a >1 set here (defensive) pools every visible anchor.
-        // The context/cogmap exclusion above guarantees at most one kind is set.
-        let single_cogmap = match effective_cogmaps.as_slice() {
-            [one] => Some(*one),
-            _ => None,
-        };
-        let anchor = match (context_id, single_cogmap) {
-            (Some(ctx), _) => Some(HomeAnchor::Context(ContextId::from(ctx))),
-            (_, Some(map)) => Some(HomeAnchor::Cogmap(CogmapId::from(map))),
-            (None, None) => None,
-        };
-        let resolved = readback::wayfind_scope_reach(
-            pool,
-            readback::WayfindScopeQuery {
-                principal: profile_id,
-                lens_id: params.lens_id.map(LensId::from),
-                // The query embedding feeds BOTH region selection here and the blend inside
-                // `unified_search` — intentionally the same signal.
-                embedding: params.embedding.as_deref(),
-                // Saturate the i64→i32 narrowing so a huge N can't wrap negative; the SQL `k`
-                // CTE then clamps into [1, max_n].
-                regions: params.regions.map(|n| n.clamp(0, i32::MAX as i64) as i32),
-                anchor,
-            },
-        )
-        .await
-        .map_err(api_err)?;
-        let ids = resolved.scope_ids.clone();
-        reach = Some(resolved);
-        Some(ids)
-    } else if !effective_cogmaps.is_empty() {
-        // Union of each map's homed, visible participants — one round-trip. Each map is independently
-        // map-read gated inside `cogmap_scope_ids`, so an unreadable map in the set adds nothing.
-        Some(
-            sqlx::query_scalar!(
-                "SELECT cogmap_scope_ids_multi($1, $2)",
-                profile_id.uuid(),
-                &effective_cogmaps
-            )
-            .fetch_all(pool)
-            .await
-            .map_err(api_err)?
-            .into_iter()
-            .flatten()
-            .collect(),
-        )
-    } else {
-        None
-    };
-
-    Ok(ResolvedScope {
-        context_id,
-        scope_ids,
-        reach,
-    })
+    if let Some(s) = params.context_ref.as_deref() {
+        let cref = temper_core::context_ref::parse_context_ref(s)
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let id =
+            *crate::services::context_service::resolve_context_ref(pool, profile_id, &cref).await?;
+        return Ok(Some(HomeAnchor::Context(ContextId::from(id))));
+    }
+    if let [one] = effective_cogmaps.as_slice() {
+        return Ok(Some(HomeAnchor::Cogmap(CogmapId::from(*one))));
+    }
+    Ok(None)
 }
 
 /// The wall-clock budget for a single server-side query embed, in milliseconds. Overridable via
@@ -633,7 +558,7 @@ fn query_embed_budget() -> std::time::Duration {
 ///
 /// Failure mode is fallback-with-warn: on embed error, task panic, OR budget timeout we log and
 /// proceed with FTS + graph only rather than turning a soft degradation into a killed request —
-/// partial results beat none, and the `degraded` signal is surfaced in [`SearchDiagnostics`] (#360).
+/// partial results beat none, and the `degraded` signal is surfaced on the wide arm ([`WideArm`]).
 ///
 /// Returns `true` when a query needed server-side embedding but it *did not land* (error / panic /
 /// timeout — the "degraded" case); `false` when the vector signal is intact — the query already
@@ -689,11 +614,9 @@ async fn embed_query_if_missing(params: &mut SearchParams) -> bool {
 /// therefore a hard-fail break for an older client, and it would buy nothing: a caller already knows
 /// which anchor it asked for, and diagnostics exist to explain the *result shape*, not to echo the
 /// request back. If the anchor is ever genuinely needed here, add an *optional* field to
-/// [`SearchDiagnostics`] rather than a variant.
+/// [`SearchScopeInfo`] rather than a variant.
 fn classify_scope(params: &SearchParams) -> SearchScope {
-    if params.wayfind {
-        SearchScope::Wayfind
-    } else if params.cogmap_id.is_some()
+    if params.cogmap_id.is_some()
         || params
             .cogmap_ids
             .as_deref()
@@ -709,7 +632,7 @@ fn classify_scope(params: &SearchParams) -> SearchScope {
     }
 }
 
-/// Build the agent-facing one-liner for a search's [`SearchDiagnostics`] (issue #360). Pure — no DB —
+/// Build the agent-facing one-liner carried on an arm's `hint`. Pure — no DB —
 /// so it is unit-testable. Returns `None` only when the result set is unremarkable (`Ok` reason and
 /// no degraded signal); otherwise it explains the shape and suggests a concrete next step.
 ///
@@ -733,25 +656,21 @@ fn search_hint(
     scope: SearchScope,
     reason: SearchReason,
     scope_size: Option<i64>,
-    reach: Option<&readback::WayfindScopeReach>,
     degraded: bool,
 ) -> Option<String> {
-    // The `WAYFIND_UNREACHABLE` hint that used to live here is GONE, because it stopped being true
-    // (spec §3.7). It told agents that "wayfind only reaches cogmap-distilled content — if what you
-    // want is context-homed (in no cogmap), it is unreachable here regardless of phrasing." As of T7
-    // wayfind pools regions over BOTH anchor kinds, so context-homed content is reachable, and a
-    // `NoMatch` under wayfind now means what it means everywhere else: rephrase or widen. Leaving the
-    // hint in would have actively taught agents to stop asking for the thing that now works.
+    // The narrowed-reach hint (issue #585) is GONE with wayfind. It reported `anchors_selected`
+    // against `anchors_visible` — a pooled-competition signal that has no referent once a search
+    // scopes to at most one anchor and each arm returns its own list. Its successor, if one is ever
+    // wanted, belongs to `/api/query`'s per-stage disclosure and describes a composition rather than
+    // a blend.
+    //
+    // ASCII ONLY still applies to every string emitted here, guarded by `every_emitted_hint_is_ascii`
+    // — see that test for why the header's percent-encoding scar outlived the header itself.
     let mut parts: Vec<String> = Vec::new();
     match (scope, reason) {
-        (SearchScope::Wayfind, SearchReason::OutOfScope) => parts.push(
-            "wayfind scope is empty: 0 candidate resources across the anchors you can see. Drop \
-             `--wayfind` for an unscoped search."
-                .to_string(),
-        ),
         (SearchScope::Cogmap, SearchReason::OutOfScope) => parts.push(
-            "this cogmap admits 0 resources you can see: check the cogmap ref, or try \
-             `--context <ref>`."
+            "the --cogmap scope resolved to zero visible resources; a different phrasing will \
+             not help - check the map ref, or drop the scope to search everything you can see."
                 .to_string(),
         ),
         (_, SearchReason::NoMatch) => {
@@ -759,65 +678,16 @@ fn search_hint(
                 .map(|n| format!("{n} candidate resource(s) in scope; "))
                 .unwrap_or_default();
             parts.push(format!(
-                "{prefix}nothing matched the query: try rephrasing or a broader scope."
+                "{prefix}this arm matched nothing: try rephrasing or a broader scope."
             ));
         }
-        // `Ok` (any scope) and the impossible `OutOfScope` for Global/Context need no reason hint.
         _ => {}
-    }
-    // Narrowed reach (issue #585 Task 4). This is the ONLY hint that fires on a healthy `Ok`, and
-    // deliberately so: a monopolized wayfind is a success by every other signal — rows returned,
-    // `scope_size` in the hundreds, `reason: Ok` — which is exactly the flattering report the
-    // `the-report-never-flatters` clause forbids. Silence here would leave the caller's own output
-    // telling them the maps were reached when they were not.
-    //
-    // The trigger is `anchors_SELECTED`, not `anchors_reached`, and that is the whole point. Reach
-    // counts the cold-start arm, which admits every region-less anchor wholesale on every query — a
-    // floor measured at 6 of 10 visible anchors on the production corpus. Keying the hint on reach
-    // would therefore stay silent on, or actively flatter, exactly the monopoly it exists to expose:
-    // one map taking the entire width still reports "7 of 10 reached". Selection is the competitive
-    // sense, and the only one that can be monopolized.
-    //
-    // Fires when more than one anchor could have won a slot and fewer did. A zero-selection scope is
-    // left to the `OutOfScope` arm above when the scope is empty; when it is non-empty (cold-start
-    // supplied everything and no region won), that IS worth saying, so `>= 1` is deliberately absent.
-    if let Some(r) =
-        reach.filter(|r| r.anchors_visible > 1 && r.anchors_selected < r.anchors_visible)
-    {
-        // Name the width only when it is actually the binding constraint — i.e. when selection used
-        // the whole width. Below it, the width is not what stopped more anchors getting in (there
-        // were not enough competitive regions to go round), and sending the caller to raise a knob
-        // that would change nothing is its own species of misleading control.
-        let bound = if r.anchors_selected == r.regions_effective {
-            format!(
-                " (region width {} bounds this, one region per map per round; raise it with \
-                 `--regions N`)",
-                r.regions_effective
-            )
-        } else {
-            String::new()
-        };
-        // Report both senses. The wholesale count is what stops the reached figure being read as
-        // fairness: those anchors contributed regardless of the query, so they are not evidence that
-        // routing worked.
-        let wholesale = r.anchors_reached - r.anchors_selected;
-        let also = if wholesale > 0 {
-            format!(
-                " {wholesale} further anchor(s) were admitted wholesale, having no regions; that is \
-                 not query relevance."
-            )
-        } else {
-            String::new()
-        };
-        parts.push(format!(
-            "wayfind selected {} of the {} anchors you can see{bound}.{also}",
-            r.anchors_selected, r.anchors_visible
-        ));
     }
     if degraded {
         parts.push(
-            "vector ranking was unavailable (server-side embedding failed); results are FTS + \
-             graph only."
+            "the query could not be embedded server-side, so this arm had no signal to run on; \
+             its result is not an answer about the corpus. Send a precomputed embedding, or read \
+             the exact arm."
                 .to_string(),
         );
     }
@@ -834,11 +704,12 @@ fn search_hint(
 /// Refuse an embedding that cannot have a cosine direction, BEFORE it reaches the database.
 ///
 /// pgvector's `<=>` against a zero-magnitude vector is **NaN**. That NaN propagates through
-/// `vec_norm` into `combined_score`, and JSON has no NaN literal — so serde emits `null` for a field
-/// the shared [`UnifiedSearchResultRow`] declares as `f32`, and the response cannot be deserialized
-/// by the very type the server used to produce it. Measured against production on 2026-08-05: a
-/// 768-dimension zero vector returns `"vector_score":null,"combined_score":null`, and
-/// `temper-client` fails with `invalid type: null, expected f32`.
+/// `vec_norm`, and JSON has no NaN literal — so serde emits `null` for a field the shared hit rows
+/// declare as `f32`, and the response cannot be deserialized by the very type the server used to
+/// produce it. Measured against production on 2026-08-05, when the arms were still blended: a
+/// 768-dimension zero vector returned `"vector_score":null,"combined_score":null`, and
+/// `temper-client` failed with `invalid type: null, expected f32`. Those two fields are gone; the
+/// NaN path is not — it now lands on `vec_norm`, which is why this guard stays.
 ///
 /// So this is refused at the door rather than repaired downstream. Coercing NaN to 0.0 at
 /// serialization would make a degenerate request look like a successful one that simply matched
@@ -878,118 +749,182 @@ fn reject_degenerate_embedding(embedding: Option<&[f32]>) -> ApiResult<()> {
     Ok(())
 }
 
+/// `search` — the two arms of `/api/search`, run independently and returned unmerged.
+///
+/// Each arm is asked the same question of the same scope and answers with its own quantity. Nothing
+/// here combines them: there is no weight, no sum, and no single ordered list they could be merged
+/// into. Decision `019fd25a-ef4c-7473-b72e-265a7d36dd65`.
+///
+/// The arms are run CONCURRENTLY (`try_join`) rather than in sequence. They share no state and
+/// neither feeds the other — which is precisely what "never combined" buys, and it is worth taking:
+/// the wide arm's ANN and the exact arm's GIN scan are independent round-trips.
 pub async fn search_select(
     pool: &PgPool,
     profile_id: ProfileId,
     mut params: SearchParams,
 ) -> ApiResult<SearchResponse> {
     reject_degenerate_embedding(params.embedding.as_deref())?;
+    // `degraded` is the WIDE arm's property: a failed embed leaves the exact arm untouched and makes
+    // the wide arm impossible. It is reported on that arm rather than on the response.
     let degraded = embed_query_if_missing(&mut params).await;
     let scope = classify_scope(&params);
     let clamped = clamp_search_params(&params);
-    let ResolvedScope {
-        context_id,
-        scope_ids,
-        reach,
-    } = resolve_search_scope(pool, profile_id, &params).await?;
+    let anchor = resolve_search_anchor(pool, profile_id, &params).await?;
 
-    // The wire `seed_ids` arrive as bare uuids; lift to the typed `&[ResourceId]` the query takes.
-    let seed_ids: Vec<ResourceId> = params
-        .seed_ids
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .copied()
-        .map(ResourceId::from)
-        .collect();
-    let hits = readback::unified_search(
-        pool,
-        readback::UnifiedSearchQuery {
-            principal: profile_id,
-            query: params.query.as_deref(),
-            embedding: params.embedding.as_deref(),
-            seed_ids: &seed_ids,
-            depth: clamped.depth,
-            edge_types: params.edge_types.as_deref().unwrap_or(&[]),
-            context_id: context_id.map(ContextId::from),
-            doc_type: params.doc_type.as_deref(),
-            graph_expand: params.graph_expand,
-            limit: clamped.limit,
-            offset: params.offset.unwrap_or(0),
-            scope_ids: scope_ids.as_deref(),
-            seed_only: params.seed_only,
+    let (exact_hits, wide_hits) = tokio::try_join!(
+        async {
+            readback::search_exact(pool, profile_id, params.query.as_deref(), anchor)
+                .await
+                .map_err(|e| search_stage_err("search_exact", e))
         },
-    )
-    .await
-    .map_err(|e| search_stage_err("unified_search", e))?;
-
-    let mut out = Vec::with_capacity(hits.len());
-    for h in hits {
-        // Enrich every hit through the cogmap-aware `native_resource_row` (Task F:
-        // `readback::resource_row` LEFT-JOINs kb_contexts AND kb_cogmaps and is visibility-gated).
-        // Context-homed hits carry `context_*`; cogmap-homed hits carry `cogmap_*`. `home_display`
-        // surfaces whichever home is set, so a `--cogmap` hit renders the map name rather than null.
-        let row = native_resource_row(pool, profile_id, h.resource_id)
+        async {
+            readback::search_wide(
+                pool,
+                profile_id,
+                params.embedding.as_deref(),
+                VECTOR_K,
+                anchor,
+            )
             .await
-            .map_err(|e| search_stage_err("enrichment", e))?;
-        let context = row.home_display().map(str::to_owned);
-        out.push(UnifiedSearchResultRow {
-            resource_id: h.resource_id.uuid(),
-            title: row.title,
-            slug: String::new(),
-            kb_uri: row.origin_uri.clone(),
-            origin_uri: row.origin_uri,
-            context,
-            doc_type: row.doc_type_name,
-            fts_score: h.fts_score,
-            vector_score: h.vector_score,
-            graph_score: h.graph_score,
-            combined_score: h.combined_score,
-            origin: "unified".to_string(),
-            context_slug: row.context_slug,
-            context_owner_ref: row.context_owner_ref,
-        });
-    }
+            .map_err(|e| search_stage_err("search_wide", e))
+        },
+    )?;
 
-    // Scope-stage diagnostics (issue #360): let an agent distinguish "rephrase the query" from
-    // "this scope can never see that content." `scope_size` is only cheaply knowable for the
-    // bounded id-set selectors (wayfind/cogmap); an *empty* set there is the structurally-out-of-
-    // scope case, never a rephrase problem.
-    let scope_size: Option<i64> = match scope {
-        SearchScope::Wayfind | SearchScope::Cogmap => {
-            scope_ids.as_ref().map(|ids| ids.len() as i64)
-        }
-        SearchScope::Global | SearchScope::Context => None,
-    };
-    let matched = out.len() as i64;
-    let reason =
-        if matches!(scope, SearchScope::Wayfind | SearchScope::Cogmap) && scope_size == Some(0) {
-            SearchReason::OutOfScope
-        } else if matched == 0 {
-            SearchReason::NoMatch
-        } else {
-            SearchReason::Ok
-        };
-    let hint = search_hint(scope, reason, scope_size, reach.as_ref(), degraded);
+    // Enrichment is shared: both arms name resources, and a resource's identity does not depend on
+    // which arm found it. One batched round-trip over the union, then each arm keeps its own order.
+    let mut wanted: Vec<ResourceId> = exact_hits.iter().map(|h| h.resource_id).collect();
+    wanted.extend(wide_hits.iter().map(|h| h.resource_id));
+    wanted.sort_unstable_by_key(|r| r.uuid());
+    wanted.dedup();
+    let identities = enrich_hits(pool, profile_id, &wanted).await?;
+
+    let mut exact: Vec<ExactHit> = exact_hits
+        .into_iter()
+        .filter_map(|h| {
+            identities
+                .get(&h.resource_id.uuid())
+                .map(|i| i.clone().into_exact(h.fts_norm))
+        })
+        .collect();
+    exact.sort_by(|a, b| {
+        b.fts_norm
+            .partial_cmp(&a.fts_norm)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.resource_id.cmp(&b.resource_id))
+    });
+    exact.truncate(clamped.limit as usize);
+
+    let mut wide: Vec<WideHit> = wide_hits
+        .into_iter()
+        .filter_map(|h| {
+            identities
+                .get(&h.resource_id.uuid())
+                .map(|i| i.clone().into_wide(h.vec_norm))
+        })
+        .collect();
+    wide.sort_by(|a, b| {
+        b.vec_norm
+            .partial_cmp(&a.vec_norm)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.resource_id.cmp(&b.resource_id))
+    });
+    wide.truncate(clamped.limit as usize);
+
+    let scope_size: Option<i64> = None;
+    let exact_reason = arm_reason(exact.len());
+    let wide_reason = arm_reason(wide.len());
 
     Ok(SearchResponse {
-        results: out,
-        // Always populated server-side; `None` is reserved for the client's old-server degrade path.
-        diagnostics: Some(SearchDiagnostics {
-            scope,
-            scope_size,
-            // `None` for every non-wayfind scope: nothing else pools across anchors, so these have
-            // no meaning to report rather than a zero to report (issue #585 Task 4).
-            anchors_visible: reach.as_ref().map(|r| i64::from(r.anchors_visible)),
-            anchors_reached: reach.as_ref().map(|r| i64::from(r.anchors_reached)),
-            anchors_selected: reach.as_ref().map(|r| i64::from(r.anchors_selected)),
-            regions_effective: reach.as_ref().map(|r| i64::from(r.regions_effective)),
-            matched,
-            reason,
+        exact: ExactArm {
+            hint: search_hint(scope, exact_reason, scope_size, false),
+            reason: exact_reason,
+            hits: exact,
+        },
+        wide: WideArm {
+            hint: search_hint(scope, wide_reason, scope_size, degraded),
+            reason: wide_reason,
+            hits: wide,
             degraded,
-            hint,
-        }),
+        },
+        scope: SearchScopeInfo {
+            kind: scope,
+            size: scope_size,
+        },
     })
+}
+
+/// How many nearest chunks the wide arm's UNSCOPED branch draws before visibility and completeness
+/// are applied. Carried over from `unified_search`'s `vector_k` — the one tuning constant this phase
+/// keeps, because it governs ADMISSION (how much the index is asked for) rather than ranking (how
+/// what came back is ordered). Nothing weighs it against anything.
+///
+/// **`hnsw.ef_search` is pinned on `search_wide` at or above this value.** Raising it past the pin
+/// silently truncates the draw — the pin's whole reason for existing. See
+/// `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for`.
+const VECTOR_K: i32 = 100;
+
+/// Enrich both arms' hits in one batched round-trip, keyed by resource id.
+async fn enrich_hits(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    ids: &[ResourceId],
+) -> ApiResult<std::collections::HashMap<Uuid, readback::HitIdentity>> {
+    let rows = readback::hit_identities(pool, profile_id, ids)
+        .await
+        .map_err(|e| search_stage_err("enrichment", e))?;
+    Ok(rows
+        .into_iter()
+        .map(|i| (i.resource_id.uuid(), i))
+        .collect())
+}
+
+/// Project a shared identity into an arm's row. Two near-identical bodies because the rows are two
+/// types on purpose: each carries its own quantity, so neither can be built without naming which.
+trait IntoArmHit {
+    fn into_exact(self, fts_norm: f32) -> ExactHit;
+    fn into_wide(self, vec_norm: f32) -> WideHit;
+}
+
+impl IntoArmHit for readback::HitIdentity {
+    fn into_exact(self, fts_norm: f32) -> ExactHit {
+        ExactHit {
+            resource_id: self.resource_id.uuid(),
+            title: self.title,
+            kb_uri: self.origin_uri.clone(),
+            origin_uri: self.origin_uri,
+            context: self.home_display,
+            doc_type: self.doc_type_name,
+            context_slug: self.context_slug,
+            context_owner_ref: self.context_owner_ref,
+            fts_norm,
+        }
+    }
+
+    fn into_wide(self, vec_norm: f32) -> WideHit {
+        WideHit {
+            resource_id: self.resource_id.uuid(),
+            title: self.title,
+            kb_uri: self.origin_uri.clone(),
+            origin_uri: self.origin_uri,
+            context: self.home_display,
+            doc_type: self.doc_type_name,
+            context_slug: self.context_slug,
+            context_owner_ref: self.context_owner_ref,
+            vec_norm,
+        }
+    }
+}
+
+/// An arm's disposition from its own hit count. `OutOfScope` is not reachable per-arm today: the
+/// anchor pair is applied inside the SQL, so an unreadable or empty anchor yields zero rows that are
+/// indistinguishable here from "nothing matched". Named rather than silently collapsed — restoring
+/// the distinction needs the arm to report its admitted count, which is the task's open item.
+fn arm_reason(hits: usize) -> SearchReason {
+    if hits == 0 {
+        SearchReason::NoMatch
+    } else {
+        SearchReason::Ok
+    }
 }
 
 /// `anchor_shape` — the surface-tier read of an anchor's materialized regions, for a context OR a
@@ -1219,19 +1154,18 @@ mod clamp_tests {
     use temper_core::types::api::SearchParams;
 
     #[test]
-    fn clamps_depth_and_limit_to_surface_a_caps() {
+    fn clamps_limit_to_the_documented_ceiling() {
+        // The limit now bounds EACH arm independently, not one merged list.
         let p = SearchParams {
-            graph_depth: Some(10),
             limit: Some(999),
             ..SearchParams::default()
         };
-        let c = clamp_search_params(&p);
-        assert_eq!(c.depth, 3, "graph_depth capped at 3 for Surface A");
-        assert_eq!(c.limit, 50, "limit capped at 50");
-
-        let d = clamp_search_params(&SearchParams::default());
-        assert_eq!(d.depth, 2, "default depth 2");
-        assert_eq!(d.limit, 10, "default limit 10");
+        assert_eq!(clamp_search_params(&p).limit, 50, "limit capped at 50");
+        assert_eq!(
+            clamp_search_params(&SearchParams::default()).limit,
+            10,
+            "default limit 10"
+        );
     }
 
     // `embed_query_if_missing` guards — the no-op cases never touch the ONNX model, so they run in the
@@ -1290,33 +1224,6 @@ mod clamp_tests {
             ..SearchParams::default()
         };
         assert_eq!(classify_scope(&cog), SearchScope::Cogmap);
-
-        let way = SearchParams {
-            wayfind: true,
-            ..SearchParams::default()
-        };
-        assert_eq!(classify_scope(&way), SearchScope::Wayfind);
-    }
-
-    #[test]
-    fn hint_out_of_scope_wayfind_suggests_dropping_wayfind() {
-        // T7: the useful escape hatch changed. An empty wayfind scope means zero candidates across
-        // EVERY visible anchor — contexts now included — so steering at `--context` (as this hint used
-        // to) is advice that cannot help: those regions were already pooled. Dropping `--wayfind` for
-        // an unscoped search is the move that can actually widen the corpus.
-        let h = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::OutOfScope,
-            Some(0),
-            None,
-            false,
-        )
-        .expect("out-of-scope wayfind must hint");
-        assert!(h.contains("wayfind scope is empty"), "got: {h}");
-        assert!(
-            h.contains("--wayfind"),
-            "must offer dropping --wayfind; got: {h}"
-        );
     }
 
     #[test]
@@ -1325,7 +1232,6 @@ mod clamp_tests {
             SearchScope::Cogmap,
             SearchReason::OutOfScope,
             Some(0),
-            None,
             false,
         )
         .expect("out-of-scope cogmap must hint");
@@ -1334,278 +1240,80 @@ mod clamp_tests {
 
     #[test]
     fn hint_no_match_reports_scope_size_when_known() {
-        let with = search_hint(
-            SearchScope::Cogmap,
-            SearchReason::NoMatch,
-            Some(7),
-            None,
-            false,
-        )
-        .expect("no-match must hint");
+        let with = search_hint(SearchScope::Cogmap, SearchReason::NoMatch, Some(7), false)
+            .expect("no-match must hint");
         assert!(with.contains('7'), "should surface scope_size; got: {with}");
         assert!(
             with.contains("rephras"),
             "should suggest rephrasing; got: {with}"
         );
 
-        let without = search_hint(
-            SearchScope::Global,
-            SearchReason::NoMatch,
-            None,
-            None,
-            false,
-        )
-        .expect("no-match must hint even without scope_size");
+        let without = search_hint(SearchScope::Global, SearchReason::NoMatch, None, false)
+            .expect("no-match must hint even without scope_size");
         assert!(without.contains("matched"), "got: {without}");
-    }
-
-    #[test]
-    fn hint_wayfind_no_match_no_longer_claims_context_content_is_unreachable() {
-        // T7 INVERTS this test. It used to require the hint to say that context-homed content is
-        // "unreachable" via wayfind and to steer the caller to `--context`. Wayfind now pools context
-        // regions too (spec §3.7), so that guidance is false — and false guidance is worse than none:
-        // it would teach an agent to stop asking for the thing that now works. A wayfind `NoMatch` is
-        // now an ordinary no-match, and falls through to the generic rephrase-or-widen hint.
-        let h = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::NoMatch,
-            Some(3),
-            None,
-            false,
-        )
-        .expect("wayfind no-match must still hint");
-        assert!(h.contains('3'), "should surface scope_size; got: {h}");
-        assert!(
-            !h.contains("unreachable"),
-            "the WAYFIND_UNREACHABLE claim must be gone — context-homed content is reachable now; \
-             got: {h}"
-        );
     }
 
     #[test]
     fn hint_ok_is_silent_unless_degraded() {
         assert!(
-            search_hint(SearchScope::Global, SearchReason::Ok, None, None, false).is_none(),
+            search_hint(SearchScope::Global, SearchReason::Ok, None, false).is_none(),
             "an unremarkable Ok result needs no hint"
         );
-        let degraded = search_hint(SearchScope::Global, SearchReason::Ok, None, None, true)
-            .expect("a degraded Ok result must still warn");
-        assert!(degraded.contains("vector ranking"), "got: {degraded}");
+        let degraded = search_hint(SearchScope::Global, SearchReason::Ok, None, true)
+            .expect("an arm that could not run must say so even with an Ok reason");
+        assert!(
+            degraded.contains("could not be embedded"),
+            "got: {degraded}"
+        );
     }
 
     #[test]
     fn hint_appends_degraded_to_a_reason() {
-        let h = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::OutOfScope,
-            Some(0),
-            None,
-            true,
-        )
-        .expect("hint");
-        assert!(h.contains("wayfind scope is empty"), "got: {h}");
+        let h = search_hint(SearchScope::Cogmap, SearchReason::OutOfScope, Some(0), true)
+            .expect("hint");
+        assert!(h.contains("--cogmap scope"), "got: {h}");
         assert!(
-            h.contains("vector ranking"),
-            "degraded note must append; got: {h}"
+            h.contains("could not be embedded"),
+            "the could-not-run note must append to the reason; got: {h}"
         );
     }
 
-    // --- Narrowed-reach hint (issue #585 Task 4) -------------------------------------------------
-
-    fn reach(visible: i32, reached: i32, selected: i32, width: i32) -> readback::WayfindScopeReach {
-        readback::WayfindScopeReach {
-            scope_ids: Vec::new(),
-            anchors_visible: visible,
-            anchors_reached: reached,
-            anchors_selected: selected,
-            regions_effective: width,
-        }
-    }
-
-    /// EVERY hint this function can emit must be pure ASCII, because it ships in a response HEADER
-    /// and the deployed platform percent-encodes non-ASCII on the way out — an em dash reaches the
-    /// user as `%E2%80%94` mid-sentence. Two hints shipped that way in #360 and nobody saw it for
-    /// months, because the e2e drives a bare Axum server and the encoding happens further out.
+    /// Every hint this function can emit is ASCII.
     ///
-    /// This enumerates the full cross product of arms rather than sampling: scope x reason x
-    /// reach-shape x degraded. A test that checked only the hints someone thought to list would go
-    /// green on the next one added, which is the precise way the original defect survived.
+    /// The scar that produced this outlived its cause: hints used to ride the
+    /// `x-temper-search-diagnostics` header, and the serverless adapter percent-encoded non-ASCII
+    /// header bytes, so an em dash reached callers as `%E2%80%94`. Hints live in the body now and
+    /// the encoding cannot happen — but nothing is gained by relaxing the rule, and a future
+    /// header-borne field would reintroduce the hazard silently.
     #[test]
     fn every_emitted_hint_is_ascii() {
         let scopes = [
             SearchScope::Global,
             SearchScope::Context,
             SearchScope::Cogmap,
-            SearchScope::Wayfind,
         ];
         let reasons = [
             SearchReason::Ok,
             SearchReason::NoMatch,
             SearchReason::OutOfScope,
         ];
-        // Reach shapes chosen to reach every branch inside the narrowed-selection arm: absent, full,
-        // single-anchor, width-binding, width-not-binding, and zero-selection.
-        let reaches = [
-            None,
-            Some(reach(4, 4, 4, 3)),
-            Some(reach(1, 1, 1, 3)),
-            Some(reach(9, 3, 3, 3)),
-            Some(reach(9, 5, 2, 3)),
-            Some(reach(10, 7, 1, 3)),
-            Some(reach(10, 6, 0, 3)),
-        ];
         let mut emitted = 0usize;
         for scope in scopes {
             for reason in reasons {
-                for r in &reaches {
-                    for degraded in [false, true] {
-                        for size in [None, Some(0), Some(7)] {
-                            let Some(h) = search_hint(scope, reason, size, r.as_ref(), degraded)
-                            else {
-                                continue;
-                            };
-                            emitted += 1;
-                            assert!(
-                                h.is_ascii(),
-                                "hint carries non-ASCII and will reach the caller \
-                                 percent-encoded: {h:?}"
-                            );
-                        }
+                for degraded in [false, true] {
+                    for size in [None, Some(0), Some(7)] {
+                        let Some(h) = search_hint(scope, reason, size, degraded) else {
+                            continue;
+                        };
+                        emitted += 1;
+                        assert!(h.is_ascii(), "hint carries non-ASCII: {h:?}");
                     }
                 }
             }
         }
-        // A cross product that produced no hints would pass this vacuously — the failure mode this
-        // whole test exists to prevent, one level up.
         assert!(
-            emitted > 20,
-            "the cross product must actually exercise the hint arms; only {emitted} hints emitted"
-        );
-    }
-
-    /// The load-bearing case: a perfectly healthy-looking `Ok` in which one anchor won everything.
-    /// Every other signal reads as success, so this hint is the only thing standing between the
-    /// caller and a flattering report.
-    #[test]
-    fn hint_names_narrowed_selection_on_an_otherwise_healthy_ok() {
-        let r = reach(8, 1, 1, 1);
-        let h = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::Ok,
-            Some(340),
-            Some(&r),
-            false,
-        )
-        .expect("a 1-of-8 selection must not pass silently as Ok");
-        assert!(
-            h.contains('1') && h.contains('8'),
-            "names the ratio; got: {h}"
-        );
-        assert!(
-            h.contains("--regions"),
-            "must offer the knob that widens it; got: {h}"
-        );
-    }
-
-    /// THE REGRESSION BOUNDARY for the cold-start floor. On the production corpus 6 of 10 visible
-    /// anchors hold no regions and are admitted wholesale on every query, so a total monopoly — one
-    /// map taking the entire width — still leaves `anchors_reached` at 7 of 10. A hint keyed on
-    /// REACH would report that as broad reach and mask the monopoly, which is precisely the
-    /// flattering report `the-report-never-flatters` forbids. Keyed on SELECTION it cannot.
-    #[test]
-    fn hint_exposes_a_monopoly_that_the_reach_floor_would_have_masked() {
-        let monopoly = reach(10, 7, 1, 3);
-        let h = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::Ok,
-            Some(640),
-            Some(&monopoly),
-            false,
-        )
-        .expect("a 1-anchor selection must report, however high reach climbs");
-        assert!(
-            h.contains("selected 1 of the 10"),
-            "must lead with the competitive sense, not the flattering 7; got: {h}"
-        );
-        assert!(
-            h.contains("wholesale"),
-            "the 6 unconditional anchors must be named as such — they are not query relevance;              got: {h}"
-        );
-        // The specific failure this guards: presenting the reach figure as the headline.
-        assert!(
-            !h.contains("selected 7"),
-            "the reach floor must never be reported as if it were selection; got: {h}"
-        );
-    }
-
-    /// Full selection is unremarkable and must stay silent — a hint on every wayfind would train
-    /// callers to ignore the one that matters.
-    #[test]
-    fn hint_is_silent_when_every_visible_anchor_was_selected() {
-        let r = reach(4, 4, 4, 20);
-        assert!(
-            search_hint(
-                SearchScope::Wayfind,
-                SearchReason::Ok,
-                Some(99),
-                Some(&r),
-                false
-            )
-            .is_none(),
-            "full selection is not worth saying"
-        );
-    }
-
-    /// One visible anchor cannot be "narrow" — there is nothing it failed to reach.
-    #[test]
-    fn hint_is_silent_when_only_one_anchor_is_visible() {
-        let r = reach(1, 1, 1, 3);
-        assert!(search_hint(
-            SearchScope::Wayfind,
-            SearchReason::Ok,
-            Some(12),
-            Some(&r),
-            false
-        )
-        .is_none());
-    }
-
-    /// The width is the constraint only when selection consumed all of it. Below that, more anchors
-    /// could have won a slot and did not — raising `--regions` would change nothing, and saying so
-    /// would be its own misleading control.
-    #[test]
-    fn hint_blames_the_width_only_when_the_width_is_binding() {
-        let binding = reach(9, 3, 3, 3);
-        let h = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::Ok,
-            Some(50),
-            Some(&binding),
-            false,
-        )
-        .expect("hint");
-        assert!(
-            h.contains("region width"),
-            "selected == width ⇒ the knob is the constraint; got: {h}"
-        );
-
-        // Selection used less than the width — the supply of competitive regions ran out first.
-        let not_binding = reach(9, 5, 2, 3);
-        let h2 = search_hint(
-            SearchScope::Wayfind,
-            SearchReason::Ok,
-            Some(50),
-            Some(&not_binding),
-            false,
-        )
-        .expect("a 2-of-9 selection still reports");
-        assert!(
-            !h2.contains("region width"),
-            "selection did not exhaust the width, so the width did not bound it; got: {h2}"
-        );
-        assert!(
-            !h2.contains("--regions"),
-            "must not send the caller to a knob that would not help; got: {h2}"
+            emitted > 0,
+            "the enumeration produced no hints at all, so it asserted nothing"
         );
     }
 }

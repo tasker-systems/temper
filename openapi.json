@@ -5944,6 +5944,8 @@
         "tags": [
           "Search"
         ],
+        "summary": "`POST /api/search`.",
+        "description": "The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics` beside\na body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that reason; the\nbody is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That\nalso retires the header's percent-encoding scar — non-ASCII hint text was arriving at clients as\n`%E2%80%94` because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded\nby `every_emitted_hint_is_ascii`, since nothing is gained by relaxing it.",
         "operationId": "search",
         "requestBody": {
           "content": {
@@ -5957,22 +5959,11 @@
         },
         "responses": {
           "200": {
-            "description": "Ranked search results. Scope-stage diagnostics (issue #360) ride the additive `x-temper-search-diagnostics` response header (compact JSON of `SearchDiagnostics`); the body contract is unchanged.",
-            "headers": {
-              "x-temper-search-diagnostics": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "Compact JSON SearchDiagnostics"
-              }
-            },
+            "description": "Two arms that are never combined: `exact` (term matching, ordered by `fts_norm`) and `wide` (embedding proximity, ordered by `vec_norm`), each with its own `reason`, plus the `scope` they share. No field ranks one arm against the other.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UnifiedSearchResultRow"
-                  }
+                  "$ref": "#/components/schemas/SearchResponse"
                 }
               }
             }
@@ -8967,6 +8958,89 @@
           }
         }
       },
+      "ExactArm": {
+        "type": "object",
+        "description": "The **exact** arm and its own disposition.\n\nThe `reason` is per-arm because one shared reason has to describe both arms at once, and would\nreport `NoMatch` for a response whose other arm returned hits — a rollup that reads as an answer\nabout the question asked when it is not.",
+        "required": [
+          "hits",
+          "reason"
+        ],
+        "properties": {
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One-liner explaining a non-`Ok` reason and suggesting a next step."
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExactHit"
+            }
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SearchReason"
+          }
+        }
+      },
+      "ExactHit": {
+        "type": "object",
+        "description": "One hit from the **exact** arm: you could quote the words.\n\nOrdered by `fts_norm` and carrying no other quantity. A second number here would be something to\nrank it against, which is the category error this whole shape exists to make unrepresentable.",
+        "required": [
+          "resource_id",
+          "title",
+          "kb_uri",
+          "origin_uri",
+          "doc_type",
+          "fts_norm"
+        ],
+        "properties": {
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_owner_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`)."
+          },
+          "context_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slug of the home context (the natural-key half of `@owner/slug`)."
+          },
+          "doc_type": {
+            "type": "string"
+          },
+          "fts_norm": {
+            "type": "number",
+            "format": "float",
+            "description": "`ts_rank` flag 33 — `rank/(rank+1)` normalization plus log-length division — in `[0,1)`."
+          },
+          "kb_uri": {
+            "type": "string",
+            "description": "Canonical kb:// URI."
+          },
+          "origin_uri": {
+            "type": "string",
+            "description": "Original source URL or file reference."
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "FacetAck": {
         "type": "object",
         "description": "Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.\n\nA facet is stored one row per inner key (migration `20260730000010`), so `{status: open,\nas_of: X}` is two rows and a singular ack could only name one of them. Which one it named would\nbe arbitrary, and a caller reading a single id back from a two-mark write would have a value\nthat *reads as complete* — precisely the defect `GET /api/resources/{id}/facets` shipped to end\n(goal `019fafd9-a978-7860-ae39-23958b4471b8`). So the ack is plural at the type level: there is\nno shape in which it can under-report.\n\nOrdered as written — one entry per inner key of the asserted object, in the order the projector\nwalked them. A non-facet property write yields exactly one entry.",
@@ -11801,82 +11875,6 @@
         ],
         "description": "Request body for `POST /api/relationships/{edge_handle}/reweight`."
       },
-      "SearchDiagnostics": {
-        "type": "object",
-        "description": "Scope-stage diagnostics accompanying every search response (issue #360). Machine-readable so\nagent harnesses can branch programmatically; `hint` is the human/agent-facing one-liner the\nCLI renders to stderr on a non-`Ok` reason.",
-        "required": [
-          "scope",
-          "matched",
-          "reason",
-          "degraded"
-        ],
-        "properties": {
-          "anchors_reached": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "How many anchors actually contributed a resource to the scope, counting both the region-winner\narm and the cold-start arm. `Some` only for `wayfind` (issue #585).\n\n**This number has a floor — do not read it as a fairness signal on its own.** An anchor that\nholds resources but no regions is admitted wholesale by cold-start on *every* query, whatever\nwas asked, so it is always reached. On the production corpus that floor was measured at 6 of 10\nvisible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it\nwith [`anchors_selected`](Self::anchors_selected), which carries the competitive sense."
-          },
-          "anchors_selected": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the\nfield that makes a monopoly visible: one anchor holding the entire region width is\n`anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached -\nanchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only\nfor `wayfind` (issue #585)."
-          },
-          "anchors_visible": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "How many region anchors — cognitive maps and contexts alike — the principal could have\nreached on this query, after any single-anchor scoping. The denominator for\n[`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that\npools across anchors (issue #585)."
-          },
-          "degraded": {
-            "type": "boolean",
-            "description": "True when a ranking signal degraded silently — currently: server-side query embedding\nfailed and the blend fell back to FTS + graph only. Results are still returned."
-          },
-          "hint": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "One-liner explaining a non-`Ok` reason (or a degraded signal) and suggesting a next step."
-          },
-          "matched": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Number of results returned (post-ranking, post-limit)."
-          },
-          "reason": {
-            "$ref": "#/components/schemas/SearchReason",
-            "description": "Why the result set is shaped as it is."
-          },
-          "regions_effective": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "The region width actually applied after the server-side clamp — what `--regions`/`regions`\nresolved to, including the default substituted when the caller passed nothing. Since Stage-1\nadmits at most one region per anchor per round, this **bounds** `anchors_reached`: a caller\nseeing `anchors_reached == regions_effective < anchors_visible` is looking at a width limit,\nnot at an irrelevant corpus. `Some` only for `wayfind` (issue #585)."
-          },
-          "scope": {
-            "$ref": "#/components/schemas/SearchScope",
-            "description": "Which selector produced the corpus."
-          },
-          "scope_size": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Number of candidate resources the scope selector admitted, when it is cheaply knowable:\nthe resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose\ncorpus is not a bounded id-set at scope-resolution time.\n\n**This is a resource count and is not a reach signal.** A wayfind drawn entirely from one map\nand one drawn evenly across ten both report a figure in the hundreds — read\n[`anchors_reached`](Self::anchors_reached) against\n[`anchors_visible`](Self::anchors_visible) for that (issue #585)."
-          }
-        }
-      },
       "SearchParams": {
         "type": "object",
         "description": "Request body for POST /api/search.",
@@ -11914,16 +11912,6 @@
             ],
             "description": "Filter by document type."
           },
-          "edge_types": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "type": "string"
-            },
-            "description": "Edge type filter for graph expansion (empty = all types)."
-          },
           "embedding": {
             "type": [
               "array",
@@ -11934,26 +11922,6 @@
               "format": "float"
             },
             "description": "Pre-computed 768-dim embedding vector."
-          },
-          "graph_depth": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "description": "Max hops for graph traversal (default 2, max 3 — clamped for Surface A)."
-          },
-          "graph_expand": {
-            "type": "boolean",
-            "description": "Whether to expand results via graph edges (default true)."
-          },
-          "lens_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "Optional lens override for wayfind region selection (resolved client-side, trailing-UUID).\n`None` ⇒ each region's memoized salience under its own lens."
           },
           "limit": {
             "type": [
@@ -11978,36 +11946,9 @@
             ],
             "description": "Plain-text query for full-text search."
           },
-          "regions": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless\n`wayfind`.\n\n**Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per\nanchor per round, so a width of N reaches at most N maps/contexts. The width actually applied\nis reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a\nscope-width knob, not an output rollup — no response carries a region list."
-          },
           "search_config": {
             "type": "string",
             "description": "Postgres text-search configuration (default \"english\").\n\nNOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates`\n(Beat 1 kept multilingual storage-only); this param does not affect results yet."
-          },
-          "seed_ids": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "Explicit seed resource IDs for graph expansion."
-          },
-          "seed_only": {
-            "type": "boolean",
-            "description": "Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed\nunion (issue #357). No effect unless `seed_ids` is non-empty. Default false."
-          },
-          "wayfind": {
-            "type": "boolean",
-            "description": "Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the\nprincipal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`."
           }
         }
       },
@@ -12019,6 +11960,26 @@
           "no_match",
           "out_of_scope"
         ]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "description": "The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they\nshare.\n\nThere is no field anywhere in this shape that ranks one arm against the other, and no single\nordered list into which they could be merged. That is the point — see decision\n`019fd25a-ef4c-7473-b72e-265a7d36dd65`.\n\nDiagnostics live here in the body. They previously rode an additive\n`x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract\na bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the\nper-arm dispositions belong beside the arms they describe rather than somewhere a reader of the\nbody cannot see.",
+        "required": [
+          "exact",
+          "wide",
+          "scope"
+        ],
+        "properties": {
+          "exact": {
+            "$ref": "#/components/schemas/ExactArm"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/SearchScopeInfo"
+          },
+          "wide": {
+            "$ref": "#/components/schemas/WideArm"
+          }
+        }
       },
       "SearchResultRow": {
         "type": "object",
@@ -12074,13 +12035,33 @@
       },
       "SearchScope": {
         "type": "string",
-        "description": "Which scope selector produced the search corpus. Mirrors the mutually-exclusive\n`{context_ref, cogmap_id, wayfind}` triple in [`SearchParams`] (plus `Global` for the\nunrestricted default). Lets an agent branch on *why* a result set is shaped as it is\n(issue #360).",
+        "description": "Which scope selector produced the search corpus — the `{context_ref, cogmap_id}` pair in\n[`SearchParams`], plus `Global` for the unrestricted default. Lets an agent branch on *why* a\nresult set is shaped as it is.\n\nThe `Wayfind` variant is gone with the concept. Note for anyone adding one: the temper-rb gem\n**`raise`s on an enum value it does not know** (`search_scope.rb:39`), so a new variant is a\nhard-fail break for an older client.",
         "enum": [
           "global",
           "context",
-          "cogmap",
-          "wayfind"
+          "cogmap"
         ]
+      },
+      "SearchScopeInfo": {
+        "type": "object",
+        "description": "What bounded the corpus — shared by both arms, because both were asked the same question of the\nsame scope.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SearchScope",
+            "description": "Which selector produced the corpus."
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Candidate resources the scope admitted, when cheaply knowable. `None` for `global` and\n`context`, whose corpus is not a bounded id-set at scope-resolution time."
+          }
+        }
       },
       "SegmentInfo": {
         "type": "object",
@@ -12863,84 +12844,6 @@
           }
         }
       },
-      "UnifiedSearchResultRow": {
-        "type": "object",
-        "description": "A unified search result combining FTS and vector scores.",
-        "required": [
-          "resource_id",
-          "title",
-          "slug",
-          "kb_uri",
-          "origin_uri",
-          "doc_type",
-          "fts_score",
-          "vector_score",
-          "graph_score",
-          "combined_score",
-          "origin"
-        ],
-        "properties": {
-          "combined_score": {
-            "type": "number",
-            "format": "float"
-          },
-          "context": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "context_owner_ref": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).\nTogether with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable\ndecorated context ref. `None` when not resolved."
-          },
-          "context_slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved."
-          },
-          "doc_type": {
-            "type": "string"
-          },
-          "fts_score": {
-            "type": "number",
-            "format": "float"
-          },
-          "graph_score": {
-            "type": "number",
-            "format": "float",
-            "description": "Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the\ncandidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning."
-          },
-          "kb_uri": {
-            "type": "string"
-          },
-          "origin": {
-            "type": "string"
-          },
-          "origin_uri": {
-            "type": "string"
-          },
-          "resource_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "vector_score": {
-            "type": "number",
-            "format": "float"
-          }
-        }
-      },
       "UnshareContextOutcome": {
         "type": "object",
         "description": "Result of unsharing a context from a team. `unshared` is `false` when no share existed.",
@@ -12991,6 +12894,89 @@
               "null"
             ],
             "description": "Managed vault root path"
+          }
+        }
+      },
+      "WideArm": {
+        "type": "object",
+        "description": "The **wide** arm, its disposition, and whether its signal was available at all.",
+        "required": [
+          "hits",
+          "reason",
+          "degraded"
+        ],
+        "properties": {
+          "degraded": {
+            "type": "boolean",
+            "description": "True when the server had to embed the query and could not — error, panic, or budget timeout.\n\n**This belongs to this arm and not to the response.** A failed embed leaves the exact arm\nentirely unaffected and makes the wide arm *impossible*; reporting it at response level\ndescribed a blend that no longer exists. An arm that could not run says so here rather than\nreturning an empty list that reads like an answer."
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WideHit"
+            }
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SearchReason"
+          }
+        }
+      },
+      "WideHit": {
+        "type": "object",
+        "description": "One hit from the **wide** arm: you had the idea, not the words.",
+        "required": [
+          "resource_id",
+          "title",
+          "kb_uri",
+          "origin_uri",
+          "doc_type",
+          "vec_norm"
+        ],
+        "properties": {
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_owner_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doc_type": {
+            "type": "string"
+          },
+          "kb_uri": {
+            "type": "string"
+          },
+          "origin_uri": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "vec_norm": {
+            "type": "number",
+            "format": "float",
+            "description": "The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.\n\n**Not the same quantity as `wayfind_region_scores.query_cos`**, which rescales the identical\noperator as `1 - d` and therefore spans `[-1,1]`. Two rescales of one distance; neither\ncolumn name discloses which it is."
           }
         }
       }

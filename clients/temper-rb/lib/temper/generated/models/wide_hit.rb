@@ -14,56 +14,39 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A unified search result combining FTS and vector scores.
-  class UnifiedSearchResultRow < ApiModelBase
-    attr_accessor :combined_score
-
+  # One hit from the **wide** arm: you had the idea, not the words.
+  class WideHit < ApiModelBase
     attr_accessor :context
 
-    # Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`). Together with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable decorated context ref. `None` when not resolved.
     attr_accessor :context_owner_ref
 
-    # Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved.
     attr_accessor :context_slug
 
     attr_accessor :doc_type
 
-    attr_accessor :fts_score
-
-    # Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
-    attr_accessor :graph_score
-
     attr_accessor :kb_uri
-
-    attr_accessor :origin
 
     attr_accessor :origin_uri
 
     attr_accessor :resource_id
 
-    attr_accessor :slug
-
     attr_accessor :title
 
-    attr_accessor :vector_score
+    # The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.  **Not the same quantity as `wayfind_region_scores.query_cos`**, which rescales the identical operator as `1 - d` and therefore spans `[-1,1]`. Two rescales of one distance; neither column name discloses which it is.
+    attr_accessor :vec_norm
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'combined_score' => :'combined_score',
         :'context' => :'context',
         :'context_owner_ref' => :'context_owner_ref',
         :'context_slug' => :'context_slug',
         :'doc_type' => :'doc_type',
-        :'fts_score' => :'fts_score',
-        :'graph_score' => :'graph_score',
         :'kb_uri' => :'kb_uri',
-        :'origin' => :'origin',
         :'origin_uri' => :'origin_uri',
         :'resource_id' => :'resource_id',
-        :'slug' => :'slug',
         :'title' => :'title',
-        :'vector_score' => :'vector_score'
+        :'vec_norm' => :'vec_norm'
       }
     end
 
@@ -80,20 +63,15 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'combined_score' => :'Float',
         :'context' => :'String',
         :'context_owner_ref' => :'String',
         :'context_slug' => :'String',
         :'doc_type' => :'String',
-        :'fts_score' => :'Float',
-        :'graph_score' => :'Float',
         :'kb_uri' => :'String',
-        :'origin' => :'String',
         :'origin_uri' => :'String',
         :'resource_id' => :'String',
-        :'slug' => :'String',
         :'title' => :'String',
-        :'vector_score' => :'Float'
+        :'vec_norm' => :'Float'
       }
     end
 
@@ -110,23 +88,17 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::UnifiedSearchResultRow` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::WideHit` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::UnifiedSearchResultRow`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::WideHit`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
-
-      if attributes.key?(:'combined_score')
-        self.combined_score = attributes[:'combined_score']
-      else
-        self.combined_score = nil
-      end
 
       if attributes.key?(:'context')
         self.context = attributes[:'context']
@@ -146,28 +118,10 @@ module Temper::Generated
         self.doc_type = nil
       end
 
-      if attributes.key?(:'fts_score')
-        self.fts_score = attributes[:'fts_score']
-      else
-        self.fts_score = nil
-      end
-
-      if attributes.key?(:'graph_score')
-        self.graph_score = attributes[:'graph_score']
-      else
-        self.graph_score = nil
-      end
-
       if attributes.key?(:'kb_uri')
         self.kb_uri = attributes[:'kb_uri']
       else
         self.kb_uri = nil
-      end
-
-      if attributes.key?(:'origin')
-        self.origin = attributes[:'origin']
-      else
-        self.origin = nil
       end
 
       if attributes.key?(:'origin_uri')
@@ -182,22 +136,16 @@ module Temper::Generated
         self.resource_id = nil
       end
 
-      if attributes.key?(:'slug')
-        self.slug = attributes[:'slug']
-      else
-        self.slug = nil
-      end
-
       if attributes.key?(:'title')
         self.title = attributes[:'title']
       else
         self.title = nil
       end
 
-      if attributes.key?(:'vector_score')
-        self.vector_score = attributes[:'vector_score']
+      if attributes.key?(:'vec_norm')
+        self.vec_norm = attributes[:'vec_norm']
       else
-        self.vector_score = nil
+        self.vec_norm = nil
       end
     end
 
@@ -206,28 +154,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @combined_score.nil?
-        invalid_properties.push('invalid value for "combined_score", combined_score cannot be nil.')
-      end
-
       if @doc_type.nil?
         invalid_properties.push('invalid value for "doc_type", doc_type cannot be nil.')
       end
 
-      if @fts_score.nil?
-        invalid_properties.push('invalid value for "fts_score", fts_score cannot be nil.')
-      end
-
-      if @graph_score.nil?
-        invalid_properties.push('invalid value for "graph_score", graph_score cannot be nil.')
-      end
-
       if @kb_uri.nil?
         invalid_properties.push('invalid value for "kb_uri", kb_uri cannot be nil.')
-      end
-
-      if @origin.nil?
-        invalid_properties.push('invalid value for "origin", origin cannot be nil.')
       end
 
       if @origin_uri.nil?
@@ -238,16 +170,12 @@ module Temper::Generated
         invalid_properties.push('invalid value for "resource_id", resource_id cannot be nil.')
       end
 
-      if @slug.nil?
-        invalid_properties.push('invalid value for "slug", slug cannot be nil.')
-      end
-
       if @title.nil?
         invalid_properties.push('invalid value for "title", title cannot be nil.')
       end
 
-      if @vector_score.nil?
-        invalid_properties.push('invalid value for "vector_score", vector_score cannot be nil.')
+      if @vec_norm.nil?
+        invalid_properties.push('invalid value for "vec_norm", vec_norm cannot be nil.')
       end
 
       invalid_properties
@@ -257,28 +185,13 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @combined_score.nil?
       return false if @doc_type.nil?
-      return false if @fts_score.nil?
-      return false if @graph_score.nil?
       return false if @kb_uri.nil?
-      return false if @origin.nil?
       return false if @origin_uri.nil?
       return false if @resource_id.nil?
-      return false if @slug.nil?
       return false if @title.nil?
-      return false if @vector_score.nil?
+      return false if @vec_norm.nil?
       true
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] combined_score Value to be assigned
-    def combined_score=(combined_score)
-      if combined_score.nil?
-        fail ArgumentError, 'combined_score cannot be nil'
-      end
-
-      @combined_score = combined_score
     end
 
     # Custom attribute writer method with validation
@@ -292,26 +205,6 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] fts_score Value to be assigned
-    def fts_score=(fts_score)
-      if fts_score.nil?
-        fail ArgumentError, 'fts_score cannot be nil'
-      end
-
-      @fts_score = fts_score
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] graph_score Value to be assigned
-    def graph_score=(graph_score)
-      if graph_score.nil?
-        fail ArgumentError, 'graph_score cannot be nil'
-      end
-
-      @graph_score = graph_score
-    end
-
-    # Custom attribute writer method with validation
     # @param [Object] kb_uri Value to be assigned
     def kb_uri=(kb_uri)
       if kb_uri.nil?
@@ -319,16 +212,6 @@ module Temper::Generated
       end
 
       @kb_uri = kb_uri
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] origin Value to be assigned
-    def origin=(origin)
-      if origin.nil?
-        fail ArgumentError, 'origin cannot be nil'
-      end
-
-      @origin = origin
     end
 
     # Custom attribute writer method with validation
@@ -352,16 +235,6 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] slug Value to be assigned
-    def slug=(slug)
-      if slug.nil?
-        fail ArgumentError, 'slug cannot be nil'
-      end
-
-      @slug = slug
-    end
-
-    # Custom attribute writer method with validation
     # @param [Object] title Value to be assigned
     def title=(title)
       if title.nil?
@@ -372,13 +245,13 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] vector_score Value to be assigned
-    def vector_score=(vector_score)
-      if vector_score.nil?
-        fail ArgumentError, 'vector_score cannot be nil'
+    # @param [Object] vec_norm Value to be assigned
+    def vec_norm=(vec_norm)
+      if vec_norm.nil?
+        fail ArgumentError, 'vec_norm cannot be nil'
       end
 
-      @vector_score = vector_score
+      @vec_norm = vec_norm
     end
 
     # Checks equality by comparing each attribute.
@@ -386,20 +259,15 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          combined_score == o.combined_score &&
           context == o.context &&
           context_owner_ref == o.context_owner_ref &&
           context_slug == o.context_slug &&
           doc_type == o.doc_type &&
-          fts_score == o.fts_score &&
-          graph_score == o.graph_score &&
           kb_uri == o.kb_uri &&
-          origin == o.origin &&
           origin_uri == o.origin_uri &&
           resource_id == o.resource_id &&
-          slug == o.slug &&
           title == o.title &&
-          vector_score == o.vector_score
+          vec_norm == o.vec_norm
     end
 
     # @see the `==` method
@@ -411,7 +279,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [combined_score, context, context_owner_ref, context_slug, doc_type, fts_score, graph_score, kb_uri, origin, origin_uri, resource_id, slug, title, vector_score].hash
+      [context, context_owner_ref, context_slug, doc_type, kb_uri, origin_uri, resource_id, title, vec_norm].hash
     end
 
     # Builds the object from hash

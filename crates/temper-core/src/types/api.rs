@@ -35,11 +35,6 @@ fn default_search_config() -> String {
     "english".to_string()
 }
 
-/// Default for graph_expand — true enables graph-enhanced search.
-fn default_graph_expand() -> bool {
-    true
-}
-
 /// Request body for POST /api/search.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -66,22 +61,6 @@ pub struct SearchParams {
     /// Offset for pagination.
     #[serde(default)]
     pub offset: Option<i64>,
-    /// Explicit seed resource IDs for graph expansion.
-    #[serde(default)]
-    pub seed_ids: Option<Vec<Uuid>>,
-    /// Edge type filter for graph expansion (empty = all types).
-    #[serde(default)]
-    pub edge_types: Option<Vec<String>>,
-    /// Max hops for graph traversal (default 2, max 3 — clamped for Surface A).
-    #[serde(default)]
-    pub graph_depth: Option<i32>,
-    /// Whether to expand results via graph edges (default true).
-    #[serde(default = "default_graph_expand")]
-    pub graph_expand: bool,
-    /// Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed
-    /// union (issue #357). No effect unless `seed_ids` is non-empty. Default false.
-    #[serde(default)]
-    pub seed_only: bool,
     /// Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
     /// Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
     /// participants the principal can see.
@@ -96,23 +75,6 @@ pub struct SearchParams {
     /// server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
     #[serde(default)]
     pub cogmap_ids: Option<Vec<Uuid>>,
-    /// Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the
-    /// principal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`.
-    #[serde(default)]
-    pub wayfind: bool,
-    /// Optional lens override for wayfind region selection (resolved client-side, trailing-UUID).
-    /// `None` ⇒ each region's memoized salience under its own lens.
-    #[serde(default)]
-    pub lens_id: Option<Uuid>,
-    /// Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless
-    /// `wayfind`.
-    ///
-    /// **Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per
-    /// anchor per round, so a width of N reaches at most N maps/contexts. The width actually applied
-    /// is reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a
-    /// scope-width knob, not an output rollup — no response carries a region list.
-    #[serde(default)]
-    pub regions: Option<i64>,
 }
 
 impl Default for SearchParams {
@@ -125,16 +87,8 @@ impl Default for SearchParams {
             doc_type: None,
             limit: None,
             offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: default_graph_expand(),
-            seed_only: false,
             cogmap_id: None,
             cogmap_ids: None,
-            wayfind: false,
-            lens_id: None,
-            regions: None,
         }
     }
 }
@@ -161,42 +115,13 @@ pub struct SearchResultRow {
     pub header_path: Option<String>,
 }
 
-/// A unified search result combining FTS and vector scores.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct UnifiedSearchResultRow {
-    pub resource_id: Uuid,
-    pub title: String,
-    pub slug: String,
-    pub kb_uri: String,
-    pub origin_uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<String>,
-    pub doc_type: String,
-    pub fts_score: f32,
-    pub vector_score: f32,
-    /// Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the
-    /// candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
-    pub graph_score: f32,
-    pub combined_score: f32,
-    pub origin: String,
-    /// Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_slug: Option<String>,
-    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
-    /// Together with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable
-    /// decorated context ref. `None` when not resolved.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_owner_ref: Option<String>,
-}
-
-/// Which scope selector produced the search corpus. Mirrors the mutually-exclusive
-/// `{context_ref, cogmap_id, wayfind}` triple in [`SearchParams`] (plus `Global` for the
-/// unrestricted default). Lets an agent branch on *why* a result set is shaped as it is
-/// (issue #360).
+/// Which scope selector produced the search corpus — the `{context_ref, cogmap_id}` pair in
+/// [`SearchParams`], plus `Global` for the unrestricted default. Lets an agent branch on *why* a
+/// result set is shaped as it is.
+///
+/// The `Wayfind` variant is gone with the concept. Note for anyone adding one: the temper-rb gem
+/// **`raise`s on an enum value it does not know** (`search_scope.rb:39`), so a new variant is a
+/// hard-fail break for an older client.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,8 +135,6 @@ pub enum SearchScope {
     Context,
     /// `cogmap_id` was set (single-map scope).
     Cogmap,
-    /// `wayfind` region-salience funnel.
-    Wayfind,
 }
 
 /// Why a search result set is shaped as it is — the load-bearing signal for agents, which
@@ -235,80 +158,145 @@ pub enum SearchReason {
     OutOfScope,
 }
 
-/// Scope-stage diagnostics accompanying every search response (issue #360). Machine-readable so
-/// agent harnesses can branch programmatically; `hint` is the human/agent-facing one-liner the
-/// CLI renders to stderr on a non-`Ok` reason.
+// The identity fields below are repeated inline on `ExactHit` and `WideHit` rather than shared
+// through `#[serde(flatten)]`, because **ts-rs cannot codegen a flattened field** (see
+// `ResourceDetail` in temper-workflow, which drops its `TS` derive for exactly this) and these types
+// are ts-rs-exported. The alternative — a nested `identity` object — would add a level of nesting on
+// the wire to save one in the source.
+//
+// `slug` is deliberately absent from both. The enrichment loop wrote `String::new()` into it on
+// every path, so it has never carried a value.
+
+/// One hit from the **exact** arm: you could quote the words.
+///
+/// Ordered by `fts_norm` and carrying no other quantity. A second number here would be something to
+/// rank it against, which is the category error this whole shape exists to make unrepresentable.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct SearchDiagnostics {
-    /// Which selector produced the corpus.
-    pub scope: SearchScope,
-    /// Number of candidate resources the scope selector admitted, when it is cheaply knowable:
-    /// the resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose
-    /// corpus is not a bounded id-set at scope-resolution time.
+pub struct ExactHit {
+    pub resource_id: Uuid,
+    pub title: String,
+    /// Canonical kb:// URI.
+    pub kb_uri: String,
+    /// Original source URL or file reference.
+    pub origin_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    pub doc_type: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_slug: Option<String>,
+    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_owner_ref: Option<String>,
+    /// `ts_rank` flag 33 — `rank/(rank+1)` normalization plus log-length division — in `[0,1)`.
+    pub fts_norm: f32,
+}
+
+/// One hit from the **wide** arm: you had the idea, not the words.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct WideHit {
+    pub resource_id: Uuid,
+    pub title: String,
+    pub kb_uri: String,
+    pub origin_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    pub doc_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_owner_ref: Option<String>,
+    /// The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.
     ///
-    /// **This is a resource count and is not a reach signal.** A wayfind drawn entirely from one map
-    /// and one drawn evenly across ten both report a figure in the hundreds — read
-    /// [`anchors_reached`](Self::anchors_reached) against
-    /// [`anchors_visible`](Self::anchors_visible) for that (issue #585).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_size: Option<i64>,
-    /// How many region anchors — cognitive maps and contexts alike — the principal could have
-    /// reached on this query, after any single-anchor scoping. The denominator for
-    /// [`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that
-    /// pools across anchors (issue #585).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchors_visible: Option<i64>,
-    /// How many anchors actually contributed a resource to the scope, counting both the region-winner
-    /// arm and the cold-start arm. `Some` only for `wayfind` (issue #585).
-    ///
-    /// **This number has a floor — do not read it as a fairness signal on its own.** An anchor that
-    /// holds resources but no regions is admitted wholesale by cold-start on *every* query, whatever
-    /// was asked, so it is always reached. On the production corpus that floor was measured at 6 of 10
-    /// visible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it
-    /// with [`anchors_selected`](Self::anchors_selected), which carries the competitive sense.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchors_reached: Option<i64>,
-    /// How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the
-    /// field that makes a monopoly visible: one anchor holding the entire region width is
-    /// `anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached -
-    /// anchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only
-    /// for `wayfind` (issue #585).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchors_selected: Option<i64>,
-    /// The region width actually applied after the server-side clamp — what `--regions`/`regions`
-    /// resolved to, including the default substituted when the caller passed nothing. Since Stage-1
-    /// admits at most one region per anchor per round, this **bounds** `anchors_reached`: a caller
-    /// seeing `anchors_reached == regions_effective < anchors_visible` is looking at a width limit,
-    /// not at an irrelevant corpus. `Some` only for `wayfind` (issue #585).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regions_effective: Option<i64>,
-    /// Number of results returned (post-ranking, post-limit).
-    pub matched: i64,
-    /// Why the result set is shaped as it is.
+    /// **Not the same quantity as `wayfind_region_scores.query_cos`**, which rescales the identical
+    /// operator as `1 - d` and therefore spans `[-1,1]`. Two rescales of one distance; neither
+    /// column name discloses which it is.
+    pub vec_norm: f32,
+}
+
+/// The **exact** arm and its own disposition.
+///
+/// The `reason` is per-arm because one shared reason has to describe both arms at once, and would
+/// report `NoMatch` for a response whose other arm returned hits — a rollup that reads as an answer
+/// about the question asked when it is not.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ExactArm {
+    pub hits: Vec<ExactHit>,
     pub reason: SearchReason,
-    /// True when a ranking signal degraded silently — currently: server-side query embedding
-    /// failed and the blend fell back to FTS + graph only. Results are still returned.
-    pub degraded: bool,
-    /// One-liner explaining a non-`Ok` reason (or a degraded signal) and suggesting a next step.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// One-liner explaining a non-`Ok` reason and suggesting a next step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
 }
 
-/// Ranked hits plus scope-stage [`SearchDiagnostics`] (issue #360). This is **not** the
-/// `POST /api/search` wire body — that stays a bare `Vec<UnifiedSearchResultRow>` for backward
-/// compatibility, and the diagnostics ride an additive `x-temper-search-diagnostics` response
-/// header. This struct is the in-process shape (`search_select`) and the client's reassembled view
-/// (body + header). `diagnostics` is `None` only when a client talks to a server old enough not to
-/// emit the header — a graceful degrade, never a hard failure.
+/// The **wide** arm, its disposition, and whether its signal was available at all.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResponse {
-    pub results: Vec<UnifiedSearchResultRow>,
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct WideArm {
+    pub hits: Vec<WideHit>,
+    pub reason: SearchReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diagnostics: Option<SearchDiagnostics>,
+    pub hint: Option<String>,
+    /// True when the server had to embed the query and could not — error, panic, or budget timeout.
+    ///
+    /// **This belongs to this arm and not to the response.** A failed embed leaves the exact arm
+    /// entirely unaffected and makes the wide arm *impossible*; reporting it at response level
+    /// described a blend that no longer exists. An arm that could not run says so here rather than
+    /// returning an empty list that reads like an answer.
+    pub degraded: bool,
+}
+
+/// What bounded the corpus — shared by both arms, because both were asked the same question of the
+/// same scope.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct SearchScopeInfo {
+    /// Which selector produced the corpus.
+    pub kind: SearchScope,
+    /// Candidate resources the scope admitted, when cheaply knowable. `None` for `global` and
+    /// `context`, whose corpus is not a bounded id-set at scope-resolution time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+}
+
+/// The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they
+/// share.
+///
+/// There is no field anywhere in this shape that ranks one arm against the other, and no single
+/// ordered list into which they could be merged. That is the point — see decision
+/// `019fd25a-ef4c-7473-b72e-265a7d36dd65`.
+///
+/// Diagnostics live here in the body. They previously rode an additive
+/// `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract
+/// a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the
+/// per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the
+/// body cannot see.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct SearchResponse {
+    pub exact: ExactArm,
+    pub wide: WideArm,
+    pub scope: SearchScopeInfo,
 }
 
 /// Request body for updating a profile.
@@ -347,37 +335,14 @@ mod tests {
     }
 
     #[test]
-    fn search_params_graph_expand_defaults_true() {
-        let json = r#"{"query": "hello"}"#;
-        let params: SearchParams = serde_json::from_str(json).unwrap();
-        assert!(params.graph_expand);
-        assert!(params.seed_ids.is_none());
-        assert!(params.edge_types.is_none());
-        assert!(params.graph_depth.is_none());
-    }
-
-    #[test]
-    fn search_params_graph_expand_can_be_disabled() {
-        let json = r#"{"query": "hello", "graph_expand": false}"#;
-        let params: SearchParams = serde_json::from_str(json).unwrap();
-        assert!(!params.graph_expand);
-    }
-
-    #[test]
-    fn search_params_with_seed_ids() {
-        let json = r#"{"seed_ids": ["019d1d24-2000-7379-8f26-ae4ae87bc5c6"]}"#;
-        let params: SearchParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.seed_ids.unwrap().len(), 1);
-        assert!(params.query.is_none());
-    }
-
-    #[test]
-    fn search_params_with_edge_types_and_depth() {
-        let json =
-            r#"{"query": "test", "edge_types": ["extends", "depends_on"], "graph_depth": 4}"#;
-        let params: SearchParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.edge_types.unwrap(), vec!["extends", "depends_on"]);
-        assert_eq!(params.graph_depth.unwrap(), 4);
+    fn search_params_carries_no_graph_or_wayfind_knob() {
+        // The graph arm and wayfind are gone, so their parameters are too. A field that deserializes
+        // and then reaches nothing is the "flag that silently does nothing" this phase set out to
+        // remove; `deny_unknown_fields` is deliberately NOT set, so an older client still sending
+        // `graph_expand` is ignored rather than rejected.
+        let json = r#"{"query": "hello", "graph_expand": false, "wayfind": true, "regions": 5}"#;
+        let params: SearchParams = serde_json::from_str(json).expect("stale knobs are ignored");
+        assert_eq!(params.query.as_deref(), Some("hello"));
     }
 
     #[test]

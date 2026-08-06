@@ -1399,6 +1399,150 @@ pub(crate) async fn neighbors(
         .collect())
 }
 
+/// One hit from the **exact** arm (`search_exact`), carrying that arm's own quantity and no other.
+///
+/// There is deliberately no companion score here. The arm is ordered by `fts_norm` alone, and a
+/// second number on this row would be something to rank it against.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ExactHit {
+    pub resource_id: ResourceId,
+    /// `ts_rank` with flag 33 — 32's `rank/(rank+1)` normalization plus flag 1's log-length
+    /// division — so it lies in `[0,1)`.
+    pub fts_norm: f32,
+}
+
+/// One hit from the **wide** arm (`search_wide`).
+///
+/// `vec_norm` rescales the pgvector cosine DISTANCE (which spans `[0,2]`) as `1 - d/2`, landing in
+/// `[0,1]`. Note that `wayfind_region_scores.query_cos` rescales the SAME operator as `1 - d`,
+/// spanning `[-1,1]` — the two are not one quantity and neither column name says so.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WideHit {
+    pub resource_id: ResourceId,
+    pub vec_norm: f32,
+}
+
+/// The exact arm. Scope is the anchor pair, taken as a [`HomeAnchor`] so the `(table, id)` literal is
+/// derived in one place rather than at each call site — `None` ⇒ unscoped.
+pub async fn search_exact(
+    pool: &PgPool,
+    principal: ProfileId,
+    query: Option<&str>,
+    anchor: Option<HomeAnchor>,
+) -> Result<Vec<ExactHit>> {
+    let hits = sqlx::query_as::<_, ExactHit>(
+        "SELECT resource_id, fts_norm FROM search_exact($1, $2, $3, $4)",
+    )
+    .bind(principal)
+    .bind(query)
+    .bind(anchor.map(|a| a.table()))
+    .bind(anchor.map(|a| a.uuid()))
+    .fetch_all(pool)
+    .await?;
+    Ok(hits)
+}
+
+/// The wide arm. Runtime `sqlx::query_as` — the `::vector` cast forbids the compile-time macros
+/// (module note).
+///
+/// `k` bounds the ANN draw on the UNSCOPED branch only; the scoped branch is exhaustive and ignores
+/// it. `hnsw.ef_search` is pinned on the SQL function at or above the `k` used here — see
+/// `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for`. Raising `k` past the pin
+/// re-introduces the silent truncation the pin exists to prevent.
+pub async fn search_wide(
+    pool: &PgPool,
+    principal: ProfileId,
+    embedding: Option<&[f32]>,
+    k: i32,
+    anchor: Option<HomeAnchor>,
+) -> Result<Vec<WideHit>> {
+    let emb_text = embedding.map(format_pgvector);
+    let hits = sqlx::query_as::<_, WideHit>(
+        "SELECT resource_id, vec_norm FROM search_wide($1, $2::vector, $3, $4, $5)",
+    )
+    .bind(principal)
+    .bind(emb_text) // NULL when None → p_emb NULL → the arm returns nothing
+    .bind(k)
+    .bind(anchor.map(|a| a.table()))
+    .bind(anchor.map(|a| a.uuid()))
+    .fetch_all(pool)
+    .await?;
+    Ok(hits)
+}
+
+/// The presentation fields a search hit needs, independent of which arm produced it.
+#[derive(Debug, Clone)]
+pub struct HitIdentity {
+    pub resource_id: ResourceId,
+    pub title: String,
+    pub origin_uri: String,
+    pub doc_type_name: String,
+    /// Whichever home is set — context name or cogmap name.
+    pub home_display: Option<String>,
+    pub context_slug: Option<String>,
+    pub context_owner_ref: Option<String>,
+}
+
+/// Enrich a set of resource ids in ONE round-trip, visibility-gated.
+///
+/// This replaces a per-hit `resource_row` call — 50 results meant 51 queries. Both arms feed the
+/// same call because a resource's identity does not depend on which arm found it.
+///
+/// A resource the principal cannot see is simply absent from the result, never an error: the arms
+/// already gate visibility inside SQL, so a miss here would mean the row disappeared between the two
+/// statements, which is a dropped hit rather than a fault.
+pub async fn hit_identities(
+    pool: &PgPool,
+    principal: ProfileId,
+    ids: &[ResourceId],
+) -> Result<Vec<HitIdentity>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let raw: Vec<Uuid> = ids.iter().map(|r| r.uuid()).collect();
+    let rows = sqlx::query!(
+        r#"SELECT r.id AS "resource_id!",
+                  r.title,
+                  r.origin_uri,
+                  dt.property_value #>> '{}' AS "doc_type_name!",
+                  COALESCE(c.name, cm.name)  AS "home_display?",
+                  c.slug                     AS "context_slug?",
+                  CASE c.owner_table
+                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                    WHEN 'kb_profiles' THEN '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+                    ELSE NULL
+                  END                        AS "context_owner_ref?"
+             FROM kb_resources r
+             JOIN kb_resource_homes h ON h.resource_id = r.id
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+             LEFT JOIN kb_contexts c
+               ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+             LEFT JOIN kb_cogmaps cm
+               ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'
+             JOIN kb_properties dt
+               ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+              AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+            WHERE r.id = ANY($2)"#,
+        principal.uuid(),
+        &raw,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| HitIdentity {
+            resource_id: ResourceId::from(row.resource_id),
+            title: row.title,
+            origin_uri: row.origin_uri,
+            doc_type_name: row.doc_type_name,
+            home_display: row.home_display,
+            context_slug: row.context_slug,
+            context_owner_ref: row.context_owner_ref,
+        })
+        .collect())
+}
+
 /// One scored hit from Surface A unified search (Beat 2). The scores are the real blended sub-scores —
 /// the either/or path's 0.0 placeholders are gone.
 #[derive(Debug, Clone, sqlx::FromRow)]

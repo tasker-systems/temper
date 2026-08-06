@@ -127,7 +127,13 @@ async fn search_by_context_ref_returns_only_that_contexts_resources(pool: PgPool
         "search with context_ref=@me/temper must return 200"
     );
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    // The body is two arms now; a context_ref bounds both, and the term is lexical so the exact arm
+    // is the one that answers here.
+    let body: serde_json::Value = resp.json().await.expect("search JSON");
+    let rows = body["exact"]["hits"]
+        .as_array()
+        .unwrap_or_else(|| panic!("exact arm must carry hits; got {body}"))
+        .clone();
 
     let returned_ids: Vec<&str> = rows
         .iter()
@@ -192,8 +198,10 @@ async fn search_plain_query_with_context_ref_and_default_params_returns_ok(pool:
         "plain-text query + context_ref + default params must return 200, not a generic error"
     );
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
-    let returned_ids: Vec<&str> = rows
+    let body: serde_json::Value = resp.json().await.expect("search JSON");
+    let returned_ids: Vec<&str> = body["exact"]["hits"]
+        .as_array()
+        .unwrap_or_else(|| panic!("exact arm must carry hits; got {body}"))
         .iter()
         .filter_map(|r| r["resource_id"].as_str())
         .collect();

@@ -4,13 +4,7 @@ use reqwest::Method;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::api::{
-    SearchDiagnostics, SearchParams, SearchResponse, UnifiedSearchResultRow,
-};
-
-/// Additive response header carrying scope-stage diagnostics (issue #360). Absent on servers old
-/// enough to predate it — the client treats that as `diagnostics: None`, never an error.
-const SEARCH_DIAGNOSTICS_HEADER: &str = "x-temper-search-diagnostics";
+use temper_core::types::api::{ExactHit, SearchParams, SearchResponse, WideHit};
 
 /// Sub-client for search operations.
 pub struct SearchClient<'a> {
@@ -28,35 +22,45 @@ impl<'a> SearchClient<'a> {
         Self { http }
     }
 
-    /// Run a vector search with a pre-computed embedding.
+    /// Run a vector search with a pre-computed embedding, returning the **wide** arm.
+    ///
+    /// Wide, not exact: an embedding is the "you have the idea, not the words" question, and the
+    /// exact arm has nothing to say about it — with no `query` text it matches nothing at all.
     pub async fn query(
         &self,
         embedding: Vec<f32>,
         context_ref: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
-    ) -> Result<Vec<UnifiedSearchResultRow>> {
-        self.search(None, Some(embedding), context_ref, doc_type, limit)
-            .await
+    ) -> Result<Vec<WideHit>> {
+        let params = SearchParams {
+            embedding: Some(embedding),
+            context_ref,
+            doc_type,
+            limit,
+            ..SearchParams::default()
+        };
+        self.search_with_params(&params).await.map(|r| r.wide.hits)
     }
 
-    /// Run a full-text search with a plain text query (no embedding needed).
+    /// Run a full-text search with a plain text query, returning the **exact** arm.
     pub async fn text_query(
         &self,
         query: &str,
         context_ref: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
-    ) -> Result<Vec<UnifiedSearchResultRow>> {
+    ) -> Result<Vec<ExactHit>> {
         self.search(Some(query.to_string()), None, context_ref, doc_type, limit)
             .await
     }
 
-    /// Run a unified search with optional text query and/or embedding.
+    /// Run a search and return the **exact** arm's hits alone.
     ///
-    /// A convenience wrapper that discards scope-stage diagnostics and returns only the ranked
-    /// rows — callers who need the diagnostics envelope (issue #360) use
-    /// [`search_with_params`](Self::search_with_params).
+    /// A convenience wrapper for callers who want term matching and nothing else. It discards the
+    /// wide arm and both dispositions, so it can return an empty vec for a query whose wide arm
+    /// answered — use [`search_with_params`](Self::search_with_params) to see both arms and why each
+    /// is shaped as it is.
     pub async fn search(
         &self,
         query: Option<String>,
@@ -64,7 +68,7 @@ impl<'a> SearchClient<'a> {
         context_ref: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
-    ) -> Result<Vec<UnifiedSearchResultRow>> {
+    ) -> Result<Vec<ExactHit>> {
         let params = SearchParams {
             query,
             embedding,
@@ -73,13 +77,17 @@ impl<'a> SearchClient<'a> {
             limit,
             ..SearchParams::default()
         };
-        self.search_with_params(&params).await.map(|r| r.results)
+        self.search_with_params(&params).await.map(|r| r.exact.hits)
     }
 
-    /// Run a search with full control over all parameters, returning the ranked hits plus scope-stage
-    /// [`SearchDiagnostics`] reassembled from the additive `x-temper-search-diagnostics` header
-    /// (issue #360). The body is a bare array (unchanged contract); a server that does not emit the
-    /// header yields `diagnostics: None`, never an error.
+    /// Run a search with full control over all parameters, returning **both arms unmerged** plus the
+    /// scope they share.
+    ///
+    /// Diagnostics arrive in the body. They previously rode the additive
+    /// `x-temper-search-diagnostics` response header, which existed only because the body was a bare
+    /// array; the body is an object now, and each arm carries its own `reason`/`hint` beside the hits
+    /// it is describing. The header, its percent-encoding scar, and the old-server `None` degrade
+    /// path are all gone with it.
     pub async fn search_with_params(&self, params: &SearchParams) -> Result<SearchResponse> {
         let token = self.http.resolve_token()?;
         let req = self.http.post("/api/search").json(params);
@@ -87,26 +95,7 @@ impl<'a> SearchClient<'a> {
             .http
             .send(&Method::POST, "/api/search", req, Some(&token))
             .await?;
-
-        // Parse the diagnostics header before consuming the body. `from_utf8` (not `to_str`) so a
-        // non-ASCII byte does not fail the parse outright; any parse miss degrades to `None`.
-        //
-        // NOT a full UTF-8 round-trip in production: the deployed platform percent-encodes non-ASCII
-        // header bytes before they reach here (measured on prod 2026-08-01), so what arrives is
-        // already `%E2%80%94` rather than an em dash. This is deliberately NOT percent-decoded — a
-        // hint may legitimately contain a `%`, and decoding would corrupt it. The server keeps hint
-        // text ASCII instead (`search_hint`, guarded by `every_emitted_hint_is_ascii`).
-        let diagnostics = resp
-            .headers()
-            .get(SEARCH_DIAGNOSTICS_HEADER)
-            .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
-            .and_then(|s| serde_json::from_str::<SearchDiagnostics>(s).ok());
-
         let bytes = resp.bytes().await?;
-        let results: Vec<UnifiedSearchResultRow> = serde_json::from_slice(&bytes)?;
-        Ok(SearchResponse {
-            results,
-            diagnostics,
-        })
+        Ok(serde_json::from_slice(&bytes)?)
     }
 }

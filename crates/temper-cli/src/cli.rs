@@ -290,50 +290,20 @@ pub enum Commands {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
-        /// Scope search to one or more cognitive maps (UUID or decorated ref). Repeatable —
-        /// `--cogmap A --cogmap B` searches the union of both maps. Mutually exclusive with --context.
+        /// Scope search to a cognitive map (UUID or decorated ref). Mutually exclusive with
+        /// --context. Search scopes to ONE anchor; asking several maps at once is a composition.
         #[arg(long = "cogmap")]
         cogmap: Vec<String>,
-        /// Wayfind: lens-driven region-salience search across your visible maps. Mutually exclusive with --context / --cogmap.
-        #[arg(long)]
-        wayfind: bool,
-        /// Lens ref (UUID or decorated) overriding wayfind region selection (requires --wayfind).
-        #[arg(long)]
-        lens: Option<String>,
-        /// Top-N regions to scope into for --wayfind — this also bounds how many maps you reach.
-        ///
-        /// Region selection admits at most one region per map per round, so a width of N can reach
-        /// at most N of your visible maps. The default and the ceiling are server-side; the width
-        /// actually applied comes back as `diagnostics.regions_effective`, alongside
-        /// `anchors_reached` / `anchors_visible`. This is a scope-width knob, not an output rollup —
-        /// results are resources, and no response carries a region list.
-        #[arg(long)]
-        regions: Option<i64>,
         /// Filter by document type
         #[arg(long)]
         doc_type: Option<String>,
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
-        /// Use text-only search (no local embedding needed)
+        /// Use text-only search (no local embedding needed). The wide arm has no signal to run
+        /// on without an embedding and will say so rather than returning an empty list.
         #[arg(long)]
         text_only: bool,
-        /// Explicit seed resource IDs for graph expansion (repeatable)
-        #[arg(long = "seed")]
-        seed_ids: Vec<uuid::Uuid>,
-        /// Edge type filter for graph expansion (repeatable)
-        #[arg(long = "edge-type")]
-        edge_types: Vec<String>,
-        /// Max hops for graph traversal (default 2, max 10)
-        #[arg(long)]
-        depth: Option<i32>,
-        /// Disable graph expansion (enabled by default)
-        #[arg(long)]
-        no_graph: bool,
-        /// Restrict graph expansion to your explicit --seed ids, skipping the automatic top-N seed
-        /// union (no effect unless at least one --seed is given)
-        #[arg(long = "seed-only")]
-        seed_only: bool,
     },
 
     /// Assert or mutate a relationship between resources (writes go through the cloud API)

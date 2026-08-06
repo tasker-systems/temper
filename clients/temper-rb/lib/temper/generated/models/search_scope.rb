@@ -18,10 +18,9 @@ module Temper::Generated
     GLOBAL = "global".freeze
     CONTEXT = "context".freeze
     COGMAP = "cogmap".freeze
-    WAYFIND = "wayfind".freeze
 
     def self.all_vars
-      @all_vars ||= [GLOBAL, CONTEXT, COGMAP, WAYFIND].freeze
+      @all_vars ||= [GLOBAL, CONTEXT, COGMAP].freeze
     end
 
     # Builds the enum from string

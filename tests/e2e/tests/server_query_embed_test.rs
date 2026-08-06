@@ -3,7 +3,7 @@
 //! Before the fix, only the CLI ran the vector arm, because it computed the query embedding
 //! client-side and passed it in `SearchParams.embedding`. Every server-side surface (MCP, raw
 //! `POST /api/search`, agent workers) sent text only, so `search_select` ran FTS + graph and the
-//! vector arm was dead: `vector_score` was always 0.0 and a resource whose only signal was semantic
+//! vector arm was dead: `vec_norm` was always 0.0 and a resource whose only signal was semantic
 //! (no lexical match) vanished from results entirely.
 //!
 //! `search_select` now embeds the query server-side when the caller sent text but no vector, using
@@ -55,9 +55,9 @@ async fn ingest_semantic(
 }
 
 /// A text-only search (no client-supplied embedding — the MCP / HTTP path) returns hits with non-zero
-/// `vector_score`, and a semantic-only resource — one that shares NO query terms, so its `fts_score`
+/// `vec_norm`, and a semantic-only resource — one that shares NO query terms, so its `fts_norm`
 /// is 0 — is surfaced purely on its vector score. Before #297 that row vanished and every hit scored
-/// `vector_score: 0.0`.
+/// `vec_norm: 0.0`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn server_embeds_text_only_query_surfaces_semantic_only_hit(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -95,49 +95,57 @@ async fn server_embeds_text_only_query_surfaces_semantic_only_hit(pool: sqlx::Pg
     .await;
 
     // The MCP / HTTP path: query text only, `embedding: None`. The server must embed it now.
-    let results = app
+    let params = temper_core::types::api::SearchParams {
+        query: Some("kubernetes deployment".into()),
+        context_ref: Some("@me/sem".into()),
+        limit: Some(10),
+        ..Default::default()
+    };
+    let resp = app
         .client
         .search()
-        .text_query(
-            "kubernetes deployment",
-            Some("@me/sem".into()),
-            None,
-            Some(10),
-        )
+        .search_with_params(&params)
         .await
         .expect("text search failed");
 
-    assert!(!results.is_empty(), "text-only search should return hits");
-
-    // Every hit is scored by the vector arm now — it is no longer dead.
+    // THE POINT OF THIS TEST, restated for two arms: the caller sent no embedding, so the wide arm
+    // can only run if the SERVER embedded the query. An empty wide arm here means it did not.
     assert!(
-        results.iter().any(|r| r.vector_score > 0.0),
-        "at least one hit must carry a non-zero vector_score once the server embeds the query; \
-         got {:?}",
-        results
+        !resp.wide.degraded,
+        "the server had to embed a text-only query and could not: {:?}",
+        resp.wide.hint
+    );
+    assert!(
+        !resp.wide.hits.is_empty(),
+        "the wide arm must answer a text-only query once the server embeds it"
+    );
+
+    // The vanishing row is back. It shares NO terms with the query, so the exact arm cannot see it
+    // at all — which is now visible as absence from one arm rather than as a zero in a blended row.
+    let title = "Container Scheduling Primer";
+    assert!(
+        resp.wide.hits.iter().any(|r| r.title == title),
+        "the semantic-only resource must appear in the WIDE arm; got {:?}",
+        resp.wide
+            .hits
             .iter()
-            .map(|r| (r.title.as_str(), r.vector_score))
+            .map(|r| (r.title.as_str(), r.vec_norm))
             .collect::<Vec<_>>()
     );
-
-    // The vanishing row is back: present, with fts_score 0 (no lexical match) and a real vector score.
-    let semantic_only = results
-        .iter()
-        .find(|r| r.title == "Container Scheduling Primer")
-        .unwrap_or_else(|| {
-            panic!(
-                "semantic-only resource must appear in results; got {:?}",
-                results.iter().map(|r| r.title.as_str()).collect::<Vec<_>>()
-            )
-        });
-    assert_eq!(
-        semantic_only.fts_score, 0.0,
-        "semantic-only row must have no lexical signal"
-    );
     assert!(
-        semantic_only.vector_score > 0.0,
-        "semantic-only row must be carried entirely by its vector score; got {}",
-        semantic_only.vector_score
+        !resp.exact.hits.iter().any(|r| r.title == title),
+        "the semantic-only resource shares no query terms, so the exact arm must not carry it"
+    );
+    let semantic_only = resp
+        .wide
+        .hits
+        .iter()
+        .find(|r| r.title == title)
+        .expect("checked above");
+    assert!(
+        semantic_only.vec_norm > 0.0,
+        "a wide hit is carried entirely by its own quantity; got {}",
+        semantic_only.vec_norm
     );
 }
 

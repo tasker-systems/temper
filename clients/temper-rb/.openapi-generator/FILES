@@ -101,6 +101,8 @@ lib/temper/generated/models/error_body.rb
 lib/temper/generated/models/error_detail.rb
 lib/temper/generated/models/event_cursor_response.rb
 lib/temper/generated/models/event_trail.rb
+lib/temper/generated/models/exact_arm.rb
+lib/temper/generated/models/exact_hit.rb
 lib/temper/generated/models/facet_ack.rb
 lib/temper/generated/models/facet_set_request.rb
 lib/temper/generated/models/finalize_payload.rb
@@ -194,11 +196,12 @@ lib/temper/generated/models/retype_relationship_request.rb
 lib/temper/generated/models/revoke_outcome.rb
 lib/temper/generated/models/revoked.rb
 lib/temper/generated/models/reweight_relationship_request.rb
-lib/temper/generated/models/search_diagnostics.rb
 lib/temper/generated/models/search_params.rb
 lib/temper/generated/models/search_reason.rb
+lib/temper/generated/models/search_response.rb
 lib/temper/generated/models/search_result_row.rb
 lib/temper/generated/models/search_scope.rb
+lib/temper/generated/models/search_scope_info.rb
 lib/temper/generated/models/segment_info.rb
 lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb
@@ -227,8 +230,9 @@ lib/temper/generated/models/territory.rb
 lib/temper/generated/models/territory_kind.rb
 lib/temper/generated/models/territory_overview.rb
 lib/temper/generated/models/unbind_team_outcome.rb
-lib/temper/generated/models/unified_search_result_row.rb
 lib/temper/generated/models/unrecognized_standing.rb
 lib/temper/generated/models/unshare_context_outcome.rb
 lib/temper/generated/models/vault_config.rb
+lib/temper/generated/models/wide_arm.rb
+lib/temper/generated/models/wide_hit.rb
 lib/temper/generated/version.rb
