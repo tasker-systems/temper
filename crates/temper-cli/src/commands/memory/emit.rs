@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use chrono::{NaiveDate, Utc};
 
 use temper_core::types::config::{MemoryConfig, TemperConfig};
-use temper_workflow::types::resource::ResourceDetail;
+use temper_core::types::resource_view::ResourceView;
 
 use super::fetch::{fetch_context_rows, fetch_principles};
 use super::migrate::{parse_memory_file, scan_memory_dir, ScannedFile};
@@ -61,7 +61,7 @@ pub fn emit_outcome(mem: Option<&MemoryConfig>) -> EmitOutcome {
 /// short-circuiting on the first, and render the index only once every row parses cleanly.
 pub fn build_index(
     cfg: &MemoryConfig,
-    rows: &[ResourceDetail],
+    rows: &[ResourceView],
     local: &LocalIndex,
     principles: &[PrincipleSection],
     today: NaiveDate,
@@ -152,7 +152,7 @@ pub(super) async fn render_current(
 ) -> Result<(String, PathBuf)> {
     let (_cfg, _store, client) = build_config_store_and_client()?;
 
-    let mut rows: Vec<ResourceDetail> = Vec::new();
+    let mut rows: Vec<ResourceView> = Vec::new();
     // Principles are looked for in every configured context, not just the shared one. Where they
     // live is the author's decision, and a render that only looked in one would silently ignore a
     // principle homed in the other rather than reporting it.
@@ -243,7 +243,9 @@ mod tests {
     use chrono::DateTime;
     use serde_json::json;
     use temper_core::types::ids::{ProfileId, ResourceId};
-    use temper_workflow::types::resource::{BodyStorage, IngestState, ResourceRow};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource::{BodyStorage, IngestState};
+    use temper_core::types::resource_view::ResourceView;
     use uuid::Uuid;
 
     fn d(s: &str) -> NaiveDate {
@@ -260,7 +262,7 @@ mod tests {
         }
     }
 
-    /// Build a `ResourceDetail` titled `title`, homed in `context_ref` (`@owner/slug`), with
+    /// Build a `ResourceView` titled `title`, homed in `context_ref` (`@owner/slug`), with
     /// `open_meta` carrying `status`/`verified` only when the corresponding argument is `Some` —
     /// mirrors `render::tests::row_with` / `status::tests::build_row`.
     fn row(
@@ -268,7 +270,7 @@ mod tests {
         context_ref: &str,
         status: Option<&str>,
         verified: Option<&str>,
-    ) -> ResourceDetail {
+    ) -> ResourceView {
         let (owner, slug) = context_ref
             .split_once('/')
             .expect("context_ref must be @owner/slug");
@@ -281,51 +283,47 @@ mod tests {
             open.insert("verified".to_string(), json!(v));
         }
 
-        let row = ResourceRow {
+        ResourceView {
             id: ResourceId::from(Uuid::now_v7()),
-            kb_context_id: None,
-            origin_uri: String::new(),
+            r#ref: String::new(),
             title: title.to_string(),
-            originator_profile_id: ProfileId::from(Uuid::now_v7()),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: Some(slug.to_string()),
+            context_owner_ref: Some(owner.to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "memory".to_string(),
+            owner_handle: "someone".to_string(),
             owner_profile_id: ProfileId::from(Uuid::now_v7()),
+            originator_profile_id: ProfileId::from(Uuid::now_v7()),
             is_active: true,
             created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            context_name: None,
-            doc_type_name: "memory".to_string(),
-            owner_handle: "someone".to_string(),
-            context_slug: Some(slug.to_string()),
-            context_owner_ref: Some(owner.to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
             body_storage: Some(BodyStorage::Derived),
-        };
-
-        ResourceDetail {
-            row,
-            managed_meta: None,
+            managed_meta: ManagedMeta::default(),
             open_meta: Some(serde_json::Value::Object(open)),
+            content: None,
         }
+        .with_derived_refs()
     }
 
-    fn meta_row_missing_status(title: &str, context_ref: &str) -> ResourceDetail {
+    fn meta_row_missing_status(title: &str, context_ref: &str) -> ResourceView {
         row(title, context_ref, None, Some("2026-08-01"))
     }
 
-    fn meta_row_missing_verified(title: &str, context_ref: &str) -> ResourceDetail {
+    fn meta_row_missing_verified(title: &str, context_ref: &str) -> ResourceView {
         row(title, context_ref, Some("active"), None)
     }
 
     /// A memory authored natively in Temper (from a session, from Desktop) never had a
     /// `source_file` — `row()` deliberately doesn't set one. Mirrors
     /// `status::tests::meta_row_titled` / `a_memory_without_a_source_file_is_ordinary_not_a_defect`.
-    fn meta_row_native(title: &str, context_ref: &str) -> ResourceDetail {
+    fn meta_row_native(title: &str, context_ref: &str) -> ResourceView {
         row(title, context_ref, Some("active"), Some("2026-08-01"))
     }
 

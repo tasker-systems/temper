@@ -92,8 +92,8 @@ pub use invitation::{
 };
 pub use lineage::{LineageNode, ResourceLineage};
 pub use managed_meta::{
-    ManagedMeta, MetaUpdatePayload, ResourceManifestRow, ResourceMetaResponse,
-    PROVENANCE_LLM_DISCOVERED, PROVENANCE_USER_CREATED,
+    ManagedMeta, MetaUpdatePayload, ResourceManifestRow, PROVENANCE_LLM_DISCOVERED,
+    PROVENANCE_USER_CREATED,
 };
 pub use materialize::{
     ContextMaterializeInput, MaterializeAck, MaterializeDelta, MaterializeDeltaInput,

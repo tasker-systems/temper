@@ -1,4 +1,4 @@
-import type { ResourceRow } from '$lib/types/generated/resource';
+import type { ResourceView } from '$lib/types/generated/resource_view';
 
 /**
  * Single authority for `/vault/...` route URLs. Every nav link, back link,
@@ -66,7 +66,7 @@ export function isContextGraphLocation(
  * which stranded 533 of 2330 active resources: VaultGrid listed them and
  * no-opped on click. It cannot return null now.
  */
-export function resourceHref(row: ResourceRow): string {
+export function resourceHref(row: ResourceView): string {
 	return `/vault/r/${row.id}`;
 }
 

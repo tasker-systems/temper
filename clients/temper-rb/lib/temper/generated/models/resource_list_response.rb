@@ -27,6 +27,7 @@ module Temper::Generated
     # This page's row count. Always `rows.len()`; carried explicitly so the count survives a projection that drops or summarizes the rows.
     attr_accessor :returned
 
+    # One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row list and a `show` of that resource serialize identically when neither asks for the body. There is no second list envelope: `?sections=` varies which parts of this shape are filled, never which type comes back.
     attr_accessor :rows
 
     # The FILTERED match count — every row the filters admit, before `limit`/`offset`.
@@ -65,7 +66,7 @@ module Temper::Generated
         :'limit' => :'Integer',
         :'offset' => :'Integer',
         :'returned' => :'Integer',
-        :'rows' => :'Array<ResourceRow>',
+        :'rows' => :'Array<ResourceView>',
         :'total' => :'Integer',
         :'truncated' => :'Boolean'
       }

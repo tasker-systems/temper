@@ -534,10 +534,10 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Full per-row view minus the body: each row carries both the
-        /// managed and open meta tiers on top of the usual row fields
-        /// (`Vec<ResourceDetail>`, vs the default `Vec<ResourceRow>` which
-        /// carries neither tier). Hits GET /api/resources?meta_only=true.
+        /// Fill the open metadata tier on every row. Same envelope and same row
+        /// type as the default list — asking for a section adds `open_meta` to
+        /// the one shape, it does not select a second one. The managed tier is
+        /// always present either way. Hits GET /api/resources?sections=open-meta.
         #[arg(long)]
         meta_only: bool,
         /// Subselect top-level response keys on each row (anchor key

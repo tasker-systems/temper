@@ -14,47 +14,55 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.  `show` used to return a bare `ResourceRow`, which carries only the flat managed projections (`stage`/`seq`/`mode`/`effort`) — so the \"full\" view silently omitted both `managed_meta` and `open_meta`, and a script reading `open_meta` from it got `None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for the tiers.  The two meta fields carry serde attributes identical to [`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only` projection is a literal strict subset of this shape.  No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The SvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is a structural superset of it, so the extra keys are simply ignored there.
-  class ResourceDetail < ApiModelBase
-    # SHA-256 hash of the resource body content, from `kb_resource_manifests`. `None` when no manifest row exists (resource created via POST without a body trio, or the manifest join returned NULL).
+  # Everything a resource is, except its body — one shape for every read and write surface.  Replaces the six near-identical projections a caller used to have to tell apart (`ResourceRow`, `ResourceDetail`, `ResourceMetaResponse`, `ResourceSummary`, the search `HitIdentity`, and the inlined identity half of `ExactHit`/`WideHit`). A human or agent learns this shape once and it is the shape `list`, `show`, `create`, `update`, `annotate` and both search arms all answer in.  Three properties are load-bearing and each has its own test below:  1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`    recorded why: \"With two different anchor names the subset relation is unachievable.\"    Here the relation is stronger than subset — it is identity. 2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on    `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and    nowhere else. Dropping them is lossless *because* of property 3. 3. **`managed_meta` is not an `Option`.** A consumer reads `view.managed_meta.stage`    without first distinguishing \"no meta\" from \"no stage\".  **No `#[serde(flatten)]` anywhere**, deliberately: ts-rs cannot codegen a flattened field, which is why `ResourceDetail` had to drop its `TS` derive and why the identity fields on `ExactHit`/`WideHit` were hand-inlined. This type is ts-rs-exported, so the constraint is structural, not stylistic.  **No `FromRow` derive, deliberately.** `ref` and `context_ref` are derived rather than selected and `content` arrives from a different read, so a `query_as` into this type could never be complete. `ResourceRow` carried a `FromRow` derive with **zero** `query_as` call sites anywhere in the repo — decorative, and an invitation to try something that cannot work. Construction is by hand, as `substrate_read` already does.
+  class ResourceView < ApiModelBase
+    # SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no manifest row exists.
     attr_accessor :body_hash
 
-    # What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte** from the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries its source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform: CRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only partial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.  `Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`), so a current server always sends it; `None` means the server predates W2 PR 3.
+    # Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.
     attr_accessor :body_storage
 
-    # Set when the resource is homed in a cognitive map (Surface B). Mutually exclusive with the `context_*` fields.
+    # Set when the resource is homed in a cognitive map. Mutually exclusive with the `context_*` fields.
     attr_accessor :cogmap_id
 
     # Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.
     attr_accessor :cogmap_name
 
+    # The reconstructed markdown body — the `body` section.  Absent means **not requested**, never \"empty body\". An empty body is `Some(String::new())`, which serializes as `\"\"`; the two are distinguishable on the wire and after a round-trip.
+    attr_accessor :content
+
     attr_accessor :context_name
 
-    # Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams. Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`. `None` for a cogmap-homed resource.
+    # Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
     attr_accessor :context_owner_ref
 
-    # Slug of the home context (the natural-key half of `@owner/slug`). `None` for a cogmap-homed resource.
+    # The composed home-context address, `{context_owner_ref}/{context_slug}`.  Not a column — derived by [`ResourceView::with_derived_refs`]. `None` for a cogmap-homed resource, which has no context half; never a half-formed ref.
+    attr_accessor :context_ref
+
+    # Slug of the home context (the natural-key half of `@owner/slug`).
     attr_accessor :context_slug
 
     attr_accessor :created
 
     attr_accessor :doc_type_name
 
-    attr_accessor :effort
-
     # A `kb_resources.id` value.
     attr_accessor :id
 
-    # Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only by the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete` for every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not yet been finalized (remaining blocks not landed), which is **excluded from list and search** and readable only by `show`.  Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the vectors ready?* This one asks *are the bytes all here?*  `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server always sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".
+    # Are all the bytes here? `Option` purely for version skew — the column is `NOT NULL` server-side, so `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".
     attr_accessor :ingest_state
 
     attr_accessor :is_active
 
-    # Home context — `Some` for a context-homed resource, `None` when the resource is homed in a cognitive map (Surface B). Mutually exclusive with the `cogmap_*` fields below.
+    # `Some` for a context-homed resource, `None` when homed in a cognitive map (Surface B). Mutually exclusive with the `cogmap_*` fields.
     attr_accessor :kb_context_id
 
-    attr_accessor :mode
+    # Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.  **Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/ `effort`/`seq` columns lossless: the values did not go away, they went home. A resource with no managed metadata carries an all-`None` `ManagedMeta`, which serializes as `{}` — present and empty, never absent.
+    attr_accessor :managed_meta
 
+    attr_accessor :open_meta
+
+    # Original source URL or file reference.  There is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one whose doc comment promised a \"canonical `kb://` URI ... from `kb_resource_uri`\", but `kb_resource_uri` does not exist in `migrations/` and the assembly wrote `kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value under a second name and a false description. It joins `origin` (the constant `\"unified\"`) and `slug` (always `String::new()`) as a field this arc dropped for never having carried what it claimed.
     attr_accessor :origin_uri
 
     # A `kb_profiles.id` value.
@@ -65,18 +73,12 @@ module Temper::Generated
     # A `kb_profiles.id` value.
     attr_accessor :owner_profile_id
 
-    attr_accessor :seq
-
-    attr_accessor :stage
+    # The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.
+    attr_accessor :ref
 
     attr_accessor :title
 
     attr_accessor :updated
-
-    # Typed managed (`temper-*`) frontmatter. `None` only if the manifest row predates meta population.
-    attr_accessor :managed_meta
-
-    attr_accessor :open_meta
 
     class EnumAttributeValidator
       attr_reader :datatype
@@ -107,27 +109,26 @@ module Temper::Generated
         :'body_storage' => :'body_storage',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_name' => :'cogmap_name',
+        :'content' => :'content',
         :'context_name' => :'context_name',
         :'context_owner_ref' => :'context_owner_ref',
+        :'context_ref' => :'context_ref',
         :'context_slug' => :'context_slug',
         :'created' => :'created',
         :'doc_type_name' => :'doc_type_name',
-        :'effort' => :'effort',
         :'id' => :'id',
         :'ingest_state' => :'ingest_state',
         :'is_active' => :'is_active',
         :'kb_context_id' => :'kb_context_id',
-        :'mode' => :'mode',
+        :'managed_meta' => :'managed_meta',
+        :'open_meta' => :'open_meta',
         :'origin_uri' => :'origin_uri',
         :'originator_profile_id' => :'originator_profile_id',
         :'owner_handle' => :'owner_handle',
         :'owner_profile_id' => :'owner_profile_id',
-        :'seq' => :'seq',
-        :'stage' => :'stage',
+        :'ref' => :'ref',
         :'title' => :'title',
-        :'updated' => :'updated',
-        :'managed_meta' => :'managed_meta',
-        :'open_meta' => :'open_meta'
+        :'updated' => :'updated'
       }
     end
 
@@ -148,57 +149,59 @@ module Temper::Generated
         :'body_storage' => :'BodyStorage',
         :'cogmap_id' => :'String',
         :'cogmap_name' => :'String',
+        :'content' => :'String',
         :'context_name' => :'String',
         :'context_owner_ref' => :'String',
+        :'context_ref' => :'String',
         :'context_slug' => :'String',
         :'created' => :'Time',
         :'doc_type_name' => :'String',
-        :'effort' => :'String',
         :'id' => :'String',
         :'ingest_state' => :'IngestState',
         :'is_active' => :'Boolean',
         :'kb_context_id' => :'String',
-        :'mode' => :'String',
+        :'managed_meta' => :'ManagedMeta',
+        :'open_meta' => :'Object',
         :'origin_uri' => :'String',
         :'originator_profile_id' => :'String',
         :'owner_handle' => :'String',
         :'owner_profile_id' => :'String',
-        :'seq' => :'Integer',
-        :'stage' => :'String',
+        :'ref' => :'String',
         :'title' => :'String',
-        :'updated' => :'Time',
-        :'managed_meta' => :'ManagedMeta',
-        :'open_meta' => :'Object'
+        :'updated' => :'Time'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'managed_meta',
-        :'open_meta'
+        :'body_hash',
+        :'body_storage',
+        :'cogmap_id',
+        :'cogmap_name',
+        :'content',
+        :'context_name',
+        :'context_owner_ref',
+        :'context_ref',
+        :'context_slug',
+        :'ingest_state',
+        :'kb_context_id',
+        :'open_meta',
       ])
-    end
-
-    # List of class defined in allOf (OpenAPI v3)
-    def self.openapi_all_of
-      [
-      :'ResourceRow'
-      ]
     end
 
     # Initializes the object
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ResourceDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ResourceView` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ResourceDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ResourceView`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
@@ -219,12 +222,20 @@ module Temper::Generated
         self.cogmap_name = attributes[:'cogmap_name']
       end
 
+      if attributes.key?(:'content')
+        self.content = attributes[:'content']
+      end
+
       if attributes.key?(:'context_name')
         self.context_name = attributes[:'context_name']
       end
 
       if attributes.key?(:'context_owner_ref')
         self.context_owner_ref = attributes[:'context_owner_ref']
+      end
+
+      if attributes.key?(:'context_ref')
+        self.context_ref = attributes[:'context_ref']
       end
 
       if attributes.key?(:'context_slug')
@@ -241,10 +252,6 @@ module Temper::Generated
         self.doc_type_name = attributes[:'doc_type_name']
       else
         self.doc_type_name = nil
-      end
-
-      if attributes.key?(:'effort')
-        self.effort = attributes[:'effort']
       end
 
       if attributes.key?(:'id')
@@ -267,8 +274,12 @@ module Temper::Generated
         self.kb_context_id = attributes[:'kb_context_id']
       end
 
-      if attributes.key?(:'mode')
-        self.mode = attributes[:'mode']
+      if attributes.key?(:'managed_meta')
+        self.managed_meta = attributes[:'managed_meta']
+      end
+
+      if attributes.key?(:'open_meta')
+        self.open_meta = attributes[:'open_meta']
       end
 
       if attributes.key?(:'origin_uri')
@@ -295,12 +306,10 @@ module Temper::Generated
         self.owner_profile_id = nil
       end
 
-      if attributes.key?(:'seq')
-        self.seq = attributes[:'seq']
-      end
-
-      if attributes.key?(:'stage')
-        self.stage = attributes[:'stage']
+      if attributes.key?(:'ref')
+        self.ref = attributes[:'ref']
+      else
+        self.ref = nil
       end
 
       if attributes.key?(:'title')
@@ -313,14 +322,6 @@ module Temper::Generated
         self.updated = attributes[:'updated']
       else
         self.updated = nil
-      end
-
-      if attributes.key?(:'managed_meta')
-        self.managed_meta = attributes[:'managed_meta']
-      end
-
-      if attributes.key?(:'open_meta')
-        self.open_meta = attributes[:'open_meta']
       end
     end
 
@@ -361,6 +362,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "owner_profile_id", owner_profile_id cannot be nil.')
       end
 
+      if @ref.nil?
+        invalid_properties.push('invalid value for "ref", ref cannot be nil.')
+      end
+
       if @title.nil?
         invalid_properties.push('invalid value for "title", title cannot be nil.')
       end
@@ -384,6 +389,7 @@ module Temper::Generated
       return false if @originator_profile_id.nil?
       return false if @owner_handle.nil?
       return false if @owner_profile_id.nil?
+      return false if @ref.nil?
       return false if @title.nil?
       return false if @updated.nil?
       true
@@ -470,6 +476,16 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] ref Value to be assigned
+    def ref=(ref)
+      if ref.nil?
+        fail ArgumentError, 'ref cannot be nil'
+      end
+
+      @ref = ref
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] title Value to be assigned
     def title=(title)
       if title.nil?
@@ -498,27 +514,26 @@ module Temper::Generated
           body_storage == o.body_storage &&
           cogmap_id == o.cogmap_id &&
           cogmap_name == o.cogmap_name &&
+          content == o.content &&
           context_name == o.context_name &&
           context_owner_ref == o.context_owner_ref &&
+          context_ref == o.context_ref &&
           context_slug == o.context_slug &&
           created == o.created &&
           doc_type_name == o.doc_type_name &&
-          effort == o.effort &&
           id == o.id &&
           ingest_state == o.ingest_state &&
           is_active == o.is_active &&
           kb_context_id == o.kb_context_id &&
-          mode == o.mode &&
+          managed_meta == o.managed_meta &&
+          open_meta == o.open_meta &&
           origin_uri == o.origin_uri &&
           originator_profile_id == o.originator_profile_id &&
           owner_handle == o.owner_handle &&
           owner_profile_id == o.owner_profile_id &&
-          seq == o.seq &&
-          stage == o.stage &&
+          ref == o.ref &&
           title == o.title &&
-          updated == o.updated &&
-          managed_meta == o.managed_meta &&
-          open_meta == o.open_meta
+          updated == o.updated
     end
 
     # @see the `==` method
@@ -530,7 +545,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, cogmap_id, cogmap_name, context_name, context_owner_ref, context_slug, created, doc_type_name, effort, id, ingest_state, is_active, kb_context_id, mode, origin_uri, originator_profile_id, owner_handle, owner_profile_id, seq, stage, title, updated, managed_meta, open_meta].hash
+      [body_hash, body_storage, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, id, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
     end
 
     # Builds the object from hash

@@ -25,8 +25,8 @@ use crate::types::ids::{ContextId, ProfileId, ResourceId};
 ///
 /// Three properties are load-bearing and each has its own test below:
 ///
-/// 1. **The anchor is `id`, never `resource_id`.** [`super::managed_meta::ResourceMetaResponse`]
-///    records why: "With two different anchor names the subset relation is unachievable."
+/// 1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`
+///    recorded why: "With two different anchor names the subset relation is unachievable."
 ///    Here the relation is stronger than subset — it is identity.
 /// 2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on
 ///    `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and
@@ -167,6 +167,17 @@ impl ResourceView {
     ///
     /// `context_ref` is `Some` only when **both** halves are present: a cogmap-homed
     /// resource gets `None` rather than a ref with an empty side.
+    /// The display name of this resource's home — its context name, or its cognitive-map name
+    /// when cogmap-homed. `None` only if neither is set (should not occur).
+    ///
+    /// The single accessor for the `context_* | cogmap_*` mutual exclusion, carried over from
+    /// `ResourceRow::home_display` unchanged: surfaces apply their own placeholder for the
+    /// `None` case rather than each re-deriving the fallback chain.
+    #[must_use]
+    pub fn home_display(&self) -> Option<&str> {
+        self.context_name.as_deref().or(self.cogmap_name.as_deref())
+    }
+
     #[must_use]
     pub fn with_derived_refs(mut self) -> Self {
         self.r#ref = decorated_ref(&self.title, self.id);
@@ -278,6 +289,26 @@ impl SectionSet {
     #[must_use]
     pub fn contains(&self, section: ResourceSection) -> bool {
         self.0.contains(&section)
+    }
+
+    /// Parse the `sections` query parameter — a comma-separated list of section names.
+    ///
+    /// A CSV string rather than a `Vec<ResourceSection>` for the same reason `tags` and
+    /// `cogmap_ids` are CSV on `ResourceListParams`: the list endpoint is a GET whose params
+    /// ride the query string, and serde_urlencoded does not encode sequences. Section names
+    /// contain no comma by construction ([`ResourceSection::ALL`]), so the split is total.
+    ///
+    /// Each piece is trimmed; an empty piece is dropped rather than refused, so `""`,
+    /// `"body,"` and `"body, open-meta"` all mean what they look like. An unknown name is
+    /// refused through [`ResourceSection::from_str`], which names the whole valid set — this
+    /// is the one place a caller's typo is caught, and it must be recoverable from the
+    /// message alone.
+    pub fn parse_csv(csv: &str) -> Result<Self, TemperError> {
+        csv.split(',')
+            .map(str::trim)
+            .filter(|piece| !piece.is_empty())
+            .map(ResourceSection::from_str)
+            .collect()
     }
 }
 

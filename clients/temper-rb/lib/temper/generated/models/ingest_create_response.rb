@@ -14,13 +14,13 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`: the one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`] when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client discriminates by which fields are present (`SegmentedBeginResponse` always carries `correlation_id`/`blocks`, which `ResourceRow` never does).
+  # `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`: the one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`] when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client discriminates by which fields are present (`SegmentedBeginResponse` always carries `correlation_id`/`blocks`, which `ResourceView` never does).
   module IngestCreateResponse
     class << self
       # List of class defined in oneOf (OpenAPI v3)
       def openapi_one_of
         [
-          :'ResourceRow',
+          :'ResourceView',
           :'SegmentedBeginResponse'
         ]
       end

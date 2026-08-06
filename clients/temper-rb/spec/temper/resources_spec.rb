@@ -93,12 +93,13 @@ RSpec.describe Temper::Resources do
   it 'returns a validated generated model, not a bare Hash' do
     stub_request(:get, "https://api.test/api/resources/#{uuid}").to_return(json(row_json))
     detail = client.resources.show(uuid)
-    expect(detail).to be_a(Temper::Generated::ResourceDetail)
+    expect(detail).to be_a(Temper::Generated::ResourceView)
     expect(detail.title).to eq('A Resource')
   end
 
-  # ResourceDetail is allOf: [ResourceRow, {...}] and the generator flattens
-  # ResourceRow's ten required fields onto it, validating each on deserialize.
+  # `ResourceView` declares eleven required attributes, each validated on
+  # deserialize, so a response missing one raises rather than yielding a half-built
+  # model.
   it 'raises when the server omits a required field' do
     stub_request(:get, "https://api.test/api/resources/#{uuid}").to_return(json('{"id":"x"}'))
     expect { client.resources.show(uuid) }.to raise_error(ArgumentError, /cannot be nil/)
@@ -110,8 +111,11 @@ RSpec.describe Temper::Resources do
   end
 
   it 'reads the meta projection without the body' do
+    # `GET /meta` answers in the same `ResourceView` `show` does -- the projection
+    # is a section request, not a second response type -- so it validates the same
+    # eleven required attributes and needs a real view as its stub.
     stub_request(:get, "https://api.test/api/resources/#{uuid}/meta")
-      .to_return(json(JSON.generate(id: uuid)))
+      .to_return(json(Fixtures.resource_row_json(id: uuid)))
     client.resources.show(uuid, meta_only: true)
     expect(a_request(:get, "https://api.test/api/resources/#{uuid}/meta")).to have_been_made.once
   end

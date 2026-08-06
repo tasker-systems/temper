@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use temper_core::types::config::{expand_tilde, MemoryConfig, TemperConfig};
-use temper_workflow::types::resource::ResourceDetail;
+use temper_core::types::resource_view::ResourceView;
 
 use super::fetch::fetch_context_rows;
 use super::render::{parse_entry, reinforcement_of};
@@ -99,7 +99,7 @@ pub struct ReinforcementDistribution {
 /// cleanly via [`parse_entry`] — a memory with a malformed `status`/`verified` is still a real
 /// migrated file and should still vouch for its local counterpart; that a memory contributes a
 /// defect and that it contributes provenance are orthogonal facts about it.
-pub(super) fn source_file_of(row: &ResourceDetail) -> Option<String> {
+pub(super) fn source_file_of(row: &ResourceView) -> Option<String> {
     row.open_meta
         .as_ref()?
         .get("source_file")?
@@ -120,7 +120,7 @@ pub(super) fn source_file_of(row: &ResourceDetail) -> Option<String> {
 /// row contributes no match — never a defect, and never a false orphan for some unrelated file.
 pub fn status_report(
     cfg: Option<&MemoryConfig>,
-    rows: &[ResourceDetail],
+    rows: &[ResourceView],
     local: &[LocalMemoryFile],
 ) -> MemoryStatus {
     let contexts = cfg
@@ -143,11 +143,9 @@ pub fn status_report(
         // whose open tier is wrong in one place is the memory most likely to be wrong in another.
         let r = reinforcement_of(row);
         if let Some(msg) = &r.malformed {
-            reinforcement.malformed.push(format!(
-                "{} \"{}\": {msg}",
-                row.row.id.uuid(),
-                row.row.title
-            ));
+            reinforcement
+                .malformed
+                .push(format!("{} \"{}\": {msg}", row.id.uuid(), row.title));
         }
         if r.dates.is_empty() {
             reinforcement.never_reinforced += 1;
@@ -196,7 +194,7 @@ pub async fn status(config: &TemperConfig, output_format: OutputFormat) -> Resul
         .map(|m| read_local_files(&m.index_path))
         .unwrap_or_default();
 
-    let mut rows: Vec<ResourceDetail> = Vec::new();
+    let mut rows: Vec<ResourceView> = Vec::new();
     if let Some(mem) = mem {
         match build_config_store_and_client() {
             Ok((_cfg, _store, client)) => {
@@ -249,7 +247,9 @@ mod tests {
     use chrono::{DateTime, Utc};
     use serde_json::json;
     use temper_core::types::ids::{ProfileId, ResourceId};
-    use temper_workflow::types::resource::{BodyStorage, IngestState, ResourceRow};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource::{BodyStorage, IngestState};
+    use temper_core::types::resource_view::ResourceView;
     use uuid::Uuid;
 
     fn cfg() -> MemoryConfig {
@@ -268,7 +268,7 @@ mod tests {
         }
     }
 
-    /// Build a `ResourceDetail` titled `title`, homed in `context_ref` (`@owner/slug`), with
+    /// Build a `ResourceView` titled `title`, homed in `context_ref` (`@owner/slug`), with
     /// `open_meta` carrying `status`/`verified` only when the corresponding argument is `Some` —
     /// mirrors `render::tests::row_with`, parameterized by title and context since status must
     /// match across multiple distinct rows.
@@ -278,7 +278,7 @@ mod tests {
         status: Option<&str>,
         verified: Option<&str>,
         source_file: Option<&str>,
-    ) -> ResourceDetail {
+    ) -> ResourceView {
         let (owner, slug) = context_ref
             .split_once('/')
             .expect("context_ref must be @owner/slug");
@@ -294,44 +294,40 @@ mod tests {
             open.insert("source_file".to_string(), json!(sf));
         }
 
-        let row = ResourceRow {
+        ResourceView {
             id: ResourceId::from(Uuid::now_v7()),
-            kb_context_id: None,
-            origin_uri: String::new(),
+            r#ref: String::new(),
             title: title.to_string(),
-            originator_profile_id: ProfileId::from(Uuid::now_v7()),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: Some(slug.to_string()),
+            context_owner_ref: Some(owner.to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "memory".to_string(),
+            owner_handle: "someone".to_string(),
             owner_profile_id: ProfileId::from(Uuid::now_v7()),
+            originator_profile_id: ProfileId::from(Uuid::now_v7()),
             is_active: true,
             created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            context_name: None,
-            doc_type_name: "memory".to_string(),
-            owner_handle: "someone".to_string(),
-            context_slug: Some(slug.to_string()),
-            context_owner_ref: Some(owner.to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
             body_storage: Some(BodyStorage::Derived),
-        };
-
-        ResourceDetail {
-            row,
-            managed_meta: None,
+            managed_meta: ManagedMeta::default(),
             open_meta: Some(serde_json::Value::Object(open)),
+            content: None,
         }
+        .with_derived_refs()
     }
 
-    fn meta_row_titled(title: &str, context_ref: &str) -> ResourceDetail {
+    fn meta_row_titled(title: &str, context_ref: &str) -> ResourceView {
         build_row(title, context_ref, Some("active"), Some("2026-08-01"), None)
     }
 
-    fn meta_row_missing_status(title: &str, context_ref: &str) -> ResourceDetail {
+    fn meta_row_missing_status(title: &str, context_ref: &str) -> ResourceView {
         build_row(title, context_ref, None, Some("2026-08-01"), None)
     }
 
@@ -339,7 +335,7 @@ mod tests {
     /// from `source_file`, the filename it was migrated from. This is the real-world shape: see
     /// `status_matches_local_files_by_source_file_not_title` for why a title/filename comparison
     /// cannot stand in for this.
-    fn meta_row_migrated(title: &str, context_ref: &str, source_file: &str) -> ResourceDetail {
+    fn meta_row_migrated(title: &str, context_ref: &str, source_file: &str) -> ResourceView {
         build_row(
             title,
             context_ref,
@@ -413,7 +409,7 @@ mod tests {
         title: &str,
         context_ref: &str,
         reinforced: serde_json::Value,
-    ) -> ResourceDetail {
+    ) -> ResourceView {
         let mut r = build_row(title, context_ref, Some("active"), Some("2026-08-01"), None);
         let Some(serde_json::Value::Object(open)) = r.open_meta.as_mut() else {
             unreachable!("build_row always builds an object")

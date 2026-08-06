@@ -722,8 +722,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .resources()
         .get(whole_id)
         .await
-        .expect("show the whole resource")
-        .row;
+        .expect("show the whole resource");
     assert_eq!(
         whole_row.ingest_state,
         Some(temper_workflow::types::IngestState::Complete),
@@ -834,8 +833,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .resources()
         .get(partial_id)
         .await
-        .expect("show must still work on a partial — hidden is not deleted")
-        .row;
+        .expect("show must still work on a partial — hidden is not deleted");
     assert_eq!(
         shown.ingest_state,
         Some(temper_workflow::types::IngestState::InProgress),
@@ -883,8 +881,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .resources()
         .get(partial_id)
         .await
-        .expect("show after finalize")
-        .row;
+        .expect("show after finalize");
     assert_eq!(
         shown.ingest_state,
         Some(temper_workflow::types::IngestState::Complete),

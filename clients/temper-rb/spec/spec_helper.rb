@@ -10,10 +10,10 @@ CONTRACT_PATH = File.expand_path('../../../openapi.json', __dir__)
 # Shared response fixtures.
 #
 # The generated models VALIDATE on deserialize: a non-nullable attribute that
-# arrives nil raises ArgumentError from its setter. ResourceDetail is
-# `allOf: [ResourceRow, {...}]`, and the generator flattens ResourceRow's ten
-# required fields onto it -- so a stub returning `{}` fails inside the client,
-# not in the assertion. Stub with a real row.
+# arrives nil raises ArgumentError from its setter. `ResourceView` -- the one
+# shape every resource read and write answers in -- declares eleven required
+# attributes, so a stub returning `{}` fails inside the client, not in the
+# assertion. Stub with a real view.
 module Fixtures
   module_function
 
@@ -28,7 +28,10 @@ module Fixtures
       created: '2026-07-10T12:00:00Z',
       updated: '2026-07-10T12:00:00Z',
       doc_type_name: 'note',
-      owner_handle: 'j-cole-taylor'
+      owner_handle: 'j-cole-taylor',
+      # Not a column: the decorated, self-resolving address the view derives from
+      # title + id. Required on the wire, so a fixture without it fails validation.
+      ref: "a-resource-#{id}"
     }.merge(overrides)
   end
 

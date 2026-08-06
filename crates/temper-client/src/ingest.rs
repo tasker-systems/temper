@@ -11,7 +11,7 @@ use crate::http::HttpClient;
 use temper_core::types::ingest::{
     AppendBlockPayload, BlocksResponse, FinalizePayload, IngestPayload, SegmentedBeginResponse,
 };
-use temper_workflow::types::resource::ResourceRow;
+use temper_core::types::resource_view::ResourceView;
 
 /// HTTP header mirroring a keyed write's `idempotency_key` (issue #581, spike rung 3-C).
 ///
@@ -43,7 +43,7 @@ impl<'a> IngestClient<'a> {
     /// the transient-failure retry loop replays it (the server dedups on `(owner, key)`), and the
     /// key is mirrored into an `Idempotency-Key` header so the apex proxy can retry it too. An
     /// unkeyed create keeps the safe-method-only retry policy.
-    pub async fn create(&self, payload: &IngestPayload) -> Result<ResourceRow> {
+    pub async fn create(&self, payload: &IngestPayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let req = self.http.post("/api/ingest").json(payload);
         match payload.idempotency_key {
@@ -62,7 +62,7 @@ impl<'a> IngestClient<'a> {
     }
 
     /// PUT /api/ingest/:id — update resource content with new chunks.
-    pub async fn update(&self, id: Uuid, payload: &IngestPayload) -> Result<ResourceRow> {
+    pub async fn update(&self, id: Uuid, payload: &IngestPayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/ingest/{id}");
         let req = self.http.put(&path).json(payload);
@@ -73,7 +73,7 @@ impl<'a> IngestClient<'a> {
 
     /// POST /api/ingest — begin a segmented (multi-block) ingest. `payload.segmented` must be
     /// `Some`; the handler returns the segmented-begin shape (block 0 landed) instead of the
-    /// one-shot `ResourceRow`.
+    /// one-shot `ResourceView`.
     pub async fn begin_segmented(&self, payload: &IngestPayload) -> Result<SegmentedBeginResponse> {
         let token = self.http.resolve_token()?;
         let req = self.http.post("/api/ingest").json(payload);

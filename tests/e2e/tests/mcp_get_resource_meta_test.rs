@@ -76,6 +76,10 @@ async fn seed_resource(
         })
         .await
         .expect("ingest create")
+        // `/api/ingest` answers in `ResourceView` now; `enrich_resource`/`enrich_resources`
+        // still take the incumbent `ResourceRow`, which **Task 9** retires along with the
+        // `From<ResourceView> for ResourceRow` behind this narrowing.
+        .into()
 }
 
 /// `enrich_resource` returns both meta blocks, with typed `ManagedMeta`

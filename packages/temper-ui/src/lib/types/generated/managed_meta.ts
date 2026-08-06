@@ -23,40 +23,40 @@ export type ManagedMeta = {
 /**
  * Task workflow stage (task only)
  */
-stage: string | null, 
+"temper-stage": string | null, 
 /**
  * Task execution mode (task only)
  */
-mode: string | null, 
+"temper-mode": string | null, 
 /**
  * Task effort estimate (task only)
  */
-effort: string | null, 
+"temper-effort": string | null, 
 /**
  * Goal lifecycle status (goal only)
  */
-status: string | null, 
+"temper-status": string | null, 
 /**
  * Sequence number for ordering (task/goal)
  */
-seq: bigint | null, 
+"temper-seq": bigint | null, 
 /**
  * Git branch associated with the task (task only)
  */
-branch: string | null, 
+"temper-branch": string | null, 
 /**
  * Pull request reference (task only)
  */
-pr: string | null, 
+"temper-pr": string | null, 
 /**
  * Model that produced this resource
  */
-llm_model: string | null, 
+"temper-llm-model": string | null, 
 /**
  * UUIDv7 stamp from a (historical) LLM-assisted run.
  */
-llm_run: string | null, 
+"temper-llm-run": string | null, 
 /**
  * How this resource was created (LLM-discovered or user-created)
  */
-provenance: string | null, };
+"temper-provenance": string | null, };

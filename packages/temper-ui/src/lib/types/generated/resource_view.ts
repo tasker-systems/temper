@@ -19,8 +19,8 @@ import type { ResourceId } from "./ResourceId";
  *
  * Three properties are load-bearing and each has its own test below:
  *
- * 1. **The anchor is `id`, never `resource_id`.** [`super::managed_meta::ResourceMetaResponse`]
- *    records why: "With two different anchor names the subset relation is unachievable."
+ * 1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`
+ *    recorded why: "With two different anchor names the subset relation is unachievable."
  *    Here the relation is stronger than subset — it is identity.
  * 2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on
  *    `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and

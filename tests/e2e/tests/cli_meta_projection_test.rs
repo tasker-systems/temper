@@ -306,8 +306,8 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             row.get("managed_meta").is_some(),
             "row missing managed_meta"
         );
-        // Rows are full `ResourceDetail`s now — they carry the row's identity/display
-        // fields (and the decorated `ref`), not just the meta tiers.
+        // Rows are `ResourceView`s — the one shape — so they carry identity/display fields
+        // and the decorated `ref`, not just the meta tiers.
         assert!(
             row.get("title").is_some(),
             "row missing title (should be a full detail row now): {row}"
@@ -322,11 +322,15 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
     assert!(stdout.get("facets").is_some(), "envelope missing facets");
 }
 
-/// `temper resource list --type task --context @me/meta-cli --fields origin_uri,stage --format json`
-/// (without --meta-only) should filter each ResourceRow in the envelope rows to
-/// include only the anchor field `id` plus the requested fields. Fields not in
-/// the selection (`title`, `created`, `updated`, `body_hash`) must be absent.
-/// Note: `slug` was removed from ResourceRow in the native-shape drop (WS6 Task 2).
+/// `temper resource list --type task --context @me/meta-cli --fields origin_uri,managed_meta
+/// --format json` (without --meta-only) should filter each `ResourceView` in the envelope rows
+/// to include only the anchor field `id` plus the requested fields. Fields not in the selection
+/// (`title`, `created`, `updated`, `body_hash`) must be absent.
+///
+/// The selection asks for `managed_meta`, not `stage`: `stage` was a hoisted column on the
+/// retired `ResourceRow` and is not a top-level field of `ResourceView` — it lives under
+/// `managed_meta` as `temper-stage`. `--fields` is a **top-level** projection, so naming a
+/// field that no longer exists would filter to nothing and assert nothing.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -369,7 +373,7 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
             "--context",
             "@me/meta-cli",
             "--fields",
-            "origin_uri,stage",
+            "origin_uri,managed_meta",
             "--format",
             "json",
         ],
@@ -397,7 +401,14 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
             row.get("origin_uri").is_some(),
             "origin_uri missing in row: {row}"
         );
-        assert!(row.get("stage").is_some(), "stage missing in row: {row}");
+        assert!(
+            row.get("managed_meta").is_some(),
+            "managed_meta missing in row: {row}"
+        );
+        assert_eq!(
+            row["managed_meta"]["temper-stage"], "in-progress",
+            "the workflow value went home to the managed tier, it did not go away: {row}"
+        );
         // Fields NOT in the selection must be absent
         assert!(
             row.get("title").is_none(),

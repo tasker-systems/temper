@@ -46,6 +46,13 @@ pub const PROVENANCE_USER_CREATED: &str = "user-created";
 ///
 /// All fields use `temper-*` YAML/JSON key names via `serde(rename)`.
 /// `None` fields are omitted from serialized output.
+// The `rename` and the `skip_serializing_if` are **two separate `#[serde(...)]` attributes on
+// purpose.** ts-rs parses each attribute whole and *discards the entire attribute* when any part
+// of it is unsupported — `skip_serializing_if` is unsupported ("ts-rs failed to parse this
+// attribute. It will be ignored."), so combining them silently dropped the rename too, and
+// `managed_meta.ts` declared `stage` where the wire carries `temper-stage`. Nothing consumed the
+// generated type until `ResourceView` put this tier on the wire, which is when the divergence
+// became reachable. Split, ts-rs keeps the rename and only warns about the skip.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "managed_meta.ts"))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -54,89 +61,54 @@ pub const PROVENANCE_USER_CREATED: &str = "user-created";
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ManagedMeta {
     /// Task workflow stage (task only)
-    #[serde(rename = "temper-stage", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-stage")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
 
     /// Task execution mode (task only)
-    #[serde(rename = "temper-mode", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-mode")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
 
     /// Task effort estimate (task only)
-    #[serde(rename = "temper-effort", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-effort")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
 
     /// Goal lifecycle status (goal only)
-    #[serde(rename = "temper-status", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-status")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
 
     /// Sequence number for ordering (task/goal)
-    #[serde(rename = "temper-seq", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-seq")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seq: Option<i64>,
 
     /// Git branch associated with the task (task only)
-    #[serde(rename = "temper-branch", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-branch")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
 
     /// Pull request reference (task only)
-    #[serde(rename = "temper-pr", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-pr")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<String>,
 
     /// Model that produced this resource
-    #[serde(rename = "temper-llm-model", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-llm-model")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_model: Option<String>,
 
     /// UUIDv7 stamp from a (historical) LLM-assisted run.
-    #[serde(rename = "temper-llm-run", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-llm-run")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_run: Option<String>,
 
     /// How this resource was created (LLM-discovered or user-created)
-    #[serde(rename = "temper-provenance", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "temper-provenance")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<String>,
-}
-
-/// Response body for the metadata-only GET endpoint.
-///
-/// Returns the current managed_meta / open_meta / hashes from a
-/// resource's manifest row without reconstructing the markdown body
-/// from `kb_chunks`. Used by the CLI sync pull path to fetch just the
-/// meta tier when the body side already agrees.
-// `export_to` is `resource_meta.ts`, NOT the `managed_meta.ts` this type used to share with
-// `ManagedMeta` — same rule as `ResourceView`, and the same measured symptom.
-// `generate-ts-types` runs one `cargo test -p <crate>` per crate in sequence into a single
-// output directory (tools/cargo-make/main.toml:332), and ts-rs truncates a target file on each
-// process's first write. temper-workflow runs last, so a type survives only if that crate
-// exports it or reaches it as a dependency. `ManagedMeta` survives in `managed_meta.ts` because
-// `ContentResponse` and `ResourceUpdateRequest` reference it; nothing over there references
-// `ResourceMetaResponse`, so sharing the file silently deleted it (measured: 37 lines, with
-// `generate-ts-types` still exiting 0). A `//` comment, not a doc comment: utoipa renders doc
-// comments into `openapi.json`, and a build-system note is not part of the wire contract.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "resource_meta.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct ResourceMetaResponse {
-    /// UUID of the resource.
-    ///
-    /// Named `id` (not `resource_id`) so this response is a literal strict subset of
-    /// `temper_workflow::types::resource::ResourceDetail`: `--meta-only` returns the same
-    /// keys the full `show` does, and nothing else. With two different anchor names the
-    /// subset relation is unachievable.
-    pub id: ResourceId,
-    /// Typed managed (temper-*) frontmatter from the manifest — the closed
-    /// Property vocabulary. Only the named `temper-*` keys are represented;
-    /// there is no catch-all (a stored non-Property key is not surfaced here).
-    /// `None` only if the manifest row predates meta population.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_meta: Option<ManagedMeta>,
-    /// Open (user-defined) frontmatter fields from the manifest.
-    /// Intentionally untyped — open_meta is the free-form tier. Typed
-    /// extraction of relationship fields lives in `ResourceRelationships`
-    /// (see `temper-core::types::graph`), which parses this value on
-    /// demand and ignores anything it doesn't recognize.
-    /// `None` only if the manifest row predates meta population.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_meta: Option<Value>,
 }
 
 /// Payload for meta-only sync updates that do not require re-chunking.
@@ -185,58 +157,6 @@ pub struct ResourceManifestRow {
     pub open_hash: String,
     /// Timestamp of the last manifest update
     pub updated: DateTime<Utc>,
-}
-
-#[cfg(test)]
-mod meta_response_shape_tests {
-    use super::*;
-    use uuid::Uuid;
-
-    #[test]
-    fn meta_response_anchors_on_id_and_has_no_hashes() {
-        let resp = ResourceMetaResponse {
-            id: ResourceId::from(Uuid::nil()),
-            managed_meta: Some(ManagedMeta::default()),
-            open_meta: Some(serde_json::json!({})),
-        };
-        let v = serde_json::to_value(&resp).expect("serialize");
-
-        // Anchors on `id`, matching ResourceRow — this is what makes `--meta-only` a
-        // literal strict subset of the full `show` object.
-        assert!(v.get("id").is_some(), "anchor is `id`: {v}");
-        assert!(v.get("resource_id").is_none(), "old anchor gone: {v}");
-
-        // The §7-dissolved hashes are removed, not emitted empty.
-        assert!(v.get("managed_hash").is_none(), "{v}");
-        assert!(v.get("open_hash").is_none(), "{v}");
-    }
-
-    /// The whole point of Task 8: every key `--meta-only` emits must exist on the full
-    /// `ResourceDetail`. Checked structurally here; checked end-to-end over a real
-    /// server in `tests/e2e/tests/resource_meta_tiers_test.rs`.
-    #[test]
-    fn meta_response_keys_are_a_subset_of_resource_detail_keys() {
-        let meta = ResourceMetaResponse {
-            id: ResourceId::from(Uuid::nil()),
-            managed_meta: Some(ManagedMeta::default()),
-            open_meta: Some(serde_json::json!({ "k": "v" })),
-        };
-        let meta_v = serde_json::to_value(&meta).expect("serialize meta");
-
-        let detail_v = serde_json::json!({
-            "id": Uuid::nil(),
-            "title": "irrelevant",
-            "managed_meta": {},
-            "open_meta": { "k": "v" },
-        });
-
-        for key in meta_v.as_object().expect("object").keys() {
-            assert!(
-                detail_v.get(key).is_some(),
-                "`{key}` is emitted by --meta-only but absent from the full show shape"
-            );
-        }
-    }
 }
 
 #[cfg(test)]

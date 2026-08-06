@@ -4,6 +4,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
 import type { ManagedMeta } from "./managed_meta";
 import type { ProfileId } from "./ProfileId";
 import type { ResourceId } from "./ResourceId";
+import type { ResourceView } from "./resource_view";
 
 /**
  * What guarantee a resource's body carries on read — a **surfaced projection** of coverage
@@ -103,11 +104,20 @@ tags: string | null,
  */
 cogmap_ids: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
 /**
- * When true, the list endpoint returns `ResourceMetaListResponse`
- * (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
- * `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
+ * Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of
+ * [`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,
+ * `edges`). `None`/empty asks for none, which is the default list row.
+ *
+ * Replaces `meta_only`, which named a *response type* rather than a part: it selected a
+ * second envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is
+ * one response shape now, so what the caller varies is which parts of it are filled.
+ *
+ * A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —
+ * the list endpoint is a GET whose params ride the query string, and serde_urlencoded does
+ * not encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name
+ * naming the whole valid set.
  */
-meta_only: boolean | null, };
+sections: string | null, };
 
 /**
  * Paginated response for resource list endpoints, with doc-type facets.
@@ -122,7 +132,14 @@ meta_only: boolean | null, };
  * Build through [`ResourceListResponse::new`], which derives `returned` and `truncated`
  * from the page rather than trusting a caller to keep them consistent with `rows`.
  */
-export type ResourceListResponse = { rows: Array<ResourceRow>, 
+export type ResourceListResponse = { 
+/**
+ * One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row
+ * list and a `show` of that resource serialize identically when neither asks for the body.
+ * There is no second list envelope: `?sections=` varies which parts of this shape are
+ * filled, never which type comes back.
+ */
+rows: Array<ResourceView>, 
 /**
  * The FILTERED match count — every row the filters admit, before `limit`/`offset`.
  */
@@ -154,6 +171,10 @@ offset: bigint, };
 /**
  * Row type for resource listings — includes joined display fields
  * and managed_meta projections from `vault_resources_browse` view.
+ *
+ * **Off the wire since Task 7** — every read and write surface answers in
+ * [`ResourceView`]. What still reads this shape is temper-mcp's `EnrichedResource`
+ * (`build_enriched`/`enrich_resources`); **Task 9** retires both, and this type with them.
  */
 export type ResourceRow = { id: ResourceId, 
 /**

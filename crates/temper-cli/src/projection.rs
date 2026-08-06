@@ -15,9 +15,9 @@ use uuid::Uuid;
 
 use temper_client::TemperClient;
 use temper_core::context_ref::{parse_context_ref, ContextOwnerRef, ContextRef};
+use temper_core::types::resource_view::ResourceView;
 use temper_workflow::types::resource::ResourceListParams;
 use temper_workflow::types::ContentResponse;
-use temper_workflow::types::ResourceRow;
 use temper_workflow::vault::Vault;
 
 use crate::config::Config;
@@ -242,7 +242,7 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
 /// therefore skipped (see below).
 pub fn write_resource_file_from_parts(
     vault_root: &Path,
-    row: &ResourceRow,
+    row: &ResourceView,
     content: &ContentResponse,
 ) -> Result<Option<PathBuf>> {
     use crate::actions::ingest;
@@ -309,7 +309,7 @@ pub fn write_resource_file_from_parts(
 pub async fn write_resource_file(
     client: &TemperClient,
     vault_root: &Path,
-    row: &ResourceRow,
+    row: &ResourceView,
 ) -> Result<Option<PathBuf>> {
     let content = client
         .resources()
@@ -319,7 +319,7 @@ pub async fn write_resource_file(
     write_resource_file_from_parts(vault_root, row, &content)
 }
 
-/// Remove a resource's projection file given a server [`ResourceRow`].
+/// Remove a resource's projection file given a server [`ResourceView`].
 ///
 /// A by-row convenience over [`remove_resource_file`] for the id-addressed
 /// `temper resource delete` path: derives `owner` from the row's context
@@ -329,7 +329,7 @@ pub async fn write_resource_file(
 pub fn remove_resource_file_for_row(
     vault_root: &Path,
     config: &crate::config::Config,
-    row: &ResourceRow,
+    row: &ResourceView,
 ) -> Result<()> {
     use crate::actions::ingest;
 
@@ -408,8 +408,8 @@ pub async fn pull_context(
 }
 
 /// List every resource in `context`, following the server's pagination.
-async fn list_context_resources(client: &TemperClient, context: &str) -> Result<Vec<ResourceRow>> {
-    let mut rows: Vec<ResourceRow> = Vec::new();
+async fn list_context_resources(client: &TemperClient, context: &str) -> Result<Vec<ResourceView>> {
+    let mut rows: Vec<ResourceView> = Vec::new();
     let mut offset: i64 = 0;
     loop {
         let params = ResourceListParams {
@@ -438,7 +438,7 @@ async fn list_context_resources(client: &TemperClient, context: &str) -> Result<
 async fn write_projection_files(
     client: &TemperClient,
     vault_root: &Path,
-    rows: &[ResourceRow],
+    rows: &[ResourceView],
 ) -> Result<HashSet<PathBuf>> {
     let mut keep: HashSet<PathBuf> = HashSet::new();
     for row in rows {
@@ -459,7 +459,7 @@ async fn write_projection_files(
 fn prune_absent_files(
     vault_root: &Path,
     context: &str,
-    rows: &[ResourceRow],
+    rows: &[ResourceView],
     keep: &HashSet<PathBuf>,
 ) -> Result<usize> {
     let context_dir_name: Option<String> = rows
@@ -483,7 +483,7 @@ async fn record_context_cursor(
     client: &TemperClient,
     state_dir: &Path,
     context: &str,
-    rows: &[ResourceRow],
+    rows: &[ResourceView],
 ) -> Result<()> {
     let context_id = rows.first().and_then(|r| r.kb_context_id.map(Uuid::from));
     let last_event_id = match context_id {

@@ -1079,6 +1079,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * `GET /api/resources` — **one response type, unconditionally.**
+         * @description This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,
+         *     selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a
+         *     union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the
+         *     caller varies which *parts* of `ResourceView` are filled, never which type comes back. The
+         *     `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are
+         *     gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
+         */
         get: operations["list_resources"];
         put?: never;
         post: operations["create_resource"];
@@ -3109,12 +3118,12 @@ export interface components {
         IdpRevocation: "not_attempted" | "revoked" | "failed";
         /**
          * @description `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
-         *     the one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`]
+         *     the one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`]
          *     when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
          *     discriminates by which fields are present (`SegmentedBeginResponse` always carries
-         *     `correlation_id`/`blocks`, which `ResourceRow` never does).
+         *     `correlation_id`/`blocks`, which `ResourceView` never does).
          */
-        IngestCreateResponse: components["schemas"]["ResourceRow"] | components["schemas"]["SegmentedBeginResponse"];
+        IngestCreateResponse: components["schemas"]["ResourceView"] | components["schemas"]["SegmentedBeginResponse"];
         /**
          * @description The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the
          *     steward's cron pulls. `new_resources` is the counted ingest metric; `new_events` is the broader
@@ -3534,13 +3543,6 @@ export interface components {
             resource_id: string;
             title: string;
         };
-        /**
-         * @description Combined response for `GET /api/resources`.
-         *
-         *     Returned shape depends on the `meta_only` query parameter. utoipa
-         *     represents this as `oneOf<ResourceListResponse, ResourceMetaListResponse>`.
-         */
-        ListResourcesResponse: components["schemas"]["ResourceListResponse"] | components["schemas"]["ResourceMetaListResponse"];
         /**
          * @description Temper-governed **workflow + provenance** metadata for a vault resource.
          *
@@ -4188,32 +4190,6 @@ export interface components {
             title: string;
         };
         /**
-         * @description The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.
-         *
-         *     `show` used to return a bare `ResourceRow`, which carries only the flat managed
-         *     projections (`stage`/`seq`/`mode`/`effort`) — so the "full" view silently omitted
-         *     both `managed_meta` and `open_meta`, and a script reading `open_meta` from it got
-         *     `None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for
-         *     the tiers.
-         *
-         *     The two meta fields carry serde attributes identical to
-         *     [`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only`
-         *     projection is a literal strict subset of this shape.
-         *
-         *     No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the
-         *     `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The
-         *     SvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is
-         *     a structural superset of it, so the extra keys are simply ignored there.
-         */
-        ResourceDetail: components["schemas"]["ResourceRow"] & {
-            managed_meta?: null | components["schemas"]["ManagedMeta"];
-            /**
-             * @description Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
-             *     `None` only if the manifest row predates meta population.
-             */
-            open_meta?: unknown;
-        };
-        /**
          * @description One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.
          *
          *     **Deliberately not [`EdgeFacetRow`], and not an alias of it.** The two look alike and are not
@@ -4369,7 +4345,13 @@ export interface components {
              *     survives a projection that drops or summarizes the rows.
              */
             returned: number;
-            rows: components["schemas"]["ResourceRow"][];
+            /**
+             * @description One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row
+             *     list and a `show` of that resource serialize identically when neither asks for the body.
+             *     There is no second list envelope: `?sections=` varies which parts of this shape are
+             *     filled, never which type comes back.
+             */
+            rows: components["schemas"]["ResourceView"][];
             /**
              * Format: int64
              * @description The FILTERED match count — every row the filters admit, before `limit`/`offset`.
@@ -4384,116 +4366,11 @@ export interface components {
              */
             truncated: boolean;
         };
-        /**
-         * @description Paginated response for the `?meta_only=true` list mode.
-         *
-         *     Mirror of [`crate::types::resource::ResourceListResponse`] with the row type
-         *     swapped to [`crate::types::resource::ResourceDetail`] — the full row (title,
-         *     doc_type, context, owner, the stage/seq/mode/effort projections) plus both
-         *     `managed_meta` and `open_meta` tiers. This is the list analogue of what
-         *     `--meta-only` gives on a single `show`: everything the default list row carries
-         *     **and** both meta tiers, per item — the whole view minus each resource's body.
-         *     (The default list row, [`crate::types::resource::ResourceRow`], carries neither
-         *     meta tier.) Returned by `GET /api/resources?meta_only=true`. Facets and total
-         *     are computed identically to the default list response — projection-independent.
-         *
-         *     No `ts_rs::TS` derive: `ResourceDetail` cannot codegen (its `#[serde(flatten)]`
-         *     row is unsupported by ts-rs), so this container cannot either. The SvelteKit UI
-         *     types the list endpoint as `ResourceListResponse` regardless; this shape is a
-         *     structural superset, so the extra keys are simply ignored there.
-         */
-        ResourceMetaListResponse: {
-            facets: components["schemas"]["ResourceFacets"];
-            rows: components["schemas"]["ResourceDetail"][];
-            /** Format: int64 */
-            total: number;
-        };
-        /**
-         * @description Response body for the metadata-only GET endpoint.
-         *
-         *     Returns the current managed_meta / open_meta / hashes from a
-         *     resource's manifest row without reconstructing the markdown body
-         *     from `kb_chunks`. Used by the CLI sync pull path to fetch just the
-         *     meta tier when the body side already agrees.
-         */
-        ResourceMetaResponse: {
-            /**
-             * @description UUID of the resource.
-             *
-             *     Named `id` (not `resource_id`) so this response is a literal strict subset of
-             *     `temper_workflow::types::resource::ResourceDetail`: `--meta-only` returns the same
-             *     keys the full `show` does, and nothing else. With two different anchor names the
-             *     subset relation is unachievable.
-             */
-            id: components["schemas"]["ResourceId"];
-            managed_meta?: null | components["schemas"]["ManagedMeta"];
-            /**
-             * @description Open (user-defined) frontmatter fields from the manifest.
-             *     Intentionally untyped — open_meta is the free-form tier. Typed
-             *     extraction of relationship fields lives in `ResourceRelationships`
-             *     (see `temper-core::types::graph`), which parses this value on
-             *     demand and ignores anything it doesn't recognize.
-             *     `None` only if the manifest row predates meta population.
-             */
-            open_meta?: unknown;
-        };
         /** @description Delete a `kb_access_grants` row on a resource (the `(subject, principal)` pair). Absent ⇒ no-op. */
         ResourceRevokeBody: {
             /** Format: uuid */
             principal_id: string;
             principal_table: string;
-        };
-        /**
-         * @description Row type for resource listings — includes joined display fields
-         *     and managed_meta projections from `vault_resources_browse` view.
-         */
-        ResourceRow: {
-            /**
-             * @description SHA-256 hash of the resource body content, from `kb_resource_manifests`.
-             *     `None` when no manifest row exists (resource created via POST without a
-             *     body trio, or the manifest join returned NULL).
-             */
-            body_hash?: string | null;
-            body_storage?: null | components["schemas"]["BodyStorage"];
-            /**
-             * Format: uuid
-             * @description Set when the resource is homed in a cognitive map (Surface B).
-             *     Mutually exclusive with the `context_*` fields.
-             */
-            cogmap_id?: string | null;
-            /** @description Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`. */
-            cogmap_name?: string | null;
-            context_name?: string | null;
-            /**
-             * @description Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
-             *     Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
-             *     `None` for a cogmap-homed resource.
-             */
-            context_owner_ref?: string | null;
-            /**
-             * @description Slug of the home context (the natural-key half of `@owner/slug`).
-             *     `None` for a cogmap-homed resource.
-             */
-            context_slug?: string | null;
-            /** Format: date-time */
-            created: string;
-            doc_type_name: string;
-            effort?: string | null;
-            id: components["schemas"]["ResourceId"];
-            ingest_state?: null | components["schemas"]["IngestState"];
-            is_active: boolean;
-            kb_context_id?: null | components["schemas"]["ContextId"];
-            mode?: string | null;
-            origin_uri: string;
-            originator_profile_id: components["schemas"]["ProfileId"];
-            owner_handle: string;
-            owner_profile_id: components["schemas"]["ProfileId"];
-            /** Format: int64 */
-            seq?: number | null;
-            stage?: string | null;
-            title: string;
-            /** Format: date-time */
-            updated: string;
         };
         /**
          * @description Sort field for resource listing.
@@ -4585,6 +4462,122 @@ export interface components {
              *     as a `temper-type` key inside `managed_meta`).
              */
             type_to?: string | null;
+        };
+        /**
+         * @description Everything a resource is, except its body — one shape for every read and write
+         *     surface.
+         *
+         *     Replaces the six near-identical projections a caller used to have to tell apart
+         *     (`ResourceRow`, `ResourceDetail`, `ResourceMetaResponse`, `ResourceSummary`, the
+         *     search `HitIdentity`, and the inlined identity half of `ExactHit`/`WideHit`). A
+         *     human or agent learns this shape once and it is the shape `list`, `show`, `create`,
+         *     `update`, `annotate` and both search arms all answer in.
+         *
+         *     Three properties are load-bearing and each has its own test below:
+         *
+         *     1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`
+         *        recorded why: "With two different anchor names the subset relation is unachievable."
+         *        Here the relation is stronger than subset — it is identity.
+         *     2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on
+         *        `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and
+         *        nowhere else. Dropping them is lossless *because* of property 3.
+         *     3. **`managed_meta` is not an `Option`.** A consumer reads `view.managed_meta.stage`
+         *        without first distinguishing "no meta" from "no stage".
+         *
+         *     **No `#[serde(flatten)]` anywhere**, deliberately: ts-rs cannot codegen a flattened
+         *     field, which is why `ResourceDetail` had to drop its `TS` derive and why the identity
+         *     fields on `ExactHit`/`WideHit` were hand-inlined. This type is ts-rs-exported, so the
+         *     constraint is structural, not stylistic.
+         *
+         *     **No `FromRow` derive, deliberately.** `ref` and `context_ref` are derived rather than
+         *     selected and `content` arrives from a different read, so a `query_as` into this type
+         *     could never be complete. `ResourceRow` carried a `FromRow` derive with **zero**
+         *     `query_as` call sites anywhere in the repo — decorative, and an invitation to try
+         *     something that cannot work. Construction is by hand, as `substrate_read` already does.
+         */
+        ResourceView: {
+            /**
+             * @description SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
+             *     manifest row exists.
+             */
+            body_hash?: string | null;
+            body_storage?: null | components["schemas"]["BodyStorage"];
+            /**
+             * Format: uuid
+             * @description Set when the resource is homed in a cognitive map. Mutually exclusive with
+             *     the `context_*` fields.
+             */
+            cogmap_id?: string | null;
+            /** @description Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`. */
+            cogmap_name?: string | null;
+            /**
+             * @description The reconstructed markdown body — the `body` section.
+             *
+             *     Absent means **not requested**, never "empty body". An empty body is
+             *     `Some(String::new())`, which serializes as `""`; the two are distinguishable on
+             *     the wire and after a round-trip.
+             */
+            content?: string | null;
+            context_name?: string | null;
+            /** @description Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams. */
+            context_owner_ref?: string | null;
+            /**
+             * @description The composed home-context address, `{context_owner_ref}/{context_slug}`.
+             *
+             *     Not a column — derived by [`ResourceView::with_derived_refs`]. `None` for a
+             *     cogmap-homed resource, which has no context half; never a half-formed ref.
+             */
+            context_ref?: string | null;
+            /** @description Slug of the home context (the natural-key half of `@owner/slug`). */
+            context_slug?: string | null;
+            /** Format: date-time */
+            created: string;
+            doc_type_name: string;
+            id: components["schemas"]["ResourceId"];
+            ingest_state?: null | components["schemas"]["IngestState"];
+            is_active: boolean;
+            kb_context_id?: null | components["schemas"]["ContextId"];
+            /**
+             * @description Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.
+             *
+             *     **Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/
+             *     `effort`/`seq` columns lossless: the values did not go away, they went home. A
+             *     resource with no managed metadata carries an all-`None` `ManagedMeta`, which
+             *     serializes as `{}` — present and empty, never absent.
+             */
+            managed_meta?: components["schemas"]["ManagedMeta"];
+            /**
+             * @description Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
+             *     Absent means the `open-meta` section was not requested.
+             */
+            open_meta?: unknown;
+            /**
+             * @description Original source URL or file reference.
+             *
+             *     There is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one
+             *     whose doc comment promised a "canonical `kb://` URI ... from `kb_resource_uri`",
+             *     but `kb_resource_uri` does not exist in `migrations/` and the assembly wrote
+             *     `kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value
+             *     under a second name and a false description. It joins `origin` (the constant
+             *     `"unified"`) and `slug` (always `String::new()`) as a field this arc dropped for
+             *     never having carried what it claimed.
+             */
+            origin_uri: string;
+            originator_profile_id: components["schemas"]["ProfileId"];
+            owner_handle: string;
+            owner_profile_id: components["schemas"]["ProfileId"];
+            /**
+             * @description The decorated, self-resolving address: `sluggify(title)-<uuid>`.
+             *
+             *     Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`.
+             *     Until this task it was injected render-time by the CLI alone
+             *     (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even
+             *     though the shipped skill instructs agents to use it.
+             */
+            ref: string;
+            title: string;
+            /** Format: date-time */
+            updated: string;
         };
         /** @description Request body for `POST /api/relationships/{edge_handle}/retype`. */
         RetypeRelationshipRequest: components["schemas"]["ActInput"] & {
@@ -7027,7 +7020,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Invalid payload */
@@ -7822,11 +7815,20 @@ export interface operations {
                 limit?: number | null;
                 offset?: number | null;
                 /**
-                 * @description When true, the list endpoint returns `ResourceMetaListResponse`
-                 *     (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
-                 *     `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
+                 * @description Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of
+                 *     [`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,
+                 *     `edges`). `None`/empty asks for none, which is the default list row.
+                 *
+                 *     Replaces `meta_only`, which named a *response type* rather than a part: it selected a
+                 *     second envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is
+                 *     one response shape now, so what the caller varies is which parts of it are filled.
+                 *
+                 *     A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —
+                 *     the list endpoint is a GET whose params ride the query string, and serde_urlencoded does
+                 *     not encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name
+                 *     naming the whole valid set.
                  */
-                meta_only?: boolean | null;
+                sections?: string | null;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -7837,13 +7839,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Paginated list of visible resources with facets, or meta-only rows when meta_only=true */
+            /** @description Paginated list of visible resources with facets and paging state */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ListResourcesResponse"];
+                    "application/json": components["schemas"]["ResourceListResponse"];
+                };
+            };
+            /** @description Unknown section name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Unauthorized */
@@ -7879,7 +7890,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unknown context or doc_type ID */
@@ -7941,7 +7952,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceDetail"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unauthorized */
@@ -8063,7 +8074,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline) */
@@ -8658,13 +8669,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current managed/open meta for the resource */
+            /** @description The resource with both metadata tiers filled */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceMetaResponse"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unauthorized */
@@ -8712,7 +8723,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unauthorized */
@@ -8813,7 +8824,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description No sources, or an invalid content_block */

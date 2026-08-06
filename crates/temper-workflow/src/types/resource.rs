@@ -17,6 +17,10 @@ pub use temper_core::types::resource::{BodyStorage, IngestState};
 
 /// Row type for resource listings — includes joined display fields
 /// and managed_meta projections from `vault_resources_browse` view.
+///
+/// **Off the wire since Task 7** — every read and write surface answers in
+/// [`ResourceView`]. What still reads this shape is temper-mcp's `EnrichedResource`
+/// (`build_enriched`/`enrich_resources`); **Task 9** retires both, and this type with them.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -97,20 +101,13 @@ impl ResourceRow {
 
 /// The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.
 ///
-/// `show` used to return a bare `ResourceRow`, which carries only the flat managed
-/// projections (`stage`/`seq`/`mode`/`effort`) — so the "full" view silently omitted
-/// both `managed_meta` and `open_meta`, and a script reading `open_meta` from it got
-/// `None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for
-/// the tiers.
-///
-/// The two meta fields carry serde attributes identical to
-/// [`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only`
-/// projection is a literal strict subset of this shape.
+/// **Off the wire since Task 7** — `GET /api/resources/{id}` answers in [`ResourceView`].
+/// What still reads this shape is temper-mcp's `get_resource`, via
+/// `substrate_read::show_detail_select`; **Task 9** retires both.
 ///
 /// No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the
-/// `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The
-/// SvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is
-/// a structural superset of it, so the extra keys are simply ignored there.
+/// `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason) — which is
+/// the constraint `ResourceView` was built to satisfy structurally.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceDetail {
@@ -128,23 +125,23 @@ pub struct ResourceDetail {
 
 // ─── Transitional narrowings between `ResourceView` and the incumbent shapes ───────────
 //
-// **All three are deleted by Task 7**, which swaps the wire itself to `ResourceView`. They
-// exist because Task 6 moved the `Backend` trait to `ResourceView` while `/api/resources`,
-// `/api/ingest`, the MCP tools and the CLI still speak `ResourceRow`/`ResourceDetail`: the
-// trait boundary and the wire boundary move in different commits, and something has to sit
-// between them for one commit.
+// Task 7 moved the **wire** to `ResourceView` — `/api/resources`, `/api/ingest`, `/meta`, the
+// temper-client and the CLI all speak it now, and the third impl (`From<ResourceRow> for
+// ResourceView`, which `CloudBackend` needed to widen a row the client no longer returns) went
+// with it.
 //
-// They live here rather than in `temper-services::backend::substrate_read` (where the first
-// two began life, as the private `view_to_row`/`view_to_detail`) because temper-api,
-// temper-mcp AND temper-cli all now need to narrow, and temper-cli does not depend on
-// temper-services. One definition in the crate all three already share beats three.
+// **The two below are Task 9's.** What holds them up is temper-mcp, which still answers in
+// `EnrichedResource` — a `ResourceRow`-shaped projection built by `build_enriched` — and reads
+// `substrate_read::show_detail_select`. Both narrow a view the read paths already produce; when
+// the MCP tools answer in `ResourceView`, both impls and `ResourceRow`/`ResourceDetail`
+// themselves have no remaining consumer.
 
 /// Narrow a [`ResourceView`] back onto the incumbent [`ResourceRow`].
 ///
 /// The four workflow columns come back out of `managed_meta`, which is exactly the
 /// losslessness claim `ResourceView` makes: they did not go away, they went home.
 ///
-/// **Transitional — deleted by Task 7.**
+/// **Transitional — deleted by Task 9**, with temper-mcp's `EnrichedResource`.
 impl From<ResourceView> for ResourceRow {
     fn from(view: ResourceView) -> Self {
         Self {
@@ -180,7 +177,7 @@ impl From<ResourceView> for ResourceRow {
 /// `managed_meta` is `Some` unconditionally because on the view it is not an `Option` at
 /// all; `open_meta` rides through as the caller's section request left it.
 ///
-/// **Transitional — deleted by Task 7.**
+/// **Transitional — deleted by Task 9**, with temper-mcp's `get_resource`.
 impl From<ResourceView> for ResourceDetail {
     fn from(mut view: ResourceView) -> Self {
         let managed_meta = view.managed_meta.clone();
@@ -190,59 +187,6 @@ impl From<ResourceView> for ResourceDetail {
             managed_meta: Some(managed_meta),
             open_meta,
         }
-    }
-}
-
-/// Widen an incumbent [`ResourceRow`] onto a [`ResourceView`].
-///
-/// The direction `CloudBackend` needs: the CLI's cloud write path receives a `ResourceRow`
-/// from `temper-client` (the wire type until Task 7) and must hand back the `ResourceView`
-/// the `Backend` trait now declares.
-///
-/// It is a faithful widening of *what a row carries*, not an invention: the four workflow
-/// columns go home into `ManagedMeta` and the rest of that tier is `None` because the row
-/// never carried it. `open_meta` and `content` are `None` — absent means **not requested**,
-/// which is true here — and `ref`/`context_ref` are filled by
-/// [`ResourceView::with_derived_refs`] rather than re-derived, so there stays exactly one
-/// `sluggify` in the address path.
-///
-/// **Transitional — deleted by Task 7**, when the wire carries a view and there is no row to
-/// widen.
-impl From<ResourceRow> for ResourceView {
-    fn from(row: ResourceRow) -> Self {
-        Self {
-            id: row.id,
-            r#ref: String::new(),
-            title: row.title,
-            origin_uri: row.origin_uri,
-            kb_context_id: row.kb_context_id,
-            context_name: row.context_name,
-            context_slug: row.context_slug,
-            context_owner_ref: row.context_owner_ref,
-            context_ref: None,
-            cogmap_id: row.cogmap_id,
-            cogmap_name: row.cogmap_name,
-            doc_type_name: row.doc_type_name,
-            owner_handle: row.owner_handle,
-            owner_profile_id: row.owner_profile_id,
-            originator_profile_id: row.originator_profile_id,
-            is_active: row.is_active,
-            created: row.created,
-            updated: row.updated,
-            body_hash: row.body_hash,
-            ingest_state: row.ingest_state,
-            body_storage: row.body_storage,
-            managed_meta: ManagedMeta {
-                stage: row.stage,
-                seq: row.seq,
-                mode: row.mode,
-                effort: row.effort,
-                ..ManagedMeta::default()
-            },
-            open_meta: None,
-            content: None,
-        }
-        .with_derived_refs()
     }
 }
 
@@ -334,11 +278,20 @@ pub struct ResourceListParams {
     pub limit: Option<i64>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
-    /// When true, the list endpoint returns `ResourceMetaListResponse`
-    /// (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
-    /// `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
+    /// Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of
+    /// [`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,
+    /// `edges`). `None`/empty asks for none, which is the default list row.
+    ///
+    /// Replaces `meta_only`, which named a *response type* rather than a part: it selected a
+    /// second envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is
+    /// one response shape now, so what the caller varies is which parts of it are filled.
+    ///
+    /// A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —
+    /// the list endpoint is a GET whose params ride the query string, and serde_urlencoded does
+    /// not encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name
+    /// naming the whole valid set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meta_only: Option<bool>,
+    pub sections: Option<String>,
 }
 
 /// Aggregated doc-type facet counts for the current filter set.
@@ -368,7 +321,11 @@ pub struct ResourceFacets {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListResponse {
-    pub rows: Vec<ResourceRow>,
+    /// One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row
+    /// list and a `show` of that resource serialize identically when neither asks for the body.
+    /// There is no second list envelope: `?sections=` varies which parts of this shape are
+    /// filled, never which type comes back.
+    pub rows: Vec<ResourceView>,
     /// The FILTERED match count — every row the filters admit, before `limit`/`offset`.
     pub total: i64,
     pub facets: ResourceFacets,
@@ -396,7 +353,7 @@ impl ResourceListResponse {
     /// page itself rather than from a parameter, so it cannot disagree with `rows`.
     #[must_use]
     pub fn new(
-        rows: Vec<ResourceRow>,
+        rows: Vec<ResourceView>,
         total: i64,
         facets: ResourceFacets,
         limit: Option<i64>,
@@ -832,13 +789,38 @@ mod tests {
 /// looking at (`limit`, `offset`).
 #[cfg(test)]
 mod list_paging_tests {
-    use super::resource_detail_tests::sample_resource_row;
     use super::*;
 
     /// A page of `n` rows. Only the count matters here — `returned` is `rows.len()`
     /// and nothing in the derivation reads a row's fields.
-    fn page_of(n: usize) -> Vec<ResourceRow> {
-        vec![sample_resource_row(); n]
+    fn page_of(n: usize) -> Vec<ResourceView> {
+        let view = ResourceView {
+            id: ResourceId::from(Uuid::nil()),
+            r#ref: String::new(),
+            title: "A Node".to_string(),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: None,
+            context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "concept".to_string(),
+            owner_handle: "someone".to_string(),
+            owner_profile_id: ProfileId::from(Uuid::nil()),
+            originator_profile_id: ProfileId::from(Uuid::nil()),
+            is_active: true,
+            created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            body_hash: None,
+            ingest_state: Some(IngestState::Complete),
+            body_storage: Some(BodyStorage::Derived),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        };
+        vec![view; n]
     }
 
     /// The default page of a large set hides rows, and says so.

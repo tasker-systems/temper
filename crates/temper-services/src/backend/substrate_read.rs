@@ -9,7 +9,7 @@
 //! through `resources_visible_to`. SQL is unqualified against the one schema (the connection
 //! carries the search_path).
 //!
-//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/status/tags/owner/`q`-title), sort, and paginate the
+//! `list` filters (context_ref/doc_type_name/stage/status/tags/owner/`q`-title), sorts, and paginates the
 //! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
 //! to a context UUID before filtering so bare names are rejected (spec Decision 1). Full-text/vector `q`
 //! on the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
@@ -41,9 +41,6 @@ use temper_core::types::invocation::{
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_substrate::readback;
-use temper_workflow::types::managed_meta::{
-    ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
-};
 use temper_workflow::types::resource::{
     ContentResponse, ResourceDetail, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
@@ -440,19 +437,29 @@ pub async fn list_views_select(
     })
 }
 
-/// `list` — the incumbent envelope over [`list_views_select`].
+/// `list` — the one list envelope, over [`list_views_select`].
 ///
-/// Asks for no sections: the default list row carries neither meta tier nor the body, exactly as
-/// before. `ResourceListResponse` still carries `Vec<ResourceRow>`, so each view is narrowed by
-/// `ResourceRow::from` at the envelope until Task 7 swaps the row type.
+/// There is no second list function. `?meta_only=true` used to route to `list_meta_select`, whose
+/// rows were a different type in a different envelope; a caller now asks for *parts* of the one
+/// shape through `params.sections`, and gets the same `ResourceListResponse` either way.
+///
+/// **The CSV is parsed here, not in the handler**, for the same reason the tag case-fold lives in
+/// `filtered_visible_page`: the HTTP surface, the MCP tools and any other caller reach this
+/// function directly, and a vocabulary parsed at one door is a vocabulary the other doors do not
+/// have. An unknown section name is a `400` naming the whole valid set
+/// (`SectionSet::parse_csv` → `ResourceSection::from_str`).
 pub async fn list_select(
     pool: &PgPool,
     profile_id: ProfileId,
     params: ResourceListParams,
 ) -> ApiResult<ResourceListResponse> {
-    let page = list_views_select(pool, profile_id, &params, &SectionSet::default()).await?;
+    let sections = match params.sections.as_deref() {
+        Some(csv) => SectionSet::parse_csv(csv).map_err(ApiError::from)?,
+        None => SectionSet::default(),
+    };
+    let page = list_views_select(pool, profile_id, &params, &sections).await?;
     Ok(ResourceListResponse::new(
-        page.views.into_iter().map(ResourceRow::from).collect(),
+        page.views,
         page.total,
         page.facets,
         page.limit,
@@ -461,10 +468,10 @@ pub async fn list_select(
 }
 
 // `view_to_row` and `view_to_detail` moved to `temper_workflow::types::resource` as
-// `impl From<ResourceView> for ResourceRow` / `for ResourceDetail`, unchanged in body and still
-// **transitional — deleted by Task 7**. Task 6 moved the `Backend` trait to `ResourceView` while
-// the wire still speaks rows, so temper-api, temper-mcp and temper-cli all narrow now too — and
-// temper-cli cannot reach into temper-services. One definition, in the crate all four share.
+// `impl From<ResourceView> for ResourceRow` / `for ResourceDetail`. Task 7 retired the wire's use
+// of both; what keeps them alive is temper-mcp, which still answers in `ResourceRow`-shaped
+// `EnrichedResource`s (`enrich_resources`, `build_enriched`) and reads `show_detail_select`. They
+// go with **Task 9**.
 
 /// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
 /// Visibility is gated inside `native_resource_row` (WS2); the typed `ReadbackError` is split by
@@ -546,48 +553,27 @@ pub async fn get_content_select(
     })
 }
 
-/// `get_meta` — managed/open frontmatter for one resource (`readback::meta`, the §7 inverse fate).
+/// `get_meta` — one resource with both metadata tiers, as a [`ResourceView`].
 ///
-/// Carries no meta hashes: `managed_hash`/`open_hash` were §7-dissolved and had been
-/// emitted as empty strings ever since, so the fields were removed rather than kept as two
-/// permanently-meaningless keys. The real `body_hash` lives on `ResourceRow`.
+/// `GET /api/resources/{id}/meta` used to answer in a `ResourceMetaResponse` — `{id, managed_meta,
+/// open_meta}` — whose whole design constraint was to be *a literal strict subset* of what `show`
+/// returns. That constraint exists only while the two are different types. They are one type now,
+/// so the endpoint answers in it: the subset relation became identity, which is the convergence
+/// this arc is for.
+///
+/// Composed from [`show_view_select`] with the `open-meta` section asked for, so this door and
+/// `show`'s cannot disagree about a resource's identity, its managed tier, or how a miss reads.
+/// The body is not requested; `GET /api/resources/{id}/content` remains its door.
+///
+/// Carries no meta hashes: `managed_hash`/`open_hash` were §7-dissolved and had been emitted as
+/// empty strings ever since. The real `body_hash` is on the view.
 pub async fn get_meta_select(
     pool: &PgPool,
     profile_id: ProfileId,
     resource_id: ResourceId,
-) -> ApiResult<ResourceMetaResponse> {
-    let new_id = Uuid::from(resource_id);
-    let rb = readback::meta(pool, profile_id, resource_id)
-        .await
-        .map_err(|e| ApiError::from(map_readback_err(e)))?;
-    let managed: ManagedMeta =
-        serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
-    Ok(ResourceMetaResponse {
-        id: ResourceId::from(new_id),
-        managed_meta: Some(managed),
-        open_meta: Some(serde_json::Value::Object(rb.open)),
-    })
-}
-
-/// `list_meta` — the `?meta_only=true` projection, i.e. `list` with the `open-meta` section asked
-/// for. Same WS2-scoped, filtered + sorted + paginated set as `list` (`filtered_visible_page`),
-/// each row a full [`ResourceDetail`] (row + both meta tiers — the whole per-resource view minus
-/// the body). `total`/`facets` mirror `list` (the FILTERED set).
-///
-/// The identity + managed tier come from the page's single batched readback; only the open tier
-/// costs a statement per row, and only because it was asked for.
-pub async fn list_meta_select(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    params: ResourceListParams,
-) -> ApiResult<ResourceMetaListResponse> {
+) -> ApiResult<ResourceView> {
     let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
-    let page = list_views_select(pool, profile_id, &params, &sections).await?;
-    Ok(ResourceMetaListResponse {
-        rows: page.views.into_iter().map(ResourceDetail::from).collect(),
-        total: page.total,
-        facets: page.facets,
-    })
+    show_view_select(pool, profile_id, resource_id, &sections).await
 }
 
 /// `get_meta_batch` — the batched meta tier for many ids (the MCP `enrich_resources` path). Loops
@@ -597,7 +583,7 @@ pub async fn get_meta_batch_select(
     pool: &PgPool,
     profile_id: ProfileId,
     ids: &[ResourceId],
-) -> ApiResult<HashMap<ResourceId, ResourceMetaResponse>> {
+) -> ApiResult<HashMap<ResourceId, ResourceView>> {
     let mut map = HashMap::with_capacity(ids.len());
     for id in ids {
         match get_meta_select(pool, profile_id, *id).await {

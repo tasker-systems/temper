@@ -317,25 +317,6 @@ pub(crate) fn cmd_to_resource_annotate_request(
     }
 }
 
-/// Project a `ResourceRow` (returned by `temper-client` methods) into the
-/// `ResourceView` shape required by the `Backend` trait.
-///
-/// The temper-client still returns `temper_workflow::types::resource::ResourceRow`
-/// directly — there is no separate wire `Resource` type, and the wire does not become
-/// a view until Task 7. So this boundary now widens rather than clones: Task 6 moved
-/// the trait to `ResourceView` while `/api/resources` still answers in rows.
-///
-/// The widening itself lives on `impl From<ResourceRow> for ResourceView` beside both
-/// shapes in temper-workflow, not here — three other crates narrow in the opposite
-/// direction and all four conversions belong in one place. **Transitional; it and the
-/// `From` impl go together in Task 7.**
-#[cfg(feature = "embed")]
-pub(crate) fn wire_resource_to_resource_view(
-    resource: &temper_workflow::types::resource::ResourceRow,
-) -> temper_core::types::resource_view::ResourceView {
-    resource.clone().into()
-}
-
 #[cfg(feature = "embed")]
 #[cfg(test)]
 mod tests {
@@ -669,56 +650,6 @@ mod tests {
         assert_eq!(req.content.as_deref(), Some("# Updated\n"));
         assert!(req.content_hash.is_some());
         assert!(req.chunks_packed.is_some());
-    }
-
-    // ── Task 4 tests ─────────────────────────────────────────────────────────
-
-    use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::types::resource::ResourceRow;
-    use uuid::Uuid;
-
-    fn sample_resource_row() -> ResourceRow {
-        let nil = Uuid::nil();
-        ResourceRow {
-            id: ResourceId(nil),
-            kb_context_id: Some(ContextId(nil)),
-            origin_uri: "kb://@me/temper/task/test-task".to_string(),
-            title: "Test Task".to_string(),
-            originator_profile_id: ProfileId(nil),
-            owner_profile_id: ProfileId(nil),
-            is_active: true,
-            created: chrono::DateTime::UNIX_EPOCH,
-            updated: chrono::DateTime::UNIX_EPOCH,
-            context_name: Some("temper".to_string()),
-            doc_type_name: "task".to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some("temper".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: Some("active".to_string()),
-            seq: None,
-            mode: None,
-            effort: None,
-            body_hash: Some("abc123".to_string()),
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
-        }
-    }
-
-    #[test]
-    fn wire_resource_to_resource_view_maps_basic_fields() {
-        let wire = sample_resource_row();
-        let view = wire_resource_to_resource_view(&wire);
-        assert_eq!(view.title, "Test Task");
-        assert_eq!(view.id, ResourceId(Uuid::nil()));
-        assert_eq!(view.context_name.as_deref(), Some("temper"));
-        assert_eq!(view.doc_type_name, "task");
-        assert_eq!(view.body_hash, Some("abc123".to_string()));
-        assert_eq!(view.owner_handle, "@me");
-        // The widening derives `ref` rather than leaving it empty — it is the address the
-        // CLI used to inject at print time and MCP never emitted at all.
-        assert_eq!(view.r#ref, "test-task-00000000-0000-0000-0000-000000000000");
     }
 }
 

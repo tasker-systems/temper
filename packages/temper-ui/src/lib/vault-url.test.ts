@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ResourceRow } from './types/generated/resource';
+import type { ResourceView } from './types/generated/resource_view';
 import {
 	contextGraphHref,
 	contextHref,
@@ -11,9 +11,10 @@ import {
 
 const ID = '019f420c-cf01-7bc1-87c9-09684b0fa69e';
 
-function makeRow(partial: Partial<ResourceRow>): ResourceRow {
+function makeRow(partial: Partial<ResourceView>): ResourceView {
 	return {
 		id: ID,
+		ref: `t-${ID}`,
 		kb_context_id: '00000000-0000-0000-0003-000000000001',
 		origin_uri: '',
 		title: 'T',
@@ -27,15 +28,28 @@ function makeRow(partial: Partial<ResourceRow>): ResourceRow {
 		owner_handle: 'j-cole-taylor',
 		context_slug: 'temper',
 		context_owner_ref: '@j-cole-taylor',
+		context_ref: '@j-cole-taylor/temper',
 		cogmap_id: null,
 		cogmap_name: null,
-		stage: null,
-		seq: null,
-		mode: null,
-		effort: null,
 		body_hash: null,
 		ingest_state: 'complete',
 		body_storage: 'derived',
+		// The hoisted `stage`/`seq`/`mode`/`effort` columns are gone; every managed value
+		// lives in this always-present tier under its canonical `temper-*` name.
+		managed_meta: {
+			'temper-stage': null,
+			'temper-mode': null,
+			'temper-effort': null,
+			'temper-status': null,
+			'temper-seq': null,
+			'temper-branch': null,
+			'temper-pr': null,
+			'temper-llm-model': null,
+			'temper-llm-run': null,
+			'temper-provenance': null,
+		},
+		open_meta: null,
+		content: null,
 		...partial,
 	};
 }

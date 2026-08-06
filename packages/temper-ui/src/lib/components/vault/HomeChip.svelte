@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { ResourceRow } from '$lib/types';
+	import type { ResourceView } from '$lib/types';
 	import { contextHref } from '$lib/vault-url';
 
-	let { row }: { row: ResourceRow } = $props();
+	let { row }: { row: ResourceView } = $props();
 
 	// A resource is homed by exactly one anchor: a context or a cogmap
 	// (kb_resource_homes.anchor_table). Cogmap-homed rows carry null context_*.

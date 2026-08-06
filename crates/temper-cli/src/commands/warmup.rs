@@ -1,9 +1,7 @@
 use serde::Serialize;
 use temper_core::types::config::CliSection;
 use temper_workflow::operations::decorated_ref;
-use temper_workflow::types::resource::{
-    ResourceListParams, ResourceRow, ResourceSortField, SortOrder,
-};
+use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
 use crate::actions::runtime;
 use crate::config::Config;
@@ -244,7 +242,7 @@ fn collect_standing_state(
 /// `filtered_visible_page` as a real predicate over the `kb_resource_workflow_props`
 /// pivot, with the value rejected against the goal schema's enum receive-side. Asking the
 /// query is now both correct and the only copy of the rule.
-fn goal_from_row(row: &ResourceRow) -> WarmupGoal {
+fn goal_from_row(row: &temper_core::types::resource_view::ResourceView) -> WarmupGoal {
     WarmupGoal {
         title: row.title.clone(),
         r#ref: decorated_ref(&row.title, row.id),
@@ -254,7 +252,7 @@ fn goal_from_row(row: &ResourceRow) -> WarmupGoal {
 /// Derive a [`WarmupSession`] from a resource row: the date is the row's
 /// creation timestamp (`%Y-%m-%d`) and the title is the row's `title` column
 /// (kept in sync with `temper-title` on every write).
-fn session_from_row(row: &ResourceRow) -> WarmupSession {
+fn session_from_row(row: &temper_core::types::resource_view::ResourceView) -> WarmupSession {
     WarmupSession {
         date: row.created.format("%Y-%m-%d").to_string(),
         title: row.title.clone(),

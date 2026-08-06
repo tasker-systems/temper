@@ -636,10 +636,10 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let meta = substrate_read::get_meta_select(&pool, profile_id, resource.id)
         .await
         .expect("get_meta_select after update");
-    assert!(
-        meta.managed_meta.is_some(),
-        "managed_meta sourced via get_meta_select",
-    );
+    // `managed_meta` is not an `Option` on `ResourceView` — it is always present, which is
+    // what makes dropping the hoisted stage/mode/effort/seq columns lossless. The reachable
+    // claim is therefore about its CONTENT, not its presence.
+    let _ = &meta.managed_meta;
     let open = meta.open_meta.expect("open_meta present");
     assert_eq!(
         open["tags"][2], "updated",
@@ -743,7 +743,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     let meta = substrate_read::get_meta_select(&pool, profile_id, resource.id)
         .await
         .expect("get_meta_select after update");
-    let managed = meta.managed_meta.expect("managed_meta present");
+    let managed = meta.managed_meta;
 
     assert_eq!(
         managed.stage.as_deref(),
@@ -859,7 +859,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     let meta = substrate_read::get_meta_select(&pool, profile_id, resource.id)
         .await
         .expect("get_meta_select after rejected update");
-    let managed = meta.managed_meta.expect("managed_meta present");
+    let managed = meta.managed_meta;
     assert_eq!(
         managed.stage.as_deref(),
         Some("backlog"),

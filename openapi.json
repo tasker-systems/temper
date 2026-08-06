@@ -2987,7 +2987,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceRow"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -4096,6 +4096,8 @@
         "tags": [
           "Resources"
         ],
+        "summary": "`GET /api/resources` — **one response type, unconditionally.**",
+        "description": "This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,\nselected by `?meta_only=true`: two envelopes over two row types, so a generated client had a\nunion to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the\ncaller varies which *parts* of `ResourceView` are filled, never which type comes back. The\n`ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are\ngone with it; `ResourceListResponse` is a plain `Json` return like every other read here.",
         "operationId": "list_resources",
         "parameters": [
           {
@@ -4270,13 +4272,13 @@
             }
           },
           {
-            "name": "meta_only",
+            "name": "sections",
             "in": "query",
-            "description": "When true, the list endpoint returns `ResourceMetaListResponse`\n(`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of\n`ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.",
+            "description": "Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of\n[`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,\n`edges`). `None`/empty asks for none, which is the default list row.\n\nReplaces `meta_only`, which named a *response type* rather than a part: it selected a\nsecond envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is\none response shape now, so what the caller varies is which parts of it are filled.\n\nA CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —\nthe list endpoint is a GET whose params ride the query string, and serde_urlencoded does\nnot encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name\nnaming the whole valid set.",
             "required": false,
             "schema": {
               "type": [
-                "boolean",
+                "string",
                 "null"
               ]
             }
@@ -4284,11 +4286,21 @@
         ],
         "responses": {
           "200": {
-            "description": "Paginated list of visible resources with facets, or meta-only rows when meta_only=true",
+            "description": "Paginated list of visible resources with facets and paging state",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ListResourcesResponse"
+                  "$ref": "#/components/schemas/ResourceListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown section name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -4331,7 +4343,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceRow"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -4423,7 +4435,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceDetail"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -4649,7 +4661,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceRow"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -5584,11 +5596,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Current managed/open meta for the resource",
+            "description": "The resource with both metadata tiers filled",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceMetaResponse"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -5653,7 +5665,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceRow"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -5803,7 +5815,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceRow"
+                  "$ref": "#/components/schemas/ResourceView"
                 }
               }
             }
@@ -9333,13 +9345,13 @@
       "IngestCreateResponse": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/ResourceRow"
+            "$ref": "#/components/schemas/ResourceView"
           },
           {
             "$ref": "#/components/schemas/SegmentedBeginResponse"
           }
         ],
-        "description": "`POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:\nthe one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`]\nwhen the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client\ndiscriminates by which fields are present (`SegmentedBeginResponse` always carries\n`correlation_id`/`blocks`, which `ResourceRow` never does)."
+        "description": "`POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:\nthe one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`]\nwhen the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client\ndiscriminates by which fields are present (`SegmentedBeginResponse` always carries\n`correlation_id`/`blocks`, which `ResourceView` never does)."
       },
       "IngestDelta": {
         "type": "object",
@@ -9488,7 +9500,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/SegmentedBegin",
-                    "description": "When set, this create is the **begin** of a segmented (multi-block) ingest: `content`\ncarries only segment 0's text, and the ingest handler returns a\n[`SegmentedBeginResponse`] instead of the one-shot `ResourceRow`. `None` (the default) is\nthe unchanged one-shot path — every existing small-body caller is unaffected."
+                    "description": "When set, this create is the **begin** of a segmented (multi-block) ingest: `content`\ncarries only segment 0's text, and the ingest handler returns a\n[`SegmentedBeginResponse`] instead of the one-shot `ResourceView`. `None` (the default) is\nthe unchanged one-shot path — every existing small-body caller is unaffected."
                   }
                 ]
               },
@@ -10009,17 +10021,6 @@
             "type": "string"
           }
         }
-      },
-      "ListResourcesResponse": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/ResourceListResponse"
-          },
-          {
-            "$ref": "#/components/schemas/ResourceMetaListResponse"
-          }
-        ],
-        "description": "Combined response for `GET /api/resources`.\n\nReturned shape depends on the `meta_only` query parameter. utoipa\nrepresents this as `oneOf<ResourceListResponse, ResourceMetaListResponse>`."
       },
       "ManagedMeta": {
         "type": "object",
@@ -11266,33 +11267,6 @@
         ],
         "description": "Request body for creating a resource."
       },
-      "ResourceDetail": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ResourceRow"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "managed_meta": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/ManagedMeta",
-                    "description": "Typed managed (`temper-*`) frontmatter. `None` only if the manifest row predates\nmeta population."
-                  }
-                ]
-              },
-              "open_meta": {
-                "description": "Open (user-defined) frontmatter — the free-form tier, intentionally untyped.\n`None` only if the manifest row predates meta population."
-              }
-            }
-          }
-        ],
-        "description": "The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.\n\n`show` used to return a bare `ResourceRow`, which carries only the flat managed\nprojections (`stage`/`seq`/`mode`/`effort`) — so the \"full\" view silently omitted\nboth `managed_meta` and `open_meta`, and a script reading `open_meta` from it got\n`None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for\nthe tiers.\n\nThe two meta fields carry serde attributes identical to\n[`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only`\nprojection is a literal strict subset of this shape.\n\nNo `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the\n`act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The\nSvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is\na structural superset of it, so the extra keys are simply ignored there."
-      },
       "ResourceFacetRow": {
         "type": "object",
         "description": "One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.\n\n**Deliberately not [`EdgeFacetRow`], and not an alias of it.** The two look alike and are not\ninterchangeable: the gates differ (`resources_visible_to` vs `edges_visible_to`), an edge's facets\nfold *with the edge* while a resource's do not, and a resource's `kb_properties` rows are shared\nwith the frontmatter tiers where an edge's are not. Two types that must be able to diverge beat\none type that makes divergence a breaking change.\n\n**Why this carries `created` where [`EdgeFacetRow`] does not.** `facet_set` appends rather than\nupserts, so one logical facet asserted twice leaves two live rows (task\n`019f6d08-2b55-7ee0-b9ac-1959cf4d736b`; 30 resources in production carry 2 or 3). The whole point\nof this read is that a caller can tell that case from a genuinely multi-valued facet, and a\ntimestamp per row is what makes the supersession legible without the read taking a position on\nhow supersession *should* work — a fork this read deliberately does not settle.\n\n**`property_key` rides on the row even though the read is scoped to `\"facet\"`.** It costs one\nfield now and makes widening the read to another property key additive later, rather than a wire\nbreak. The read is scoped rather than general because a resource's other property rows *are* its\nfrontmatter — `get_meta` already serves them — so returning them all would be a second,\ndivergent copy of an existing surface.",
@@ -11497,8 +11471,9 @@
           "rows": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ResourceRow"
-            }
+              "$ref": "#/components/schemas/ResourceView"
+            },
+            "description": "One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row\nlist and a `show` of that resource serialize identically when neither asks for the body.\nThere is no second list envelope: `?sections=` varies which parts of this shape are\nfilled, never which type comes back."
           },
           "total": {
             "type": "integer",
@@ -11508,57 +11483,6 @@
           "truncated": {
             "type": "boolean",
             "description": "Are there matching rows beyond this page? `offset + returned < total`.\n\nDeliberately not `total > returned`, which is true on the last page of a walk\n(total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is\nwhat tells a caller it may not conclude a resource is absent from what it sees."
-          }
-        }
-      },
-      "ResourceMetaListResponse": {
-        "type": "object",
-        "description": "Paginated response for the `?meta_only=true` list mode.\n\nMirror of [`crate::types::resource::ResourceListResponse`] with the row type\nswapped to [`crate::types::resource::ResourceDetail`] — the full row (title,\ndoc_type, context, owner, the stage/seq/mode/effort projections) plus both\n`managed_meta` and `open_meta` tiers. This is the list analogue of what\n`--meta-only` gives on a single `show`: everything the default list row carries\n**and** both meta tiers, per item — the whole view minus each resource's body.\n(The default list row, [`crate::types::resource::ResourceRow`], carries neither\nmeta tier.) Returned by `GET /api/resources?meta_only=true`. Facets and total\nare computed identically to the default list response — projection-independent.\n\nNo `ts_rs::TS` derive: `ResourceDetail` cannot codegen (its `#[serde(flatten)]`\nrow is unsupported by ts-rs), so this container cannot either. The SvelteKit UI\ntypes the list endpoint as `ResourceListResponse` regardless; this shape is a\nstructural superset, so the extra keys are simply ignored there.",
-        "required": [
-          "rows",
-          "total",
-          "facets"
-        ],
-        "properties": {
-          "facets": {
-            "$ref": "#/components/schemas/ResourceFacets"
-          },
-          "rows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ResourceDetail"
-            }
-          },
-          "total": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "ResourceMetaResponse": {
-        "type": "object",
-        "description": "Response body for the metadata-only GET endpoint.\n\nReturns the current managed_meta / open_meta / hashes from a\nresource's manifest row without reconstructing the markdown body\nfrom `kb_chunks`. Used by the CLI sync pull path to fetch just the\nmeta tier when the body side already agrees.",
-        "required": [
-          "id"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/ResourceId",
-            "description": "UUID of the resource.\n\nNamed `id` (not `resource_id`) so this response is a literal strict subset of\n`temper_workflow::types::resource::ResourceDetail`: `--meta-only` returns the same\nkeys the full `show` does, and nothing else. With two different anchor names the\nsubset relation is unachievable."
-          },
-          "managed_meta": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ManagedMeta",
-                "description": "Typed managed (temper-*) frontmatter from the manifest — the closed\nProperty vocabulary. Only the named `temper-*` keys are represented;\nthere is no catch-all (a stored non-Property key is not surfaced here).\n`None` only if the manifest row predates meta population."
-              }
-            ]
-          },
-          "open_meta": {
-            "description": "Open (user-defined) frontmatter fields from the manifest.\nIntentionally untyped — open_meta is the free-form tier. Typed\nextraction of relationship fields lives in `ResourceRelationships`\n(see `temper-core::types::graph`), which parses this value on\ndemand and ignores anything it doesn't recognize.\n`None` only if the manifest row predates meta population."
           }
         }
       },
@@ -11576,156 +11500,6 @@
           },
           "principal_table": {
             "type": "string"
-          }
-        }
-      },
-      "ResourceRow": {
-        "type": "object",
-        "description": "Row type for resource listings — includes joined display fields\nand managed_meta projections from `vault_resources_browse` view.",
-        "required": [
-          "id",
-          "origin_uri",
-          "title",
-          "originator_profile_id",
-          "owner_profile_id",
-          "is_active",
-          "created",
-          "updated",
-          "doc_type_name",
-          "owner_handle"
-        ],
-        "properties": {
-          "body_hash": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "SHA-256 hash of the resource body content, from `kb_resource_manifests`.\n`None` when no manifest row exists (resource created via POST without a\nbody trio, or the manifest join returned NULL)."
-          },
-          "body_storage": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/BodyStorage",
-                "description": "What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte**\nfrom the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries\nits source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform:\nCRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only\npartial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.\n\n`Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`),\nso a current server always sends it; `None` means the server predates W2 PR 3."
-              }
-            ]
-          },
-          "cogmap_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "Set when the resource is homed in a cognitive map (Surface B).\nMutually exclusive with the `context_*` fields."
-          },
-          "cogmap_name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`."
-          },
-          "context_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "context_owner_ref": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.\nTogether with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.\n`None` for a cogmap-homed resource."
-          },
-          "context_slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Slug of the home context (the natural-key half of `@owner/slug`).\n`None` for a cogmap-homed resource."
-          },
-          "created": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "doc_type_name": {
-            "type": "string"
-          },
-          "effort": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "id": {
-            "$ref": "#/components/schemas/ResourceId"
-          },
-          "ingest_state": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/IngestState",
-                "description": "Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only\nby the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete`\nfor every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not\nyet been finalized (remaining blocks not landed), which is **excluded from list and search** and\nreadable only by `show`.\n\nOrthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the\nvectors ready?* This one asks *are the bytes all here?*\n\n`Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server\nalways sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\"."
-              }
-            ]
-          },
-          "is_active": {
-            "type": "boolean"
-          },
-          "kb_context_id": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ContextId",
-                "description": "Home context — `Some` for a context-homed resource, `None` when the\nresource is homed in a cognitive map (Surface B). Mutually exclusive\nwith the `cogmap_*` fields below."
-              }
-            ]
-          },
-          "mode": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "origin_uri": {
-            "type": "string"
-          },
-          "originator_profile_id": {
-            "$ref": "#/components/schemas/ProfileId"
-          },
-          "owner_handle": {
-            "type": "string"
-          },
-          "owner_profile_id": {
-            "$ref": "#/components/schemas/ProfileId"
-          },
-          "seq": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
-          },
-          "stage": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "title": {
-            "type": "string"
-          },
-          "updated": {
-            "type": "string",
-            "format": "date-time"
           }
         }
       },
@@ -11843,6 +11617,158 @@
           }
         ],
         "description": "Request body for updating a resource."
+      },
+      "ResourceView": {
+        "type": "object",
+        "description": "Everything a resource is, except its body — one shape for every read and write\nsurface.\n\nReplaces the six near-identical projections a caller used to have to tell apart\n(`ResourceRow`, `ResourceDetail`, `ResourceMetaResponse`, `ResourceSummary`, the\nsearch `HitIdentity`, and the inlined identity half of `ExactHit`/`WideHit`). A\nhuman or agent learns this shape once and it is the shape `list`, `show`, `create`,\n`update`, `annotate` and both search arms all answer in.\n\nThree properties are load-bearing and each has its own test below:\n\n1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`\n   recorded why: \"With two different anchor names the subset relation is unachievable.\"\n   Here the relation is stronger than subset — it is identity.\n2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on\n   `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and\n   nowhere else. Dropping them is lossless *because* of property 3.\n3. **`managed_meta` is not an `Option`.** A consumer reads `view.managed_meta.stage`\n   without first distinguishing \"no meta\" from \"no stage\".\n\n**No `#[serde(flatten)]` anywhere**, deliberately: ts-rs cannot codegen a flattened\nfield, which is why `ResourceDetail` had to drop its `TS` derive and why the identity\nfields on `ExactHit`/`WideHit` were hand-inlined. This type is ts-rs-exported, so the\nconstraint is structural, not stylistic.\n\n**No `FromRow` derive, deliberately.** `ref` and `context_ref` are derived rather than\nselected and `content` arrives from a different read, so a `query_as` into this type\ncould never be complete. `ResourceRow` carried a `FromRow` derive with **zero**\n`query_as` call sites anywhere in the repo — decorative, and an invitation to try\nsomething that cannot work. Construction is by hand, as `substrate_read` already does.",
+        "required": [
+          "id",
+          "ref",
+          "title",
+          "origin_uri",
+          "doc_type_name",
+          "owner_handle",
+          "owner_profile_id",
+          "originator_profile_id",
+          "is_active",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "body_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no\nmanifest row exists."
+          },
+          "body_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodyStorage",
+                "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
+              }
+            ]
+          },
+          "cogmap_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Set when the resource is homed in a cognitive map. Mutually exclusive with\nthe `context_*` fields."
+          },
+          "cogmap_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`."
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reconstructed markdown body — the `body` section.\n\nAbsent means **not requested**, never \"empty body\". An empty body is\n`Some(String::new())`, which serializes as `\"\"`; the two are distinguishable on\nthe wire and after a round-trip."
+          },
+          "context_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_owner_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams."
+          },
+          "context_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The composed home-context address, `{context_owner_ref}/{context_slug}`.\n\nNot a column — derived by [`ResourceView::with_derived_refs`]. `None` for a\ncogmap-homed resource, which has no context half; never a half-formed ref."
+          },
+          "context_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slug of the home context (the natural-key half of `@owner/slug`)."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "doc_type_name": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "ingest_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IngestState",
+                "description": "Are all the bytes here? `Option` purely for version skew — the column is\n`NOT NULL` server-side, so `None` means the server predates W2 PR 1. Do not\nread `None` as \"incomplete\"."
+              }
+            ]
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "kb_context_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextId",
+                "description": "`Some` for a context-homed resource, `None` when homed in a cognitive map\n(Surface B). Mutually exclusive with the `cogmap_*` fields."
+              }
+            ]
+          },
+          "managed_meta": {
+            "$ref": "#/components/schemas/ManagedMeta",
+            "description": "Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.\n\n**Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/\n`effort`/`seq` columns lossless: the values did not go away, they went home. A\nresource with no managed metadata carries an all-`None` `ManagedMeta`, which\nserializes as `{}` — present and empty, never absent."
+          },
+          "open_meta": {
+            "description": "Open (user-defined) frontmatter — the free-form tier, intentionally untyped.\nAbsent means the `open-meta` section was not requested."
+          },
+          "origin_uri": {
+            "type": "string",
+            "description": "Original source URL or file reference.\n\nThere is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one\nwhose doc comment promised a \"canonical `kb://` URI ... from `kb_resource_uri`\",\nbut `kb_resource_uri` does not exist in `migrations/` and the assembly wrote\n`kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value\nunder a second name and a false description. It joins `origin` (the constant\n`\"unified\"`) and `slug` (always `String::new()`) as a field this arc dropped for\nnever having carried what it claimed."
+          },
+          "originator_profile_id": {
+            "$ref": "#/components/schemas/ProfileId"
+          },
+          "owner_handle": {
+            "type": "string"
+          },
+          "owner_profile_id": {
+            "$ref": "#/components/schemas/ProfileId"
+          },
+          "ref": {
+            "type": "string",
+            "description": "The decorated, self-resolving address: `sluggify(title)-<uuid>`.\n\nNot a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`.\nUntil this task it was injected render-time by the CLI alone\n(`temper-cli/src/commands/resource.rs`), so MCP callers never received one even\nthough the shipped skill instructs agents to use it."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "RetypeRelationshipRequest": {
         "allOf": [

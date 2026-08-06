@@ -449,9 +449,12 @@ pub async fn enrich_resources(
 
     let mut enriched = Vec::with_capacity(rows.len());
     for row in rows {
+        // `get_meta_batch_select` answers in `ResourceView`, whose `managed_meta` is not an
+        // `Option` — an absent id still means "no meta" here, so the two tiers are re-optioned
+        // for `build_enriched`'s incumbent signature. **Task 9** moves this onto the view.
         let (managed_meta, open_meta) = meta
             .remove(&row.id)
-            .map(|m| (m.managed_meta, m.open_meta))
+            .map(|m| (Some(m.managed_meta), m.open_meta))
             .unwrap_or((None, None));
         let embedding_status = statuses
             .get(&Uuid::from(row.id))
@@ -960,7 +963,16 @@ pub async fn list_resources(
             }
         })?;
 
-    let enriched = enrich_resources(pool, profile.id, &list_result.rows).await?;
+    // `list_select` answers in `ResourceView` now; `enrich_resources` still takes the incumbent
+    // `ResourceRow` because `EnrichedResource` is `ResourceRow`-shaped. **Task 9** moves the MCP
+    // tools onto `ResourceView` and this narrowing (and `From<ResourceView> for ResourceRow`
+    // behind it) goes with it.
+    let rows: Vec<temper_workflow::types::resource::ResourceRow> = list_result
+        .rows
+        .into_iter()
+        .map(temper_workflow::types::resource::ResourceRow::from)
+        .collect();
+    let enriched = enrich_resources(pool, profile.id, &rows).await?;
 
     let array_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;

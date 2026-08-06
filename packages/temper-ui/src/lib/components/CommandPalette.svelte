@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import type { ResourceRow } from '$lib/types';
+	import type { ResourceView } from '$lib/types';
 	import { resourceHref, searchHref } from '$lib/vault-url';
 
 	let open = $state(false);
 	let query = $state('');
-	let results = $state<ResourceRow[]>([]);
+	let results = $state<ResourceView[]>([]);
 	let total = $state(0);
 	let focused = $state(0);
 	let loading = $state(false);
@@ -103,8 +103,8 @@
 					>
 						<span class="text-sm text-zinc-100">{row.title}</span>
 						<span class="text-xs text-zinc-500"
-							>{row.context_name} &middot; {row.doc_type_name}{#if row.stage}
-								&nbsp;&middot; {row.stage}{/if}</span
+							>{row.context_name} &middot; {row.doc_type_name}{#if row.managed_meta['temper-stage']}
+								&nbsp;&middot; {row.managed_meta['temper-stage']}{/if}</span
 						>
 					</button>
 				{/each}

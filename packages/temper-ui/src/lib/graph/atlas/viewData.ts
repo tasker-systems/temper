@@ -12,7 +12,7 @@ import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { ContextPanorama } from '$lib/types/generated/graph_context';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
-import type { ResourceRow } from '$lib/types/generated/resource';
+import type { ResourceView } from '$lib/types/generated/resource_view';
 import type { Focus, GraphFilters, SelectedElement } from './nav';
 
 /** Breadcrumb label for the focused territory hop (see `crumbTerritory` in load).
@@ -42,7 +42,7 @@ export interface AtlasViewData {
 	neighborhood: AtlasSubgraph | null;
 	selection: SelectedElement;
 	trail: EventTrail | null;
-	resourceRow: ResourceRow | null;
+	resourceRow: ResourceView | null;
 	filters: GraphFilters;
 	focusPath: Focus[];
 	crumbTerritory: CrumbTerritory | null;

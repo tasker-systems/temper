@@ -2,11 +2,11 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { Grid, WillowDark } from 'wx-svelte-grid';
-	import type { ResourceRow, ResourceSortField } from '$lib/types';
+	import type { ResourceSortField, ResourceView } from '$lib/types';
 	import { resourceHref } from '$lib/vault-url';
 
 	interface Props {
-		rows: ResourceRow[];
+		rows: ResourceView[];
 		total: number;
 		limit?: number;
 		offset?: number;
@@ -56,12 +56,14 @@
 			id: r.id,
 			updated: shortDate(r.updated),
 			_raw_updated: r.updated,
-			stage: r.stage ?? '',
-			seq: r.seq ?? ''
+			// `stage`/`seq` were hoisted columns on the retired `ResourceRow`; on `ResourceView`
+			// they live in the always-present managed tier under their canonical `temper-*` names.
+			stage: r.managed_meta['temper-stage'] ?? '',
+			seq: r.managed_meta['temper-seq'] ?? ''
 		}))
 	);
 
-	// Map from grid row ID → original ResourceRow for navigation
+	// Map from grid row ID → original ResourceView for navigation
 	let rowLookup = $derived(new Map(rows.map((r) => [r.id, r])));
 
 	// Pagination

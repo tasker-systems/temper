@@ -22,7 +22,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 use temper_client::TemperClient;
 use temper_core::types::ids::ResourceId;
-use temper_workflow::types::{ContentResponse, ResourceRow};
+use temper_core::types::resource_view::ResourceView;
+use temper_workflow::types::ContentResponse;
 
 use crate::actions::runtime::client_err_to_temper;
 use crate::error::{Result, TemperError};
@@ -108,8 +109,7 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
         .resources()
         .get(*params.resource_id.as_uuid())
         .await
-        .map_err(client_err_to_temper)?
-        .row;
+        .map_err(client_err_to_temper)?;
 
     let content = params
         .client
@@ -134,7 +134,7 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
 /// `content.markdown` is body-only — the server returns frontmatter as
 /// structured `managed_meta` / `open_meta` fields on the same response.
 /// This function rebuilds the canonical on-disk form by combining:
-/// - identity fields from the `ResourceRow` (id, context, created, title, slug, owner)
+/// - identity fields from the `ResourceView` (id, context, created, title, slug, owner)
 /// - typed managed_meta fields from `content.managed_meta` — the closed
 ///   Property vocabulary (stage, mode, effort, status, seq, branch, pr,
 ///   llm-model, llm-run, provenance)
@@ -146,7 +146,7 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
 /// The body is normalized so it always starts with a newline — guarantees
 /// a blank line between the closing `---` fence and the first body line.
 pub(super) fn reconstruct_full_file_content(
-    meta: &ResourceRow,
+    meta: &ResourceView,
     content: &ContentResponse,
 ) -> Result<String> {
     use temper_workflow::frontmatter::{DocType, Frontmatter};
@@ -255,10 +255,11 @@ mod tests {
         assert_eq!(result, "future");
     }
 
-    fn test_resource_row() -> ResourceRow {
+    fn test_resource_row() -> ResourceView {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-        ResourceRow {
+        ResourceView {
             id: ResourceId(uuid::Uuid::nil()),
+            r#ref: String::new(),
             kb_context_id: Some(ContextId(uuid::Uuid::nil())),
             origin_uri: "test://origin".to_string(),
             title: "Test Title".to_string(),
@@ -272,16 +273,17 @@ mod tests {
             owner_handle: "@me".to_string(),
             context_slug: Some("temper".to_string()),
             context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
             cogmap_id: None,
             cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
+            ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
+            open_meta: None,
+            content: None,
         }
+        .with_derived_refs()
     }
 
     /// Tier-3's regression test: the reconstructed file must include both

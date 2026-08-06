@@ -8,14 +8,14 @@ use crate::vault;
 
 /// Flat result emitted by `temper resource create`.
 ///
-/// `ResourceRow` is flattened so all wire-type fields appear at the top level
+/// `ResourceView` is flattened so all wire-type fields appear at the top level
 /// alongside `status`. Breaking change (Task 9): replaces the 7-variant
 /// per-doctype JSON shape map (Task/Goal/Session/Research/Concept/Decision/default).
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct CreateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
-    pub resource: temper_workflow::types::resource::ResourceRow,
+    pub resource: temper_core::types::resource_view::ResourceView,
     /// Targets of the `derived_from` edges asserted by `--sources-as-edges`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub edges_asserted: Vec<uuid::Uuid>,
@@ -30,7 +30,7 @@ pub(crate) struct CreateActionResult {
 pub(crate) struct UpdateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
-    pub resource: temper_workflow::types::resource::ResourceRow,
+    pub resource: temper_core::types::resource_view::ResourceView,
 }
 
 /// Result emitted by `temper resource delete`.
@@ -56,8 +56,8 @@ pub(crate) struct EdgesReport {
 /// Insert a derived `ref` key (the decorated, self-resolving identifier)
 /// into a serialized resource row, computed from its id + `title`. The
 /// `ref` is render-time only — never persisted, never on the wire type.
-/// Reads the anchor id from `id` (ResourceRow / ResourceDetail /
-/// ResourceMetaResponse) OR `resource_id` (UnifiedSearchResultRow, which still
+/// Reads the anchor id from `id` (ResourceView) OR `resource_id`
+/// (UnifiedSearchResultRow, which still
 /// anchors on the longer name). Both branches are live — do not collapse them.
 /// No-op if the id is absent or unparseable.
 ///
@@ -559,16 +559,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             };
             runtime.block_on(crate::actions::ingest::run_segmented_create(params))?
         } else {
-            // `.into()` narrows the `ResourceView` the `Backend` trait now returns back onto the
-            // `ResourceRow` the projection writer and `UpdateActionResult` still take. Transitional:
-            // Task 7 moves the wire to the view and Beat D moves the CLI, at which point this and
-            // the `From` impl behind it go.
-            runtime.block_on(backend.create_resource(cmd))?.value.into()
+            runtime.block_on(backend.create_resource(cmd))?.value
         }
     };
     #[cfg(not(feature = "embed"))]
-    let created_resource: temper_workflow::types::resource::ResourceRow =
-        runtime.block_on(backend.create_resource(cmd))?.value.into();
+    let created_resource: temper_core::types::resource_view::ResourceView =
+        runtime.block_on(backend.create_resource(cmd))?.value;
 
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
@@ -1074,8 +1070,8 @@ fn validate_status_filter(value: &str) -> Result<()> {
 
 /// Build the wire params both list endpoints take from the CLI's own `ListParams`.
 ///
-/// `list` and `list --meta-only` differ only in their default page cap and the `meta_only`
-/// flag, and until 2026-07-29 each carried a character-identical copy of this block. The tag
+/// `list` and `list --meta-only` differ only in their default page cap and the `sections`
+/// request, and until 2026-07-29 each carried a character-identical copy of this block. The tag
 /// filter had to be added to both — which is exactly the drift the project's "never duplicate
 /// filter logic; the two copies will drift" rule names.
 ///
@@ -1117,8 +1113,10 @@ fn list_api_params(
         order,
         limit: resolve_list_limit(params.all, params.limit, default_limit),
         offset: Some(params.offset.unwrap_or(0) as i64),
-        // The full-list path leaves this at its `None` default; only the meta path asserts it.
-        meta_only: meta_only.then_some(true),
+        // The full-list path leaves this at its `None` default; only the meta path asks for the
+        // open tier. One envelope either way — the section is what varies, not the row type.
+        sections: meta_only
+            .then(|| temper_core::types::resource_view::ResourceSection::OpenMeta.to_string()),
         ..Default::default()
     })
 }
@@ -1400,8 +1398,7 @@ pub fn delete(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?
-    .row;
+    })?;
 
     let cmd = DeleteResource {
         resource: id,
@@ -1505,8 +1502,9 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     let config_clone = config.clone();
     let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            // `get` returns a `ResourceDetail`: the row flattened, plus both meta tiers.
-            // The tiers are what make the full `show` a superset of `--meta-only`.
+            // `get` returns a `ResourceView` — the same shape a `list` row is, with the
+            // `open-meta` section filled. The tiers are what make the full `show` a superset
+            // of `--meta-only`.
             let detail = client
                 .resources()
                 .get(uuid::Uuid::from(id))
@@ -1522,7 +1520,7 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
             // row; the meta tiers reach the file via `resp`'s managed/open fields.
             if let Err(e) = crate::projection::write_resource_file_from_parts(
                 &config_clone.vault_root,
-                &detail.row,
+                &detail,
                 &resp,
             ) {
                 crate::output::warning(format!("could not refresh projection file: {e}"));
@@ -2082,7 +2080,7 @@ fn resolve_update_target(
     params: &UpdateParams<'_>,
 ) -> Result<(
     temper_core::types::ids::ResourceId,
-    temper_workflow::types::resource::ResourceRow,
+    temper_core::types::resource_view::ResourceView,
 )> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
     // Update needs only the row (home context + doctype for schema-keyed flag validation);
@@ -2095,8 +2093,7 @@ fn resolve_update_target(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?
-    .row;
+    })?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
     }
@@ -2195,8 +2192,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         row.context_name.as_deref().unwrap_or_default(),
     )?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
-    // Transitional narrowing — see the note in `create`.
-    let updated_row: temper_workflow::types::resource::ResourceRow = output.value.into();
+    let updated_row: temper_core::types::resource_view::ResourceView = output.value;
 
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
@@ -2254,8 +2250,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?
-    .row;
+    })?;
 
     // Resolve --sources refs → provenance records. A ref that fails to parse is a hard error
     // (escalate, never a silent drop). clap guarantees the list is non-empty (`required = true`).
@@ -2280,7 +2275,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
     // Transitional narrowing — see the note in `create`.
     let result = UpdateActionResult {
         status: "ok",
-        resource: output.value.into(),
+        resource: output.value,
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);
@@ -2560,11 +2555,12 @@ mod list_helpers_tests {
 
         assert_eq!(full.limit, Some(DEFAULT_LIST_LIMIT as i64));
         assert_eq!(meta.limit, Some(DEFAULT_META_LIST_LIMIT as i64));
+        assert_eq!(full.sections, None, "the full path asks for no sections");
         assert_eq!(
-            full.meta_only, None,
-            "the full path must not send meta_only"
+            meta.sections.as_deref(),
+            Some("open-meta"),
+            "the meta path asks for a SECTION of the one shape, not a second response type"
         );
-        assert_eq!(meta.meta_only, Some(true));
 
         // Every OTHER field agrees, so the shared builder is not flattening a third
         // difference. Compared through serde because `ResourceListParams` derives no
@@ -2575,11 +2571,11 @@ mod list_helpers_tests {
         for wire in [&mut full_wire, &mut meta_wire] {
             let obj = wire.as_object_mut().expect("params serialize to an object");
             obj.remove("limit");
-            obj.remove("meta_only");
+            obj.remove("sections");
         }
         assert_eq!(
             full_wire, meta_wire,
-            "the two paths must differ ONLY in page cap and meta_only"
+            "the two paths must differ ONLY in page cap and sections"
         );
     }
 
@@ -3112,44 +3108,47 @@ mod build_helpers_tests {
 #[cfg(test)]
 mod action_result_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::types::resource::ResourceRow;
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource_view::ResourceView;
 
     use super::{
         render_action_result_with_ref, CreateActionResult, DeleteActionResult, UpdateActionResult,
     };
 
-    /// Build a minimal `ResourceRow` fixture for action result tests.
+    /// Build a minimal `ResourceView` fixture for action result tests.
     pub(super) fn make_resource_row(
         _slug: &str,
         doc_type: &str,
         title: &str,
         context: &str,
-    ) -> ResourceRow {
-        ResourceRow {
+    ) -> ResourceView {
+        ResourceView {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
-            origin_uri: "test://origin".to_string(),
+            r#ref: String::new(),
             title: title.to_string(),
-            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
+            context_name: Some(context.to_string()),
+            context_slug: Some(context.to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: doc_type.to_string(),
+            owner_handle: "@me".to_string(),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: Some(context.to_string()),
-            doc_type_name: doc_type.to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some(context.to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
+            ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
         }
+        .with_derived_refs()
     }
 
     /// Task 9: `CreateActionResult` flattens `ResourceRow` — all wire-type
@@ -3501,38 +3500,41 @@ mod from_flag_tests {
 #[cfg(test)]
 mod resource_list_render_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::types::resource::ResourceRow;
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource_view::ResourceView;
 
     /// Task 7: verify that `render()` passthrough includes internal wire fields
     /// like `body_hash` that the old `row_to_frontmatter_value` + `render_server_rows`
     /// path deliberately dropped. This is the canary for the breaking change.
     #[test]
     fn render_resource_list_json_passes_wire_type_with_internals() {
-        let rows: Vec<ResourceRow> = vec![ResourceRow {
+        let rows: Vec<ResourceView> = vec![ResourceView {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
-            origin_uri: "test://origin".to_string(),
+            r#ref: String::new(),
             title: "Test Resource".to_string(),
-            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
+            context_name: Some("temper".to_string()),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
             created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             updated: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            context_name: Some("temper".to_string()),
-            doc_type_name: "research".to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some("temper".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: Some("abc123deadbeef".to_string()),
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
-        }];
+            ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        }
+        .with_derived_refs()];
 
         let out =
             crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");
@@ -3738,8 +3740,8 @@ mod list_meta_only_tests {
 
     #[test]
     fn list_meta_filter_applies_per_row_and_preserves_envelope() {
-        // Build a stub meta-list envelope. Rows are `ResourceDetail`-shaped now
-        // (full row + both tiers), so they carry `title`/`doc_type_name` too.
+        // Build a stub meta-list envelope. Rows are `ResourceView`-shaped (identity plus
+        // both tiers), so they carry `title`/`doc_type_name` too.
         let envelope = serde_json::json!({
             "rows": [
                 {
@@ -3823,16 +3825,17 @@ mod inject_ref_tests {
 #[cfg(test)]
 mod show_meta_only_tests {
     use temper_core::projection::apply_top_level_filter;
-    use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource_view::ResourceView;
 
-    fn fake_meta_response() -> ResourceMetaResponse {
-        ResourceMetaResponse {
-            id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
-            managed_meta: Some(ManagedMeta {
+    fn fake_meta_response() -> ResourceView {
+        ResourceView {
+            managed_meta: ManagedMeta {
                 stage: Some("in-progress".to_string()),
                 ..Default::default()
-            }),
+            },
             open_meta: Some(serde_json::json!({"tags": ["x"]})),
+            ..super::action_result_tests::make_resource_row("s", "task", "A Task", "temper")
         }
     }
 

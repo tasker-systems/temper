@@ -173,7 +173,7 @@ async fn byte_exact_roundtrip(pool: PgPool) {
         // for these bodies, but would not carry the verbatim guarantee.
         let detail = app.client.resources().get(id).await.expect("show");
         assert_eq!(
-            detail.row.body_storage,
+            detail.body_storage,
             Some(BodyStorage::Verbatim),
             "body {i} ({title}) must report body_storage = verbatim",
         );

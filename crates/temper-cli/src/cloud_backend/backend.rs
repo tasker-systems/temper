@@ -64,7 +64,6 @@ mod embed_impl {
 
     use super::super::translators::{
         cmd_to_ingest_payload, cmd_to_resource_annotate_request, cmd_to_resource_update_request,
-        wire_resource_to_resource_view,
     };
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -84,7 +83,7 @@ mod embed_impl {
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = row.id;
             Ok(CommandOutput {
-                value: wire_resource_to_resource_view(&row),
+                value: row,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
@@ -104,7 +103,7 @@ mod embed_impl {
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = updated.id;
             Ok(CommandOutput {
-                value: wire_resource_to_resource_view(&updated),
+                value: updated,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
@@ -123,7 +122,7 @@ mod embed_impl {
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = annotated.id;
             Ok(CommandOutput {
-                value: wire_resource_to_resource_view(&annotated),
+                value: annotated,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
