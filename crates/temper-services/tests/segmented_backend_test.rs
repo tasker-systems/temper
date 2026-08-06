@@ -77,7 +77,7 @@ async fn seed_segmented_resource(
     pool: &PgPool,
     email: &str,
     slug: &str,
-) -> (DbBackend, temper_workflow::types::resource::ResourceRow) {
+) -> (DbBackend, temper_core::types::resource_view::ResourceView) {
     let (profile, context) = seed_profile_with_context(pool, email).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     let created = backend
@@ -112,7 +112,7 @@ async fn seed_resource_with_body(
     email: &str,
     slug: &str,
     body: &str,
-) -> (DbBackend, temper_workflow::types::resource::ResourceRow) {
+) -> (DbBackend, temper_core::types::resource_view::ResourceView) {
     use temper_workflow::operations::BodyUpdate;
     let (profile, context) = seed_profile_with_context(pool, email).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));

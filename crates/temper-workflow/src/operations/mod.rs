@@ -21,7 +21,7 @@ pub use actions::{
     validate_doctype, validate_managed_meta, validate_open_meta_keys, validate_slug,
     validate_update, ActionError, FrontmatterIdentity, ValidateManagedMetaParams,
 };
-pub use backend::{Backend, ResourceSummary, SearchHit};
+pub use backend::Backend;
 pub use commands::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
     CloseInvocation, CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource,

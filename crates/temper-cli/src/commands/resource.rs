@@ -559,11 +559,16 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             };
             runtime.block_on(crate::actions::ingest::run_segmented_create(params))?
         } else {
-            runtime.block_on(backend.create_resource(cmd))?.value
+            // `.into()` narrows the `ResourceView` the `Backend` trait now returns back onto the
+            // `ResourceRow` the projection writer and `UpdateActionResult` still take. Transitional:
+            // Task 7 moves the wire to the view and Beat D moves the CLI, at which point this and
+            // the `From` impl behind it go.
+            runtime.block_on(backend.create_resource(cmd))?.value.into()
         }
     };
     #[cfg(not(feature = "embed"))]
-    let created_resource = runtime.block_on(backend.create_resource(cmd))?.value;
+    let created_resource: temper_workflow::types::resource::ResourceRow =
+        runtime.block_on(backend.create_resource(cmd))?.value.into();
 
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
@@ -2190,6 +2195,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         row.context_name.as_deref().unwrap_or_default(),
     )?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
+    // Transitional narrowing — see the note in `create`.
+    let updated_row: temper_workflow::types::resource::ResourceRow = output.value.into();
 
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
@@ -2197,7 +2204,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
         &client,
         &config.vault_root,
-        &output.value,
+        &updated_row,
     )) {
         output::warning(format!("could not rewrite projection file: {e}"));
     }
@@ -2206,7 +2213,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     //    bespoke { "temper-slug", "content_hash" } shape).
     let result = UpdateActionResult {
         status: "ok",
-        resource: output.value,
+        resource: updated_row,
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);
@@ -2270,9 +2277,10 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
 
     // The resource body is unchanged, so there is no projection file to rewrite — emit the same flat
     // action result `update` does (status + resource row), so the two write verbs read identically.
+    // Transitional narrowing — see the note in `create`.
     let result = UpdateActionResult {
         status: "ok",
-        resource: output.value,
+        resource: output.value.into(),
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);

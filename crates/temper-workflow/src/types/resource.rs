@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use super::managed_meta::ManagedMeta;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::resource_view::ResourceView;
 
 /// The two body-state enums moved to [`temper_core::types::resource`] — both are fields of
 /// `ResourceView`, which temper-substrate reads back, and substrate sits *below* this crate.
@@ -123,6 +124,126 @@ pub struct ResourceDetail {
     /// `None` only if the manifest row predates meta population.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<serde_json::Value>,
+}
+
+// ─── Transitional narrowings between `ResourceView` and the incumbent shapes ───────────
+//
+// **All three are deleted by Task 7**, which swaps the wire itself to `ResourceView`. They
+// exist because Task 6 moved the `Backend` trait to `ResourceView` while `/api/resources`,
+// `/api/ingest`, the MCP tools and the CLI still speak `ResourceRow`/`ResourceDetail`: the
+// trait boundary and the wire boundary move in different commits, and something has to sit
+// between them for one commit.
+//
+// They live here rather than in `temper-services::backend::substrate_read` (where the first
+// two began life, as the private `view_to_row`/`view_to_detail`) because temper-api,
+// temper-mcp AND temper-cli all now need to narrow, and temper-cli does not depend on
+// temper-services. One definition in the crate all three already share beats three.
+
+/// Narrow a [`ResourceView`] back onto the incumbent [`ResourceRow`].
+///
+/// The four workflow columns come back out of `managed_meta`, which is exactly the
+/// losslessness claim `ResourceView` makes: they did not go away, they went home.
+///
+/// **Transitional — deleted by Task 7.**
+impl From<ResourceView> for ResourceRow {
+    fn from(view: ResourceView) -> Self {
+        Self {
+            id: view.id,
+            kb_context_id: view.kb_context_id,
+            origin_uri: view.origin_uri,
+            title: view.title,
+            originator_profile_id: view.originator_profile_id,
+            owner_profile_id: view.owner_profile_id,
+            is_active: view.is_active,
+            created: view.created,
+            updated: view.updated,
+            context_name: view.context_name,
+            doc_type_name: view.doc_type_name,
+            owner_handle: view.owner_handle,
+            context_slug: view.context_slug,
+            context_owner_ref: view.context_owner_ref,
+            cogmap_id: view.cogmap_id,
+            cogmap_name: view.cogmap_name,
+            stage: view.managed_meta.stage,
+            seq: view.managed_meta.seq,
+            mode: view.managed_meta.mode,
+            effort: view.managed_meta.effort,
+            body_hash: view.body_hash,
+            ingest_state: view.ingest_state,
+            body_storage: view.body_storage,
+        }
+    }
+}
+
+/// Narrow a [`ResourceView`] onto the incumbent [`ResourceDetail`] (row + both meta tiers).
+///
+/// `managed_meta` is `Some` unconditionally because on the view it is not an `Option` at
+/// all; `open_meta` rides through as the caller's section request left it.
+///
+/// **Transitional — deleted by Task 7.**
+impl From<ResourceView> for ResourceDetail {
+    fn from(mut view: ResourceView) -> Self {
+        let managed_meta = view.managed_meta.clone();
+        let open_meta = view.open_meta.take();
+        Self {
+            row: view.into(),
+            managed_meta: Some(managed_meta),
+            open_meta,
+        }
+    }
+}
+
+/// Widen an incumbent [`ResourceRow`] onto a [`ResourceView`].
+///
+/// The direction `CloudBackend` needs: the CLI's cloud write path receives a `ResourceRow`
+/// from `temper-client` (the wire type until Task 7) and must hand back the `ResourceView`
+/// the `Backend` trait now declares.
+///
+/// It is a faithful widening of *what a row carries*, not an invention: the four workflow
+/// columns go home into `ManagedMeta` and the rest of that tier is `None` because the row
+/// never carried it. `open_meta` and `content` are `None` — absent means **not requested**,
+/// which is true here — and `ref`/`context_ref` are filled by
+/// [`ResourceView::with_derived_refs`] rather than re-derived, so there stays exactly one
+/// `sluggify` in the address path.
+///
+/// **Transitional — deleted by Task 7**, when the wire carries a view and there is no row to
+/// widen.
+impl From<ResourceRow> for ResourceView {
+    fn from(row: ResourceRow) -> Self {
+        Self {
+            id: row.id,
+            r#ref: String::new(),
+            title: row.title,
+            origin_uri: row.origin_uri,
+            kb_context_id: row.kb_context_id,
+            context_name: row.context_name,
+            context_slug: row.context_slug,
+            context_owner_ref: row.context_owner_ref,
+            context_ref: None,
+            cogmap_id: row.cogmap_id,
+            cogmap_name: row.cogmap_name,
+            doc_type_name: row.doc_type_name,
+            owner_handle: row.owner_handle,
+            owner_profile_id: row.owner_profile_id,
+            originator_profile_id: row.originator_profile_id,
+            is_active: row.is_active,
+            created: row.created,
+            updated: row.updated,
+            body_hash: row.body_hash,
+            ingest_state: row.ingest_state,
+            body_storage: row.body_storage,
+            managed_meta: ManagedMeta {
+                stage: row.stage,
+                seq: row.seq,
+                mode: row.mode,
+                effort: row.effort,
+                ..ManagedMeta::default()
+            },
+            open_meta: None,
+            content: None,
+        }
+        .with_derived_refs()
+    }
 }
 
 /// Sort field for resource listing.

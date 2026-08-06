@@ -83,5 +83,7 @@ pub async fn update_meta(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
-    Ok(Json(out.value))
+    // `.into()` narrows the `ResourceView` the trait now returns onto this endpoint's incumbent
+    // wire shape. Transitional — Task 7 makes the wire a view.
+    Ok(Json(out.value.into()))
 }

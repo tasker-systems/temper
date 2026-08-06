@@ -444,7 +444,7 @@ pub async fn list_views_select(
 ///
 /// Asks for no sections: the default list row carries neither meta tier nor the body, exactly as
 /// before. `ResourceListResponse` still carries `Vec<ResourceRow>`, so each view is narrowed by
-/// `view_to_row` at the envelope until Task 7 swaps the row type.
+/// `ResourceRow::from` at the envelope until Task 7 swaps the row type.
 pub async fn list_select(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -452,7 +452,7 @@ pub async fn list_select(
 ) -> ApiResult<ResourceListResponse> {
     let page = list_views_select(pool, profile_id, &params, &SectionSet::default()).await?;
     Ok(ResourceListResponse::new(
-        page.views.into_iter().map(view_to_row).collect(),
+        page.views.into_iter().map(ResourceRow::from).collect(),
         page.total,
         page.facets,
         page.limit,
@@ -460,56 +460,11 @@ pub async fn list_select(
     ))
 }
 
-/// Narrow a [`ResourceView`] back onto the incumbent `ResourceRow`.
-///
-/// **Transitional — deleted by Task 7**, which swaps `ResourceListResponse::rows` to
-/// `Vec<ResourceView>`. Until then the read path assembles views (one batched round-trip) and the
-/// envelope narrows them here.
-///
-/// The four workflow columns come back out of `managed_meta`, which is exactly the losslessness
-/// claim `ResourceView` makes: they did not go away, they went home.
-fn view_to_row(view: ResourceView) -> ResourceRow {
-    ResourceRow {
-        id: view.id,
-        kb_context_id: view.kb_context_id,
-        origin_uri: view.origin_uri,
-        title: view.title,
-        originator_profile_id: view.originator_profile_id,
-        owner_profile_id: view.owner_profile_id,
-        is_active: view.is_active,
-        created: view.created,
-        updated: view.updated,
-        context_name: view.context_name,
-        doc_type_name: view.doc_type_name,
-        owner_handle: view.owner_handle,
-        context_slug: view.context_slug,
-        context_owner_ref: view.context_owner_ref,
-        cogmap_id: view.cogmap_id,
-        cogmap_name: view.cogmap_name,
-        stage: view.managed_meta.stage,
-        seq: view.managed_meta.seq,
-        mode: view.managed_meta.mode,
-        effort: view.managed_meta.effort,
-        body_hash: view.body_hash,
-        ingest_state: view.ingest_state,
-        body_storage: view.body_storage,
-    }
-}
-
-/// Narrow a [`ResourceView`] onto the incumbent `ResourceDetail` (row + both meta tiers).
-///
-/// **Transitional — deleted by Task 7**, alongside `view_to_row`. `managed_meta` is `Some`
-/// unconditionally because on the view it is not an `Option` at all; `open_meta` rides through as
-/// the caller's section request left it.
-fn view_to_detail(mut view: ResourceView) -> ResourceDetail {
-    let managed_meta = view.managed_meta.clone();
-    let open_meta = view.open_meta.take();
-    ResourceDetail {
-        row: view_to_row(view),
-        managed_meta: Some(managed_meta),
-        open_meta,
-    }
-}
+// `view_to_row` and `view_to_detail` moved to `temper_workflow::types::resource` as
+// `impl From<ResourceView> for ResourceRow` / `for ResourceDetail`, unchanged in body and still
+// **transitional — deleted by Task 7**. Task 6 moved the `Backend` trait to `ResourceView` while
+// the wire still speaks rows, so temper-api, temper-mcp and temper-cli all narrow now too — and
+// temper-cli cannot reach into temper-services. One definition, in the crate all four share.
 
 /// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
 /// Visibility is gated inside `native_resource_row` (WS2); the typed `ReadbackError` is split by
@@ -568,7 +523,7 @@ pub async fn show_detail_select(
     id: ResourceId,
 ) -> ApiResult<ResourceDetail> {
     let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
-    Ok(view_to_detail(
+    Ok(ResourceDetail::from(
         show_view_select(pool, profile_id, id, &sections).await?,
     ))
 }
@@ -629,7 +584,7 @@ pub async fn list_meta_select(
     let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
     let page = list_views_select(pool, profile_id, &params, &sections).await?;
     Ok(ResourceMetaListResponse {
-        rows: page.views.into_iter().map(view_to_detail).collect(),
+        rows: page.views.into_iter().map(ResourceDetail::from).collect(),
         total: page.total,
         facets: page.facets,
     })

@@ -533,7 +533,10 @@ async fn read_resource_row(
             origin: Surface::ApiHttp,
         })
         .await
-        .map(|out| out.value)
+        // `.into()` narrows the `ResourceView` the trait now returns onto the `ResourceDetail`
+        // `/api/resources/{id}` still answers in — this example mirrors that endpoint, so it
+        // narrows where the endpoint does. Transitional: Task 7 moves the wire to the view.
+        .map(|out| out.value.into())
         .map_err(|e| format!("resource row {node}: {e}"))
 }
 

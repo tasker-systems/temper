@@ -146,7 +146,10 @@ pub async fn create(
     let Some(seg) = segmented else {
         // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
         let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
-        return Ok(IngestCreateResponse::OneShot(Box::new(out.value)));
+        // `.into()` narrows the `ResourceView` the trait now returns back onto the
+        // `ResourceRow` this endpoint still answers in. Transitional — Task 7 makes the wire a
+        // view and both this call and the `From` impl behind it go.
+        return Ok(IngestCreateResponse::OneShot(Box::new(out.value.into())));
     };
 
     // Segmented begin is ONE command: create block 0, record the source row, read the landed set.
@@ -228,5 +231,6 @@ pub async fn update(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
-    Ok(Json(out.value))
+    // Transitional narrowing — see the note in `create`.
+    Ok(Json(out.value.into()))
 }

@@ -109,7 +109,10 @@ pub async fn get(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
-    Ok(Json(out.value))
+    // `.into()` narrows the `ResourceView` the trait now returns back onto the `ResourceDetail`
+    // this endpoint still answers in — the view already carries both meta tiers, so nothing is
+    // lost. Transitional: Task 7 makes the wire a view and this narrowing goes with it.
+    Ok(Json(out.value.into()))
 }
 
 #[utoipa::path(
@@ -202,7 +205,8 @@ pub async fn annotate(
         .annotate_resource(cmd)
         .await
         .map_err(ApiError::from)?;
-    Ok(Json(out.value))
+    // Transitional narrowing — see the note in `get`.
+    Ok(Json(out.value.into()))
 }
 
 #[utoipa::path(
@@ -265,7 +269,8 @@ pub async fn create(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
-    Ok(Json(out.value))
+    // Transitional narrowing — see the note in `get`.
+    Ok(Json(out.value.into()))
 }
 
 #[utoipa::path(
@@ -364,7 +369,8 @@ pub async fn update(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
-    Ok(Json(out.value))
+    // Transitional narrowing — see the note in `get`.
+    Ok(Json(out.value.into()))
 }
 
 #[utoipa::path(

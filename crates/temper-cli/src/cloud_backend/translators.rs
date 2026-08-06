@@ -318,18 +318,22 @@ pub(crate) fn cmd_to_resource_annotate_request(
 }
 
 /// Project a `ResourceRow` (returned by `temper-client` methods) into the
-/// `ResourceRow` shape required by the `Backend` trait.
+/// `ResourceView` shape required by the `Backend` trait.
 ///
-/// The temper-client already returns `temper_workflow::types::resource::ResourceRow`
-/// directly — there is no separate wire `Resource` type. This function is a
-/// clone and exists as a named boundary so the `CloudBackend` impl in Task 5
-/// has a consistent translation call site matching the other translators, and
-/// so the naming in the plan aligns with the actual code structure.
+/// The temper-client still returns `temper_workflow::types::resource::ResourceRow`
+/// directly — there is no separate wire `Resource` type, and the wire does not become
+/// a view until Task 7. So this boundary now widens rather than clones: Task 6 moved
+/// the trait to `ResourceView` while `/api/resources` still answers in rows.
+///
+/// The widening itself lives on `impl From<ResourceRow> for ResourceView` beside both
+/// shapes in temper-workflow, not here — three other crates narrow in the opposite
+/// direction and all four conversions belong in one place. **Transitional; it and the
+/// `From` impl go together in Task 7.**
 #[cfg(feature = "embed")]
-pub(crate) fn wire_resource_to_resource_row(
+pub(crate) fn wire_resource_to_resource_view(
     resource: &temper_workflow::types::resource::ResourceRow,
-) -> temper_workflow::types::resource::ResourceRow {
-    resource.clone()
+) -> temper_core::types::resource_view::ResourceView {
+    resource.clone().into()
 }
 
 #[cfg(feature = "embed")]
@@ -703,15 +707,18 @@ mod tests {
     }
 
     #[test]
-    fn wire_resource_to_resource_row_maps_basic_fields() {
+    fn wire_resource_to_resource_view_maps_basic_fields() {
         let wire = sample_resource_row();
-        let row = wire_resource_to_resource_row(&wire);
-        assert_eq!(row.title, "Test Task");
-        assert_eq!(row.id, ResourceId(Uuid::nil()));
-        assert_eq!(row.context_name.as_deref(), Some("temper"));
-        assert_eq!(row.doc_type_name, "task");
-        assert_eq!(row.body_hash, Some("abc123".to_string()));
-        assert_eq!(row.owner_handle, "@me");
+        let view = wire_resource_to_resource_view(&wire);
+        assert_eq!(view.title, "Test Task");
+        assert_eq!(view.id, ResourceId(Uuid::nil()));
+        assert_eq!(view.context_name.as_deref(), Some("temper"));
+        assert_eq!(view.doc_type_name, "task");
+        assert_eq!(view.body_hash, Some("abc123".to_string()));
+        assert_eq!(view.owner_handle, "@me");
+        // The widening derives `ref` rather than leaving it empty — it is the address the
+        // CLI used to inject at print time and MCP never emitted at all.
+        assert_eq!(view.r#ref, "test-task-00000000-0000-0000-0000-000000000000");
     }
 }
 

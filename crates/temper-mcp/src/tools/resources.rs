@@ -706,7 +706,10 @@ pub async fn create_resource(
             rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
         }
     })?;
-    let resource = out.value;
+    // `.into()` narrows the `ResourceView` the trait now returns back onto the `ResourceRow`
+    // `enrich_resource` still takes. Transitional — Task 9 moves the MCP tools to the view and
+    // Task 7 moves the wire, at which point this and the `From` impl behind it go.
+    let resource: temper_workflow::types::resource::ResourceRow = out.value.into();
 
     let enriched = enrich_resource(pool, profile.id, &resource).await?;
     let response = CreateResourceResponse {

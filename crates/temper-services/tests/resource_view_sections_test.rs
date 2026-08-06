@@ -89,7 +89,7 @@ async fn seed_resource(
     pool: &PgPool,
     email: &str,
     slug: &str,
-) -> (ProfileId, temper_workflow::types::resource::ResourceRow) {
+) -> (ProfileId, temper_core::types::resource_view::ResourceView) {
     let (profile, context) = seed_profile_with_context(pool, email).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     let created = backend
