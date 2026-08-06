@@ -14,8 +14,8 @@ flatters](./019fbdb9-f287-79c0-aab6-efa0b1de12c8).
 [A declaration is a description](./019fd377-ee04-7223-861b-3e0bebabaceb).
 
 **Contract authority:** `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md`.
-This document does not restate that contract; it amends four things in it and builds the executor
-the contract was written for. Where the two disagree, the amendments below are the later word.
+This document does not restate that contract; it amends it where noted below and builds the executor
+the contract was written for. Where the two disagree, the amendments here are the later word.
 
 ## Provenance discipline
 
@@ -170,6 +170,35 @@ hydrated rows. That satisfies `composition-is-legible` through the mandatory tie
 stage 2"); it does **not** hydrate them. Full is a diagnostic axis, `returns` is a payload axis, and
 they are orthogonal.
 
+### A row may name its parents; it may not embed them
+
+`[decided — 2026-08-05, Pete]` Three things are easy to collapse into one and must not be, because
+two of them are the point of a knowledge-graph surface and the third is a rebuild of GraphQL.
+
+1. **Edge-filtered traversal as a stage — IN, and it is the primary case.** `follow-from` admitting
+   `EdgeFilter { edge_kinds, labels }` `[verified — filter.rs:26-31]` narrows *the walk*, inside the
+   act, narrow-first. `filter.rs`'s two-axis design — the closed DDL `EdgeKind` re-used rather than
+   restated, with open `labels` beside it — is one of the affordances this builder exists to make
+   reachable at all. §8 shows why the two axes cannot be merged on live data.
+2. **Flat arms carrying edge provenance — IN, subject to the check below.** An arm returning 40
+   neighbours should say *which seed each is a neighbour of, and via which edge*. That is real
+   information and it needs no tree: `from_id`, `edge_kind`, `label` are columns on a flat row. It
+   introduces no ranking, because provenance is structure rather than quantity.
+3. **Nested projection — REFUSED.** A response shaped as a tree, where the caller declares a
+   selection set that recursively follows edges into the returned shape, is where a GraphQL rebuild
+   actually begins, and no caller has asked for it.
+
+> **The rule that separates 2 from 3: a row may NAME its parents; it may not EMBED them.** A `via`
+> entry carries ids and edge metadata, never a hydrated resource.
+
+**The open check, stated as unverified rather than assumed.** A node reachable from two seeds via two
+edges has more than one parent, and `follow-from`'s mechanic is a `MAX(score) GROUP BY node` over the
+walk `[carried — decision 019fd2ea]` — it **collapses paths by construction**. Whether
+`search_graph_expand` can emit path provenance without a change to its body is **not verified here**,
+and beat C owns finding out. If it can, `via` is an array; first-wins would be a silent lossy pick and
+is the wrong answer. `search_graph_expand` is untouched by phase 1, so any change to it belongs to
+this phase and collides with nothing.
+
 ### `union` narrows to an intermediate
 
 Per-arm returns remove the reason to merge at the end — you already get both arms. A `union`
@@ -302,7 +331,7 @@ dependency on the sibling's work**, against exactly the acts most in need of a d
 |---|---|---|
 | **A** | no | The type reshape: named DAG, stage references, combinator node, `returns`, `ActResult.produced` as a variant, `produces` derived. Closes phase 3's `claims-carry-standing` shape gap |
 | **B** | no | Static validation and the validate-only path. Pure, no database |
-| **C** | no | The compiler: kind-parametric fragment contract, CTE assembly, `vis` hoist, identifier allowlist, generative `EXPLAIN` harness — **executing compositions over `survey` and `follow-from`** |
+| **C** | no | The compiler: kind-parametric fragment contract, CTE assembly, `vis` hoist, identifier allowlist, generative `EXPLAIN` harness — **executing compositions over `survey` and `follow-from`**. Owns the edge-provenance check (§3): can `search_graph_expand` emit path provenance without a body change, given its `MAX(score) GROUP BY node` collapse |
 | **D** | **yes** | Bind `find-exact` / `find-about-*` to `search_exact` / `search_wide` |
 | **E** | no | The doors: `POST /api/query`, an MCP tool, `temper query`, and a `door_coverage` entry per act |
 | **F** | **yes** | Reconcile act declarations — `Fused { unified_search }` → `Served` where `/api/query` serves an act alone |
@@ -427,12 +456,38 @@ otherwise `.context`"* `[verified — tasker-grammar/src/types/envelope.rs]` —
 fallback contract §4.3 names as the flattering-degradation vector Temper must not inherit. Temper
 compiles; it does not iterate.
 
-**Consequence worth stating: v1 may need no expression language at all.** Every chain this design
-serves is expressible as a typed DAG with named stage references and per-stage filters.
-`BoundsSource::Expression` remains in the trace for the case where a compiled predicate sub-selects,
-but nothing in v1 requires jaq. If that holds through the build, the grammar is **declarative data
-rather than a language** — which is also the honest answer to the "am I inventing a query language"
-question this design opened with.
+### There is no expression language, and that is a strengthening
+
+`[decided — 2026-08-05, Pete]` Not "v1 may not need jaq" — **the design has no place for one, and
+adding one would be contrary to it.**
+
+Every narrowing axis already has a typed slot: bounds are stage references or caller id sets; terms
+are the closed `BoundTerm` vocabulary; predicates are `ResourceFilter` / `EdgeFilter` /
+`FacetPredicate` `[verified — filter.rs]`; combination is a node kind; projection is a field list.
+There is no residue for an expression to handle. And `filter.rs`'s own header states why adding one
+would be a regression rather than a feature: *"deliberately NOT a generic `{field, op, value}`
+grammar: a general predicate language would be more expressive and would immediately re-open every
+conflation this contract exists to close."*
+
+So the grammar is **declarative data, not a language** — a `Composition` is a JSON body validated
+against generated schemas. That makes it publishable as part of `/api/query`'s OpenAPI surface and
+handed to a human or an agent as a delivered artifact, which is strictly stronger than a surface whose
+plans must be authored in an embedded expression language. It is also the honest answer to the *"am I
+inventing a query language for fun"* question this design opened with: the artifact is a schema, not
+a syntax.
+
+**Two shipped types are left with no producer, and they are treated differently on a real
+distinction:**
+
+- **`RefusalReason::ExpressionNotPushdownable` is removed.** `RefusalReason` is **open**
+  `[verified — disposition.rs:44-50, and decision 019fcd13]`, so re-adding it later is additive and
+  costs nothing. Keeping a reason nothing can raise is a claim about the system with no referent.
+- **`BoundsSource::Expression` is kept and documented as reserved-and-unreachable**, with a test
+  asserting **no compiled plan ever emits it**. `BoundsSource` is a *closed* tagged enum
+  `[verified — trace.rs:16-32]`, so removing it now would make re-adding it a breaking change. The
+  test is what converts "reserved" from an unfalsifiable claim into a checked one — the same
+  discipline that caught `nothing_in_the_search_family_is_served` sitting green beside a comment that
+  was false about the deployed system.
 
 ---
 
@@ -457,8 +512,11 @@ it is not re-measured, and §4 records the four requirements that keep the phase
 > That is not `visibility-is-never-presented-as-relevance` (it is not visibility-shaped) but it is the
 > same species, and it is undisclosed today.
 
-**Nested projection — REFUSED, not deferred.** Following edges into the returned shape is where a
-rebuild of GraphQL actually begins, and no caller has asked for it.
+**Nested projection — REFUSED, not deferred.** A response shaped as a tree, where a selection set
+recursively follows edges into the returned shape. **This does not touch edge-filtered traversal or
+edge provenance, both of which are in** — see §3's three-way split and the rule that a row may name
+its parents but not embed them. The refusal is about the response being a tree, never about whether
+edges can be walked.
 
 **Rate-shaped axes — open, inherited.** Nothing here closes over composition depth, plan complexity
 or query volume. Decision `019fcd13`'s warning that one statement concentrates all risk in the query
