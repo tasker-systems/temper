@@ -293,11 +293,29 @@ migrations/20260804000020_profile_reachable_teams_write_gates.sql]`.
 
 ### The trade, stated rather than discovered
 
-**This is dynamic SQL, so `sqlx::query!()` compile-time checking does not apply.** The repo's standing
-rule is *"never inline `sqlx::query!()` in a surface"*, and the `.sqlx` cache discipline assumes
-static statements. A builder is the one thing in the codebase that can have neither.
+**This is dynamic SQL, so `sqlx::query!()` compile-time checking does not apply**, and the `.sqlx`
+cache discipline assumes static statements.
 `[decided — 2026-08-05, Pete: this trade is inherent to any builder-shaped approach, and is paid for
 with tests rather than avoided.]`
+
+**It is not unprecedented, and the precedent comes with an instruction the plan must obey.**
+`readback/mod.rs` already carries three runtime `sqlx::query_as` reads — `vector_search`,
+`unified_search`, `wayfind_scope_ids` — and its module note is explicit about their status:
+*"all for one reason — a `$n::vector` bind the macros cannot type. That is the allow-listed exception
+class and the whole of it here; it is deliberately not a house style."* The note also records what
+happened when the exemption spread: *"Until 2026-07-30 sixteen further reads in this module were
+runtime 'for consistency' with those three, which left them absent from the cache — and the cache is
+the record a schema/binary change detector reads, so an exemption taken for tidiness was subtracting
+from the coverage of a safety check."* `[verified — 2026-08-05,
+crates/temper-substrate/src/readback/mod.rs:1-34]`
+
+So the builder is a **fourth runtime read with a second, different reason** — dynamic composition
+rather than a `::vector` bind. **Amending that module note to name the second class is a required
+step of the build, not documentation hygiene.** Left unamended, the note instructs the next cleanup
+sweep to claw the builder back exactly as it clawed back the sixteen, and it would be right to.
+
+*(Note for whoever lands phase 1: `wayfind_scope_ids` is one of the three and phase 1 retires it, so
+the `::vector` class shrinks to two as this one arrives.)*
 
 Three obligations make it tolerable, and each is a plan step rather than a hope:
 
