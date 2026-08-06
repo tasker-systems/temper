@@ -182,6 +182,37 @@ async fn homes_in_cogmap(pool: &PgPool, cogmap: Uuid) -> i64 {
     .expect("count homes")
 }
 
+/// Every hit `resource_id` in a `/api/search` response, gathered from BOTH arms.
+///
+/// `/api/search` returns an OBJECT — `{exact, wide, scope}` — not a bare array; it has since this
+/// branch's phase-1 two-arm reshape. The decode conforms to the incumbent pattern in
+/// `search_two_arms_test.rs` (`body["exact"]["hits"]` at `:100`, `body["wide"]["hits"]` at `:182`);
+/// this file must not invent a third way to read a search response.
+///
+/// **Both arms, deliberately.** These tests assert whether a cogmap-homed resource is reachable at
+/// all under a given scope. Under two arms a resource may surface in either, so asking only one
+/// would make the assertion depend on which mechanic matched — which is not what these tests are
+/// about.
+///
+/// **One helper, deliberately.** Task 8 of the ResourceView convergence plan reshapes a hit into
+/// `{ resource: ResourceView, fts_norm }`, at which point `h["resource_id"]` becomes
+/// `h["resource"]["id"]`. Localized here that is a one-line edit; inlined at each call site it
+/// would be six.
+async fn search_hit_ids(resp: reqwest::Response) -> Vec<String> {
+    let body: serde_json::Value = resp.json().await.expect("search JSON");
+    ["exact", "wide"]
+        .iter()
+        .flat_map(|arm| {
+            body[arm]["hits"]
+                .as_array()
+                .unwrap_or_else(|| panic!("the `{arm}` arm must carry `hits`; got {body}"))
+                .iter()
+                .filter_map(|h| h["resource_id"].as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 // ── (1) create --cogmap homes the resource in the map ───────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -403,18 +434,14 @@ async fn cogmap_homed_resource_invisible_to_context_search(pool: PgPool) {
         "context search must return 200"
     );
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
-    let ids: Vec<&str> = rows
-        .iter()
-        .filter_map(|r| r["resource_id"].as_str())
-        .collect();
+    let ids = search_hit_ids(resp).await;
 
     assert!(
-        ids.contains(&ctx_id.as_str()),
+        ids.contains(&ctx_id),
         "the context-homed resource must appear in its own context search; got {ids:?}"
     );
     assert!(
-        !ids.contains(&cogmap_resource_id.to_string().as_str()),
+        !ids.contains(&cogmap_resource_id.to_string()),
         "the cogmap-homed resource must NOT appear in a context search; got {ids:?}"
     );
 }
@@ -589,11 +616,7 @@ async fn cogmap_search_scopes_to_map(pool: PgPool) {
         .expect("search request failed");
     assert_eq!(resp.status().as_u16(), 200, "cogmap search must return 200");
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
-    let ids: Vec<String> = rows
-        .iter()
-        .filter_map(|r| r["resource_id"].as_str().map(String::from))
-        .collect();
+    let ids = search_hit_ids(resp).await;
 
     assert!(
         ids.contains(&resource_id.to_string()),
@@ -674,10 +697,10 @@ async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
         "non-member cogmap search must return 200 (deny-as-empty)"
     );
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    let ids = search_hit_ids(resp).await;
     assert!(
-        rows.is_empty(),
-        "non-member cogmap search must return zero results; got {rows:?}"
+        ids.is_empty(),
+        "non-member cogmap search must return zero results; got {ids:?}"
     );
 }
 
@@ -781,18 +804,14 @@ async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
         "ex-member cogmap search must return 200 (deny-as-empty)"
     );
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
-    let ids: Vec<String> = rows
-        .iter()
-        .filter_map(|r| r["resource_id"].as_str().map(String::from))
-        .collect();
+    let ids = search_hit_ids(resp).await;
     assert!(
         !ids.contains(&resource_id.to_string()),
         "an ex-member who still owns the resource must get zero cogmap-scoped hits; got {ids:?}"
     );
     assert!(
-        rows.is_empty(),
-        "ex-member cogmap search must be empty; got {rows:?}"
+        ids.is_empty(),
+        "ex-member cogmap search must be empty; got {ids:?}"
     );
 }
 
@@ -880,11 +899,7 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
         "co-member cogmap search must return 200"
     );
 
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
-    let ids: Vec<String> = rows
-        .iter()
-        .filter_map(|r| r["resource_id"].as_str().map(String::from))
-        .collect();
+    let ids = search_hit_ids(resp).await;
     // MULTI-AUTHOR READ RBAC: the co-member (a member of the map's team) now SEES the peer's
     // cogmap-homed resource — the cogmap-membership clause on `resources_visible_to` flows through
     // the `--cogmap` scope set.
@@ -927,10 +942,10 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
         200,
         "outsider cogmap search must return 200 (deny-as-empty)"
     );
-    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    let ids = search_hit_ids(resp).await;
     assert!(
-        rows.is_empty(),
-        "non-member cogmap search must be empty; got {rows:?}"
+        ids.is_empty(),
+        "non-member cogmap search must be empty; got {ids:?}"
     );
 }
 
