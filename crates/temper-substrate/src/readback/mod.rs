@@ -56,7 +56,10 @@ use uuid::Uuid;
 use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId,
 };
-use crate::keys::is_managed_property_key;
+use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
+use temper_workflow::types::managed_meta::ManagedMeta;
+use temper_workflow::types::resource::{BodyStorage, IngestState};
+use temper_workflow::types::ResourceView;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
 /// the surface can map each mode to the right HTTP status. The alternative — string-matching one
@@ -1470,19 +1473,6 @@ pub async fn search_wide(
     Ok(hits)
 }
 
-/// The presentation fields a search hit needs, independent of which arm produced it.
-#[derive(Debug, Clone)]
-pub struct HitIdentity {
-    pub resource_id: ResourceId,
-    pub title: String,
-    pub origin_uri: String,
-    pub doc_type_name: String,
-    /// Whichever home is set — context name or cogmap name.
-    pub home_display: Option<String>,
-    pub context_slug: Option<String>,
-    pub context_owner_ref: Option<String>,
-}
-
 /// Enrich a set of resource ids in ONE round-trip, visibility-gated.
 ///
 /// This replaces a per-hit `resource_row` call — 50 results meant 51 queries. Both arms feed the
@@ -1491,27 +1481,60 @@ pub struct HitIdentity {
 /// A resource the principal cannot see is simply absent from the result, never an error: the arms
 /// already gate visibility inside SQL, so a miss here would mean the row disappeared between the two
 /// statements, which is a dropped hit rather than a fault.
+///
+/// Answers in [`ResourceView`] — the one shape a resource has — rather than in a search-local
+/// projection, so an `ExactHit` and a list row describe the same resource identically. Two fields
+/// are deliberately absent on every view this returns: `content` (the body is a section, and
+/// reconstructing markdown for every hit is what this call exists NOT to do) and `open_meta` (the
+/// open tier is a section too; `None` means *not requested*, never "empty").
+///
+/// The managed tier is not a section, so it is joined in here. It arrives as one `jsonb` object per
+/// resource from a LATERAL aggregate — **still one statement**, which is the property this function
+/// was written to hold. The key set the aggregate filters on is bound from
+/// [`crate::keys::MANAGED_PROPERTY_KEYS`], not spelled into the SQL, so the managed/open split has
+/// the same single source here as [`meta`]'s [`is_managed_property_key`] inverse.
 pub async fn hit_identities(
     pool: &PgPool,
     principal: ProfileId,
     ids: &[ResourceId],
-) -> Result<Vec<HitIdentity>> {
+) -> Result<Vec<ResourceView>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
     let raw: Vec<Uuid> = ids.iter().map(|r| r.uuid()).collect();
+    let managed_keys: Vec<String> = MANAGED_PROPERTY_KEYS
+        .iter()
+        .map(|k| (*k).to_string())
+        .collect();
+    // The `?` overrides on the LEFT-JOINed anchors are the load-bearing ones (as in
+    // `resource_row`): a resource is homed in EITHER a context or a cogmap, so exactly one side is
+    // NULL on every row. `managed` is `?` because `jsonb_object_agg` over an empty set is NULL —
+    // a resource with no managed property at all.
     let rows = sqlx::query!(
-        r#"SELECT r.id AS "resource_id!",
+        r#"SELECT r.id AS "id!",
                   r.title,
                   r.origin_uri,
+                  r.is_active,
+                  r.created,
+                  r.updated,
+                  r.body_hash,
+                  r.ingest_state,
+                  r.body_storage,
+                  h.owner_profile_id,
+                  h.originator_profile_id,
+                  p.handle                   AS owner_handle,
                   dt.property_value #>> '{}' AS "doc_type_name!",
-                  COALESCE(c.name, cm.name)  AS "home_display?",
+                  c.id                       AS "kb_context_id?",
+                  c.name                     AS "context_name?",
+                  cm.id                      AS "cogmap_id?",
+                  cm.name                    AS "cogmap_name?",
                   c.slug                     AS "context_slug?",
                   CASE c.owner_table
                     WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
                     WHEN 'kb_profiles' THEN '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                     ELSE NULL
-                  END                        AS "context_owner_ref?"
+                  END                        AS "context_owner_ref?",
+                  mm.managed                 AS "managed?"
              FROM kb_resources r
              JOIN kb_resource_homes h ON h.resource_id = r.id
              JOIN resources_visible_to($1) v ON v.resource_id = r.id
@@ -1519,28 +1542,75 @@ pub async fn hit_identities(
                ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
              LEFT JOIN kb_cogmaps cm
                ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'
+             JOIN kb_profiles p ON p.id = h.owner_profile_id
              JOIN kb_properties dt
                ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
               AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+             LEFT JOIN LATERAL (
+               SELECT jsonb_object_agg(newest.property_key, newest.property_value) AS managed
+                 FROM (SELECT DISTINCT ON (mp.property_key)
+                              mp.property_key, mp.property_value
+                         FROM kb_properties mp
+                        WHERE mp.owner_table = 'kb_resources' AND mp.owner_id = r.id
+                          AND NOT mp.is_folded AND mp.property_key = ANY($3)
+                        ORDER BY mp.property_key, mp.created DESC, mp.id DESC) newest
+             ) mm ON TRUE
             WHERE r.id = ANY($2)"#,
         principal.uuid(),
         &raw,
+        &managed_keys,
     )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| HitIdentity {
-            resource_id: ResourceId::from(row.resource_id),
-            title: row.title,
-            origin_uri: row.origin_uri,
-            doc_type_name: row.doc_type_name,
-            home_display: row.home_display,
-            context_slug: row.context_slug,
-            context_owner_ref: row.context_owner_ref,
+    rows.into_iter()
+        .map(|row| {
+            // Newest-wins per key is done by the `DISTINCT ON` above, matching `meta`'s
+            // ORDER BY + last-write-wins. `deny_unknown_fields` on `ManagedMeta` is what makes the
+            // bound key filter load-bearing rather than an optimization: an open key reaching here
+            // is an error, not a silently-carried extra.
+            let managed_meta: ManagedMeta = match row.managed {
+                Some(v) => serde_json::from_value(v).map_err(|e| {
+                    anyhow::anyhow!(
+                        "managed meta for resource {} is not a ManagedMeta: {e}",
+                        row.id
+                    )
+                })?,
+                None => ManagedMeta::default(),
+            };
+            Ok(ResourceView {
+                id: ResourceId::from(row.id),
+                // Filled by `with_derived_refs` below — neither is a column.
+                r#ref: String::new(),
+                title: row.title,
+                origin_uri: row.origin_uri,
+                kb_context_id: row.kb_context_id.map(ContextId::from),
+                context_name: row.context_name,
+                context_slug: row.context_slug,
+                context_owner_ref: row.context_owner_ref,
+                context_ref: None,
+                cogmap_id: row.cogmap_id,
+                cogmap_name: row.cogmap_name,
+                doc_type_name: row.doc_type_name,
+                owner_handle: row.owner_handle,
+                owner_profile_id: ProfileId::from(row.owner_profile_id),
+                originator_profile_id: ProfileId::from(row.originator_profile_id),
+                is_active: row.is_active,
+                created: row.created,
+                updated: row.updated,
+                body_hash: row.body_hash,
+                // Both columns are CHECK-constrained, so `from_wire` is total in practice; an
+                // unparseable value is a schema violation, surfaced as None rather than coerced.
+                ingest_state: IngestState::from_wire(&row.ingest_state),
+                body_storage: BodyStorage::from_wire(&row.body_storage),
+                managed_meta,
+                // Both are sections this read does not serve — see the doc comment.
+                open_meta: None,
+                content: None,
+            }
+            .with_derived_refs())
         })
-        .collect())
+        .collect()
 }
 
 /// One scored hit from Surface A unified search (Beat 2). The scores are the real blended sub-scores —

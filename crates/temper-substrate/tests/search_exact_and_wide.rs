@@ -11,7 +11,9 @@ mod common;
 
 use temper_substrate::content::{PreparedBlock, PreparedChunk};
 use temper_substrate::events::{fire, SeedAction};
-use temper_substrate::ids::{BlockId, ChunkId, CogmapId, ContextId, EntityId, ProfileId};
+use temper_substrate::ids::{
+    BlockId, ChunkId, CogmapId, ContextId, EntityId, ProfileId, ResourceId,
+};
 use temper_substrate::payloads::AnchorRef;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes;
@@ -63,6 +65,39 @@ async fn mk_at(
             originator: owner,
             emitter,
             properties: &[],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap()
+    .uuid()
+}
+
+/// [`mk`] with frontmatter properties attached, so the enrichment read has both metadata tiers to
+/// tell apart: a `temper-*` key is managed, anything else is open.
+async fn mk_with_props(
+    pool: &sqlx::PgPool,
+    home: ContextId,
+    owner: ProfileId,
+    emitter: EntityId,
+    title: &str,
+    body: &str,
+    properties: &[(String, serde_json::Value)],
+) -> Uuid {
+    writes::create_resource(
+        pool,
+        writes::CreateParams {
+            idempotency_key: None,
+            sources: vec![],
+            title,
+            origin_uri: &format!("test://{title}"),
+            body,
+            doc_type: "concept",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties,
             chunks: None,
         },
     )
@@ -498,5 +533,139 @@ async fn an_in_progress_resource_appears_in_neither_arm(pool: sqlx::PgPool) {
             .iter()
             .any(|(id, _)| *id == partial),
         "an in_progress resource must not surface in the wide arm"
+    );
+}
+
+/// Enrichment answers in the ONE resource shape, for a whole page of hits, in ONE round trip.
+///
+/// Three things are asserted together because they are the three ways this read can regress:
+///
+/// 1. **Every id comes back.** Ten ids in, ten views out — the batched call is what replaced the
+///    per-hit `resource_row` (`readback/mod.rs`: "50 results meant 51 queries"), so a widened
+///    SELECT that dropped rows or needed a follow-up query per row would fail here.
+/// 2. **`managed_meta` is populated from the property tier, and only the managed half of it.**
+///    Each resource carries a `temper-*` key and an open key. `ManagedMeta` is
+///    `deny_unknown_fields`, so an open key leaking into the managed tier is a hard
+///    deserialization failure, not a soft one — which is what makes the negative half of this
+///    conjunct self-enforcing.
+/// 3. **`content` is absent.** The body is a section this read never fetches; `None` means "not
+///    requested", and a body arriving here would mean the enrichment read had started
+///    reconstructing markdown for every search hit.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn hit_identities_is_one_round_trip_and_carries_both_meta_tiers(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "enriched").await;
+
+    let mut ids: Vec<ResourceId> = Vec::new();
+    for n in 0..10_i64 {
+        let id = mk_with_props(
+            &pool,
+            home,
+            owner,
+            emitter,
+            &format!("Falconry {n}"),
+            "The peregrine stoops at terminal velocity.",
+            &[
+                ("temper-stage".to_string(), serde_json::json!("doing")),
+                ("temper-seq".to_string(), serde_json::json!(n)),
+                // An OPEN key. It must not reach `ManagedMeta`, which rejects unknown fields.
+                ("falcon".to_string(), serde_json::json!("peregrine")),
+            ],
+        )
+        .await;
+        ids.push(ResourceId::from(id));
+    }
+
+    let views = temper_substrate::readback::hit_identities(&pool, owner, &ids)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        views.len(),
+        ids.len(),
+        "every visible id is enriched by the one batched call"
+    );
+
+    for view in &views {
+        assert_eq!(
+            view.managed_meta.stage.as_deref(),
+            Some("doing"),
+            "the managed tier is joined in, not left empty: {:?}",
+            view.managed_meta
+        );
+        assert!(
+            view.managed_meta.seq.is_some(),
+            "a numeric managed key survives the join as a number: {:?}",
+            view.managed_meta
+        );
+        assert!(
+            view.content.is_none(),
+            "the body is a section this read never fetches"
+        );
+        assert!(
+            view.r#ref.ends_with(&view.id.uuid().to_string()),
+            "the decorated ref is derived, not selected: {}",
+            view.r#ref
+        );
+        assert_eq!(
+            view.context_ref.as_deref(),
+            Some("@system/enriched"),
+            "the context ref is derived from the owner ref + slug beside it"
+        );
+    }
+
+    let mut seqs: Vec<i64> = views
+        .iter()
+        .map(|v| v.managed_meta.seq.expect("temper-seq"))
+        .collect();
+    seqs.sort_unstable();
+    assert_eq!(
+        seqs,
+        (0..10_i64).collect::<Vec<_>>(),
+        "each view carries ITS OWN managed meta — not one resource's smeared across the page"
+    );
+}
+
+/// The enrichment read is visibility-gated: a resource the principal cannot see is simply absent,
+/// never an error and never a leaked title.
+///
+/// The precondition half matters as much as the assertion — without it the test would pass for a
+/// resource that no principal could see, which is the wrong reason.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn hit_identities_omits_a_resource_the_principal_cannot_see(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "private").await;
+
+    let hidden = ResourceId::from(
+        mk(
+            &pool,
+            home,
+            owner,
+            emitter,
+            "Falconry",
+            "The peregrine stoops at terminal velocity.",
+        )
+        .await,
+    );
+
+    let mine = temper_substrate::readback::hit_identities(&pool, owner, &[hidden])
+        .await
+        .unwrap();
+    assert_eq!(
+        mine.len(),
+        1,
+        "precondition: the owner of the home sees their own resource"
+    );
+
+    let stranger = ProfileId::from(common::insert_profile(&pool, "stranger").await);
+    let theirs = temper_substrate::readback::hit_identities(&pool, stranger, &[hidden])
+        .await
+        .unwrap();
+    assert!(
+        theirs.is_empty(),
+        "a principal with no grant, no team and no home ownership must be enriched nothing: {:?}",
+        theirs.iter().map(|v| &v.title).collect::<Vec<_>>()
     );
 }

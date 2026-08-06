@@ -6343,6 +6343,7 @@ dependencies = [
  "temper-core",
  "temper-ingest",
  "temper-migrate",
+ "temper-workflow",
  "tokio",
  "uuid",
 ]

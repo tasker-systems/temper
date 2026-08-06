@@ -44,6 +44,7 @@ use temper_workflow::types::managed_meta::{
 use temper_workflow::types::resource::{
     ContentResponse, ResourceDetail, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
+use temper_workflow::types::ResourceView;
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))
@@ -886,14 +887,11 @@ async fn enrich_hits(
     pool: &PgPool,
     profile_id: ProfileId,
     ids: &[ResourceId],
-) -> ApiResult<std::collections::HashMap<Uuid, readback::HitIdentity>> {
+) -> ApiResult<std::collections::HashMap<Uuid, ResourceView>> {
     let rows = readback::hit_identities(pool, profile_id, ids)
         .await
         .map_err(|e| search_stage_err("enrichment", e))?;
-    Ok(rows
-        .into_iter()
-        .map(|i| (i.resource_id.uuid(), i))
-        .collect())
+    Ok(rows.into_iter().map(|v| (v.id.uuid(), v)).collect())
 }
 
 /// Project a shared identity into an arm's row. Two near-identical bodies because the rows are two
@@ -903,14 +901,18 @@ trait IntoArmHit {
     fn into_wide(self, vec_norm: f32) -> WideHit;
 }
 
-impl IntoArmHit for readback::HitIdentity {
+/// The hit's `context` is the home DISPLAY name — whichever of the two homes is set. `ResourceView`
+/// keeps the two apart (`context_name` / `cogmap_name`) because they are different homes; the hit
+/// collapses them because it has one display slot. The collapse lives here rather than in the
+/// readback so the view stays the un-collapsed shape every other surface reads.
+impl IntoArmHit for ResourceView {
     fn into_exact(self, fts_norm: f32) -> ExactHit {
         ExactHit {
-            resource_id: self.resource_id.uuid(),
+            resource_id: self.id.uuid(),
             title: self.title,
             kb_uri: self.origin_uri.clone(),
             origin_uri: self.origin_uri,
-            context: self.home_display,
+            context: self.context_name.or(self.cogmap_name),
             doc_type: self.doc_type_name,
             context_slug: self.context_slug,
             context_owner_ref: self.context_owner_ref,
@@ -920,11 +922,11 @@ impl IntoArmHit for readback::HitIdentity {
 
     fn into_wide(self, vec_norm: f32) -> WideHit {
         WideHit {
-            resource_id: self.resource_id.uuid(),
+            resource_id: self.id.uuid(),
             title: self.title,
             kb_uri: self.origin_uri.clone(),
             origin_uri: self.origin_uri,
-            context: self.home_display,
+            context: self.context_name.or(self.cogmap_name),
             doc_type: self.doc_type_name,
             context_slug: self.context_slug,
             context_owner_ref: self.context_owner_ref,
