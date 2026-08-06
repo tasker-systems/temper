@@ -281,9 +281,12 @@ async fn segmented_create_roundtrips_large_body(pool: PgPool) {
         .await
         .expect("text search");
     assert!(
-        results.iter().any(|r| r.resource_id == resource_id),
+        results.iter().any(|r| r.resource.id.uuid() == resource_id),
         "search for a last-segment phrase must return the segmented resource; got {:?}",
-        results.iter().map(|r| r.title.as_str()).collect::<Vec<_>>()
+        results
+            .iter()
+            .map(|r| r.resource.title.as_str())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -823,7 +826,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .await
         .expect("search");
     assert!(
-        !hits.iter().any(|h| h.resource_id == partial_id),
+        !hits.iter().any(|h| h.resource.id.uuid() == partial_id),
         "an unfinalized segmented ingest must NOT surface in search"
     );
 
@@ -907,7 +910,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .await
         .expect("search after finalize");
     assert!(
-        hits.iter().any(|h| h.resource_id == partial_id),
+        hits.iter().any(|h| h.resource.id.uuid() == partial_id),
         "after finalize the same query must find it — otherwise the absence above proved nothing"
     );
 }

@@ -994,7 +994,7 @@ pub async fn search_select(
         b.fts_norm
             .partial_cmp(&a.fts_norm)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.resource_id.cmp(&b.resource_id))
+            .then_with(|| a.resource.id.cmp(&b.resource.id))
     });
     let exact: Vec<ExactHit> = exact.into_iter().skip(offset).take(limit).collect();
 
@@ -1010,7 +1010,7 @@ pub async fn search_select(
         b.vec_norm
             .partial_cmp(&a.vec_norm)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.resource_id.cmp(&b.resource_id))
+            .then_with(|| a.resource.id.cmp(&b.resource.id))
     });
     let wide: Vec<WideHit> = wide.into_iter().skip(offset).take(limit).collect();
 
@@ -1066,35 +1066,25 @@ trait IntoArmHit {
     fn into_wide(self, vec_norm: f32) -> WideHit;
 }
 
-/// The hit's `context` is the home DISPLAY name — whichever of the two homes is set. `ResourceView`
-/// keeps the two apart (`context_name` / `cogmap_name`) because they are different homes; the hit
-/// collapses them because it has one display slot. The collapse lives here rather than in the
-/// readback so the view stays the un-collapsed shape every other surface reads.
+/// A wrap, and nothing else. The view goes onto the hit unchanged, so a hit and a list row describe
+/// the same resource with the same bytes — the property this convergence exists to hold.
+///
+/// This used to flatten the view into eight inlined fields, collapsing `context_name`/`cogmap_name`
+/// into one `context` slot along the way. That collapse existed only to fill the flat field; with no
+/// flat field there is nothing to collapse into, and a caller that wants the display name calls
+/// [`ResourceView::home_display`] — the one accessor for the mutual exclusion, which this was a
+/// second, local copy of.
 impl IntoArmHit for ResourceView {
     fn into_exact(self, fts_norm: f32) -> ExactHit {
         ExactHit {
-            resource_id: self.id.uuid(),
-            title: self.title,
-            kb_uri: self.origin_uri.clone(),
-            origin_uri: self.origin_uri,
-            context: self.context_name.or(self.cogmap_name),
-            doc_type: self.doc_type_name,
-            context_slug: self.context_slug,
-            context_owner_ref: self.context_owner_ref,
+            resource: self,
             fts_norm,
         }
     }
 
     fn into_wide(self, vec_norm: f32) -> WideHit {
         WideHit {
-            resource_id: self.id.uuid(),
-            title: self.title,
-            kb_uri: self.origin_uri.clone(),
-            origin_uri: self.origin_uri,
-            context: self.context_name.or(self.cogmap_name),
-            doc_type: self.doc_type_name,
-            context_slug: self.context_slug,
-            context_owner_ref: self.context_owner_ref,
+            resource: self,
             vec_norm,
         }
     }

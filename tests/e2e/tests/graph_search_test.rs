@@ -176,7 +176,7 @@ async fn search_context_ref_scopes_and_unknown_errors(pool: sqlx::PgPool) {
 
     // Both documents carry the same distinctive term, so nothing but the scope can separate them.
     let ids_of = |r: &temper_core::types::api::SearchResponse| -> Vec<uuid::Uuid> {
-        r.exact.hits.iter().map(|h| h.resource_id).collect()
+        r.exact.hits.iter().map(|h| h.resource.id.uuid()).collect()
     };
 
     let unscoped = SearchParams {

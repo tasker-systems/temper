@@ -138,6 +138,165 @@ async fn search_returns_two_arms_each_with_its_own_quantity_and_no_sum(pool: PgP
     );
 }
 
+/// A hit's `resource` is byte-identical to the list row for the same resource.
+///
+/// **The convergence witness for search.** Before this, a hit carried eight hand-inlined identity
+/// fields that had drifted from the list projection in every direction at once: it renamed the
+/// anchor (`resource_id` vs `id`), collapsed the two homes into one `context` slot, dropped
+/// `owner_handle`/`created`/`updated`/`managed_meta` entirely, and invented a `kb_uri` that was
+/// `origin_uri` under a second name. An agent reading a hit and a list row had to know all of that.
+///
+/// Asserting equality of the whole serialized object — rather than field-by-field — is what makes
+/// this hold for fields nobody thought to check, including any added later.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn hit_carries_the_same_shape_as_list(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("hit-shape-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+
+    let resp = app
+        .client
+        .post(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "kb_context_id": context_id.to_string(),
+            "doc_type": "research",
+            "origin_uri": format!("test://hit-shape-{}", uuid::Uuid::new_v4()),
+            "title": "ztmpshapeword the kestrel hovers",
+        }))
+        .send()
+        .await
+        .expect("create resource");
+    assert!(resp.status().is_success(), "seed resource must be created");
+    let created: Value = resp.json().await.expect("create JSON");
+    let id = created["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("create returns a ResourceView anchored on `id`; got {created}"))
+        .to_string();
+
+    let resp = post_search(
+        &app,
+        &token,
+        json!({ "query": "ztmpshapeword", "limit": 50 }),
+    )
+    .await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: Value = resp.json().await.expect("search JSON");
+    let hit = body["exact"]["hits"]
+        .as_array()
+        .expect("exact hits")
+        .iter()
+        .find(|h| h["resource"]["id"].as_str() == Some(id.as_str()))
+        .unwrap_or_else(|| panic!("the seeded resource must appear in the exact arm; got {body}"));
+
+    let resp = app
+        .client
+        .get(app.url("/api/resources?limit=50"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("list request failed");
+    assert_eq!(resp.status().as_u16(), 200, "list must return 200");
+    let list: Value = resp.json().await.expect("list JSON");
+    let row = list["rows"]
+        .as_array()
+        .expect("list carries `rows`")
+        .iter()
+        .find(|r| r["id"].as_str() == Some(id.as_str()))
+        .unwrap_or_else(|| panic!("the seeded resource must appear in the list; got {list}"));
+
+    assert_eq!(
+        &hit["resource"], row,
+        "a hit's `resource` and a list row for the same id are one shape with one set of values"
+    );
+}
+
+/// The arm's quantity is on the HIT, never on the resource it wraps.
+///
+/// Frame register `no-cross-act-ranking`: `fts_norm` and `vec_norm` measure different things and
+/// are never summed. They sit on the two hit types precisely so that neither can be reached from
+/// the shape the two arms SHARE — a quantity on `ResourceView` would appear in a list row, in
+/// `show`, and in both arms at once, which is what makes writing `a.score + b.score` look like
+/// arithmetic instead of a category error.
+///
+/// Asserted against the wire body rather than a constructed struct: the wire is where a consumer
+/// would find it, and a `#[serde(skip)]` would hide a field this test must still catch.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn no_quantity_field_exists_on_resource_view(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("no-quantity-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+
+    let resp = app
+        .client
+        .post(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "kb_context_id": context_id.to_string(),
+            "doc_type": "research",
+            "origin_uri": format!("test://no-quantity-{}", uuid::Uuid::new_v4()),
+            "title": "ztmpquantityword the merlin dives",
+        }))
+        .send()
+        .await
+        .expect("create resource");
+    assert!(resp.status().is_success(), "seed resource must be created");
+
+    let resp = post_search(
+        &app,
+        &token,
+        json!({ "query": "ztmpquantityword", "limit": 50 }),
+    )
+    .await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: Value = resp.json().await.expect("search JSON");
+
+    let hits = body["exact"]["hits"].as_array().expect("exact hits");
+    assert!(
+        !hits.is_empty(),
+        "the seeded resource carries the query term, so there must be a hit to inspect: {body}"
+    );
+
+    for hit in hits {
+        // The hit itself carries its arm's quantity — that half is the point, not an accident.
+        assert!(
+            hit.get("fts_norm").is_some(),
+            "the exact hit carries `fts_norm`: {hit}"
+        );
+
+        let resource = hit["resource"]
+            .as_object()
+            .unwrap_or_else(|| panic!("a hit wraps a `resource` object; got {hit}"));
+
+        // But the resource it wraps carries NEITHER arm's quantity — not its own, not the other's.
+        for quantity in ["fts_norm", "vec_norm", "score", "combined_score"] {
+            assert!(
+                !resource.contains_key(quantity),
+                "`{quantity}` is an arm's quantity and belongs on the hit, never on the shared \
+                 resource shape: {hit}"
+            );
+        }
+    }
+
+    // And the same for the wide arm, whose own quantity is the other one.
+    for hit in body["wide"]["hits"].as_array().expect("wide hits") {
+        let resource = hit["resource"]
+            .as_object()
+            .unwrap_or_else(|| panic!("a hit wraps a `resource` object; got {hit}"));
+        for quantity in ["fts_norm", "vec_norm", "score", "combined_score"] {
+            assert!(!resource.contains_key(quantity), "{hit}");
+        }
+    }
+}
+
 /// `offset` pages EACH ARM through its own order, and is not silently ignored.
 ///
 /// The arms are incommensurable, so there is no combined sequence for a caller to be at position N
@@ -184,7 +343,7 @@ async fn offset_pages_each_arm_and_is_not_ignored(pool: PgPool) {
             .as_array()
             .expect("exact hits")
             .iter()
-            .map(|h| h["resource_id"].as_str().unwrap().to_string())
+            .map(|h| h["resource"]["id"].as_str().unwrap().to_string())
             .collect()
     }
 

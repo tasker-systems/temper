@@ -9000,56 +9000,18 @@
         "type": "object",
         "description": "One hit from the **exact** arm: you could quote the words.\n\nOrdered by `fts_norm` and carrying no other quantity. A second number here would be something to\nrank it against, which is the category error this whole shape exists to make unrepresentable.",
         "required": [
-          "resource_id",
-          "title",
-          "kb_uri",
-          "origin_uri",
-          "doc_type",
+          "resource",
           "fts_norm"
         ],
         "properties": {
-          "context": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "context_owner_ref": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`)."
-          },
-          "context_slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Slug of the home context (the natural-key half of `@owner/slug`)."
-          },
-          "doc_type": {
-            "type": "string"
-          },
           "fts_norm": {
             "type": "number",
             "format": "float",
             "description": "`ts_rank` flag 33 — `rank/(rank+1)` normalization plus log-length division — in `[0,1)`."
           },
-          "kb_uri": {
-            "type": "string",
-            "description": "Canonical kb:// URI."
-          },
-          "origin_uri": {
-            "type": "string",
-            "description": "Original source URL or file reference."
-          },
-          "resource_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "title": {
-            "type": "string"
+          "resource": {
+            "$ref": "#/components/schemas/ResourceView",
+            "description": "The resource this hit names — the same shape `list`, `show`, `create`, `update` and\n`annotate` all answer in."
           }
         }
       },
@@ -12883,47 +12845,13 @@
         "type": "object",
         "description": "One hit from the **wide** arm: you had the idea, not the words.",
         "required": [
-          "resource_id",
-          "title",
-          "kb_uri",
-          "origin_uri",
-          "doc_type",
+          "resource",
           "vec_norm"
         ],
         "properties": {
-          "context": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "context_owner_ref": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "context_slug": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "doc_type": {
-            "type": "string"
-          },
-          "kb_uri": {
-            "type": "string"
-          },
-          "origin_uri": {
-            "type": "string"
-          },
-          "resource_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "title": {
-            "type": "string"
+          "resource": {
+            "$ref": "#/components/schemas/ResourceView",
+            "description": "The resource this hit names — identical in shape to [`ExactHit::resource`] and to a list\nrow. Only the quantity beside it differs, because only the quantity is arm-specific."
           },
           "vec_norm": {
             "type": "number",

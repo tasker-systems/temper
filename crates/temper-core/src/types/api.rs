@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::types::resource_view::ResourceView;
 use crate::types::vault_config::VaultConfig;
 
 /// Response body for the health endpoint.
@@ -158,14 +159,19 @@ pub enum SearchReason {
     OutOfScope,
 }
 
-// The identity fields below are repeated inline on `ExactHit` and `WideHit` rather than shared
-// through `#[serde(flatten)]`, because **ts-rs cannot codegen a flattened field** (see
-// `ResourceDetail` in temper-workflow, which drops its `TS` derive for exactly this) and these types
-// are ts-rs-exported. The alternative — a nested `identity` object — would add a level of nesting on
-// the wire to save one in the source.
+// A hit is a WRAPPER: the resource it names in [`ResourceView`], the arm's own quantity beside it.
+// Nothing about a resource's identity is restated here, so a hit and a list row cannot disagree
+// about the same resource — which is what the six earlier projections all found ways to do.
 //
-// `slug` is deliberately absent from both. The enrichment loop wrote `String::new()` into it on
-// every path, so it has never carried a value.
+// **The quantity lives on the hit and never on the view.** `fts_norm` and `vec_norm` measure
+// different things and are never summed; a quantity on the shape both arms share is precisely what
+// would make that sum mechanically easy to write. The wrapper is what keeps the two arms
+// incommensurable in the type system rather than only in a comment.
+//
+// The wrapping is by a NAMED field, not `#[serde(flatten)]`: ts-rs cannot codegen a flattened field
+// (see `ResourceDetail` in temper-workflow, which drops its `TS` derive for exactly this) and these
+// types are ts-rs-exported. So the nesting is on the wire too — `hit.resource.title`, not
+// `hit.title`.
 
 /// One hit from the **exact** arm: you could quote the words.
 ///
@@ -177,21 +183,9 @@ pub enum SearchReason {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ExactHit {
-    pub resource_id: Uuid,
-    pub title: String,
-    /// Canonical kb:// URI.
-    pub kb_uri: String,
-    /// Original source URL or file reference.
-    pub origin_uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<String>,
-    pub doc_type: String,
-    /// Slug of the home context (the natural-key half of `@owner/slug`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_slug: Option<String>,
-    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_owner_ref: Option<String>,
+    /// The resource this hit names — the same shape `list`, `show`, `create`, `update` and
+    /// `annotate` all answer in.
+    pub resource: ResourceView,
     /// `ts_rank` flag 33 — `rank/(rank+1)` normalization plus log-length division — in `[0,1)`.
     pub fts_norm: f32,
 }
@@ -203,17 +197,9 @@ pub struct ExactHit {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct WideHit {
-    pub resource_id: Uuid,
-    pub title: String,
-    pub kb_uri: String,
-    pub origin_uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<String>,
-    pub doc_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_slug: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_owner_ref: Option<String>,
+    /// The resource this hit names — identical in shape to [`ExactHit::resource`] and to a list
+    /// row. Only the quantity beside it differs, because only the quantity is arm-specific.
+    pub resource: ResourceView,
     /// The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.
     ///
     /// **Not the same quantity as `wayfind_region_scores.query_cos`**, which rescales the identical

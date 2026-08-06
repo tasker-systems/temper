@@ -109,7 +109,7 @@ async fn fts_text_query_finds_resource(pool: sqlx::PgPool) {
         !results.is_empty(),
         "FTS text search should find the ingested resource"
     );
-    assert_eq!(results[0].title, "Kubernetes Deployment Strategy");
+    assert_eq!(results[0].resource.title, "Kubernetes Deployment Strategy");
     // The resource is a genuine lexical hit, so its FTS term is non-zero. #297: the server now
     // embeds a text-only query server-side (`search_select` fills `p_emb`), so the vector term may
     // also contribute — this is no longer the dead-vector-arm path, and `vector_score` is no longer
@@ -163,7 +163,7 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
         !results.is_empty(),
         "FTS should find resource by body content"
     );
-    assert_eq!(results[0].title, "Infrastructure Notes");
+    assert_eq!(results[0].resource.title, "Infrastructure Notes");
 }
 
 /// open_meta convention v2: a term present ONLY in `tags` (not title or body) is still findable,
@@ -206,7 +206,7 @@ async fn fts_finds_by_open_meta_tags(pool: sqlx::PgPool) {
         !results.is_empty(),
         "a term present only in open_meta.tags must be findable via FTS (tags@C, v2)"
     );
-    assert_eq!(results[0].title, "Release Checklist");
+    assert_eq!(results[0].resource.title, "Release Checklist");
     assert!(
         results[0].fts_norm > 0.0,
         "tag-only match must carry a non-zero fts_norm; got {}",
@@ -259,7 +259,7 @@ async fn fts_finds_by_open_meta_descriptor(pool: sqlx::PgPool) {
         !results.is_empty(),
         "a term present only in open_meta.descriptor must be findable via FTS (descriptor@D, v1)"
     );
-    assert_eq!(results[0].title, "Section 4");
+    assert_eq!(results[0].resource.title, "Section 4");
 }
 
 /// Receive-side symmetric-defense gate (Deliverable D): the server rejects a create whose open_meta
@@ -479,7 +479,7 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
         .expect("alpha search failed");
 
     assert_eq!(alpha_results.len(), 1);
-    assert_eq!(alpha_results[0].title, "Alpha Specific Document");
+    assert_eq!(alpha_results[0].resource.title, "Alpha Specific Document");
 
     // Search in beta context — should only find beta doc
     let beta_results = app
@@ -495,7 +495,7 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
         .expect("beta search failed");
 
     assert_eq!(beta_results.len(), 1);
-    assert_eq!(beta_results[0].title, "Beta Specific Document");
+    assert_eq!(beta_results[0].resource.title, "Beta Specific Document");
 }
 
 /// A zero-magnitude embedding is refused with 400, rather than answered with JSON the caller cannot

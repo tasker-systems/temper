@@ -2930,24 +2930,16 @@ export interface components {
          *     rank it against, which is the category error this whole shape exists to make unrepresentable.
          */
         ExactHit: {
-            context?: string | null;
-            /** @description Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`). */
-            context_owner_ref?: string | null;
-            /** @description Slug of the home context (the natural-key half of `@owner/slug`). */
-            context_slug?: string | null;
-            doc_type: string;
             /**
              * Format: float
              * @description `ts_rank` flag 33 — `rank/(rank+1)` normalization plus log-length division — in `[0,1)`.
              */
             fts_norm: number;
-            /** @description Canonical kb:// URI. */
-            kb_uri: string;
-            /** @description Original source URL or file reference. */
-            origin_uri: string;
-            /** Format: uuid */
-            resource_id: string;
-            title: string;
+            /**
+             * @description The resource this hit names — the same shape `list`, `show`, `create`, `update` and
+             *     `annotate` all answer in.
+             */
+            resource: components["schemas"]["ResourceView"];
         };
         /**
          * @description Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.
@@ -5194,15 +5186,11 @@ export interface components {
         };
         /** @description One hit from the **wide** arm: you had the idea, not the words. */
         WideHit: {
-            context?: string | null;
-            context_owner_ref?: string | null;
-            context_slug?: string | null;
-            doc_type: string;
-            kb_uri: string;
-            origin_uri: string;
-            /** Format: uuid */
-            resource_id: string;
-            title: string;
+            /**
+             * @description The resource this hit names — identical in shape to [`ExactHit::resource`] and to a list
+             *     row. Only the quantity beside it differs, because only the quantity is arm-specific.
+             */
+            resource: components["schemas"]["ResourceView"];
             /**
              * Format: float
              * @description The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.

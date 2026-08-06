@@ -16,21 +16,8 @@ require 'time'
 module Temper::Generated
   # One hit from the **wide** arm: you had the idea, not the words.
   class WideHit < ApiModelBase
-    attr_accessor :context
-
-    attr_accessor :context_owner_ref
-
-    attr_accessor :context_slug
-
-    attr_accessor :doc_type
-
-    attr_accessor :kb_uri
-
-    attr_accessor :origin_uri
-
-    attr_accessor :resource_id
-
-    attr_accessor :title
+    # The resource this hit names — identical in shape to [`ExactHit::resource`] and to a list row. Only the quantity beside it differs, because only the quantity is arm-specific.
+    attr_accessor :resource
 
     # The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.  **Not the same quantity as `wayfind_region_scores.query_cos`**, which rescales the identical operator as `1 - d` and therefore spans `[-1,1]`. Two rescales of one distance; neither column name discloses which it is.
     attr_accessor :vec_norm
@@ -38,14 +25,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'context' => :'context',
-        :'context_owner_ref' => :'context_owner_ref',
-        :'context_slug' => :'context_slug',
-        :'doc_type' => :'doc_type',
-        :'kb_uri' => :'kb_uri',
-        :'origin_uri' => :'origin_uri',
-        :'resource_id' => :'resource_id',
-        :'title' => :'title',
+        :'resource' => :'resource',
         :'vec_norm' => :'vec_norm'
       }
     end
@@ -63,14 +43,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'context' => :'String',
-        :'context_owner_ref' => :'String',
-        :'context_slug' => :'String',
-        :'doc_type' => :'String',
-        :'kb_uri' => :'String',
-        :'origin_uri' => :'String',
-        :'resource_id' => :'String',
-        :'title' => :'String',
+        :'resource' => :'ResourceView',
         :'vec_norm' => :'Float'
       }
     end
@@ -78,9 +51,6 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'context',
-        :'context_owner_ref',
-        :'context_slug',
       ])
     end
 
@@ -100,46 +70,10 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'context')
-        self.context = attributes[:'context']
-      end
-
-      if attributes.key?(:'context_owner_ref')
-        self.context_owner_ref = attributes[:'context_owner_ref']
-      end
-
-      if attributes.key?(:'context_slug')
-        self.context_slug = attributes[:'context_slug']
-      end
-
-      if attributes.key?(:'doc_type')
-        self.doc_type = attributes[:'doc_type']
+      if attributes.key?(:'resource')
+        self.resource = attributes[:'resource']
       else
-        self.doc_type = nil
-      end
-
-      if attributes.key?(:'kb_uri')
-        self.kb_uri = attributes[:'kb_uri']
-      else
-        self.kb_uri = nil
-      end
-
-      if attributes.key?(:'origin_uri')
-        self.origin_uri = attributes[:'origin_uri']
-      else
-        self.origin_uri = nil
-      end
-
-      if attributes.key?(:'resource_id')
-        self.resource_id = attributes[:'resource_id']
-      else
-        self.resource_id = nil
-      end
-
-      if attributes.key?(:'title')
-        self.title = attributes[:'title']
-      else
-        self.title = nil
+        self.resource = nil
       end
 
       if attributes.key?(:'vec_norm')
@@ -154,24 +88,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @doc_type.nil?
-        invalid_properties.push('invalid value for "doc_type", doc_type cannot be nil.')
-      end
-
-      if @kb_uri.nil?
-        invalid_properties.push('invalid value for "kb_uri", kb_uri cannot be nil.')
-      end
-
-      if @origin_uri.nil?
-        invalid_properties.push('invalid value for "origin_uri", origin_uri cannot be nil.')
-      end
-
-      if @resource_id.nil?
-        invalid_properties.push('invalid value for "resource_id", resource_id cannot be nil.')
-      end
-
-      if @title.nil?
-        invalid_properties.push('invalid value for "title", title cannot be nil.')
+      if @resource.nil?
+        invalid_properties.push('invalid value for "resource", resource cannot be nil.')
       end
 
       if @vec_norm.nil?
@@ -185,63 +103,19 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @doc_type.nil?
-      return false if @kb_uri.nil?
-      return false if @origin_uri.nil?
-      return false if @resource_id.nil?
-      return false if @title.nil?
+      return false if @resource.nil?
       return false if @vec_norm.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] doc_type Value to be assigned
-    def doc_type=(doc_type)
-      if doc_type.nil?
-        fail ArgumentError, 'doc_type cannot be nil'
+    # @param [Object] resource Value to be assigned
+    def resource=(resource)
+      if resource.nil?
+        fail ArgumentError, 'resource cannot be nil'
       end
 
-      @doc_type = doc_type
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] kb_uri Value to be assigned
-    def kb_uri=(kb_uri)
-      if kb_uri.nil?
-        fail ArgumentError, 'kb_uri cannot be nil'
-      end
-
-      @kb_uri = kb_uri
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] origin_uri Value to be assigned
-    def origin_uri=(origin_uri)
-      if origin_uri.nil?
-        fail ArgumentError, 'origin_uri cannot be nil'
-      end
-
-      @origin_uri = origin_uri
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] resource_id Value to be assigned
-    def resource_id=(resource_id)
-      if resource_id.nil?
-        fail ArgumentError, 'resource_id cannot be nil'
-      end
-
-      @resource_id = resource_id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] title Value to be assigned
-    def title=(title)
-      if title.nil?
-        fail ArgumentError, 'title cannot be nil'
-      end
-
-      @title = title
+      @resource = resource
     end
 
     # Custom attribute writer method with validation
@@ -259,14 +133,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          context == o.context &&
-          context_owner_ref == o.context_owner_ref &&
-          context_slug == o.context_slug &&
-          doc_type == o.doc_type &&
-          kb_uri == o.kb_uri &&
-          origin_uri == o.origin_uri &&
-          resource_id == o.resource_id &&
-          title == o.title &&
+          resource == o.resource &&
           vec_norm == o.vec_norm
     end
 
@@ -279,7 +146,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [context, context_owner_ref, context_slug, doc_type, kb_uri, origin_uri, resource_id, title, vec_norm].hash
+      [resource, vec_norm].hash
     end
 
     # Builds the object from hash

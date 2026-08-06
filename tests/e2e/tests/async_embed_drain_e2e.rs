@@ -113,9 +113,11 @@ async fn deferred_create_is_fts_immediate_then_ready_after_drain(pool: sqlx::PgP
         .await
         .expect("text search failed");
     assert!(
-        fts.iter().any(|r| r.resource_id == id),
+        fts.iter().any(|r| r.resource.id.uuid() == id),
         "deferred create is FTS-findable immediately; got {:?}",
-        fts.iter().map(|r| r.title.as_str()).collect::<Vec<_>>()
+        fts.iter()
+            .map(|r| r.resource.title.as_str())
+            .collect::<Vec<_>>()
     );
 
     // (3) Chunks landed unembedded, and the derived status is `pending` (NULL chunks + a live job).

@@ -166,19 +166,58 @@ mod tests {
         );
     }
 
+    /// A [`ResourceView`] to hang a hit on — the wrapped half, identical for both arms.
+    ///
+    /// Built as the typed struct rather than a `serde_json::json!` literal: the hits are typed now,
+    /// and a hand-written JSON stand-in is exactly the thing that used to let the CLI's rendered
+    /// shape drift from the wire shape without any test noticing.
+    fn sample_resource() -> temper_core::types::resource_view::ResourceView {
+        use chrono::{DateTime, Utc};
+        use temper_core::types::ids::{ProfileId, ResourceId};
+        use temper_core::types::managed_meta::ManagedMeta;
+        use temper_core::types::resource_view::ResourceView;
+
+        let epoch = DateTime::<Utc>::from_timestamp(0, 0).expect("epoch");
+        ResourceView {
+            id: ResourceId::from(uuid::Uuid::nil()),
+            r#ref: String::new(),
+            title: "Some Title".to_string(),
+            origin_uri: "test://some-title".to_string(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: None,
+            context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "someone".to_string(),
+            owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            is_active: true,
+            created: epoch,
+            updated: epoch,
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        }
+        .with_derived_refs()
+    }
+
     #[test]
     fn render_search_results_json_carries_both_arms_and_no_merged_list() {
-        use temper_core::types::api::{SearchScope, SearchScopeInfo};
-        let exact = vec![serde_json::json!({
-            "resource_id": uuid::Uuid::nil(),
-            "title": "Some Title",
-            "fts_norm": 0.5,
-        })];
-        let wide = vec![serde_json::json!({
-            "resource_id": uuid::Uuid::nil(),
-            "title": "Some Title",
-            "vec_norm": 0.8,
-        })];
+        use temper_core::types::api::{ExactHit, SearchScope, SearchScopeInfo, WideHit};
+        let exact = vec![ExactHit {
+            resource: sample_resource(),
+            fts_norm: 0.5,
+        }];
+        let wide = vec![WideHit {
+            resource: sample_resource(),
+            vec_norm: 0.8,
+        }];
         let doc = crate::commands::search_cmd::SearchResultsResponse {
             exact,
             wide,
@@ -199,5 +238,18 @@ mod tests {
         );
         assert_eq!(parsed["exact"][0]["fts_norm"], 0.5);
         assert_eq!(parsed["wide"][0]["vec_norm"], 0.8);
+
+        // The quantity is on the hit; the resource it wraps is the shared shape and carries the
+        // `ref` the CLI used to inject at render time.
+        assert_eq!(parsed["exact"][0]["resource"]["title"], "Some Title");
+        assert_eq!(
+            parsed["exact"][0]["resource"]["ref"],
+            "some-title-00000000-0000-0000-0000-000000000000",
+            "the server-derived `ref` rides through render untouched: {out}"
+        );
+        assert!(
+            parsed["exact"][0]["resource"].get("fts_norm").is_none(),
+            "the arm's quantity stays on the hit, never on the resource: {out}"
+        );
     }
 }

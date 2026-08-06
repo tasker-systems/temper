@@ -194,10 +194,10 @@ async fn homes_in_cogmap(pool: &PgPool, cogmap: Uuid) -> i64 {
 /// would make the assertion depend on which mechanic matched — which is not what these tests are
 /// about.
 ///
-/// **One helper, deliberately.** Task 8 of the ResourceView convergence plan reshapes a hit into
-/// `{ resource: ResourceView, fts_norm }`, at which point `h["resource_id"]` becomes
-/// `h["resource"]["id"]`. Localized here that is a one-line edit; inlined at each call site it
-/// would be six.
+/// **One helper, deliberately.** Task 8 of the ResourceView convergence plan reshaped a hit into
+/// `{ resource: ResourceView, fts_norm }`, at which point `h["resource_id"]` became
+/// `h["resource"]["id"]`. Localized here that was a one-line edit; inlined at each call site it
+/// would have been six.
 async fn search_hit_ids(resp: reqwest::Response) -> Vec<String> {
     let body: serde_json::Value = resp.json().await.expect("search JSON");
     ["exact", "wide"]
@@ -207,7 +207,7 @@ async fn search_hit_ids(resp: reqwest::Response) -> Vec<String> {
                 .as_array()
                 .unwrap_or_else(|| panic!("the `{arm}` arm must carry `hits`; got {body}"))
                 .iter()
-                .filter_map(|h| h["resource_id"].as_str().map(String::from))
+                .filter_map(|h| h["resource"]["id"].as_str().map(String::from))
                 .collect::<Vec<_>>()
         })
         .collect()

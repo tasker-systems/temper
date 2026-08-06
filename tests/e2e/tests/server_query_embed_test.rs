@@ -124,23 +124,23 @@ async fn server_embeds_text_only_query_surfaces_semantic_only_hit(pool: sqlx::Pg
     // at all — which is now visible as absence from one arm rather than as a zero in a blended row.
     let title = "Container Scheduling Primer";
     assert!(
-        resp.wide.hits.iter().any(|r| r.title == title),
+        resp.wide.hits.iter().any(|r| r.resource.title == title),
         "the semantic-only resource must appear in the WIDE arm; got {:?}",
         resp.wide
             .hits
             .iter()
-            .map(|r| (r.title.as_str(), r.vec_norm))
+            .map(|r| (r.resource.title.as_str(), r.vec_norm))
             .collect::<Vec<_>>()
     );
     assert!(
-        !resp.exact.hits.iter().any(|r| r.title == title),
+        !resp.exact.hits.iter().any(|r| r.resource.title == title),
         "the semantic-only resource shares no query terms, so the exact arm must not carry it"
     );
     let semantic_only = resp
         .wide
         .hits
         .iter()
-        .find(|r| r.title == title)
+        .find(|r| r.resource.title == title)
         .expect("checked above");
     assert!(
         semantic_only.vec_norm > 0.0,
