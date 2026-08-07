@@ -16,7 +16,7 @@ set -euo pipefail
 #       or the cargo-make wiring).
 #   temper-cloud TS battery (typecheck, biome)      — only if a file under
 #       packages/temper-cloud/ is staged.
-#   temper-ui battery (svelte-check)                — only if a file under
+#   temper-ui battery (svelte-check, biome)         — only if a file under
 #       packages/temper-ui/ is staged.
 #
 # The temper-ui battery was added after this hook said "the UI and SDK trees are
@@ -136,15 +136,30 @@ if [ "$HAS_UI" = "true" ]; then
     echo "  ! temper-ui staged but packages/temper-ui/node_modules is absent — SKIPPING svelte-check." >&2
     echo "    Run 'cd packages/temper-ui && bun install' to enable it. CI checks this tree regardless." >&2
   else
-    # svelte-check ONLY. `bun run biome` is deliberately not run here: this tree
-    # carries 46 standing lint warnings and biome exits 0 on warnings, so it
-    # gates nothing while printing a screen of output on every UI commit — and a
-    # hook whose output is noise is a hook people stop reading, which this file's
-    # own header names as the thing that trains `--no-verify`. CI runs biome over
-    # this tree (test-typescript.yml) with the same non-blocking result.
     echo "  temper-ui svelte-check..."
     (cd packages/temper-ui && bun run check)
     echo "  ✓ temper-ui types OK"
+
+    # Biome, because svelte-check alone was not enough — and the reason this ran
+    # svelte-check ONLY was wrong on both of its claims. It said biome "exits 0
+    # on warnings, so it gates nothing", and that CI runs it "with the same
+    # non-blocking result". Biome exits 0 on warnings and NON-ZERO on errors, and
+    # test-typescript.yml's `Lint & format (Biome)` step fails the UI job on one:
+    # `7595d45a` landed an unsorted import block (assist/source/organizeImports)
+    # that stayed red for six commits, invisible because nothing local ran biome,
+    # `cargo make check` does not reach this tree, and CI had never run on the
+    # branch. First CI run caught it.
+    #
+    # --diagnostic-level=error is what makes this cheap rather than noisy. The
+    # tree carries ~46 standing warnings; printing them on every UI commit is the
+    # output-as-noise problem this file's header names as what trains
+    # `--no-verify`. The flag suppresses them from the OUTPUT only — the exit code
+    # is unchanged, so the gate is identical to CI's while the screen stays quiet.
+    # Verified both ways: clean tree exits 0 with one line; reintroducing the
+    # unsorted import exits 1 and names organizeImports.
+    echo "  temper-ui biome..."
+    (cd packages/temper-ui && bun run biome --diagnostic-level=error)
+    echo "  ✓ temper-ui lint OK"
   fi
 fi
 

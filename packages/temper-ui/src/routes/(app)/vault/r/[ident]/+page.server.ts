@@ -2,10 +2,9 @@ import { error } from '@sveltejs/kit';
 import { parseRef } from '$lib/ref';
 import { ApiError, apiGet } from '$lib/server/api';
 import { readResourceEdges, readTrail } from '$lib/server/graph-reads';
-import type { ContentResponse } from '$lib/types';
+import type { ContentResponse, ResourceView } from '$lib/types';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { GraphEdgeRow } from '$lib/types/generated/graph';
-import type { ResourceView } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
