@@ -8,28 +8,27 @@
 -- ── WHY THIS IS `shape-breaking`, NOT `additive` ─────────────────────────────────────────────────
 --
 -- A binary deployed BEFORE this branch reads `/api/search` through `unified_search`. Applying this
--- ahead of that binary makes every search 500 — not degradation. That is precisely the axis the
+-- ahead of that binary makes every search 500 — not degradation. That is the axis the
 -- additive/shape-breaking split governs, so the declaration below is a statement of fact about the
 -- schema change, not a deployment plan.
 --
--- What the classification MECHANICALLY causes, stated without prescribing what anyone should do
--- about it: `temper-migrate --additive-only` applies the pending set until it reaches a migration
--- that is not additive, then halts and exits non-zero (`run_additive_only` → `HALTED`,
--- crates/temper-migrate/src/main.rs). `scripts/vercel-build.sh` runs that binary as its build
--- command, so the halt surfaces as a failed build rather than a partially-migrated schema. Nothing
--- after the halt is applied; halting is stopping, not skipping.
+-- What the classification mechanically causes: `temper-migrate --additive-only` applies the pending
+-- set until it reaches a migration that is not additive, then halts and exits non-zero
+-- (`run_additive_only` → `HALTED`, crates/temper-migrate/src/main.rs). `scripts/vercel-build.sh`
+-- runs that binary as its build command, so the halt surfaces as a failed build rather than a
+-- partially-migrated schema. Nothing after the halt is applied; halting is stopping, not skipping.
 --
--- Preview and production are NOT the same event here. A preview build applies the PR's own migration
--- to the PR's own Neon branch — the rehearsal half (scripts/vercel-build.sh header). Production
--- carries the live binary that still calls `unified_search`. And `MIGRATE_CMD` is an overridable
--- env var whose DEFAULT carries `--additive-only` (vercel-build.sh:151), so what any given target
--- actually runs is an environment fact, not a repo fact.
+-- Preview and production are NOT the same event. A preview build applies the PR's own migration to
+-- the PR's own Neon branch — the rehearsal half (scripts/vercel-build.sh header). Production carries
+-- the live binary that still calls `unified_search`. And `MIGRATE_CMD` is an overridable env var
+-- whose DEFAULT carries `--additive-only` (vercel-build.sh:151), so what any given target actually
+-- runs is an environment fact, not a repo fact — read the build log, not this comment.
 --
 -- `[decided — 2026-08-06, Pete]` The retirement rides with the code that supersedes it rather than
--- being deferred behind a separate later change. Compare 20260709000020, which dropped a function
--- only once the release that stopped calling it was deployed everywhere; that option is deliberately
--- not taken. How the halt is handled per target is an operational question this file does not
--- answer — the binary's own HALTED message points at DEPLOYING.md, which is where that belongs.
+-- behind a separate later change. Compare 20260709000020, which dropped a function only once the
+-- release that stopped calling it was deployed everywhere; that option is deliberately not taken
+-- here. How the halt is handled per target is an operational question this file does not answer —
+-- the binary's own HALTED message points at DEPLOYING.md, which is where that belongs.
 --
 -- ── WHAT SURVIVES, AND WHY IT MUST NOT BE SWEPT UP HERE ──────────────────────────────────────────
 --

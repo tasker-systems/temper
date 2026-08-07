@@ -19,17 +19,15 @@ the section it implements. **Read the cited section — this plan is an index ov
 replacement for it.**
 
 **Out of scope, by design:** beat D (binding `find-exact` / `find-about-*` to phase 1's
-`search_exact` / `search_wide`), beat E (the API/MCP/CLI doors), beat F (act-declaration
-reconciliation). D and F are gated on the sibling session's phase-1 work; E is a follow-on plan.
+`search_exact` / `search_wide`) and beat E (the API/MCP/CLI doors). E is a follow-on plan; D's
+dependency has landed on this branch, but D itself stays out of scope here.
 
-`[corrected — 2026-08-06]` **Beat F is not gated future work — it is done**, and the sentence above
-listed it as something this phase still had to wait for. Phase 1's step 5 reconciled the declarations
+**Beat F — act-declaration reconciliation — is done**, landed by phase 1's own step 5
 `[verified — 59ee9100, "Phase 1 step 5 — the declarations describe the deployed system again, and
 offset stops being ignored"]`: `find-exact`, `find-about-anywhere` and `find-about-within` are
 `BuildState::Served` with `served_by` `search_exact` / `search_wide`
 `[verified — registry.rs: the FindExact, FindAboutAnywhere and FindAboutWithin declarations each
-carry build_state: BuildState::Served]`. D's dependency has landed on this branch as well, though D
-itself stays out of scope for this plan.
+carry build_state: BuildState::Served]`.
 
 ---
 
@@ -48,19 +46,16 @@ itself stays out of scope for this plan.
   `[verified — crates/temper-core/tests/query_schema.rs:5]`. TypeScript: `cargo make generate-ts-types`.
   OpenAPI: `cargo make openapi`. Read the `generated-artifacts` skill before the first one.
 - **Runtime `sqlx` is an allow-listed exception, and this plan widens the allow-list.**
-  `readback/mod.rs`'s module note names exactly three runtime reads, all for a `::vector` bind, and
-  records that sixteen others were clawed back on 2026-07-30 for imitating them without a reason.
-  Task 10 amends that note. Do not add a runtime read without it.
-  `[corrected — 2026-08-06]` **That "three" was never true and this plan must not repeat it.** The
-  file held **seven** runtime reads while the note said three; phase 1 retires three of them
-  (`unified_search`, `wayfind_scope_ids`, `wayfind_scope_reach`) and **four survive** —
-  `vector_search`, `search_wide`, `wayfind_region_diagnostics`, and `search_exact`, which carries no
-  `::vector` bind and so is **not** covered by the class's stated reason
-  `[verified — 2026-08-06, crates/temper-substrate/src/readback/mod.rs, whose note now says so in
-  those terms]`. Count from the file, never from this plan. The rule is what is unchanged: the
-  incumbent class exists for a `::vector` bind, this plan adds a **second** class for dynamic
-  composition, and the 2026-07-30 claw-back is why an exemption nobody can state the ground for is
-  not safe.
+  `readback/mod.rs`'s module note names the runtime reads — `vector_search`, `search_wide`,
+  `wayfind_region_diagnostics` — all for one reason, a `::vector` bind the macros cannot type, and
+  records that sixteen others were clawed back on 2026-07-30 for imitating them without a reason
+  `[verified — 2026-08-07, crates/temper-substrate/src/readback/mod.rs module note]`.
+  **Count the class's members from the file, never from this plan** — the note carries that
+  instruction itself, because a restated count drifts silently as reads are added and retired. The
+  rule is what this plan depends on: the incumbent class exists for a `::vector` bind, this plan adds
+  a **second** class for dynamic composition, and the 2026-07-30 claw-back is why an exemption nobody
+  can state the ground for is not safe. Task 10 amends that note. Do not add a runtime read without
+  it.
 - **Never interpolate a caller-supplied value into SQL.** Bind it. The only identifiers the builder
   emits are stage names, and Task 9 holds them to an allowlist.
 - **Test database:** `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`,
@@ -884,14 +879,10 @@ fn a_kind_changing_hop_is_expressible_so_the_region_phase_is_not_foreclosed() {
 }
 ```
 
-`[corrected — 2026-08-06]` `an_unbuilt_act_is_refused_as_not_implemented` named **`substantiate`** as
-*"declared and unbuilt"*. It is `BuildState::Served` by `resource_standing_shape`
-`[verified — registry.rs, the Substantiate declaration]`, and has been since before this branch
-`[verified — the same declaration on origin/main]` — the declaration carries its own
-`CORRECTED 2026-08-05 (was None / Unbuilt). This act SHIPS` note. Written as it stood, the test would
-have driven `validate` to refuse a served act. `admit` is the only `Unbuilt` declaration
-`[verified — registry.rs, the Admit declaration]`. Not a phase-1 casualty; a stale claim this pass
-found.
+> **`admit` is the only `Unbuilt` declaration** `[verified — registry.rs, the Admit declaration]`.
+> `substantiate` is `BuildState::Served` by `resource_standing_shape`
+> `[verified — registry.rs, the Substantiate declaration]` — do not reach for it as the unbuilt act,
+> or the test drives `validate` to refuse a served one.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -1084,34 +1075,27 @@ git commit -m "query: properties are queryable — open keys, two bound operator
 **GD-3: EXTEND.** Spec §7, *"The state between C and D, and the `BuildState` gap it lands on."*
 Authorized because `RefusalReason` is open and the honest variant does not exist.
 
-`[corrected — 2026-08-06]` **This task's premise was that the three `find` acts are
-`Fused { host: "unified_search" }`, so a plan naming `find-exact` must be refused as "fused into a
-host this surface cannot invoke". The premise is dead.** Phase 1 step 5 moved all three to
+**The gap this task is about:** `BuildState` cannot say *"the mechanic exists and no surface reaches
+it"*. Its live instance is `follow-from` and `survey`, which carry `provisionally_unexpressed()` —
+a helper returning `Fused { host: "unified_search" }` as the least-wrong of the available values and
+documenting it as such rather than believing it: *"Their mechanics are live — `search_graph_expand`
+and `wayfind_region_scores` are both still deployed — but as of phase 1 steps 2-3 **no door reaches
+either one**. … So `Fused` is now false in BOTH its clauses — there is no host, and it has no door —
+while `Unbuilt` would still be false about a function that is right there, and `Served` would still
+be false about a door that does not exist."* `[verified — registry.rs, provisionally_unexpressed and
+its two call sites, the FollowFrom and Survey declarations]`. The three `find` acts are
 `BuildState::Served` with their own SQL functions `[verified — registry.rs: the FindExact,
 FindAboutAnywhere and FindAboutWithin declarations each carry build_state: BuildState::Served]`, and
-phase 1's retirement migration removes `unified_search` from the schema entirely
+`unified_search` is gone from the schema entirely
 `[verified — migrations/20260806000010_retire_unified_search.sql]`, so the host names nothing.
-**The task's subject survives** — `BuildState` still cannot say *"the mechanic exists and no surface
-reaches it"* — and its live instance is `follow-from` and `survey`, which carry
-`provisionally_unexpressed()`: a helper returning `Fused { host: "unified_search" }` as the
-least-wrong of three, documented as such rather than believed — *"Their mechanics are live —
-`search_graph_expand` and `wayfind_region_scores` are both still deployed — but as of phase 1 steps
-2-3 **no door reaches either one**. … So `Fused` is imprecise in its second clause ("the host has
-one" — it does not), `Unbuilt` would be false about a function that is right there, and `Served`
-would be false about a door that does not exist."* `[verified — registry.rs,
-provisionally_unexpressed and its two call sites, the FollowFrom and Survey declarations]`. The
-worked example, both tests, and the rule's trigger (Step 3) move with it. The variant, the refusal it
-expresses, and this task's place in the sequence do not.
 
-> The 2026-08-06 corrections cite `registry.rs` **by declaration rather than by line**, deliberately:
-> phase 1 is editing that file as this is written, and the older `registry.rs:76` citations elsewhere
-> in this plan have already drifted (`search_family()` has moved). Grep the symbol.
+> **Cite `registry.rs` by declaration, not by line.** That file is under active edit, and the older
+> `registry.rs:76` citations elsewhere in this plan have already drifted (`search_family()` has
+> moved). Grep the symbol.
 
-**Coordination:** the sibling's phase-1 work hits this same gap from the other side (an act whose
-mechanic exists with no door). **Whoever lands first settles it; check before implementing** whether
-phase 1 has already added a variant, and reuse it if so. `[corrected — 2026-08-06]` Phase 1 landed
-first and added **no** variant — deliberately, because widening `BuildState` is *"semver-breaking on
-a shipped contract type"* and a variant minted there would be *"born obsolete"*
+**Coordination:** phase 1 reached this same gap from the other side (an act whose mechanic exists with
+no door) and added **no** `BuildState` variant — deliberately, because widening it is
+*"semver-breaking on a shipped contract type"* and a variant minted there would be *"born obsolete"*
 `[verified — 59ee9100 commit body, and provisionally_unexpressed's doc comment]`. So there is
 nothing to reuse: this task adds the `RefusalReason` variant, and `BuildState` is left alone.
 
@@ -1121,9 +1105,7 @@ nothing to reuse: this task adds the `RefusalReason` variant, and `BuildState` i
 **Interfaces:**
 - Produces: `RefusalReason::NotSeparablyReachable` — spec §7's own wording for the open variant:
   *"declared, built, not reachable from this surface"* `[verified — spec §7, "Named, not solved
-  here"]`. `[corrected — 2026-08-06]` It previously read *"the act is declared and its mechanic
-  exists, but it is fused into a host this surface cannot invoke"* — fusion is no longer the reason
-  any act is refused here.
+  here"]`. Fusion is not the reason any act is refused here.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1132,11 +1114,10 @@ nothing to reuse: this task adds the `RefusalReason` variant, and `BuildState` i
 fn a_served_act_this_builder_has_no_fragment_for_refuses_honestly() {
     // Before beat D the compiler emits no fragment for `search_exact` / `search_wide`, so a plan
     // naming `find-exact` must refuse. `NotImplemented` is documented as "build_state is not served
-    // or fused" and is FALSE here for the OPPOSITE reason it once was: the act is `Served`
-    // (the `FindExact` declaration in registry.rs). The distinction BuildState cannot draw is
-    // existence versus
-    // reachability-from-this-surface, and this is that distinction from the surface's side. This is
-    // the test that must go RED at beat D, when the find acts acquire fragments and the rule narrows.
+    // or fused" and is FALSE here: the act is `Served` (the `FindExact` declaration in registry.rs).
+    // The distinction BuildState cannot draw is existence versus reachability-from-this-surface,
+    // and this is that distinction from the surface's side. This is the test that must go RED at
+    // beat D, when the find acts acquire fragments and the rule narrows.
     let errs = validate(&plan(vec![act("hits", ActName::FindExact, None)], vec!["hits"])).unwrap_err();
     assert!(
         errs.iter().any(|e| e.reason == RefusalReason::NotSeparablyReachable),
@@ -1176,13 +1157,11 @@ spec §7. In `validate`, refuse an act whose `served_by` function is not one the
 fragment for. Maintain that set as a `const` in `validate.rs` with a comment naming beat D as what
 grows it — **not** as a hardcoded act list, which would drift from the declarations.
 
-`[corrected — 2026-08-06]` The rule read *"refuse an act whose `build_state` is `Fused { .. }`
-**unless** its `served_by` function is one the builder can call directly"*, with the `const` described
-as the set beat D **shrinks**. After phase 1 that trigger is inverted: the only `Fused` declarations
-left are `follow-from` and `survey` `[verified — registry.rs, the FollowFrom and Survey
-declarations]`, the two acts this beat exists to execute, and it never fires on the `find` acts,
-which are `Served`. Key on the
-callable-fragment set alone and keep the `build_state` discriminant out of the condition entirely.
+**Key on the callable-fragment set alone, and keep the `build_state` discriminant out of the
+condition entirely.** The only `Fused` declarations are `follow-from` and `survey`
+`[verified — registry.rs, the FollowFrom and Survey declarations]` — the two acts this beat exists to
+execute — so a rule keyed on `Fused` refuses exactly the wrong pair, and never fires on the `find`
+acts, which are `Served`.
 
 - [ ] **Step 4: Run to verify both pass**
 
@@ -1239,11 +1218,9 @@ the security property testable in isolation.
   pub fn compile(v: &ValidatedComposition, principal: ProfileId) -> CompiledQuery;
   ```
 
-`[corrected — 2026-08-06]` `QueryBind::Embedding`'s doc comment cited `unified_search` as the
-worked example of the `$n::vector` treatment. Phase 1 retires that function
-`[verified — migrations/20260806000010_retire_unified_search.sql]`; the live example is `search_wide`,
-which binds `$2::vector` through `format_pgvector`
-`[verified — crates/temper-substrate/src/readback/mod.rs, the search_wide statement]`.
+`search_wide` is the live worked example of the `$n::vector` treatment: it binds `$2::vector` through
+`format_pgvector` `[verified — crates/temper-substrate/src/readback/mod.rs, the search_wide
+statement]`.
 
 - [ ] **Step 1: Write the failing tests** in `tests/query_plan_compile.rs`
 
@@ -1405,17 +1382,11 @@ incumbent `::vector` bind, and dynamic composition (`query_plan::compile`). Stat
 exactly one member and that adding to it needs the same deliberate justification the first required.
 Keep the 2026-07-30 claw-back history — it is the reason the note works.
 
-`[corrected — 2026-08-06]` This step said the incumbent class is *"three reads, one of which phase 1
-retires"*. Neither half held: the file carried **seven** runtime reads while the note said three, and
-phase 1 retires **three** of them (`unified_search`, `wayfind_scope_ids`, `wayfind_scope_reach`),
-leaving **four** — `vector_search`, `search_wide`, `wayfind_region_diagnostics`, and `search_exact`.
-**Phase 1 has already rewritten this paragraph from the file**, and it now states the count as four
-and names `search_exact` as *"carries no `::vector` bind and so is not covered by that reason"*
-`[verified — 2026-08-06, crates/temper-substrate/src/readback/mod.rs module note]`. So this step is
-now **additive only**: add the second class (`query_plan::compile`) beside the incumbent one, change
-no count, and do not fold `search_exact` into either class — it is an open question the note
-deliberately leaves standing, and settling it is not this task's to take. Read the paragraph before
-editing it; a number carried from an eight-day-old plan is how it went stale the first time.
+**This edit is additive: add the second class beside the incumbent one and change nothing else about
+the paragraph.** Read it on disk before editing rather than working from this plan's description of
+it — the note carries its own instruction that the class's members are counted from the file, never
+from prose `[verified — 2026-08-07, crates/temper-substrate/src/readback/mod.rs module note]`. Do not
+carry a number into it from here.
 
 - [ ] **Step 6: Run to verify they pass**
 

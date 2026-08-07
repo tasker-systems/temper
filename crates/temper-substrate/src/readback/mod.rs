@@ -24,21 +24,17 @@
 //! provably the self-audit arm and not a readability failure).
 //!
 //! Reads are compile-time `query!`-family macros, so each leaves an entry in the workspace `.sqlx`
-//! cache and is checked against the live schema at build time. **Three** are runtime `sqlx::query` /
-//! `query_as` — [`vector_search`], [`search_wide`], [`wayfind_region_diagnostics`] — each for the
-//! one allow-listed reason, a `$n::vector` bind the macros cannot type. That reason is the whole of
-//! the class: a read that cannot state it does not belong here, and none of the three is exempt for
-//! any other ground.
+//! cache and is checked against the live schema at build time. A few are runtime `sqlx::query` /
+//! `query_as` — [`vector_search`], [`search_wide`], [`wayfind_region_diagnostics`] — for one
+//! allow-listed reason only: a `$n::vector` bind the macros cannot type.
 //!
-//! **The count in this paragraph was wrong for longer than anyone noticed, which is worth knowing
-//! before trusting the next one.** Until 2026-08-06 it read *"Three"* and named `unified_search` and
-//! `wayfind_scope_ids` — while the file actually held **seven** runtime reads. Three of the seven
-//! (`unified_search`, `wayfind_scope_ids`, `wayfind_scope_reach`) were retired with the blended
-//! search mechanism. A fourth, [`search_exact`], was a genuine drift: it binds a principal, query
-//! text and an anchor pair, with **no vector and no cast**, so it had been sitting outside the cache
-//! with no reason anyone could state. It was converted to a `query!` macro rather than documented as
-//! an exception, because an exemption without a ground is exactly the failure the paragraph below
-//! records. **Count from the file, not from this sentence.**
+//! **That reason is the whole of the class.** A runtime read that cannot state it is drift, not an
+//! exception, and belongs as a macro. Do not add one for tidiness, consistency, or because a
+//! neighbour is runtime.
+//!
+//! **Count the members by reading the file, never by trusting a number written in prose** — here or
+//! in any document describing this module. A restated count drifts silently as reads are added and
+//! retired; the grep is `rg "sqlx::query(_as)?(::<|\()"` over this file.
 //!
 //! **The exemption must not spread.** Until 2026-07-30 sixteen further reads in this module were
 //! runtime *"for consistency"* with the vector ones, which left them absent from the cache — and the
