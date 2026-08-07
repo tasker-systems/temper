@@ -88,7 +88,6 @@ read -r -d '' BASELINE <<'EOF' || true
 1 tests/e2e/tests/cloud_warmup_e2e_test.rs
 3 tests/e2e/tests/cloud_writes_test.rs
 1 tests/e2e/tests/fts_search_test.rs
-1 tests/e2e/tests/mcp_get_resource_meta_test.rs
 5 tests/e2e/tests/projection_pull_test.rs
 1 tests/e2e/tests/show_cache_e2e_test.rs
 EOF
