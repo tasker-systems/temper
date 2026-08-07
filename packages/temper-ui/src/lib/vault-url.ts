@@ -73,3 +73,21 @@ export function resourceHref(row: ResourceView): string {
 export function searchHref(query: string): string {
 	return `/vault/search?q=${encodeURIComponent(query)}`;
 }
+
+/**
+ * Is this row homed in a cognitive map rather than a context?
+ *
+ * A resource is homed by exactly one anchor (`kb_resource_homes.anchor_table`), so the unused
+ * half is ABSENT from the wire, not null: `ResourceView` carries
+ * `skip_serializing_if = "Option::is_none"` on both `cogmap_*` and `context_*`. A context-homed
+ * row therefore has no `cogmap_id` KEY at all.
+ *
+ * Hence `!=` rather than `!==`, which is the whole reason this is a named function instead of an
+ * inline comparison. `row.cogmap_id !== null` is `true` for EVERY context-homed row, and the
+ * ts-rs binding cannot catch it: it declares `cogmap_id: string | null` — a *required* key that
+ * can never be `undefined` — so a strict comparison type-checks as exhaustive while being
+ * always-true. `svelte-check` is structurally unable to see this class, so it needs a test.
+ */
+export function isCogmapHomed(row: ResourceView): boolean {
+	return row.cogmap_id != null;
+}

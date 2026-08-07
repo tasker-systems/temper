@@ -1,12 +1,12 @@
 <script lang="ts">
 	import type { ResourceView } from '$lib/types';
-	import { contextHref } from '$lib/vault-url';
+	import { contextHref, isCogmapHomed } from '$lib/vault-url';
 
 	let { row }: { row: ResourceView } = $props();
 
-	// A resource is homed by exactly one anchor: a context or a cogmap
-	// (kb_resource_homes.anchor_table). Cogmap-homed rows carry null context_*.
-	let isCogmap = $derived(row.cogmap_id !== null);
+	// Absent-vs-null is the trap here, and it has a test rather than a comment — see
+	// `isCogmapHomed`, which owns the rule and states why `!==` is wrong.
+	let isCogmap = $derived(isCogmapHomed(row));
 	let label = $derived(
 		isCogmap ? (row.cogmap_name ?? 'cogmap') : (row.context_name ?? row.context_slug ?? 'context')
 	);

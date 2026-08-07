@@ -34,7 +34,11 @@
 //!
 //! **Count the members by reading the file, never by trusting a number written in prose** — here or
 //! in any document describing this module. A restated count drifts silently as reads are added and
-//! retired; the grep is `rg "sqlx::query(_as)?(::<|\()"` over this file.
+//! retired. Count them with `python3 scripts/classify-sqlx-calls.py`, which is the enumerator the
+//! `audit-sqlx-macro-exceptions` CI gate itself runs, so the number you get is the number that
+//! gates. A literal grep pattern for the call spelling is deliberately NOT written here: that
+//! scanner matches the call head anywhere in the file and does not strip comments, so a pattern
+//! quoted in this note counts itself and inflates this module's total by one.
 //!
 //! **The exemption must not spread.** Until 2026-07-30 sixteen further reads in this module were
 //! runtime *"for consistency"* with the vector ones, which left them absent from the cache — and the

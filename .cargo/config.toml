@@ -33,7 +33,12 @@ WORKSPACE_PATH = { value = ".", relative = true }
 PDFIUM_VERSION = "7947"
 
 [profile.dev]
-incremental = false 
+# Off for TARGET DIRECTORY SIZE, not for build speed — incremental trades disk for rebuild time and
+# this workspace's `target/` was the thing under pressure. Expect slower warm rebuilds as the cost.
+# Stated because the flag reads as an accident otherwise: it landed unexplained in `e226fce2`, whose
+# subject is about generated code, and a reviewer arriving cold read it as a debugging change staged
+# by mistake.
+incremental = false
 split-debuginfo = "unpacked"
 
 [profile.release]
