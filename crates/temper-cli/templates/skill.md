@@ -190,8 +190,9 @@ authoring or amending a goal or sub-goal.
 ## Listing Is Truncated — Enumerate Before Asserting
 
 > **Never claim a goal/task/session is absent, or that a set is complete, from a
-> default `temper resource list`.** The list returns a capped page (20 rows; 50
-> with `--with open-meta`), so a resource you "don't see" may just be past the cap —
+> default `temper resource list`.** The list returns a capped page (20 rows,
+> whatever sections you ask for), so a resource you "don't see" may just be past
+> the cap —
 > this has repeatedly led agents to assert wrong backlog/status.
 
 Every list response carries `total` (all matching rows), `returned` (this page),
@@ -199,7 +200,7 @@ and `truncated`. When `truncated` is `true`, there is more than you can see.
 Before asserting absence or completeness:
 
 - **Narrow**: `--title-contains <substr>`, `--stage <s>`, `--status <s>`, or `--sort <field>[:asc|desc]`.
-- **Enumerate fully**: `--all` (or a larger `--limit`/`--offset`).
+- **Enumerate fully**: `--all`, a larger `--limit`, or walk with `--page <n>`.
 
 See `reference.md` → *Listing: truncation, sort, and filters* for the full flag set.
 

@@ -504,18 +504,28 @@ pub enum ResourceAction {
         /// exclusive with --context.
         #[arg(long = "cogmap")]
         cogmap: Vec<String>,
-        /// Maximum results (default 20; 50 with --meta-only). The response always
-        /// carries `total` (the full match count) and `truncated`, so a capped
-        /// page is self-evident. Conflicts with --all.
+        /// Page size (default 20). A DEFAULT, not a cap: whatever you pass is honoured
+        /// unchanged, and there is no server-side clamp. The response always carries
+        /// `total` (the full match count), `returned`, and `truncated`, so a capped page
+        /// is self-evident. Conflicts with --all.
         #[arg(long, conflicts_with = "all")]
         limit: Option<usize>,
         /// Return ALL matching results (no page cap). Reach for this before
         /// asserting a set is complete or a resource is absent. Conflicts with --limit.
         #[arg(long)]
         all: bool,
-        /// Skip the first N matching results (pagination).
-        #[arg(long)]
+        /// Skip the first N matching results (pagination). Conflicts with --page,
+        /// which is the same axis counted in pages instead of rows.
+        #[arg(long, conflicts_with = "page")]
         offset: Option<usize>,
+        /// Page number, 1-indexed — `--page 1` is the first page. Resolves to
+        /// `(page - 1) * <effective limit>`, so it counts in whatever `--limit` is in
+        /// force (`--page 3 --limit 5` starts at row 10, not 40). Conflicts with
+        /// --offset (the same axis in rows) and with --all (an uncapped page has no
+        /// page number).
+        #[arg(long, conflicts_with_all = ["offset", "all"],
+              value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+        page: Option<usize>,
         /// Sort as `<field>[:asc|desc]`. Fields: updated, created, title, stage,
         /// seq, context, doctype. Direction defaults per field (time/seq → desc,
         /// text → asc). Omit for the default `updated:desc`.
@@ -591,7 +601,7 @@ pub enum ResourceAction {
         #[arg(long = "without", value_delimiter = ',',
               value_parser = crate::commands::resource_sections::show_section_parser())]
         without: Vec<String>,
-        /// Subselect top-level response keys (resource_id always
+        /// Subselect top-level response keys (the anchor key `id` is always
         /// preserved). Use jq for nested projection.
         #[arg(long, value_delimiter = ',')]
         fields: Vec<String>,
@@ -2068,6 +2078,49 @@ mod section_flag_tests {
             "--provenance",
         ]);
         assert!(m.is_ok(), "no conflict edge survives: {:?}", m.err());
+    }
+
+    /// `--page` and `--offset` are the same axis in two units, so naming both is refused
+    /// rather than resolved: there is no honest precedence between "start at row 40" and
+    /// "start at page 3", and silently taking one would hand back a page the caller did not
+    /// ask for and has no way to notice.
+    #[test]
+    fn page_and_offset_together_are_rejected() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--page", "3", "--offset", "40",
+        ]);
+        assert!(m.is_err(), "--page and --offset must conflict");
+    }
+
+    /// `--all` is an uncapped page, so it has no page number to count in.
+    #[test]
+    fn page_and_all_together_are_rejected() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--page", "2", "--all",
+        ]);
+        assert!(m.is_err(), "--page and --all must conflict");
+    }
+
+    /// Pages are 1-indexed and `--page 0` is refused at parse time. That refusal is what
+    /// makes `resolve_list_offset`'s `page - 1` total.
+    #[test]
+    fn page_zero_is_rejected() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--page", "0",
+        ]);
+        assert!(m.is_err(), "--page is 1-indexed; 0 must not parse");
+
+        let cmd = Cli::command();
+        assert!(
+            cmd.try_get_matches_from([
+                "temper", "resource", "list", "--type", "task", "--page", "1",
+            ])
+            .is_ok(),
+            "--page 1 is the first page"
+        );
     }
 
     /// `list --with body` is refused at parse time — `list`'s value set omits it.

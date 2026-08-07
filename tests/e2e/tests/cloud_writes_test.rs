@@ -1111,6 +1111,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
                     limit: Some(20),
                     all: false,
                     offset: None,
+                    page: None,
                     sort: None,
                     title_contains: None,
                     stage: None,

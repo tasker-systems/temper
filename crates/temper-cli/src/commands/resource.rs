@@ -815,6 +815,10 @@ pub struct ListParams<'a> {
     pub all: bool,
     /// `--offset`: skip the first N matching rows (pagination).
     pub offset: Option<usize>,
+    /// `--page`: the same axis counted in pages, 1-indexed. Clap makes it mutually
+    /// exclusive with both `offset` and `all`, so at most one of the two is ever set and
+    /// a paged call always has a page size to count in.
+    pub page: Option<usize>,
     /// `--sort <field>[:asc|desc]`. Parsed by `parse_sort_arg`; `None` keeps
     /// the default `updated:desc`.
     pub sort: Option<&'a str>,
@@ -833,15 +837,21 @@ pub struct ListParams<'a> {
     pub fields: &'a [String],
 }
 
-/// The default page cap for `list` when neither `--limit` nor `--all` is given.
-/// `--with open-meta` uses [`DEFAULT_META_LIST_LIMIT`]. Kept small enough to be cheap,
-/// large enough that the common case fits — but the `total`/`truncated` signal
-/// makes any cap self-evident, so an agent never has to guess whether it saw
-/// the whole set.
+/// The page size `list` uses when neither `--limit` nor `--all` is given.
+///
+/// **A default, not a cap.** An explicit `--limit` is honoured unchanged and no server-side
+/// clamp exists (`crates/temper-api/src/handlers/resources.rs`), so this number bounds only
+/// the call that asked for nothing. Kept small enough to be cheap, large enough that the
+/// common case fits — and the `total`/`returned`/`truncated` trio makes any page
+/// self-evident, so an agent never has to guess whether it saw the whole set.
+///
+/// **The one default.** There used to be a second, `DEFAULT_META_LIST_LIMIT = 50`, on the
+/// `--meta-only` path, justified by meta rows being cheaper. That justification died with the
+/// row types: `list` and `list --with open-meta` return the same `ResourceView`, differing by
+/// one optional tier, so two page sizes meant a caller's page silently changed size when they
+/// asked for a section. Worse, it is the number `--page` counts in — two defaults would make
+/// `--page 3` mean row 40 or row 100 depending on an unrelated flag.
 const DEFAULT_LIST_LIMIT: usize = 20;
-/// The default page cap for `list --with open-meta` (meta rows are cheaper, so the
-/// default is larger).
-const DEFAULT_META_LIST_LIMIT: usize = 50;
 
 /// Resolve repeated `--cogmap` refs (trailing-UUID-only) into the comma-separated UUID string the
 /// list endpoint's `cogmap_ids` query param expects (the GET can't carry a `Vec`). `None` when no
@@ -992,41 +1002,76 @@ fn parse_sort_arg(
 
 /// Resolve the effective page limit for a list call. `--all` means "no cap"
 /// (`None` — the server returns every matching row); otherwise the explicit
-/// `--limit`, falling back to `default`.
-fn resolve_list_limit(all: bool, limit: Option<usize>, default: usize) -> Option<i64> {
+/// `--limit`, falling back to [`DEFAULT_LIST_LIMIT`].
+///
+/// The fallback is read from the constant rather than passed in: a `default` parameter is
+/// what let two page sizes exist, and the caller that chose between them is gone.
+fn resolve_list_limit(all: bool, limit: Option<usize>) -> Option<i64> {
     if all {
         None
     } else {
-        Some(limit.unwrap_or(default) as i64)
+        Some(limit.unwrap_or(DEFAULT_LIST_LIMIT) as i64)
     }
 }
 
-/// Inject the truncation signal into a `list`/`list --meta-only` envelope and
-/// report whether the page was capped.
+/// Resolve the row offset a list call starts at, from `--offset` or `--page`.
 ///
-/// The server already returns `total` (the FILTERED match count, before
-/// limit/offset) alongside `rows`. Silent truncation — reasoning over a capped
-/// page as if it were the whole set — is the root footgun this task fixes, so
-/// we surface it two ways: a machine-readable `truncated` boolean on the
-/// envelope, and (via the returned bool) a stderr hint for humans. `truncated`
-/// is true iff there are matching rows beyond this page (`offset + returned <
-/// total`). Also injects `returned` (this page's row count) for symmetry with
-/// `total`.
-fn inject_truncation_signal(envelope: &mut serde_json::Value, offset: usize) -> bool {
-    let obj = match envelope.as_object_mut() {
-        Some(o) => o,
-        None => return false,
-    };
-    let returned = obj
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let total = obj.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let truncated = (offset as i64) + (returned as i64) < total;
-    obj.insert("returned".to_string(), serde_json::json!(returned));
-    obj.insert("truncated".to_string(), serde_json::json!(truncated));
-    truncated
+/// `--offset` is passed through; `--page` is 1-indexed and multiplied by the **effective**
+/// page size — the explicit `--limit` when there is one, else [`DEFAULT_LIST_LIMIT`]. That
+/// is the whole subtlety: resolving `--page` against a hardcoded 20 would make
+/// `--page 3 --limit 5` start at row 40 instead of row 10, silently skipping 30 rows and
+/// returning a page the caller would have no reason to distrust.
+///
+/// Clap makes `--page` mutually exclusive with `--offset` and with `--all`, so the two arms
+/// cannot both apply and an uncapped page never reaches the multiplication.
+fn resolve_list_offset(page: Option<usize>, offset: Option<usize>, limit: Option<usize>) -> usize {
+    match page {
+        // `saturating_sub`, not `- 1`: clap's `range(1..)` makes page 0 unreachable, and this
+        // keeps an unreachable input from being an arithmetic panic rather than encoding a
+        // second opinion about what page 0 means.
+        Some(page) => page.saturating_sub(1) * limit.unwrap_or(DEFAULT_LIST_LIMIT),
+        None => offset.unwrap_or(0),
+    }
+}
+
+/// Serialize a list response into the envelope the CLI prints: every row decorated with its
+/// `ref`, then the optional `--fields` projection applied per row.
+///
+/// **`returned` and `truncated` are NOT computed here.** They arrive on the wire
+/// (`ResourceListResponse`), derived by the server from the page it actually built. The CLI
+/// used to inject them — `inject_truncation_signal` recomputed `offset + returned < total`
+/// from the serialized JSON — which made the client a second, independent implementation of
+/// a rule the server already applies, reachable only through the CLI. MCP callers got
+/// neither key. Reading them off the response is what makes the signal a property of the
+/// answer rather than of the surface that rendered it.
+///
+/// Pure, so the rendering half of `list` is testable without a server: `list` itself returns
+/// `Result<()>` and prints, so nothing downstream of it can be observed.
+fn build_list_envelope(
+    response: &temper_workflow::types::resource::ResourceListResponse,
+    fields: &[String],
+) -> Result<serde_json::Value> {
+    let mut envelope = serde_json::to_value(response)
+        .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
+
+    // Identity-out: every printed row carries its decorated `ref`.
+    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
+        for row in rows.iter_mut() {
+            inject_ref(row);
+        }
+    }
+
+    if !fields.is_empty() {
+        let rows = envelope
+            .get_mut("rows")
+            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
+            .take();
+        let filtered_rows = temper_core::projection::apply_top_level_filter(rows, fields, "id")
+            .map_err(map_projection_error)?;
+        envelope["rows"] = filtered_rows;
+    }
+
+    Ok(envelope)
 }
 
 /// Emit the stderr note shown when a `list` page is truncated. Routed through
@@ -1034,15 +1079,20 @@ fn inject_truncation_signal(envelope: &mut serde_json::Value, offset: usize) -> 
 /// choice — both now write to stderr, so neither can corrupt the JSON document
 /// an agent parses on stdout. A capped page an agent silently mistakes for the
 /// whole set is a wrong answer, not a suggestion. Names the exact escape
-/// hatches (`--all`, a bigger `--limit`, `--offset`, or narrowing with
+/// hatches (`--all`, a bigger `--limit`, `--page`/`--offset`, or narrowing with
 /// `--sort`/filters) so an agent self-corrects instead of asserting a set is
 /// complete from a capped page.
-fn warn_truncated(total: i64, returned: usize) {
+///
+/// Both arguments now come off `ResourceListResponse` rather than being counted from the
+/// serialized rows, so the number a human reads and the `truncated` flag an agent reads are
+/// the same server-side facts. `returned` is `i64` for that reason — it is the wire field,
+/// not a `rows.len()`.
+fn warn_truncated(total: i64, returned: i64) {
     output::warning(format!(
         "Showing {returned} of {total} matching results — the list is TRUNCATED. \
          Do not conclude a resource is absent or a set is complete from this page. \
-         Re-run with --all (or a larger --limit/--offset), or narrow with \
-         --title-contains/--stage/--sort first."
+         Re-run with --all (or a larger --limit, or --page/--offset to walk), or narrow \
+         with --title-contains/--stage/--sort first."
     ));
 }
 
@@ -1093,7 +1143,6 @@ fn validate_status_filter(value: &str) -> Result<()> {
 /// stops landing in its field.
 fn list_api_params(
     params: &ListParams<'_>,
-    default_limit: usize,
     sections: &SectionSet,
 ) -> Result<temper_workflow::types::resource::ResourceListParams> {
     let (sort, order) = match params.sort {
@@ -1121,8 +1170,8 @@ fn list_api_params(
         goal,
         sort,
         order,
-        limit: resolve_list_limit(params.all, params.limit, default_limit),
-        offset: Some(params.offset.unwrap_or(0) as i64),
+        limit: resolve_list_limit(params.all, params.limit),
+        offset: Some(resolve_list_offset(params.page, params.offset, params.limit) as i64),
         // One envelope either way — the section is what varies, not the row type. Rendered
         // through `SectionSet::to_csv` rather than from a `contains` check per section, so a
         // section added to the vocabulary rides the wire instead of being silently dropped.
@@ -1136,8 +1185,11 @@ fn list_api_params(
 /// **One path, whatever sections are asked for.** There used to be two — `list` and
 /// `list_meta_only` — character-identical but for the client method they called and their
 /// default page cap, because `--meta-only` selected a second *response type*. It selects a
-/// *part* now (`?sections=open-meta` over the same `ResourceListResponse`), so the branch had
-/// nothing left to branch on.
+/// *part* now (`?sections=open-meta` over the same `ResourceListResponse`), and the second
+/// page cap went with it, so the branch has nothing left to branch on.
+///
+/// The paging state it prints (`returned`, `truncated`, `limit`, `offset`) is read off the
+/// response, never recomputed here — see `build_list_envelope`.
 pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
     check_type_scoped_filters(params.doc_type, params.stage, params.goal, params.status)?;
 
@@ -1157,16 +1209,7 @@ pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
 
     let fmt = params.format;
-    let offset = params.offset.unwrap_or(0);
-    let fields_owned: Vec<String> = params.fields.to_vec();
-    // Meta rows are cheaper, so a page of them may be larger. (One default, and this
-    // second one with it, is Task 11's to retire.)
-    let default_limit = if sections.contains(ResourceSection::OpenMeta) {
-        DEFAULT_META_LIST_LIMIT
-    } else {
-        DEFAULT_LIST_LIMIT
-    };
-    let api_params = list_api_params(&params, default_limit, &sections)?;
+    let api_params = list_api_params(&params, &sections)?;
 
     // Cloud-only list: the server query. Any error (network, auth, 4xx/5xx)
     // surfaces as-is — there is no local-scan fallback.
@@ -1180,42 +1223,11 @@ pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
         })
     })?;
 
-    let mut envelope = serde_json::to_value(&response)
-        .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
-
-    // Identity-out: every printed row carries its decorated `ref`.
-    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
-        for row in rows.iter_mut() {
-            inject_ref(row);
-        }
-    }
-
-    // Truncation signal — injected BEFORE the optional `--fields` projection so
-    // the `total`/`returned`/`truncated` envelope keys are always present (they
-    // survive the filter, which only prunes per-row keys, not envelope keys).
-    let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let returned = envelope
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let truncated = inject_truncation_signal(&mut envelope, offset);
-
-    if !fields_owned.is_empty() {
-        let rows = envelope
-            .get_mut("rows")
-            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
-            .take();
-        let filtered_rows =
-            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
-                .map_err(map_projection_error)?;
-        envelope["rows"] = filtered_rows;
-    }
-
+    let envelope = build_list_envelope(&response, params.fields)?;
     let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
-    if truncated {
-        warn_truncated(total, returned);
+    if response.truncated {
+        warn_truncated(response.total, response.returned);
     }
     Ok(())
 }
@@ -2397,6 +2409,7 @@ mod list_helpers_tests {
             limit: None,
             all: false,
             offset: None,
+            page: None,
             sort: None,
             title_contains: None,
             stage: None,
@@ -2451,8 +2464,8 @@ mod list_helpers_tests {
         params.limit = Some(7);
         params.offset = Some(3);
 
-        let api = list_api_params(&params, DEFAULT_LIST_LIMIT, &no_sections())
-            .expect("a well-formed ListParams must build");
+        let api =
+            list_api_params(&params, &no_sections()).expect("a well-formed ListParams must build");
 
         assert_eq!(api.doc_type_name.as_deref(), Some("task"), "--type");
         assert_eq!(api.tags.as_deref(), Some("ci,security"), "--tag");
@@ -2487,12 +2500,12 @@ mod list_helpers_tests {
         let mut goal_params = list_params(&[], &[]);
         goal_params.doc_type = Some("goal");
         goal_params.status = Some("active");
-        let api = list_api_params(&goal_params, DEFAULT_LIST_LIMIT, &no_sections())
+        let api = list_api_params(&goal_params, &no_sections())
             .expect("a goal-scoped --status must build");
         assert_eq!(api.status.as_deref(), Some("active"), "--status");
 
         let cogmap_params = list_params(&[], &cogmaps);
-        let api = list_api_params(&cogmap_params, DEFAULT_LIST_LIMIT, &no_sections())
+        let api = list_api_params(&cogmap_params, &no_sections())
             .expect("a --cogmap with no --context must build");
         assert_eq!(
             api.cogmap_ids.as_deref(),
@@ -2501,33 +2514,40 @@ mod list_helpers_tests {
         );
     }
 
-    /// The two list paths differ in exactly two things, and nothing else.
+    /// Asking for a section changes the `sections` param and **nothing else** — the page
+    /// size included.
     ///
     /// This is what makes one builder safe to share. `list` and `list --meta-only` carried
     /// character-identical copies of the param build until they were collapsed; the risk of
-    /// collapsing them is that a difference gets flattened away, so both surviving differences
-    /// are pinned. `sections` must stay `None` on the default path rather than `Some("")` —
-    /// the field is `skip_serializing_if = "Option::is_none"`, so the two are different wires,
-    /// which is why `SectionSet::to_csv` answers `None` for the empty set.
+    /// collapsing them is that a difference gets flattened away, so the one surviving
+    /// difference is pinned. `sections` must stay `None` on the default path rather than
+    /// `Some("")` — the field is `skip_serializing_if = "Option::is_none"`, so the two are
+    /// different wires, which is why `SectionSet::to_csv` answers `None` for the empty set.
+    ///
+    /// **`limit` is now inside the equality**, not excluded from it. It used to be the
+    /// second permitted difference (`DEFAULT_META_LIST_LIMIT = 50`); with one default,
+    /// asking for a section that no longer changes the row type must not change how many
+    /// rows come back either.
     #[test]
-    fn the_two_list_paths_differ_only_in_page_cap_and_sections() {
+    fn asking_for_a_section_changes_only_the_sections_param() {
         let params = list_params(&[], &[]);
 
-        let full =
-            list_api_params(&params, DEFAULT_LIST_LIMIT, &no_sections()).expect("full list builds");
-        let meta = list_api_params(&params, DEFAULT_META_LIST_LIMIT, &open_meta_section())
-            .expect("meta list builds");
+        let full = list_api_params(&params, &no_sections()).expect("full list builds");
+        let meta = list_api_params(&params, &open_meta_section()).expect("meta list builds");
 
         assert_eq!(full.limit, Some(DEFAULT_LIST_LIMIT as i64));
-        assert_eq!(meta.limit, Some(DEFAULT_META_LIST_LIMIT as i64));
-        assert_eq!(full.sections, None, "the full path asks for no sections");
+        assert_eq!(
+            meta.limit, full.limit,
+            "one default: a section request must not resize the page"
+        );
+        assert_eq!(full.sections, None, "the default path asks for no sections");
         assert_eq!(
             meta.sections.as_deref(),
             Some("open-meta"),
-            "the meta path asks for a SECTION of the one shape, not a second response type"
+            "the section path asks for a PART of the one shape, not a second response type"
         );
 
-        // Every OTHER field agrees, so the shared builder is not flattening a third
+        // Every OTHER field agrees, so the shared builder is not flattening a second
         // difference. Compared through serde because `ResourceListParams` derives no
         // `PartialEq` — and comparing the wire form is the stronger check anyway, since the
         // wire is what the two paths actually differ on.
@@ -2535,12 +2555,11 @@ mod list_helpers_tests {
         let mut meta_wire = serde_json::to_value(&meta).expect("serialize meta params");
         for wire in [&mut full_wire, &mut meta_wire] {
             let obj = wire.as_object_mut().expect("params serialize to an object");
-            obj.remove("limit");
             obj.remove("sections");
         }
         assert_eq!(
             full_wire, meta_wire,
-            "the two paths must differ ONLY in page cap and sections"
+            "the two paths must differ ONLY in sections"
         );
     }
 
@@ -2552,13 +2571,13 @@ mod list_helpers_tests {
         params.all = true;
 
         assert_eq!(
-            list_api_params(&params, DEFAULT_LIST_LIMIT, &no_sections())
+            list_api_params(&params, &no_sections())
                 .expect("builds")
                 .limit,
             None
         );
         assert_eq!(
-            list_api_params(&params, DEFAULT_META_LIST_LIMIT, &open_meta_section())
+            list_api_params(&params, &open_meta_section())
                 .expect("builds")
                 .limit,
             None
@@ -2638,47 +2657,90 @@ mod list_helpers_tests {
 
     #[test]
     fn resolve_list_limit_all_means_no_cap() {
-        assert_eq!(resolve_list_limit(true, None, 20), None);
+        assert_eq!(resolve_list_limit(true, None), None);
         // `--all` wins over any (clap-excluded) limit.
-        assert_eq!(resolve_list_limit(true, Some(5), 20), None);
+        assert_eq!(resolve_list_limit(true, Some(5)), None);
     }
 
+    /// An explicit `--limit` is honoured unchanged — the default applies only when the
+    /// caller asked for nothing, and no clamp exists on either side.
     #[test]
-    fn resolve_list_limit_uses_explicit_then_default() {
-        assert_eq!(resolve_list_limit(false, Some(5), 20), Some(5));
-        assert_eq!(resolve_list_limit(false, None, 20), Some(20));
-        assert_eq!(resolve_list_limit(false, None, 50), Some(50));
+    fn resolve_list_limit_uses_explicit_then_the_one_default() {
+        assert_eq!(resolve_list_limit(false, Some(5)), Some(5));
+        assert_eq!(resolve_list_limit(false, Some(10_000)), Some(10_000));
+        assert_eq!(
+            resolve_list_limit(false, None),
+            Some(DEFAULT_LIST_LIMIT as i64)
+        );
     }
 
+    /// `--page 1` is the first page, which is offset 0 — not offset 20.
     #[test]
-    fn truncation_signal_flags_a_capped_page() {
-        // 2 of 5 shown from offset 0 → truncated.
-        let mut env = serde_json::json!({
-            "rows": [{"id": "a"}, {"id": "b"}],
-            "total": 5,
-        });
-        assert!(inject_truncation_signal(&mut env, 0));
-        assert_eq!(env["truncated"], serde_json::json!(true));
-        assert_eq!(env["returned"], serde_json::json!(2));
+    fn page_one_is_offset_zero() {
+        assert_eq!(resolve_list_offset(Some(1), None, None), 0);
+        assert_eq!(resolve_list_offset(Some(1), None, Some(5)), 0);
     }
 
+    /// **`--page` counts in the effective page size, not in a hardcoded default.**
+    ///
+    /// `--page 3 --limit 5` starts at row 10. Resolving against a hardcoded 20 would give
+    /// 40 — a page that skips 30 rows and looks entirely plausible from the outside, which
+    /// is what makes this the failure mode worth a named witness rather than a comment.
     #[test]
-    fn truncation_signal_clear_when_page_covers_the_tail() {
-        // offset 3 + 2 returned == total 5 → nothing beyond this page.
-        let mut env = serde_json::json!({
-            "rows": [{"id": "d"}, {"id": "e"}],
-            "total": 5,
-        });
-        assert!(!inject_truncation_signal(&mut env, 3));
-        assert_eq!(env["truncated"], serde_json::json!(false));
+    fn page_resolves_against_the_effective_limit() {
+        assert_eq!(resolve_list_offset(Some(3), None, Some(5)), 10);
+        // And with no `--limit`, the same page number counts in the one default.
+        assert_eq!(
+            resolve_list_offset(Some(3), None, None),
+            2 * DEFAULT_LIST_LIMIT
+        );
+    }
 
-        // Whole set on one page.
-        let mut whole = serde_json::json!({
-            "rows": [{"id": "a"}, {"id": "b"}],
-            "total": 2,
-        });
-        assert!(!inject_truncation_signal(&mut whole, 0));
-        assert_eq!(whole["truncated"], serde_json::json!(false));
+    /// With no `--page`, `--offset` passes through verbatim; with neither, the walk starts
+    /// at the top.
+    #[test]
+    fn offset_passes_through_when_no_page_is_given() {
+        assert_eq!(resolve_list_offset(None, Some(37), Some(5)), 37);
+        assert_eq!(resolve_list_offset(None, None, Some(5)), 0);
+    }
+
+    /// **`truncated` is read off the wire, never recomputed from the rendered page.**
+    ///
+    /// The response here is deliberately self-contradictory by the client's OLD rule:
+    /// `offset + returned == total`, which `inject_truncation_signal` would have rendered as
+    /// `truncated: false`. The server said `true`. The envelope must say what the server
+    /// said — the client is not a second opinion about a page it did not build.
+    #[test]
+    fn truncated_comes_from_the_wire_not_the_client() {
+        use temper_workflow::types::resource::{ResourceFacets, ResourceListResponse};
+
+        let response = ResourceListResponse {
+            rows: Vec::new(),
+            total: 5,
+            facets: ResourceFacets::default(),
+            returned: 5,
+            // `offset + returned == total`: the retired client-side derivation says `false`.
+            truncated: true,
+            limit: Some(5),
+            offset: 0,
+        };
+
+        let envelope = build_list_envelope(&response, &[]).expect("envelope builds");
+
+        assert_eq!(
+            envelope["truncated"],
+            serde_json::json!(true),
+            "the wire's verdict survives: {envelope}"
+        );
+        assert_eq!(
+            envelope["returned"],
+            serde_json::json!(5),
+            "`returned` is the wire field, not `rows.len()` — the page here carries no rows"
+        );
+        // And the rest of the paging state rides along, which is what a caller pages on.
+        assert_eq!(envelope["limit"], serde_json::json!(5));
+        assert_eq!(envelope["offset"], serde_json::json!(0));
+        assert_eq!(envelope["total"], serde_json::json!(5));
     }
 }
 

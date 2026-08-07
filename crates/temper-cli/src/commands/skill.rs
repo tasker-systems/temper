@@ -147,8 +147,8 @@ Search first, read second. Don't guess at file paths.
 
 ## Listing: truncation, sort, and filters
 
-`temper resource list` returns a **capped page** — 20 rows by default (50 with
-`--with open-meta`). **Never conclude a resource is absent, or that a set is
+`temper resource list` returns a **capped page** — 20 rows by default, whatever
+sections you ask for. **Never conclude a resource is absent, or that a set is
 complete, from a default `list`.** A goal/task/session you "don't see" may just
 be past the cap.
 
@@ -166,7 +166,8 @@ absence or completeness, **expand or narrow**:
 | Flag | Use |
 |------|-----|
 | `--all` | Return every matching row (no cap). Reach for this before claiming a set is complete. Conflicts with `--limit`. |
-| `--limit <n>` / `--offset <n>` | A bigger page, or page through the set. |
+| `--limit <n>` | A bigger page. It is a DEFAULT, not a cap — whatever you pass is honoured, and there is no server-side clamp. |
+| `--page <n>` / `--offset <n>` | Walk the set, in pages or in rows. `--page` is 1-indexed and counts in the effective `--limit`, so `--page 3 --limit 5` starts at row 10. The two are mutually exclusive, as is either with `--all`. |
 | `--sort <field>[:asc\|desc]` | Order by `updated`, `created`, `title`, `stage`, `seq`, `context`, or `doctype`. Direction defaults per field (time/seq → desc, text → asc); default sort is `updated:desc`. |
 | `--title-contains <substr>` | Case-insensitive title filter — narrow instead of paging blind (for topical/semantic search use `temper search`). |
 | `--stage <s>` / `--goal <ref>` (task) · `--status <s>` (goal) | Type-specific filters. Naming a `--type` they don't apply to is an error, not a silent no-op. |

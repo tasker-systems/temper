@@ -411,8 +411,8 @@ downstream reader is that reader.
 - **`--open-meta` on `update` is a per-key PATCH, and the key is the unit.** Keys you do not supply
   are untouched, but a key you do supply is **replaced whole** — sending `{"witness":{"mode":"judged"}}`
   drops every other field of `witness`. Send the complete key value.
-- **`resource list` is capped and will lie by omission.** Default page is 20 rows (50 with
-  `--with open-meta`). Check `truncated` in the response, and reach for `--all` before you conclude a
+- **`resource list` is capped and will lie by omission.** Default page is 20 rows, whatever
+  sections you ask for. Check `truncated` in the response, and reach for `--all` before you conclude a
   clause has no tasks, or that a set is complete.
 {%- else -%}
 - **Goal membership has two spellings and nothing ties them.** `create_resource`'s / `update_resource`'s
