@@ -1,6 +1,10 @@
 #![cfg(feature = "test-db")]
-//! Issue #330: full `resource show` carries both metadata tiers, `--meta-only` is a
+//! Issue #330: full `resource show` carries both metadata tiers, a body-less `show` is a
 //! literal strict subset of it, and the provenance trio is stamped server-side.
+//!
+//! `--meta-only` retired in favour of the section vocabulary; the subset relation it named
+//! is now `--without body`, and it is stronger than subset — the two reads differ by exactly
+//! the `content` key.
 //!
 //! Differential by construction: the load-bearing assertion compares the two read paths
 //! against each other rather than against a typed-out expected shape. A hand-written
@@ -32,9 +36,11 @@ async fn cli_json(app: &common::E2eTestApp, args: &[&str]) -> Value {
 
 /// The acceptance criterion for #330's items 3 and 4, in one pass:
 /// the trio is stamped on create, the full `show` carries both tiers, and every key
-/// `--meta-only` returns is present with an equal value in the full `show`.
+/// `--without body` returns is present with an equal value in the full `show`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn meta_only_is_a_strict_subset_of_full_show_and_carries_the_stamp(pool: sqlx::PgPool) {
+async fn a_body_less_show_is_a_strict_subset_of_full_show_and_carries_the_stamp(
+    pool: sqlx::PgPool,
+) {
     let app = common::setup(pool).await;
 
     app.client
@@ -98,31 +104,57 @@ async fn meta_only_is_a_strict_subset_of_full_show_and_carries_the_stamp(pool: s
         "open_meta on full show: {full}"
     );
 
-    // ---- meta-only ----
+    // ---- the same show, without the body section ----
     let meta = cli_json(
         &app,
-        &["resource", "show", &id, "--meta-only", "--format", "json"],
+        &[
+            "resource",
+            "show",
+            &id,
+            "--without",
+            "body",
+            "--format",
+            "json",
+        ],
     )
     .await;
 
-    // THE differential assertion: every key --meta-only returns is present, with an equal
-    // value, in the full show object. No expected shape is typed out anywhere.
-    let meta_obj = meta.as_object().expect("meta-only is an object");
-    assert!(!meta_obj.is_empty(), "meta-only returned nothing: {meta}");
+    // THE differential assertion: every key `--without body` returns is present, with an
+    // equal value, in the full show object. No expected shape is typed out anywhere.
+    let meta_obj = meta.as_object().expect("a body-less show is an object");
+    assert!(
+        !meta_obj.is_empty(),
+        "the body-less show returned nothing: {meta}"
+    );
     for (key, meta_value) in meta_obj {
-        let full_value = full
-            .get(key)
-            .unwrap_or_else(|| panic!("full show is missing `{key}` that --meta-only returned"));
+        let full_value = full.get(key).unwrap_or_else(|| {
+            panic!("full show is missing `{key}` that `--without body` returned")
+        });
         assert_eq!(
             full_value, meta_value,
-            "`{key}` disagrees between full show and --meta-only"
+            "`{key}` disagrees between full show and `--without body`"
         );
     }
 
     // The anchor is `id` on both — that rename is what makes the subset relation possible.
     assert!(
         meta_obj.contains_key("id"),
-        "meta-only anchors on id: {meta}"
+        "a body-less show anchors on id: {meta}"
+    );
+
+    // And the subset is proper by exactly ONE key. Dropping a section must remove the
+    // section and nothing else — a `--without body` that also quietly shed, say, `open_meta`
+    // would still pass the loop above, since a subset relation cannot see an absence.
+    let dropped: Vec<&String> = full
+        .as_object()
+        .expect("full show is an object")
+        .keys()
+        .filter(|k| !meta_obj.contains_key(*k))
+        .collect();
+    assert_eq!(
+        dropped,
+        vec!["content"],
+        "`--without body` must drop the body key and nothing else"
     );
 
     // And the §7-dissolved hashes are gone from the wire entirely, not emitted empty.

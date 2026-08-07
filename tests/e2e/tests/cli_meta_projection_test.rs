@@ -5,12 +5,14 @@ mod common;
 use serde_json::Value;
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
-/// `temper resource show <slug> --meta-only --format json` returns the full
-/// `show` view **minus the body**: the row (title, doc_type, context, owner, the
-/// stage/seq/mode/effort projections) plus both `managed_meta` and `open_meta`
-/// tiers — everything except the reconstructed markdown body.
+/// `temper resource show <slug> --without body --format json` returns the full
+/// `show` view **minus the body**: the identity/home/attribution fields plus both the
+/// `managed_meta` and `open_meta` tiers — everything except the reconstructed markdown.
+///
+/// This is `--meta-only`'s replacement, and it is the same read: one `GET /api/resources/{id}`
+/// with the `GET /content` round-trip skipped.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
+async fn show_without_body_returns_the_view_minus_the_body(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
     app.client
@@ -54,7 +56,8 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
             "resource",
             "show",
             id.as_str(),
-            "--meta-only",
+            "--without",
+            "body",
             "--format",
             "json",
         ],
@@ -70,8 +73,8 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
     let stdout: Value = serde_json::from_slice(&output.stdout).expect("json parse");
     assert!(stdout.get("id").is_some(), "missing id anchor: {stdout}");
     assert!(stdout.get("managed_meta").is_some(), "missing managed_meta");
-    // The row's identity/display fields are now included — that's the whole point of
-    // the redefinition (`--meta-only` = full `show` minus body).
+    // The identity/display fields are included — a body-less `show` is the full view
+    // minus one section, not a narrower projection.
     assert_eq!(
         stdout.get("title").and_then(Value::as_str),
         Some("Show Meta Test"),
@@ -85,13 +88,13 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
     // Now that the title is present, the decorated `ref` is emitted too (parity with
     // the full `show`).
     assert!(stdout.get("ref").is_some(), "ref must be present: {stdout}");
-    // The body is the one thing `--meta-only` withholds.
+    // The body is the one thing `--without body` withholds — and it is ABSENT, not `""`.
     assert!(stdout.get("content").is_none(), "should not include body");
     assert!(stdout.get("markdown").is_none(), "should not include body");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
+async fn show_without_body_with_fields_filters_response(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
     app.client
@@ -134,7 +137,8 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
             "resource",
             "show",
             id.as_str(),
-            "--meta-only",
+            "--without",
+            "body",
             "--fields",
             "managed_meta",
             "--format",
@@ -165,7 +169,7 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
 /// the rejected path. The validation fires post-API-call (projection is applied
 /// to the fetched meta), so the resource must exist to reach that code path.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
+async fn show_without_body_with_dotted_path_errors(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client.profile().get().await.expect("profile");
     app.client
@@ -205,7 +209,8 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
             "resource",
             "show",
             id.as_str(),
-            "--meta-only",
+            "--without",
+            "body",
             "--fields",
             "managed_meta.stage",
         ],
@@ -223,7 +228,7 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
+async fn list_with_open_meta_returns_the_one_list_shape(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client.profile().get().await.expect("profile");
     app.client
@@ -280,7 +285,8 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             "task",
             "--context",
             "@me/meta-cli",
-            "--meta-only",
+            "--with",
+            "open-meta",
             "--format",
             "json",
         ],
@@ -323,7 +329,7 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
 }
 
 /// `temper resource list --type task --context @me/meta-cli --fields origin_uri,managed_meta
-/// --format json` (without --meta-only) should filter each `ResourceView` in the envelope rows
+/// --format json` (with no `--with`) should filter each `ResourceView` in the envelope rows
 /// to include only the anchor field `id` plus the requested fields. Fields not in the selection
 /// (`title`, `created`, `updated`, `body_hash`) must be absent.
 ///

@@ -534,12 +534,22 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Fill the open metadata tier on every row. Same envelope and same row
-        /// type as the default list — asking for a section adds `open_meta` to
-        /// the one shape, it does not select a second one. The managed tier is
-        /// always present either way. Hits GET /api/resources?sections=open-meta.
-        #[arg(long)]
-        meta_only: bool,
+        /// Add a section to every row (comma-separated or repeated). `--with open-meta`
+        /// fills the open metadata tier — the same envelope and the same row type as the
+        /// default list, since asking for a section adds a part to the one shape rather
+        /// than selecting a second one. The managed tier is always present either way.
+        /// `body` is deliberately not offered here: a page of reconstructed bodies is an
+        /// unbounded payload behind a flag that reads as cheap — use `show` per row.
+        #[arg(long = "with", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::list_section_parser())]
+        with: Vec<String>,
+        /// Drop a section from every row (comma-separated or repeated). `list` asks for
+        /// none by default, so this is only meaningful against a `--with` on the same
+        /// invocation — and naming one section in both is a hard error, not a precedence
+        /// rule.
+        #[arg(long = "without", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::list_section_parser())]
+        without: Vec<String>,
         /// Subselect top-level response keys on each row (anchor key
         /// always preserved). Use jq for nested projection.
         #[arg(long, value_delimiter = ',')]
@@ -562,17 +572,25 @@ pub enum ResourceAction {
         /// Show the resource's derived_from lineage — what it derives from
         /// (ancestors) and what derives from it (descendants), access-gated.
         /// Calls GET /lineage.
-        #[arg(long, conflicts_with = "meta_only")]
+        #[arg(long)]
         lineage: bool,
         /// Show itemized per-block provenance — the sources each of the
         /// resource's content blocks was distilled from. Calls GET /provenance.
-        #[arg(long, conflicts_with = "meta_only")]
+        #[arg(long)]
         provenance: bool,
-        /// Show everything except the body: the full resource view
-        /// (title, type, context, owner, and both the managed and open
-        /// meta tiers) minus the reconstructed markdown body.
-        #[arg(long, conflicts_with = "edges")]
-        meta_only: bool,
+        /// Add a section (comma-separated or repeated). `show` already carries `body` and
+        /// `open-meta`; `--with edges` folds this resource's graph edges into the same
+        /// document (the long form of `--edges`).
+        #[arg(long = "with", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::show_section_parser())]
+        with: Vec<String>,
+        /// Drop a section (comma-separated or repeated). `--without body` is the cheap
+        /// orientation read: everything `show` returns except the reconstructed markdown,
+        /// and it composes freely with `--with edges`. Naming one section in both `--with`
+        /// and `--without` is a hard error, not a precedence rule.
+        #[arg(long = "without", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::show_section_parser())]
+        without: Vec<String>,
         /// Subselect top-level response keys (resource_id always
         /// preserved). Use jq for nested projection.
         #[arg(long, value_delimiter = ',')]
@@ -1963,41 +1981,108 @@ pub enum EdgeAction {
 }
 
 #[cfg(test)]
-mod meta_only_flag_tests {
+mod section_flag_tests {
     use super::*;
     use clap::CommandFactory;
 
+    const REF: &str = "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+
     #[test]
-    fn show_accepts_meta_only_and_fields() {
+    fn show_accepts_without_body_and_fields() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
             "temper",
             "resource",
             "show",
-            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
-            "--meta-only",
+            REF,
+            "--without",
+            "body",
             "--fields",
             "managed_meta,open_meta",
         ]);
         assert!(
             m.is_ok(),
-            "show with --meta-only and --fields failed to parse: {:?}",
+            "show with --without body and --fields failed to parse: {:?}",
             m.err()
         );
     }
 
+    /// **The combination the old design forbade.** `--meta-only` carried
+    /// `conflicts_with = "edges"`, so "everything but the body, plus edges" could not be
+    /// typed at all. Nothing conflicts now, and this is the parse-level half of the witness
+    /// (`resource_sections::show_with_edges_without_body_is_accepted` is the resolution half).
     #[test]
-    fn show_meta_only_conflicts_with_edges() {
+    fn show_with_edges_without_body_parses() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
             "temper",
             "resource",
             "show",
-            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
-            "--meta-only",
+            REF,
+            "--with",
+            "edges",
+            "--without",
+            "body",
+        ]);
+        assert!(
+            m.is_ok(),
+            "--with edges --without body must parse: {:?}",
+            m.err()
+        );
+    }
+
+    /// `--edges` survives as the short spelling of `--with edges` and no longer conflicts
+    /// with dropping the body — the one conflict edge this vocabulary retired.
+    #[test]
+    fn show_edges_no_longer_conflicts_with_dropping_the_body() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "show",
+            REF,
+            "--without",
+            "body",
             "--edges",
         ]);
-        assert!(m.is_err(), "--meta-only and --edges must conflict");
+        assert!(
+            m.is_ok(),
+            "--edges beside --without body must parse: {:?}",
+            m.err()
+        );
+    }
+
+    /// `--lineage` and `--provenance` carried `conflicts_with = "meta_only"` for the same
+    /// reason `--edges` did, and lost it with the flag.
+    #[test]
+    fn show_lineage_and_provenance_compose_with_dropping_the_body() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "show",
+            REF,
+            "--without",
+            "body",
+            "--lineage",
+            "--provenance",
+        ]);
+        assert!(m.is_ok(), "no conflict edge survives: {:?}", m.err());
+    }
+
+    /// `list --with body` is refused at parse time — `list`'s value set omits it.
+    #[test]
+    fn list_never_offers_body() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--with", "body",
+        ]);
+        let err = m.expect_err("`list --with body` must not parse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("open-meta"),
+            "the refusal names what list DOES offer: {msg}"
+        );
     }
 
     #[test]
@@ -2230,7 +2315,7 @@ mod meta_only_flag_tests {
     }
 
     #[test]
-    fn list_accepts_meta_only_and_fields() {
+    fn list_accepts_with_open_meta_and_fields() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
             "temper",
@@ -2238,13 +2323,14 @@ mod meta_only_flag_tests {
             "list",
             "--type",
             "task",
-            "--meta-only",
+            "--with",
+            "open-meta",
             "--fields",
             "managed_meta",
         ]);
         assert!(
             m.is_ok(),
-            "list with --meta-only and --fields failed: {:?}",
+            "list with --with open-meta and --fields failed: {:?}",
             m.err()
         );
     }

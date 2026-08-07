@@ -1,6 +1,8 @@
 use chrono::Local;
+use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_workflow::schema;
 
+use crate::commands::resource_sections;
 use crate::config::Config;
 use crate::error::{Result, TemperError};
 use crate::output;
@@ -71,8 +73,9 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
         .or_else(|| row.get("resource_id"))
         .and_then(|v| v.as_str());
     let Some(id) = id else { return };
-    // A row carrying no `title` — the `--meta-only` projection is the one that doesn't —
-    // cannot form the decorated half of a ref. This used to default the title to `""` and
+    // A row carrying no `title` cannot form the decorated half of a ref. No read path emits
+    // one today (the retired `--meta-only` projection was the one that did), so this arm is
+    // a guard rather than a live case. It used to default the title to `""` and
     // emit `-<uuid>`: a malformed ref that resolved only by accident (resolution is
     // trailing-UUID-only) and that made the meta projection disagree with the full `show`
     // on the value of `ref`. Emit nothing instead; a bare UUID is itself a valid ref.
@@ -781,7 +784,10 @@ pub struct ShowParams<'a> {
     pub edges: bool,
     pub lineage: bool,
     pub provenance: bool,
-    pub meta_only: bool,
+    /// `--with <section>[,…]`: sections to add on top of [`resource_sections::show_defaults`].
+    pub with: &'a [String],
+    /// `--without <section>[,…]`: sections to drop. A section named in both is a hard error.
+    pub without: &'a [String],
     pub fields: &'a [String],
 }
 
@@ -819,17 +825,21 @@ pub struct ListParams<'a> {
     pub goal: Option<&'a str>,
     pub status: Option<&'a str>,
     pub format: crate::format::OutputFormat,
-    pub meta_only: bool,
+    /// `--with <section>[,…]`: sections to fill on every row, on top of
+    /// [`resource_sections::list_defaults`] (which asks for none). `body` is not offered.
+    pub with: &'a [String],
+    /// `--without <section>[,…]`: sections to drop. A section named in both is a hard error.
+    pub without: &'a [String],
     pub fields: &'a [String],
 }
 
 /// The default page cap for `list` when neither `--limit` nor `--all` is given.
-/// `--meta-only` uses [`DEFAULT_META_LIST_LIMIT`]. Kept small enough to be cheap,
+/// `--with open-meta` uses [`DEFAULT_META_LIST_LIMIT`]. Kept small enough to be cheap,
 /// large enough that the common case fits — but the `total`/`truncated` signal
 /// makes any cap self-evident, so an agent never has to guess whether it saw
 /// the whole set.
 const DEFAULT_LIST_LIMIT: usize = 20;
-/// The default page cap for `list --meta-only` (meta rows are cheaper, so the
+/// The default page cap for `list --with open-meta` (meta rows are cheaper, so the
 /// default is larger).
 const DEFAULT_META_LIST_LIMIT: usize = 50;
 
@@ -1070,7 +1080,7 @@ fn validate_status_filter(value: &str) -> Result<()> {
 
 /// Build the wire params both list endpoints take from the CLI's own `ListParams`.
 ///
-/// `list` and `list --meta-only` differ only in their default page cap and the `sections`
+/// `list` and `list --with open-meta` differ only in their default page cap and the `sections`
 /// request, and until 2026-07-29 each carried a character-identical copy of this block. The tag
 /// filter had to be added to both — which is exactly the drift the project's "never duplicate
 /// filter logic; the two copies will drift" rule names.
@@ -1084,7 +1094,7 @@ fn validate_status_filter(value: &str) -> Result<()> {
 fn list_api_params(
     params: &ListParams<'_>,
     default_limit: usize,
-    meta_only: bool,
+    sections: &SectionSet,
 ) -> Result<temper_workflow::types::resource::ResourceListParams> {
     let (sort, order) = match params.sort {
         Some(raw) => {
@@ -1113,16 +1123,22 @@ fn list_api_params(
         order,
         limit: resolve_list_limit(params.all, params.limit, default_limit),
         offset: Some(params.offset.unwrap_or(0) as i64),
-        // The full-list path leaves this at its `None` default; only the meta path asks for the
-        // open tier. One envelope either way — the section is what varies, not the row type.
-        sections: meta_only
-            .then(|| temper_core::types::resource_view::ResourceSection::OpenMeta.to_string()),
+        // One envelope either way — the section is what varies, not the row type. Rendered
+        // through `SectionSet::to_csv` rather than from a `contains` check per section, so a
+        // section added to the vocabulary rides the wire instead of being silently dropped.
+        sections: sections.to_csv(),
         ..Default::default()
     })
 }
 
 /// List resources of a given type (unified pipeline for all doc types).
-pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
+///
+/// **One path, whatever sections are asked for.** There used to be two — `list` and
+/// `list_meta_only` — character-identical but for the client method they called and their
+/// default page cap, because `--meta-only` selected a second *response type*. It selects a
+/// *part* now (`?sections=open-meta` over the same `ResourceListResponse`), so the branch had
+/// nothing left to branch on.
+pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
     check_type_scoped_filters(params.doc_type, params.stage, params.goal, params.status)?;
 
     if let Some(s) = params.stage {
@@ -1132,16 +1148,25 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         validate_status_filter(s)?;
     }
 
-    if params.meta_only {
-        return list_meta_only(config, params);
-    }
+    let sections = resource_sections::resolve_sections(
+        params.with,
+        params.without,
+        resource_sections::list_defaults(),
+    )?;
 
     use crate::actions::runtime;
 
     let fmt = params.format;
     let offset = params.offset.unwrap_or(0);
     let fields_owned: Vec<String> = params.fields.to_vec();
-    let api_params = list_api_params(&params, DEFAULT_LIST_LIMIT, false)?;
+    // Meta rows are cheaper, so a page of them may be larger. (One default, and this
+    // second one with it, is Task 11's to retire.)
+    let default_limit = if sections.contains(ResourceSection::OpenMeta) {
+        DEFAULT_META_LIST_LIMIT
+    } else {
+        DEFAULT_LIST_LIMIT
+    };
+    let api_params = list_api_params(&params, default_limit, &sections)?;
 
     // Cloud-only list: the server query. Any error (network, auth, 4xx/5xx)
     // surfaces as-is — there is no local-scan fallback.
@@ -1168,70 +1193,6 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     // Truncation signal — injected BEFORE the optional `--fields` projection so
     // the `total`/`returned`/`truncated` envelope keys are always present (they
     // survive the filter, which only prunes per-row keys, not envelope keys).
-    let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let returned = envelope
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let truncated = inject_truncation_signal(&mut envelope, offset);
-
-    if !fields_owned.is_empty() {
-        let rows = envelope
-            .get_mut("rows")
-            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
-            .take();
-        let filtered_rows =
-            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
-                .map_err(map_projection_error)?;
-        envelope["rows"] = filtered_rows;
-    }
-
-    let rendered = crate::format::render(&envelope, fmt)?;
-    println!("{rendered}");
-    if truncated {
-        warn_truncated(total, returned);
-    }
-    Ok(())
-}
-
-/// `list --meta-only`: call client.resources().list_meta() and emit the
-/// meta-list envelope, whose rows are now full `ResourceDetail`s (row + both
-/// meta tiers per item — the whole view minus each body). Injects each row's
-/// decorated `ref` (rows carry a title now), then applies the shared top-level
-/// projection filter to each row when `fields` is non-empty; the envelope keys
-/// (`rows`, `total`, `facets`) are preserved untouched.
-fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
-    use crate::actions::runtime;
-
-    let offset = params.offset.unwrap_or(0);
-    let api_params = list_api_params(&params, DEFAULT_META_LIST_LIMIT, true)?;
-    let fmt = params.format;
-    let fields_owned: Vec<String> = params.fields.to_vec();
-
-    let response = runtime::with_client(|client| {
-        Box::pin(async move {
-            client
-                .resources()
-                .list_meta(&api_params)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let mut envelope = serde_json::to_value(&response)
-        .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
-
-    // Identity-out: every printed row carries its decorated `ref` (parity with the
-    // full `list` path). Rows are `ResourceDetail` now, so they carry the title
-    // `inject_ref` needs.
-    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
-        for row in rows.iter_mut() {
-            inject_ref(row);
-        }
-    }
-
-    // Truncation signal — parity with the full `list` path (see `inject_truncation_signal`).
     let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
     let returned = envelope
         .get("rows")
@@ -1444,7 +1405,7 @@ pub fn delete(
 /// JSON response structurally impossible rather than merely test-detectable.
 pub(crate) fn build_show_document(
     metadata: serde_json::Value,
-    body: &str,
+    body: Option<&str>,
     edges: Option<EdgesReport>,
     lineage: Option<temper_core::types::lineage::ResourceLineage>,
     provenance: Option<Vec<temper_core::types::provenance::BlockProvenanceRow>>,
@@ -1454,10 +1415,16 @@ pub(crate) fn build_show_document(
         .as_object_mut()
         .ok_or_else(|| TemperError::Api("resource metadata is not a JSON object".to_string()))?;
 
-    obj.insert(
-        "content".to_string(),
-        serde_json::Value::String(body.to_string()),
-    );
+    // `None` omits the key rather than emitting `""` — the same distinction `ResourceView`
+    // draws with `content: Option<String>`, where absent means "not requested" and never
+    // "the body is empty". A `--without body` read that emitted `"content": ""` would be
+    // indistinguishable from a resource whose body really is empty.
+    if let Some(body) = body {
+        obj.insert(
+            "content".to_string(),
+            serde_json::Value::String(body.to_string()),
+        );
+    }
 
     if let Some(edges) = edges {
         obj.insert(
@@ -1488,55 +1455,80 @@ pub(crate) fn build_show_document(
 
 /// Show a resource's content.
 ///
-/// Cloud-only and context-free: the ref resolves to a `ResourceId`, the row +
+/// Cloud-only and context-free: the ref resolves to a `ResourceId`, the view +
 /// content are fetched by id (no `resolve_by_uri`, no doctype dispatch — the
 /// three former per-doctype shows rendered identically), the canonical
-/// projection file is refreshed best-effort, and the row+body is rendered.
+/// projection file is refreshed best-effort, and the view+body is rendered.
+///
+/// **Sections decide what is fetched, not just what is printed.** `--without body` skips the
+/// `GET /content` round-trip entirely, which is the whole reason the old `--meta-only` was
+/// cheap; it is the same saving under a name that composes. `--without open-meta` is a
+/// render-time drop rather than a saving, because `GET /api/resources/{id}` carries both tiers
+/// unconditionally — one call either way, so there is nothing to skip.
 pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
 
-    if params.meta_only {
-        return show_meta_only(config, id, params.format, params.fields);
-    }
+    let sections = resource_sections::resolve_sections(
+        params.with,
+        params.without,
+        resource_sections::show_defaults(),
+    )?;
+    let want_body = sections.contains(ResourceSection::Body);
 
     let config_clone = config.clone();
-    let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
+    let (mut metadata, body) = crate::actions::runtime::with_client(move |client| {
         Box::pin(async move {
             // `get` returns a `ResourceView` — the same shape a `list` row is, with the
-            // `open-meta` section filled. The tiers are what make the full `show` a superset
-            // of `--meta-only`.
+            // `open-meta` section filled. The tiers are what make a body-less `show` a
+            // strict subset of the full one.
             let detail = client
                 .resources()
                 .get(uuid::Uuid::from(id))
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let resp = client
-                .resources()
-                .content(uuid::Uuid::from(id))
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-            // Per-resource projection refresh — best-effort. The projection writer takes the
-            // row; the meta tiers reach the file via `resp`'s managed/open fields.
-            if let Err(e) = crate::projection::write_resource_file_from_parts(
-                &config_clone.vault_root,
-                &detail,
-                &resp,
-            ) {
-                crate::output::warning(format!("could not refresh projection file: {e}"));
-            }
+            let body = if want_body {
+                let resp = client
+                    .resources()
+                    .content(uuid::Uuid::from(id))
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+                // Per-resource projection refresh — best-effort, and only on the path that
+                // actually holds a body. The projection file IS the body plus frontmatter,
+                // so refreshing it from a body-less read would write a truncated file over a
+                // complete one: a cheap read must not damage the cache.
+                if let Err(e) = crate::projection::write_resource_file_from_parts(
+                    &config_clone.vault_root,
+                    &detail,
+                    &resp,
+                ) {
+                    crate::output::warning(format!("could not refresh projection file: {e}"));
+                }
+                Some(resp.markdown)
+            } else {
+                None
+            };
 
             let metadata = serde_json::to_value(&detail)
                 .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
-            Ok((metadata, resp.markdown))
+            Ok((metadata, body))
         })
     })?;
 
     inject_ref(&mut metadata);
+    if !sections.contains(ResourceSection::OpenMeta) {
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.remove("open_meta");
+        }
+    }
 
     // Fetch every requested section BEFORE rendering: the JSON arm folds them into
     // one document, so nothing may be printed until all of them are in hand.
-    let edges = if params.edges {
+    //
+    // `--edges` is the short spelling of `--with edges`; they are one request, not two, so
+    // they OR rather than each triggering a fetch.
+    let edges = if params.edges || sections.contains(ResourceSection::Edges) {
         Some(fetch_edges(id)?)
     } else {
         None
@@ -1554,15 +1546,24 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
 
     match params.format {
         crate::format::OutputFormat::Json => {
-            let doc = build_show_document(metadata, &body, edges, lineage, provenance)?;
-            let rendered = crate::format::render(&doc, params.format)?;
+            let doc = build_show_document(metadata, body.as_deref(), edges, lineage, provenance)?;
+            let filtered =
+                temper_core::projection::apply_top_level_filter(doc, params.fields, "id")
+                    .map_err(map_projection_error)?;
+            let rendered = crate::format::render(&filtered, params.format)?;
             crate::output::plain(rendered);
         }
         // Toon is the human TTY surface: keep the frontmatter+body document, then append
         // each requested section as its own block. The one-document contract is a JSON
         // (agent-surface) invariant, not a Toon one.
         crate::format::OutputFormat::Toon => {
-            let rendered = crate::format::render_resource_show(&metadata, &body, params.format)?;
+            let metadata =
+                temper_core::projection::apply_top_level_filter(metadata, params.fields, "id")
+                    .map_err(map_projection_error)?;
+            let rendered = match body.as_deref() {
+                Some(body) => crate::format::render_resource_show(&metadata, body, params.format)?,
+                None => crate::format::render(&metadata, params.format)?,
+            };
             crate::output::plain(rendered);
             if let Some(edges) = edges {
                 crate::output::plain(crate::format::render(&edges, params.format)?);
@@ -1604,55 +1605,6 @@ pub fn evidence(_config: &Config, r#ref: &str, format: crate::format::OutputForm
 
     let rendered = crate::format::render(&shape, format)?;
     crate::output::plain(rendered);
-    Ok(())
-}
-
-/// `show --meta-only`: the full `show` view **minus the body**.
-///
-/// Fetches the same `ResourceDetail` the default path does (the row flattened
-/// — title, doc_type, context, owner, the stage/seq/mode/effort projections —
-/// plus both `managed_meta` and `open_meta` tiers), and simply skips the
-/// separate `content` body fetch. So `--meta-only` is a strict subset of the
-/// full `show`: everything except the (expensive-to-reconstruct) body. Applies
-/// the shared top-level projection filter when `fields` is non-empty.
-///
-/// This deliberately hits `GET /api/resources/{id}` (row + tiers, no body
-/// reconstruction) rather than the narrower `GET /api/resources/{id}/meta`:
-/// the meta endpoint omits every identity/display field (title included), which
-/// made the projection too lossy to orient from.
-///
-/// Cloud-only and context-free: the id was already resolved from the ref by
-/// `show`; this calls `get` by id directly (no `resolve_by_uri`).
-fn show_meta_only(
-    _config: &Config,
-    id: temper_core::types::ids::ResourceId,
-    fmt: crate::format::OutputFormat,
-    fields: &[String],
-) -> Result<()> {
-    use crate::actions::runtime;
-
-    let fields_inner = fields.to_vec();
-
-    let detail = runtime::with_client(|client| {
-        Box::pin(async move {
-            client
-                .resources()
-                .get(uuid::Uuid::from(id))
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let mut value = serde_json::to_value(&detail)
-        .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    // Inject `ref` (and `context_ref`) before the `--fields` filter, exactly as the full
-    // `show` and `list` do: the anchor `id` is always preserved. Now that `--meta-only`
-    // carries the title, this produces the same decorated `ref` the full `show` emits.
-    inject_ref(&mut value);
-    let filtered = temper_core::projection::apply_top_level_filter(value, &fields_inner, "id")
-        .map_err(map_projection_error)?;
-    let rendered = crate::format::render(&filtered, fmt)?;
-    println!("{rendered}");
     Ok(())
 }
 
@@ -2451,9 +2403,20 @@ mod list_helpers_tests {
             goal: None,
             status: None,
             format: crate::format::OutputFormat::Json,
-            meta_only: false,
+            with: &[],
+            without: &[],
             fields: &[],
         }
+    }
+
+    /// The empty set — a default `list`.
+    fn no_sections() -> SectionSet {
+        SectionSet::default()
+    }
+
+    /// What `--with open-meta` resolves to.
+    fn open_meta_section() -> SectionSet {
+        [ResourceSection::OpenMeta].into_iter().collect()
     }
 
     /// Every `--flag` on `ListParams` lands in the wire field it names.
@@ -2488,7 +2451,7 @@ mod list_helpers_tests {
         params.limit = Some(7);
         params.offset = Some(3);
 
-        let api = list_api_params(&params, DEFAULT_LIST_LIMIT, false)
+        let api = list_api_params(&params, DEFAULT_LIST_LIMIT, &no_sections())
             .expect("a well-formed ListParams must build");
 
         assert_eq!(api.doc_type_name.as_deref(), Some("task"), "--type");
@@ -2524,12 +2487,12 @@ mod list_helpers_tests {
         let mut goal_params = list_params(&[], &[]);
         goal_params.doc_type = Some("goal");
         goal_params.status = Some("active");
-        let api = list_api_params(&goal_params, DEFAULT_LIST_LIMIT, false)
+        let api = list_api_params(&goal_params, DEFAULT_LIST_LIMIT, &no_sections())
             .expect("a goal-scoped --status must build");
         assert_eq!(api.status.as_deref(), Some("active"), "--status");
 
         let cogmap_params = list_params(&[], &cogmaps);
-        let api = list_api_params(&cogmap_params, DEFAULT_LIST_LIMIT, false)
+        let api = list_api_params(&cogmap_params, DEFAULT_LIST_LIMIT, &no_sections())
             .expect("a --cogmap with no --context must build");
         assert_eq!(
             api.cogmap_ids.as_deref(),
@@ -2543,15 +2506,17 @@ mod list_helpers_tests {
     /// This is what makes one builder safe to share. `list` and `list --meta-only` carried
     /// character-identical copies of the param build until they were collapsed; the risk of
     /// collapsing them is that a difference gets flattened away, so both surviving differences
-    /// are pinned. `meta_only` must stay `None` on the full path rather than `Some(false)` —
-    /// the field is `skip_serializing_if = "Option::is_none"`, so the two are different wires.
+    /// are pinned. `sections` must stay `None` on the default path rather than `Some("")` —
+    /// the field is `skip_serializing_if = "Option::is_none"`, so the two are different wires,
+    /// which is why `SectionSet::to_csv` answers `None` for the empty set.
     #[test]
-    fn the_two_list_paths_differ_only_in_page_cap_and_meta_flag() {
+    fn the_two_list_paths_differ_only_in_page_cap_and_sections() {
         let params = list_params(&[], &[]);
 
-        let full = list_api_params(&params, DEFAULT_LIST_LIMIT, false).expect("full list builds");
-        let meta =
-            list_api_params(&params, DEFAULT_META_LIST_LIMIT, true).expect("meta list builds");
+        let full =
+            list_api_params(&params, DEFAULT_LIST_LIMIT, &no_sections()).expect("full list builds");
+        let meta = list_api_params(&params, DEFAULT_META_LIST_LIMIT, &open_meta_section())
+            .expect("meta list builds");
 
         assert_eq!(full.limit, Some(DEFAULT_LIST_LIMIT as i64));
         assert_eq!(meta.limit, Some(DEFAULT_META_LIST_LIMIT as i64));
@@ -2587,13 +2552,13 @@ mod list_helpers_tests {
         params.all = true;
 
         assert_eq!(
-            list_api_params(&params, DEFAULT_LIST_LIMIT, false)
+            list_api_params(&params, DEFAULT_LIST_LIMIT, &no_sections())
                 .expect("builds")
                 .limit,
             None
         );
         assert_eq!(
-            list_api_params(&params, DEFAULT_META_LIST_LIMIT, true)
+            list_api_params(&params, DEFAULT_META_LIST_LIMIT, &open_meta_section())
                 .expect("builds")
                 .limit,
             None
@@ -3735,7 +3700,7 @@ mod resource_show_render_tests {
 }
 
 #[cfg(test)]
-mod list_meta_only_tests {
+mod list_section_projection_tests {
     use temper_core::projection::apply_top_level_filter;
 
     #[test]
@@ -3805,9 +3770,9 @@ mod inject_ref_tests {
         );
     }
 
-    /// A titleless row (the `--meta-only` projection) gets no `ref` rather than a
-    /// fabricated `-<uuid>` one. Surfaced by the #330 differential e2e: the malformed ref
-    /// made `--meta-only` disagree with the full `show` on the same key.
+    /// A titleless row gets no `ref` rather than a fabricated `-<uuid>` one. Surfaced by the
+    /// #330 differential e2e: the malformed ref made the then-`--meta-only` projection
+    /// disagree with the full `show` on the same key.
     #[test]
     fn inject_ref_skips_rows_without_a_title() {
         let mut row = serde_json::json!({
@@ -3823,7 +3788,7 @@ mod inject_ref_tests {
 }
 
 #[cfg(test)]
-mod show_meta_only_tests {
+mod show_projection_tests {
     use temper_core::projection::apply_top_level_filter;
     use temper_core::types::managed_meta::ManagedMeta;
     use temper_core::types::resource_view::ResourceView;
@@ -3840,7 +3805,7 @@ mod show_meta_only_tests {
     }
 
     #[test]
-    fn show_meta_only_fields_filter_preserves_anchor_and_managed_meta_only() {
+    fn show_fields_filter_preserves_anchor_and_managed_meta_only() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
         let filtered =
@@ -3857,7 +3822,7 @@ mod show_meta_only_tests {
     }
 
     #[test]
-    fn show_meta_only_no_fields_returns_full_response() {
+    fn show_no_fields_returns_full_response() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
         let unfiltered = apply_top_level_filter(value.clone(), &[], "id").expect("filter");
@@ -3892,7 +3857,7 @@ mod build_show_document_tests {
 
         let doc = build_show_document(
             metadata,
-            "# body\n",
+            Some("# body\n"),
             Some(edges),
             Some(lineage),
             Some(vec![]),
@@ -3922,8 +3887,8 @@ mod build_show_document_tests {
     #[test]
     fn build_show_document_omits_absent_sections() {
         let metadata = serde_json::json!({ "id": "11111111-1111-1111-1111-111111111111" });
-        let doc =
-            build_show_document(metadata, "b", None, None, None).expect("build show document");
+        let doc = build_show_document(metadata, Some("b"), None, None, None)
+            .expect("build show document");
 
         assert_eq!(doc["content"], "b");
         assert!(

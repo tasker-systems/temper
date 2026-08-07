@@ -310,6 +310,27 @@ impl SectionSet {
             .map(ResourceSection::from_str)
             .collect()
     }
+
+    /// Render as the `sections` query parameter — the inverse of [`SectionSet::parse_csv`].
+    ///
+    /// `None` for the empty set, because the wire field is an `Option<String>` and "asked
+    /// for no sections" is the parameter being *absent*, not present-and-empty. It lives
+    /// here rather than at the one call site so the two directions stay next to each other:
+    /// a caller that renders the set by hand renders it from `contains` checks, which means
+    /// adding a section to [`ResourceSection::ALL`] leaves that caller silently dropping it.
+    #[must_use]
+    pub fn to_csv(&self) -> Option<String> {
+        if self.0.is_empty() {
+            return None;
+        }
+        Some(
+            self.0
+                .iter()
+                .map(|section| section.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    }
 }
 
 impl FromIterator<ResourceSection> for SectionSet {
@@ -594,6 +615,31 @@ mod tests {
         assert!(
             !set.contains(ResourceSection::OpenMeta),
             "a section that was never added is not in the set"
+        );
+    }
+
+    /// [`SectionSet::to_csv`] round-trips through [`SectionSet::parse_csv`], and the empty
+    /// set renders as an absent parameter rather than an empty one.
+    ///
+    /// The round-trip is the assertion that matters: it is what lets a CLI hand the server
+    /// a set it built from `--with`/`--without` without either end restating the vocabulary.
+    #[test]
+    fn section_set_csv_round_trips_and_the_empty_set_is_absent() {
+        let set: SectionSet = [ResourceSection::OpenMeta, ResourceSection::Body]
+            .into_iter()
+            .collect();
+
+        let csv = set.to_csv().expect("a non-empty set renders");
+        assert_eq!(
+            SectionSet::parse_csv(&csv).expect("round-trip parses"),
+            set,
+            "to_csv and parse_csv must be inverses: {csv}"
+        );
+
+        assert_eq!(
+            SectionSet::default().to_csv(),
+            None,
+            "the empty set is an ABSENT `sections` param, never `sections=`"
         );
     }
 }

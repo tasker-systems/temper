@@ -327,7 +327,7 @@ goal --show-template` prints the section skeleton.
 ```bash
 # 1. Open — what is in force
 temper resource list --type goal --context @me/<ctx> --status active --all
-temper resource show <goal-ref>            # the register; --meta-only to skip the body
+temper resource show <goal-ref>            # the register; --without body to skip the prose
 
 # 2. Author or amend. The register is the body, so a body rewrite is the edit.
 #    `show` prints a serialized RECORD, not the markdown body — json or toon depending on the
@@ -412,7 +412,7 @@ downstream reader is that reader.
   are untouched, but a key you do supply is **replaced whole** — sending `{"witness":{"mode":"judged"}}`
   drops every other field of `witness`. Send the complete key value.
 - **`resource list` is capped and will lie by omission.** Default page is 20 rows (50 with
-  `--meta-only`). Check `truncated` in the response, and reach for `--all` before you conclude a
+  `--with open-meta`). Check `truncated` in the response, and reach for `--all` before you conclude a
   clause has no tasks, or that a set is complete.
 {%- else -%}
 - **Goal membership has two spellings and nothing ties them.** `create_resource`'s / `update_resource`'s
