@@ -1,5 +1,5 @@
 //! Substrate read dispatcher — the service-direct read paths (list / show / get_content / get_meta /
-//! search + the MCP enrichment list/meta-batch) over the one schema.
+//! search) over the one schema.
 //!
 //! These reads bypass the `Backend` trait by design (the trait projections are lossy and don't cover
 //! meta/body/content); they resolve against `temper_substrate::readback`. The resource read paths
@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::backend::db_backend::{map_readback_err, native_resource_row};
+use crate::backend::db_backend::map_readback_err;
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service::resolve_context_ref;
 use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
@@ -42,7 +42,7 @@ use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_substrate::readback;
 use temper_workflow::types::resource::{
-    ContentResponse, ResourceDetail, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
+    ContentResponse, ResourceFacets, ResourceSortField, SortOrder,
 };
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
@@ -320,10 +320,9 @@ async fn filtered_visible_page(
 
 /// One page of [`ResourceView`]s plus the paging state the page was actually cut with.
 ///
-/// The list read path's own shape, not a wire type. `ResourceListResponse` still carries
-/// `Vec<ResourceRow>` — the row-type swap is Task 7's, deliberately, because doing it here would
-/// leave every construction site uncompilable — so the envelope is assembled *from* this rather
-/// than the other way round.
+/// The list read path's own shape, not a wire type: it carries the paging state the page was cut
+/// with, which `ResourceListResponse::new` then turns into `returned`/`truncated`. The envelope is
+/// assembled *from* this rather than the other way round, so the derivation has one home.
 #[derive(Debug)]
 pub struct ResourceViewPage {
     /// This page's rows, in the order `filtered_visible_page`'s ORDER BY produced.
@@ -338,16 +337,28 @@ pub struct ResourceViewPage {
     pub offset: i64,
 }
 
-/// Fill onto an assembled view the sections the caller asked for, and only those.
+/// Fill onto a page of assembled views the sections the caller asked for, and only those.
 ///
 /// The **one** mapping from a section to the read that serves it, so `list` and `show` cannot
-/// disagree about what `body` or `open-meta` means. Each fill is its own round-trip by
-/// construction — that is what makes these sections rather than columns, and why the default
-/// (empty) set costs nothing beyond the batched identity read.
+/// disagree about what `body` or `open-meta` means. It takes a SLICE, not one view, so the page is
+/// the unit of work: `show` calls it through `std::slice::from_mut`, which is this same batch at
+/// size one rather than a second code path.
+///
+/// **`open-meta` costs ONE statement for the whole page**, via `readback::meta_batch`. The
+/// predecessor of this function ran `readback::meta` per view — itself two statements, an
+/// `ensure_visible` plus the read — so a 13-row page asking for the open tier cost **28 statements,
+/// measured**, exactly the N+1 `hit_identities` had already been written to end one section over.
+/// It is **3** now, and `list_page_open_meta_query_count_test` is what holds it there.
+///
+/// **`body` is deliberately still per-view.** Reconstructing markdown is a per-resource read with no
+/// batched form, and `--with body` over a page is a cost a caller opts into explicitly; the open
+/// tier is not, because the MCP list surface asks for it on every call.
 ///
 /// `content: None` and `open_meta: None` mean **not requested**, never "empty": an empty body is
 /// `Some(String::new())` and an empty open tier is `Some({})`. Both distinctions survive the wire
-/// (`ResourceView`'s `body_absent_is_distinguishable_from_body_empty`).
+/// (`ResourceView`'s `body_absent_is_distinguishable_from_body_empty`). A view whose id the batch
+/// did not return still gets `Some({})` — it was already read through a visibility-gated identity
+/// read, so "no property rows" is an EMPTY open tier, not a missing one.
 ///
 /// [`ResourceSection::Edges`] is deliberately unhandled. Edges are fetched *alongside* a view, not
 /// carried on it — [`ResourceView`] has no edges field — so there is nothing here to fill; the
@@ -359,21 +370,30 @@ pub struct ResourceViewPage {
 async fn fill_sections(
     pool: &PgPool,
     profile_id: ProfileId,
-    view: &mut ResourceView,
+    views: &mut [ResourceView],
     sections: &SectionSet,
 ) -> ApiResult<()> {
+    if views.is_empty() {
+        return Ok(());
+    }
     if sections.contains(ResourceSection::OpenMeta) {
-        let rb = readback::meta(pool, profile_id, view.id)
+        let ids: Vec<ResourceId> = views.iter().map(|view| view.id).collect();
+        let mut by_id = readback::meta_batch(pool, profile_id, &ids)
             .await
             .map_err(|e| ApiError::from(map_readback_err(e)))?;
-        view.open_meta = Some(serde_json::Value::Object(rb.open));
+        for view in views.iter_mut() {
+            let open = by_id.remove(&view.id).map(|rb| rb.open).unwrap_or_default();
+            view.open_meta = Some(serde_json::Value::Object(open));
+        }
     }
     if sections.contains(ResourceSection::Body) {
-        view.content = Some(
-            readback::body(pool, profile_id, view.id)
-                .await
-                .map_err(|e| ApiError::from(map_readback_err(e)))?,
-        );
+        for view in views.iter_mut() {
+            view.content = Some(
+                readback::body(pool, profile_id, view.id)
+                    .await
+                    .map_err(|e| ApiError::from(map_readback_err(e)))?,
+            );
+        }
     }
     Ok(())
 }
@@ -420,11 +440,13 @@ pub async fn list_views_select(
     for new_id in &page.page_ids {
         // An id absent from the batch means the row stopped being visible between the two
         // statements — a dropped row, not a fault. Same convention as the readback's own.
-        if let Some(mut view) = by_id.remove(new_id) {
-            fill_sections(pool, profile_id, &mut view, sections).await?;
+        if let Some(view) = by_id.remove(new_id) {
             views.push(view);
         }
     }
+    // Sections are filled for the PAGE, not per row: `open-meta` is one statement for all of them.
+    // Doing it inside the loop above is what made the open tier an N+1 (see `fill_sections`).
+    fill_sections(pool, profile_id, &mut views, sections).await?;
 
     Ok(ResourceViewPage {
         views,
@@ -467,24 +489,10 @@ pub async fn list_select(
     ))
 }
 
-// `view_to_row` and `view_to_detail` moved to `temper_workflow::types::resource` as
-// `impl From<ResourceView> for ResourceRow` / `for ResourceDetail`. Task 7 retired the wire's use
-// of both; what keeps them alive is temper-mcp, which still answers in `ResourceRow`-shaped
-// `EnrichedResource`s (`enrich_resources`, `build_enriched`) and reads `show_detail_select`. They
-// go with **Task 9**.
-
-/// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
-/// Visibility is gated inside `native_resource_row` (WS2); the typed `ReadbackError` is split by
-/// `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
-pub async fn show_select(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    id: ResourceId,
-) -> ApiResult<ResourceRow> {
-    native_resource_row(pool, profile_id, id)
-        .await
-        .map_err(ApiError::from)
-}
+// `show_select` (→ `ResourceRow`) and `show_detail_select` (→ `ResourceDetail`) are GONE, with the
+// two `From<ResourceView>` narrowings that fed them. Their last consumer was temper-mcp, which
+// answered in a `ResourceRow`-shaped `EnrichedResource`; it answers in `ResourceView` now, so both
+// projections and both source types are retired. `show_view_select` is the one door.
 
 /// `show`, as a [`ResourceView`] — one resource, the always-present managed tier, plus whatever
 /// `sections` asks for.
@@ -493,8 +501,8 @@ pub async fn show_select(
 /// one: a resource's identity does not depend on how it was reached, so a second per-resource
 /// query would be a second definition of the same shape. Visibility is gated inside that readback
 /// (WS2 — `resources_visible_to`); an id the principal cannot see comes back as no row, rendered
-/// here as the same `NotFound` message `map_readback_err` produces, so this door and
-/// `native_resource_row`'s cannot disagree about how a miss reads.
+/// here as the same `NotFound` message `map_readback_err` produces, so this door and the write
+/// path's readback cannot disagree about how a miss reads.
 ///
 /// Deliberately **not** gated on `ingest_state`: an interrupted segmented ingest stays fully
 /// addressable and readable via `show` (which reports the state) even though list and search
@@ -511,28 +519,8 @@ pub async fn show_view_select(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::NotFound(format!("resource {id} not found")))?;
-    fill_sections(pool, profile_id, &mut view, sections).await?;
+    fill_sections(pool, profile_id, std::slice::from_mut(&mut view), sections).await?;
     Ok(view)
-}
-
-/// `show_detail` — the incumbent envelope over [`show_view_select`], with the open tier asked for.
-///
-/// `ResourceDetail` carries both meta tiers, so the section request is `open-meta` (the managed
-/// tier is not a section — it is always present). The body is not part of this shape and is not
-/// requested; `GET /api/resources/{id}/content` remains its door.
-///
-/// This is the composition `temper-mcp`'s `get_resource` performed inline. It used to compose
-/// `native_resource_row` + `get_meta_select` — two round-trips whose managed tiers were read by two
-/// different queries; one view assembly plus one open-tier read is the same answer from one shape.
-pub async fn show_detail_select(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    id: ResourceId,
-) -> ApiResult<ResourceDetail> {
-    let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
-    Ok(ResourceDetail::from(
-        show_view_select(pool, profile_id, id, &sections).await?,
-    ))
 }
 
 /// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`
@@ -576,27 +564,12 @@ pub async fn get_meta_select(
     show_view_select(pool, profile_id, resource_id, &sections).await
 }
 
-/// `get_meta_batch` — the batched meta tier for many ids (the MCP `enrich_resources` path). Loops
-/// `get_meta` per id (each WS2-gated); a not-visible id is OMITTED from the map (parity with the prior
-/// batch's "absent = no meta"), while a genuine fault propagates.
-pub async fn get_meta_batch_select(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    ids: &[ResourceId],
-) -> ApiResult<HashMap<ResourceId, ResourceView>> {
-    let mut map = HashMap::with_capacity(ids.len());
-    for id in ids {
-        match get_meta_select(pool, profile_id, *id).await {
-            Ok(resp) => {
-                map.insert(*id, resp);
-            }
-            // A not-visible id is simply absent from the map; a genuine fault still propagates.
-            Err(ApiError::NotFound(_)) => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(map)
-}
+// `get_meta_batch_select` is GONE. It looped `get_meta_select` — itself three statements — once per
+// id, which made the MCP list surface cost ~3n. Its one caller was temper-mcp's `enrich_resources`,
+// and the meta a list row needs now arrives ON the row: MCP asks `list_select` for
+// `sections=open-meta`, so the managed tier comes from `hit_identities` and the open tier from
+// `readback::meta_batch`, both once for the whole page. A second batched meta door beside the
+// section vocabulary would be a second answer to "what are this resource's tiers".
 
 /// Surface A caps resolved once, before the SQL call (pure → unit-tested).
 pub(crate) struct ClampedSearch {

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pr.owner_id, pr.property_key, pr.property_value\n             FROM kb_properties pr\n             JOIN resources_visible_to($1) v ON v.resource_id = pr.owner_id\n            WHERE pr.owner_table = 'kb_resources'\n              AND pr.owner_id = ANY($2)\n              AND NOT pr.is_folded\n            ORDER BY pr.owner_id, pr.created, pr.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "property_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "property_value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2b072f0759b26687f0ca240311a066d0c7fa09dec6f82e1e1d9f1231924367a4"
+}

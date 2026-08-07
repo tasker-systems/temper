@@ -477,9 +477,14 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         .expect("update via DbBackend");
 
     // Read back the row via the substrate selector (NOT the retired get_visible).
-    let updated_resource = substrate_read::show_select(&pool, profile_id, resource.id)
-        .await
-        .expect("show_select after update");
+    let updated_resource = substrate_read::show_view_select(
+        &pool,
+        profile_id,
+        resource.id,
+        &temper_core::types::resource_view::SectionSet::default(),
+    )
+    .await
+    .expect("show_view_select after update");
     assert_eq!(updated_resource.id, resource.id);
 
     // 3. Verify the server-derived body_hash advanced (the body changed). The
@@ -871,12 +876,11 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 // WS6 Spec B Task 4: get_resource routes through substrate_read
 // ---------------------------------------------------------------------------
 
-/// Drive the production MCP `get_resource` tool fn end-to-end (row via
-/// `show_select`, meta via `get_meta_select`, body via `get_content_select`,
-/// assembled by `build_enriched`). Proves the contract through the *production
-/// caller* (`TemperMcpService` → `require_profile` → `get_resource`): the
-/// response carries managed_meta + open_meta off the meta selector, plus a
-/// second body part under `include_content`.
+/// Drive the production MCP `get_resource` tool fn end-to-end (identity, both meta tiers and the
+/// body all composed by `substrate_read::show_view_select` from one section set). Proves the
+/// contract through the *production caller* (`TemperMcpService` → `require_profile` →
+/// `get_resource`): the response carries managed_meta + open_meta, plus a second body part under
+/// `include_content`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     use temper_services::config::ApiConfig;
@@ -1005,11 +1009,11 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     );
     assert!(
         enriched.get("managed_meta").is_some(),
-        "managed_meta sourced via get_meta_select"
+        "managed_meta joined by `readback::hit_identities`"
     );
     assert_eq!(
         enriched["open_meta"]["tags"][0], "selector",
-        "open_meta sourced via get_meta_select"
+        "open_meta filled from the `open-meta` section"
     );
     let body_text = parts[1]["text"].as_str().expect("body part text");
     assert!(
@@ -1023,11 +1027,11 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
 // ---------------------------------------------------------------------------
 
 /// Drive the production MCP `list_resources` tool fn end-to-end (rows via
-/// `substrate_read::list_select` filtered by `context_ref`, enriched per-row
-/// via `enrich_resources`). Proves the contract through the *production caller*
-/// (`TemperMcpService` → `require_profile` → `list_resources`): the doctype
-/// filter narrows the array to matching rows, and every row carries managed_meta
-/// + a non-empty context_name.
+/// `substrate_read::list_select` filtered by `context_ref`, with the `open-meta` section asked for
+/// and embedding readiness attached by `enrich_resources`). Proves the contract through the
+/// *production caller* (`TemperMcpService` → `require_profile` → `list_resources`): the doctype
+/// filter narrows the envelope's rows to matching ones, and every row carries managed_meta + a
+/// non-empty context_name.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     use temper_services::config::ApiConfig;
@@ -1158,14 +1162,23 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     .await
     .expect("list_resources ok");
 
+    // The tool answers in an ENVELOPE now, not a bare array: `rows` beside the paging state
+    // (`total`/`returned`/`truncated`/`limit`/`offset`) the shipped agent skill instructs every
+    // agent to read, and which this surface emitted none of until the `ResourceView` convergence.
     let v = serde_json::to_value(&result).expect("serialize result");
     let text = v["content"][0]["text"].as_str().expect("content text");
-    let rows: serde_json::Value = serde_json::from_str(text).expect("parse rows array");
-    let rows = rows.as_array().expect("rows is an array");
+    let page: serde_json::Value = serde_json::from_str(text).expect("parse list envelope");
+    let rows = page["rows"].as_array().expect("rows is an array");
     assert_eq!(
         rows.len(),
         1,
         "doctype=research filter narrows to exactly the one research row"
+    );
+    assert_eq!(page["returned"], 1, "`returned` is this page's row count");
+    assert_eq!(page["total"], 1, "`total` is the filtered match count");
+    assert_eq!(
+        page["truncated"], false,
+        "the whole filtered set came back, so nothing is claimed hidden"
     );
     let row = &rows[0];
     assert_eq!(
@@ -1178,11 +1191,11 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     );
     assert!(
         row.get("managed_meta").is_some(),
-        "managed_meta sourced via enrich_resources (get_meta_batch)"
+        "managed_meta joined by `readback::hit_identities`"
     );
     assert_eq!(
         row["open_meta"]["tags"][0], "list-selector-research",
-        "open_meta sourced via enrich_resources"
+        "open_meta filled from the `open-meta` section the tool asks for"
     );
 
     // Unknown doc_type filter → empty result (NOT an error). Pre-collapse the
@@ -1212,10 +1225,15 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     .expect("unknown doc_type filter resolves to an empty list, not an error");
     let v = serde_json::to_value(&empty).expect("serialize result");
     let text = v["content"][0]["text"].as_str().expect("content text");
-    let rows: serde_json::Value = serde_json::from_str(text).expect("parse rows array");
+    let page: serde_json::Value = serde_json::from_str(text).expect("parse list envelope");
     assert_eq!(
-        rows.as_array().expect("rows is an array").len(),
+        page["rows"].as_array().expect("rows is an array").len(),
         0,
         "an unknown doc_type filter matches zero rows"
+    );
+    assert_eq!(page["returned"], 0);
+    assert_eq!(
+        page["truncated"], false,
+        "an empty page of an empty set hides nothing"
     );
 }

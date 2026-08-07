@@ -161,7 +161,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "List resources in the knowledge base. Filter by context and/or document type. Returns most recent first."
+        description = "List resources in the knowledge base. Filter by context and/or document type. Returns most recent first. The response is a page: `rows` plus `total` (all matching rows), `returned`, `truncated`, `limit` and `offset`. When `truncated` is true there are matching rows you have not seen — do not conclude a resource is absent, or a set complete, from a truncated page; raise `limit`, page with `offset`, or narrow the filters. Each row carries a decorated `ref` (`slug-<uuid>`) you can pass straight back to any tool that takes one."
     )]
     async fn list_resources(
         &self,

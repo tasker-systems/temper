@@ -64,12 +64,12 @@ use temper_core::types::graph_context::ContextPanorama;
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::TerritoryOverview;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::resource_view::ResourceView;
 use temper_services::backend::DbBackend;
 use temper_services::services::context_graph_service::{self, ResidualMemberQuery};
 use temper_services::services::context_service::resolve_context_ref;
 use temper_services::services::{event_service, graph_service};
 use temper_workflow::operations::{Backend, ShowResource, Surface};
-use temper_workflow::types::resource::ResourceDetail;
 
 // ── Handler-mirrored constants ─────────────────────────────────────────────────────────────────
 // These are the surface defaults, not new choices. `graph.rs` holds the originals; a divergence
@@ -179,7 +179,7 @@ struct AtlasViewData {
     neighborhood: Option<AtlasSubgraph>,
     selection: SelectedElement,
     trail: Option<EventTrail>,
-    resource_row: Option<ResourceDetail>,
+    resource_row: Option<ResourceView>,
     filters: GraphFilters,
     focus_path: Vec<Focus>,
     crumb_territory: Option<CrumbTerritory>,
@@ -525,7 +525,7 @@ async fn read_resource_row(
     pool: &PgPool,
     profile: ProfileId,
     node: Uuid,
-) -> Result<ResourceDetail, String> {
+) -> Result<ResourceView, String> {
     let backend = DbBackend::new(pool.clone(), profile);
     backend
         .show_resource(ShowResource {
@@ -533,10 +533,7 @@ async fn read_resource_row(
             origin: Surface::ApiHttp,
         })
         .await
-        // `.into()` narrows the `ResourceView` the trait now returns onto the `ResourceDetail`
-        // `/api/resources/{id}` still answers in — this example mirrors that endpoint, so it
-        // narrows where the endpoint does. Transitional: Task 7 moves the wire to the view.
-        .map(|out| out.value.into())
+        .map(|out| out.value)
         .map_err(|e| format!("resource row {node}: {e}"))
 }
 

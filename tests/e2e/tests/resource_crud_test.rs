@@ -326,7 +326,7 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
     );
 }
 
-/// The native ResourceRow drops the four shim fields (kb_doc_type_id, slug,
+/// The native resource shape drops the four shim fields (kb_doc_type_id, slug,
 /// managed_hash, open_hash) and keeps name-only doc type. Asserts on the
 /// serialized wire shape so it fails (red) while the fields still exist.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -365,20 +365,20 @@ async fn resource_row_native_shape_drops_shim_fields(pool: sqlx::PgPool) {
         .await
         .expect("get failed");
 
-    let json = serde_json::to_value(&fetched).expect("serialize ResourceRow");
+    let json = serde_json::to_value(&fetched).expect("serialize the resource view");
     let obj = json
         .as_object()
-        .expect("ResourceRow serializes to an object");
+        .expect("a resource serializes to an object");
     for k in ["kb_doc_type_id", "slug", "managed_hash", "open_hash"] {
         assert!(
             !obj.contains_key(k),
-            "native ResourceRow must drop `{k}`, got: {json}"
+            "the native resource shape must drop `{k}`, got: {json}"
         );
     }
     assert_eq!(
         obj.get("doc_type_name").and_then(|v| v.as_str()),
         Some("research"),
-        "native ResourceRow keeps name-only doc type"
+        "the native resource shape keeps name-only doc type"
     );
 }
 

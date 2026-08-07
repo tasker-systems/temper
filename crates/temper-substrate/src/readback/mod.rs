@@ -305,6 +305,81 @@ pub async fn meta(
     .fetch_all(pool)
     .await?;
 
+    classify_properties(
+        new_id,
+        rows.into_iter()
+            .map(|row| (row.property_key, row.property_value)),
+    )
+}
+
+/// The batched [`meta`] — the managed/open/doc_type split for MANY resources in ONE statement.
+///
+/// Exists because the per-resource loop above it was the surviving N+1 on the list surface: the
+/// `open-meta` section fill ran `meta` once per page row (and `meta` itself is two statements, its
+/// own `ensure_visible` plus the read), so a 13-row page asking for the open tier cost **28
+/// statements, measured** — the same defect [`hit_identities`] was written to end for search, one
+/// section down. It is 3 now.
+///
+/// Visibility is gated by the `resources_visible_to` JOIN rather than by `ensure_visible`, matching
+/// the set reads in this module: a resource the principal cannot see is simply ABSENT from the map,
+/// never an error. That is the right convention here — every caller has already read the resource's
+/// identity through a visibility-gated read, so a miss means the row disappeared between the two
+/// statements, which is a dropped row rather than a fault.
+///
+/// The classification is `classify_properties`, shared verbatim with [`meta`]: the `facet` merge
+/// and the newest-wins rule are subtle enough that a second copy would drift, and a drift here means
+/// two doors disagreeing about what a resource's open tier IS.
+pub async fn meta_batch(
+    pool: &PgPool,
+    principal: ProfileId,
+    ids: &[ResourceId],
+) -> std::result::Result<std::collections::HashMap<ResourceId, ReconstructedMeta>, ReadbackError> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let raw: Vec<Uuid> = ids.iter().map(|id| id.uuid()).collect();
+    // `ORDER BY owner_id` first so each resource's rows arrive contiguously; `created, id` within a
+    // resource is `meta`'s ordering verbatim, which is what makes newest-wins mean the same thing.
+    let rows = sqlx::query!(
+        r#"SELECT pr.owner_id, pr.property_key, pr.property_value
+             FROM kb_properties pr
+             JOIN resources_visible_to($1) v ON v.resource_id = pr.owner_id
+            WHERE pr.owner_table = 'kb_resources'
+              AND pr.owner_id = ANY($2)
+              AND NOT pr.is_folded
+            ORDER BY pr.owner_id, pr.created, pr.id"#,
+        principal.uuid(),
+        &raw,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut grouped: Vec<(ResourceId, Vec<(String, Value)>)> = Vec::new();
+    for row in rows {
+        let id = ResourceId::from(row.owner_id);
+        match grouped.last_mut() {
+            Some((last, props)) if *last == id => {
+                props.push((row.property_key, row.property_value));
+            }
+            _ => grouped.push((id, vec![(row.property_key, row.property_value)])),
+        }
+    }
+
+    grouped
+        .into_iter()
+        .map(|(id, props)| Ok((id, classify_properties(id, props)?)))
+        .collect()
+}
+
+/// The §7 fate split for one resource's property rows — the **one** implementation, shared by
+/// [`meta`] (one statement per resource) and [`meta_batch`] (one statement for many).
+///
+/// `rows` must arrive in `created, id` order, which is what makes the last-write-wins inserts below
+/// mean *newest wins*.
+fn classify_properties(
+    new_id: ResourceId,
+    rows: impl IntoIterator<Item = (String, Value)>,
+) -> std::result::Result<ReconstructedMeta, ReadbackError> {
     let mut managed = Map::new();
     let mut open = Map::new();
     let mut doc_type: Option<String> = None;
@@ -328,9 +403,7 @@ pub async fn meta(
     // Per-mark weight still does not appear here — `open_meta` is a key→value map with
     // nowhere to put it. The facet read remains the faithful door; this one is honest
     // about the marks, not about their strength.
-    for row in rows {
-        let key = row.property_key;
-        let value = row.property_value;
+    for (key, value) in rows {
         if key == "doc_type" {
             // The authoritative doctype is a JSON string scalar; surface it as the typed field.
             doc_type = Some(match value {

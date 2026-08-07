@@ -3,10 +3,10 @@
 //! Reads delegate to `temper_substrate::readback`; writes compose `temper_substrate::writes`. The SQL is
 //! unqualified against the one schema (`public`); the connection's search_path resolves all references.
 //!
-//! The full-row read (`show_resource`) maps the substrate readback (`readback::resource_row`) to the
-//! native `ResourceRow` — real timestamps (event-sourced from `kb_events.occurred_at`), name-only
-//! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
-//! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
+//! Every read and write command answers in `ResourceView` — real timestamps (event-sourced from
+//! `kb_events.occurred_at`), name-only doc type, no fabricated fields. The §7-dissolved fields
+//! (`kb_doc_type_id`, `slug`, `managed_hash`, `open_hash`) are gone. See `native_resource_view` and
+//! the historical §9 parity floor.
 
 use crate::authz::{
     authorize, citation_subject, require_machine_principal, AuditAuthority, AuditorJobAuthority,
@@ -47,7 +47,6 @@ use temper_workflow::operations::{
     OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship,
     ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
-use temper_workflow::types::resource::ResourceRow;
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
@@ -488,9 +487,9 @@ fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(),
 /// identity does not depend on whether it was just written or merely looked at. Visibility is gated
 /// inside that readback (WS2 — `resources_visible_to`).
 ///
-/// Asks for **no sections**: `ResourceRow`, which this replaces on `create`/`update`/`annotate`,
-/// carried neither meta tier nor the body, and `managed_meta` is not a section — it is always
-/// present. `show_resource` asks for `open-meta` on top, because `ResourceDetail` carried both
+/// Asks for **no sections**: the row shape this replaced on `create`/`update`/`annotate` carried
+/// neither meta tier nor the body, and `managed_meta` is not a section — it is always present.
+/// `show_resource` asks for `open-meta` on top, because the detail shape it replaced carried both
 /// tiers.
 async fn native_resource_view(
     pool: &PgPool,
@@ -507,48 +506,12 @@ async fn native_resource_view(
     .map_err(TemperError::from)
 }
 
-/// Maps the substrate readback (`readback::resource_row`) to the native `ResourceRow` — real
-/// timestamps (event-sourced from `kb_events.occurred_at`), name-only doc type, no fabrication.
-/// Shared by `show_resource` and the read selector arms (`list_select`, `show_select`,
-/// `search_select`). The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`, `open_hash`)
-/// are absent; `doc_type_name` is authoritative.
-pub(crate) async fn native_resource_row(
-    pool: &PgPool,
-    principal: ProfileId,
-    new_id: ResourceId,
-) -> Result<ResourceRow, TemperError> {
-    let p = readback::resource_row(pool, principal, new_id)
-        .await
-        .map_err(map_readback_err)?;
-    Ok(ResourceRow {
-        id: p.re_minted_id,
-        kb_context_id: p.re_minted_context_id,
-        origin_uri: p.origin_uri,
-        title: p.title,
-        originator_profile_id: p.originator_profile_id,
-        owner_profile_id: p.owner_profile_id,
-        is_active: p.is_active,
-        created: p.created,
-        updated: p.updated,
-        context_name: p.context_name,
-        doc_type_name: p.doc_type_name,
-        owner_handle: p.owner_handle,
-        context_slug: p.context_slug,
-        context_owner_ref: p.context_owner_ref,
-        cogmap_id: p.cogmap_id,
-        cogmap_name: p.cogmap_name,
-        stage: p.stage,
-        seq: p.seq,
-        mode: p.mode,
-        effort: p.effort,
-        body_hash: p.body_hash,
-        // The column is CHECK-constrained to {in_progress, complete}, so `from_wire` is total in
-        // practice; an unparseable value would be a schema violation, surfaced (not coerced) as None.
-        ingest_state: temper_workflow::types::IngestState::from_wire(&p.ingest_state),
-        // Likewise CHECK-constrained to {verbatim, derived}; `from_wire` is total in practice.
-        body_storage: temper_workflow::types::resource::BodyStorage::from_wire(&p.body_storage),
-    })
-}
+// `native_resource_row` is GONE with `ResourceRow` itself. It mapped `readback::resource_row` onto
+// the retired row shape; every caller — `show_select`, and the update path's read of its own current
+// row — reads `native_resource_view` / `show_view_select` now. Both select `r.created`/`r.updated`
+// from `kb_resources` (populated from `kb_events.occurred_at` at write time), so the "real
+// timestamps, no fabrication" property this function carried is a property of the columns, not of
+// the projection, and survives its removal.
 
 /// The Postgres-backed backend. Holds a pool + the caller profile. The caller's profile id is the
 /// substrate principal directly (synthesis preserves profile ids verbatim, WS2); reads/writes are
@@ -1981,7 +1944,7 @@ impl Backend for DbBackend {
             // carries no doc_type/context, so take the EFFECTIVE values from the current row
             // (already visibility-gated via `check_can_modify_next`).
             let current =
-                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+                native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
             // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
             // `move_to.type_to` (the file-move path); else the doc type is unchanged.
             let effective_doc_type = incoming

@@ -1,12 +1,11 @@
 //! Resource API types — shared between temper-api and temper-client.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::managed_meta::ManagedMeta;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::ResourceId;
 use temper_core::types::resource_view::ResourceView;
 
 /// The two body-state enums moved to [`temper_core::types::resource`] — both are fields of
@@ -15,180 +14,15 @@ use temper_core::types::resource_view::ResourceView;
 /// call site resolves unchanged.
 pub use temper_core::types::resource::{BodyStorage, IngestState};
 
-/// Row type for resource listings — includes joined display fields
-/// and managed_meta projections from `vault_resources_browse` view.
-///
-/// **Off the wire since Task 7** — every read and write surface answers in
-/// [`ResourceView`]. What still reads this shape is temper-mcp's `EnrichedResource`
-/// (`build_enriched`/`enrich_resources`); **Task 9** retires both, and this type with them.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct ResourceRow {
-    pub id: ResourceId,
-    /// Home context — `Some` for a context-homed resource, `None` when the
-    /// resource is homed in a cognitive map (Surface B). Mutually exclusive
-    /// with the `cogmap_*` fields below.
-    pub kb_context_id: Option<ContextId>,
-    pub origin_uri: String,
-    pub title: String,
-    pub originator_profile_id: ProfileId,
-    pub owner_profile_id: ProfileId,
-    pub is_active: bool,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-    // Joined display fields — `context_*` present for a context home,
-    // `cogmap_*` for a cogmap home.
-    pub context_name: Option<String>,
-    pub doc_type_name: String,
-    pub owner_handle: String,
-    /// Slug of the home context (the natural-key half of `@owner/slug`).
-    /// `None` for a cogmap-homed resource.
-    pub context_slug: Option<String>,
-    /// Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
-    /// Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
-    /// `None` for a cogmap-homed resource.
-    pub context_owner_ref: Option<String>,
-    /// Set when the resource is homed in a cognitive map (Surface B).
-    /// Mutually exclusive with the `context_*` fields.
-    pub cogmap_id: Option<Uuid>,
-    /// Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.
-    pub cogmap_name: Option<String>,
-    // Managed meta projections
-    pub stage: Option<String>,
-    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
-    pub seq: Option<i64>,
-    pub mode: Option<String>,
-    pub effort: Option<String>,
-    /// SHA-256 hash of the resource body content, from `kb_resource_manifests`.
-    /// `None` when no manifest row exists (resource created via POST without a
-    /// body trio, or the manifest join returned NULL).
-    pub body_hash: Option<String>,
-    /// Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only
-    /// by the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete`
-    /// for every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not
-    /// yet been finalized (remaining blocks not landed), which is **excluded from list and search** and
-    /// readable only by `show`.
-    ///
-    /// Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the
-    /// vectors ready?* This one asks *are the bytes all here?*
-    ///
-    /// `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
-    /// always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
-    pub ingest_state: Option<IngestState>,
-    /// What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte**
-    /// from the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries
-    /// its source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform:
-    /// CRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only
-    /// partial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.
-    ///
-    /// `Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`),
-    /// so a current server always sends it; `None` means the server predates W2 PR 3.
-    pub body_storage: Option<BodyStorage>,
-}
-
-impl ResourceRow {
-    /// The display name of this resource's home — its context name, or its cognitive-map
-    /// name when cogmap-homed. `None` only if neither is set (should not occur). The single
-    /// accessor for the `context_* | cogmap_*` mutual exclusion: surfaces apply their own
-    /// placeholder for the `None` case rather than re-deriving the fallback chain.
-    pub fn home_display(&self) -> Option<&str> {
-        self.context_name.as_deref().or(self.cogmap_name.as_deref())
-    }
-}
-
-/// The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.
-///
-/// **Off the wire since Task 7** — `GET /api/resources/{id}` answers in [`ResourceView`].
-/// What still reads this shape is temper-mcp's `get_resource`, via
-/// `substrate_read::show_detail_select`; **Task 9** retires both.
-///
-/// No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the
-/// `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason) — which is
-/// the constraint `ResourceView` was built to satisfy structurally.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-pub struct ResourceDetail {
-    #[serde(flatten)]
-    pub row: ResourceRow,
-    /// Typed managed (`temper-*`) frontmatter. `None` only if the manifest row predates
-    /// meta population.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_meta: Option<ManagedMeta>,
-    /// Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
-    /// `None` only if the manifest row predates meta population.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_meta: Option<serde_json::Value>,
-}
-
-// ─── Transitional narrowings between `ResourceView` and the incumbent shapes ───────────
+// `ResourceRow` and `ResourceDetail` are GONE, and with them the two `From<ResourceView>`
+// narrowings that kept them reachable. Every read and write surface — `/api/resources`,
+// `/api/ingest`, `GET /meta`, both search arms, the MCP tools and the CLI — answers in
+// [`ResourceView`]. What held the pair up last was temper-mcp's `ResourceRow`-shaped
+// `EnrichedResource`; that shape is the view now, so nothing narrows and nothing widens.
 //
-// Task 7 moved the **wire** to `ResourceView` — `/api/resources`, `/api/ingest`, `/meta`, the
-// temper-client and the CLI all speak it now, and the third impl (`From<ResourceRow> for
-// ResourceView`, which `CloudBackend` needed to widen a row the client no longer returns) went
-// with it.
-//
-// **The two below are Task 9's.** What holds them up is temper-mcp, which still answers in
-// `EnrichedResource` — a `ResourceRow`-shaped projection built by `build_enriched` — and reads
-// `substrate_read::show_detail_select`. Both narrow a view the read paths already produce; when
-// the MCP tools answer in `ResourceView`, both impls and `ResourceRow`/`ResourceDetail`
-// themselves have no remaining consumer.
-
-/// Narrow a [`ResourceView`] back onto the incumbent [`ResourceRow`].
-///
-/// The four workflow columns come back out of `managed_meta`, which is exactly the
-/// losslessness claim `ResourceView` makes: they did not go away, they went home.
-///
-/// **Transitional — deleted by Task 9**, with temper-mcp's `EnrichedResource`.
-impl From<ResourceView> for ResourceRow {
-    fn from(view: ResourceView) -> Self {
-        Self {
-            id: view.id,
-            kb_context_id: view.kb_context_id,
-            origin_uri: view.origin_uri,
-            title: view.title,
-            originator_profile_id: view.originator_profile_id,
-            owner_profile_id: view.owner_profile_id,
-            is_active: view.is_active,
-            created: view.created,
-            updated: view.updated,
-            context_name: view.context_name,
-            doc_type_name: view.doc_type_name,
-            owner_handle: view.owner_handle,
-            context_slug: view.context_slug,
-            context_owner_ref: view.context_owner_ref,
-            cogmap_id: view.cogmap_id,
-            cogmap_name: view.cogmap_name,
-            stage: view.managed_meta.stage,
-            seq: view.managed_meta.seq,
-            mode: view.managed_meta.mode,
-            effort: view.managed_meta.effort,
-            body_hash: view.body_hash,
-            ingest_state: view.ingest_state,
-            body_storage: view.body_storage,
-        }
-    }
-}
-
-/// Narrow a [`ResourceView`] onto the incumbent [`ResourceDetail`] (row + both meta tiers).
-///
-/// `managed_meta` is `Some` unconditionally because on the view it is not an `Option` at
-/// all; `open_meta` rides through as the caller's section request left it.
-///
-/// **Transitional — deleted by Task 9**, with temper-mcp's `get_resource`.
-impl From<ResourceView> for ResourceDetail {
-    fn from(mut view: ResourceView) -> Self {
-        let managed_meta = view.managed_meta.clone();
-        let open_meta = view.open_meta.take();
-        Self {
-            row: view.into(),
-            managed_meta: Some(managed_meta),
-            open_meta,
-        }
-    }
-}
+// The four hoisted workflow columns (`stage`/`seq`/`mode`/`effort`) did not go away with the row:
+// they live in [`ManagedMeta`] under their canonical `temper-*` names, which is what made dropping
+// them lossless (`ResourceView::no_workflow_field_is_hoisted`).
 
 /// Sort field for resource listing.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -572,72 +406,6 @@ pub struct DeleteResponse {
 }
 
 #[cfg(test)]
-mod resource_detail_tests {
-    use super::*;
-
-    pub(super) fn sample_resource_row() -> ResourceRow {
-        ResourceRow {
-            id: ResourceId::from(Uuid::nil()),
-            kb_context_id: None,
-            origin_uri: String::new(),
-            title: "A Node".to_string(),
-            originator_profile_id: ProfileId::from(Uuid::nil()),
-            owner_profile_id: ProfileId::from(Uuid::nil()),
-            is_active: true,
-            created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            context_name: None,
-            doc_type_name: "concept".to_string(),
-            owner_handle: "someone".to_string(),
-            context_slug: None,
-            context_owner_ref: None,
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
-            body_hash: None,
-            ingest_state: Some(IngestState::Complete),
-            body_storage: Some(BodyStorage::Derived),
-        }
-    }
-
-    #[test]
-    fn resource_detail_flattens_row_and_carries_both_meta_tiers() {
-        let detail = ResourceDetail {
-            row: sample_resource_row(),
-            managed_meta: Some(ManagedMeta {
-                mode: Some("build".to_string()),
-                ..ManagedMeta::default()
-            }),
-            open_meta: Some(serde_json::json!({ "custom": "value" })),
-        };
-
-        let v = serde_json::to_value(&detail).expect("serialize");
-
-        // ResourceRow's fields are flattened to the top level, not nested under `row`.
-        assert!(v.get("row").is_none(), "row must be flattened: {v}");
-        assert!(v.get("id").is_some(), "flattened id: {v}");
-        assert_eq!(v["title"], "A Node");
-        assert_eq!(v["managed_meta"]["temper-mode"], "build");
-        assert_eq!(v["open_meta"]["custom"], "value");
-    }
-
-    #[test]
-    fn resource_detail_omits_absent_meta_tiers() {
-        let detail = ResourceDetail {
-            row: sample_resource_row(),
-            managed_meta: None,
-            open_meta: None,
-        };
-        let v = serde_json::to_value(&detail).expect("serialize");
-        assert!(v.get("managed_meta").is_none(), "{v}");
-        assert!(v.get("open_meta").is_none(), "{v}");
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -790,6 +558,8 @@ mod tests {
 #[cfg(test)]
 mod list_paging_tests {
     use super::*;
+    use chrono::{DateTime, Utc};
+    use temper_core::types::ids::ProfileId;
 
     /// A page of `n` rows. Only the count matters here — `returned` is `rows.len()`
     /// and nothing in the derivation reads a row's fields.
