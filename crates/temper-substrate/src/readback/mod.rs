@@ -1515,13 +1515,39 @@ pub struct WideHit {
     pub vec_norm: f32,
 }
 
+/// What both arms take besides their own retrieval input.
+///
+/// A params struct because the alternative is seven positional arguments per arm, four of which are
+/// `Option`s of the same shape — and because `limit`/`offset` mean the same thing to both arms and
+/// should not be able to drift apart in two signatures.
+#[derive(Debug, Clone, Copy)]
+pub struct ArmQuery<'a> {
+    pub principal: ProfileId,
+    /// The anchor pair, `None` ⇒ unscoped.
+    pub anchor: Option<HomeAnchor>,
+    /// Filter on the resource's `doc_type` property. `None` ⇒ no filter.
+    pub doc_type: Option<&'a str>,
+    /// Rows to fetch. `None` ⇒ unbounded, which is `LIMIT NULL` in SQL.
+    ///
+    /// **The read path deliberately asks for one MORE row than it will return.** That extra row is
+    /// how an arm tells "you have paged past the end" from "nothing matched" without paying for a
+    /// second count — the two are indistinguishable from an empty page alone, and reporting
+    /// `NoMatch` with "try rephrasing" to a caller who simply walked off the end is a wrong answer
+    /// to the question they asked.
+    pub limit: Option<i32>,
+    pub offset: i32,
+}
+
 /// The exact arm. Scope is the anchor pair, taken as a [`HomeAnchor`] so the `(table, id)` literal is
 /// derived in one place rather than at each call site — `None` ⇒ unscoped.
+///
+/// Ordering and paging are the SQL function's, not this caller's: `ORDER BY fts_norm DESC,
+/// resource_id` then `LIMIT`/`OFFSET`. The tiebreak is part of the contract — without a total order
+/// a tied row can appear on two pages or on none.
 pub async fn search_exact(
     pool: &PgPool,
-    principal: ProfileId,
     query: Option<&str>,
-    anchor: Option<HomeAnchor>,
+    arm: ArmQuery<'_>,
 ) -> Result<Vec<ExactHit>> {
     // Compile-time `query!`, unlike its sibling [`search_wide`]: this arm binds no vector, so the
     // module note's `::vector` exemption never covered it and a runtime read here would sit outside
@@ -1532,11 +1558,14 @@ pub async fn search_exact(
     // regardless of the declaration, so without them the row fields would arrive as `Option`.
     let rows = sqlx::query!(
         r#"SELECT resource_id AS "resource_id!", fts_norm AS "fts_norm!"
-             FROM search_exact($1, $2, $3, $4)"#,
-        principal.uuid(),
+             FROM search_exact($1, $2, $3, $4, $5, $6, $7)"#,
+        arm.principal.uuid(),
         query,
-        anchor.map(|a| a.table()),
-        anchor.map(|a| a.uuid()),
+        arm.anchor.map(|a| a.table()),
+        arm.anchor.map(|a| a.uuid()),
+        arm.doc_type,
+        arm.limit,
+        arm.offset,
     )
     .fetch_all(pool)
     .await?;
@@ -1553,26 +1582,32 @@ pub async fn search_exact(
 /// The wide arm. Runtime `sqlx::query_as` — the `::vector` cast forbids the compile-time macros
 /// (module note).
 ///
-/// `k` bounds the ANN draw on the UNSCOPED branch only; the scoped branch is exhaustive and ignores
-/// it. `hnsw.ef_search` is pinned on the SQL function at or above the `k` used here — see
+/// `k` bounds the ANN draw in CHUNKS on the UNSCOPED branch only; the scoped branch is exhaustive
+/// and ignores it. [`ArmQuery::limit`] is a different unit — it bounds the answer in RESOURCES,
+/// after aggregation, on both branches. Collapsing the two would change what the shrinkage factor
+/// is computed over.
+///
+/// `hnsw.ef_search` is pinned on the SQL function at or above the `k` used here — see
 /// `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for`. Raising `k` past the pin
 /// re-introduces the silent truncation the pin exists to prevent.
 pub async fn search_wide(
     pool: &PgPool,
-    principal: ProfileId,
     embedding: Option<&[f32]>,
     k: i32,
-    anchor: Option<HomeAnchor>,
+    arm: ArmQuery<'_>,
 ) -> Result<Vec<WideHit>> {
     let emb_text = embedding.map(format_pgvector);
     let hits = sqlx::query_as::<_, WideHit>(
-        "SELECT resource_id, vec_norm FROM search_wide($1, $2::vector, $3, $4, $5)",
+        "SELECT resource_id, vec_norm FROM search_wide($1, $2::vector, $3, $4, $5, $6, $7, $8)",
     )
-    .bind(principal)
+    .bind(arm.principal)
     .bind(emb_text) // NULL when None → p_emb NULL → the arm returns nothing
     .bind(k)
-    .bind(anchor.map(|a| a.table()))
-    .bind(anchor.map(|a| a.uuid()))
+    .bind(arm.anchor.map(|a| a.table()))
+    .bind(arm.anchor.map(|a| a.uuid()))
+    .bind(arm.doc_type)
+    .bind(arm.limit)
+    .bind(arm.offset)
     .fetch_all(pool)
     .await?;
     Ok(hits)

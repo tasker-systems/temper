@@ -1566,3 +1566,261 @@ async fn search_exact_returns_nothing_for_an_empty_query(pool: sqlx::PgPool) {
         "an empty query yields no candidates"
     );
 }
+
+// ── SQL-side paging and the doc_type filter (20260806000020) ─────────────────────────────────────
+//
+// Both arms used to return their entire match set, ordered and sliced in Rust only AFTER every row
+// had been hydrated into a full `ResourceView` — measured at 1,883 rows for a ten-row request
+// against a 3,402-resource production corpus. And `p_doc_type`, which `unified_search` applied,
+// went with the blend while its CLI flag, `SearchParams` field, MCP parameter and OpenAPI schema
+// all stayed. These are the witnesses for both.
+
+/// [`mk`] with a caller-chosen doc type, so a doc_type filter has something to tell apart.
+async fn mk_typed(
+    pool: &sqlx::PgPool,
+    home: ContextId,
+    owner: ProfileId,
+    emitter: EntityId,
+    title: &str,
+    body: &str,
+    doc_type: &str,
+) -> Uuid {
+    writes::create_resource(
+        pool,
+        writes::CreateParams {
+            idempotency_key: None,
+            sources: vec![],
+            title,
+            origin_uri: &format!("test://{title}"),
+            body,
+            doc_type,
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap()
+    .uuid()
+}
+
+/// `search_exact` over the full parameter set. `limit: None` is `LIMIT NULL` — unbounded.
+async fn exact_full(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    q: &str,
+    doc_type: Option<&str>,
+    limit: Option<i32>,
+    offset: i32,
+) -> Vec<(Uuid, f32)> {
+    use sqlx::Row;
+    sqlx::query("SELECT resource_id, fts_norm FROM search_exact($1, $2, NULL, NULL, $3, $4, $5)")
+        .bind(principal.uuid())
+        .bind(q)
+        .bind(doc_type)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("fts_norm")))
+        .collect()
+}
+
+/// The exact arm pages in SQL, and the page boundary is total.
+///
+/// Two claims, and the second is the one that is easy to lose. A `LIMIT` with a partial order lets
+/// rows tied on score reshuffle between calls, so a caller walking offsets can see one row twice
+/// and another never — which looks like a search bug and is a paging bug. Every resource here
+/// carries the SAME body, so every `fts_norm` ties and the `resource_id` tiebreak is the ONLY thing
+/// deciding the pages: if it were dropped, this test fails by set inequality rather than by order.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_exact_pages_in_sql_and_the_tiebreak_makes_the_boundary_total(pool: sqlx::PgPool) {
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "paging").await;
+    for i in 0..7 {
+        mk(
+            &pool,
+            home,
+            owner,
+            emitter,
+            &format!("r{i}"),
+            "quorum quorum",
+        )
+        .await;
+    }
+
+    let all = exact_full(&pool, owner, "quorum", None, None, 0).await;
+    assert_eq!(all.len(), 7, "unbounded must return the whole match set");
+
+    // The pages partition the set, in order, with no repeat and no gap.
+    let mut walked: Vec<Uuid> = Vec::new();
+    for page in 0..4 {
+        let rows = exact_full(&pool, owner, "quorum", None, Some(2), page * 2).await;
+        walked.extend(rows.into_iter().map(|(id, _)| id));
+    }
+    let expected: Vec<Uuid> = all.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        walked, expected,
+        "walking the arm two at a time must reproduce the unbounded order exactly - a repeat or a \
+         gap here means the ORDER BY is not total"
+    );
+
+    // Past the end is empty, not an error and not a wrap.
+    assert!(
+        exact_full(&pool, owner, "quorum", None, Some(2), 100)
+            .await
+            .is_empty(),
+        "an offset past the end yields nothing"
+    );
+}
+
+/// `p_doc_type` filters the exact arm, and its absence does not.
+///
+/// The negative half alone would pass against an arm that returned nothing at all, so the unfiltered
+/// call is the control that makes the filtered one mean something.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_exact_filters_by_doc_type(pool: sqlx::PgPool) {
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "doctype").await;
+    let concept = mk_typed(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "c",
+        "quorum sentinel",
+        "concept",
+    )
+    .await;
+    let decision = mk_typed(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "d",
+        "quorum sentinel",
+        "decision",
+    )
+    .await;
+
+    let unfiltered: Vec<Uuid> = exact_full(&pool, owner, "quorum", None, None, 0)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(unfiltered.len(), 2, "control: both types match the term");
+    assert!(unfiltered.contains(&concept) && unfiltered.contains(&decision));
+
+    let only_decisions: Vec<Uuid> = exact_full(&pool, owner, "quorum", Some("decision"), None, 0)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        only_decisions,
+        vec![decision],
+        "a doc_type filter must admit that type and no other"
+    );
+
+    assert!(
+        exact_full(&pool, owner, "quorum", Some("no-such-type"), None, 0)
+            .await
+            .is_empty(),
+        "an unmatched doc_type filters everything out rather than being ignored - being ignored is \
+         the defect this restores"
+    );
+}
+
+/// `p_doc_type` filters the wide arm on BOTH of its branches.
+///
+/// The branches place the conjunct in different CTEs — after the top-k on the unscoped branch, so
+/// the HNSW draw is not defeated, and with the row predicates on the exhaustive scoped one — so a
+/// witness on one says nothing about the other.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_wide_filters_by_doc_type_on_both_branches(pool: sqlx::PgPool) {
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "wide-doctype").await;
+    // `at_cos` is defined relative to axis 0, so that is the query vector both fixtures sit near.
+    let q = unit(0);
+
+    let anchor_ref = AnchorRef::context(home);
+    let concept = mk_embedded(&pool, anchor_ref, owner, emitter, "wc", at_cos(0.9)).await;
+    let decision = mk_embedded(&pool, anchor_ref, owner, emitter, "wd", at_cos(0.8)).await;
+    // `mk_chunked` creates everything as `concept`; retype one so the filter has two kinds to tell
+    // apart. Writing the property directly is the narrowest way to get there and leaves the
+    // embedding untouched, which is what this arm actually retrieves on.
+    sqlx::query(
+        "UPDATE kb_properties SET property_value = to_jsonb($2::text)
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 AND property_key = 'doc_type'",
+    )
+    .bind(decision)
+    .bind("decision")
+    .execute(&pool)
+    .await
+    .expect("retype the second resource");
+
+    for anchor in [None, Some(("kb_contexts", home.uuid()))] {
+        let label = if anchor.is_none() {
+            "unscoped"
+        } else {
+            "scoped"
+        };
+
+        let both: Vec<Uuid> = wide_full(&pool, owner, &q, 100, anchor, None)
+            .await
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(
+            both.contains(&concept) && both.contains(&decision),
+            "{label}: control - both resources are in reach before any filter"
+        );
+
+        let filtered: Vec<Uuid> = wide_full(&pool, owner, &q, 100, anchor, Some("decision"))
+            .await
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            filtered,
+            vec![decision],
+            "{label}: the doc_type filter must apply on this branch too"
+        );
+    }
+}
+
+/// `search_wide` over the full parameter set.
+async fn wide_full(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    emb: &[f32],
+    k: i32,
+    anchor: Option<(&str, Uuid)>,
+    doc_type: Option<&str>,
+) -> Vec<(Uuid, f32)> {
+    use sqlx::Row;
+    let (table, id) = match anchor {
+        Some((t, i)) => (Some(t), Some(i)),
+        None => (None, None),
+    };
+    sqlx::query(
+        "SELECT resource_id, vec_norm FROM search_wide($1, $2::vector, $3, $4, $5, $6, NULL, 0)",
+    )
+    .bind(principal.uuid())
+    .bind(vlit(emb))
+    .bind(k)
+    .bind(table)
+    .bind(id)
+    .bind(doc_type)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("vec_norm")))
+    .collect()
+}

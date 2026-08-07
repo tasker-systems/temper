@@ -800,6 +800,7 @@ fn search_hint(
     reason: SearchReason,
     scope_size: Option<i64>,
     degraded: bool,
+    offset: i64,
 ) -> Option<String> {
     // The narrowed-reach hint (issue #585) is GONE with wayfind. It reported `anchors_selected`
     // against `anchors_visible` — a pooled-competition signal that has no referent once a search
@@ -816,6 +817,17 @@ fn search_hint(
              not help - check the map ref, or drop the scope to search everything you can see."
                 .to_string(),
         ),
+        // An empty page at a non-zero offset is NOT "nothing matched", and telling the caller to
+        // rephrase is a wrong answer to the question they asked: they walked off the end of a walk
+        // that may have been returning hits the whole way. The wire enum cannot tell these apart —
+        // `SearchReason` has no past-the-end variant and adding one is a breaking widen — so the
+        // distinction lives in the hint, which is where a caller reads what to DO next.
+        (_, SearchReason::NoMatch) if offset > 0 => {
+            parts.push(format!(
+                "no results at offset {offset}: this is the end of this arm, not an empty corpus. \
+                 Earlier pages may have matched. Rephrasing will not help; go back a page."
+            ));
+        }
         (_, SearchReason::NoMatch) => {
             let prefix = scope_size
                 .map(|n| format!("{n} candidate resource(s) in scope; "))
@@ -916,24 +928,41 @@ pub async fn search_select(
     let limit = clamped.limit as usize;
     let anchor = resolve_search_anchor(pool, profile_id, &params).await?;
 
+    // ONE MORE ROW THAN THE PAGE. Ordering and paging are the SQL functions' now, so the arms
+    // return at most `limit + 1` rows instead of their whole match set — measured at 1,883 rows for
+    // a ten-row request against a 3,402-resource production corpus, every one of which used to be
+    // hydrated into a full `ResourceView` before the page was sliced.
+    //
+    // The `+ 1` is the probe row. It never reaches the caller; it exists so an arm can tell "there
+    // is more after this page" without a second counting statement. `saturating_add` because
+    // `limit` is caller-supplied and an `i32::MAX` page must not wrap to a negative LIMIT.
+    let fetch = i32::try_from(clamped.limit)
+        .unwrap_or(i32::MAX)
+        .saturating_add(1);
+    let arm = readback::ArmQuery {
+        principal: profile_id,
+        anchor,
+        doc_type: params.doc_type.as_deref(),
+        limit: Some(fetch),
+        offset: i32::try_from(offset).unwrap_or(i32::MAX),
+    };
+
     let (exact_hits, wide_hits) = tokio::try_join!(
         async {
-            readback::search_exact(pool, profile_id, params.query.as_deref(), anchor)
+            readback::search_exact(pool, params.query.as_deref(), arm)
                 .await
                 .map_err(|e| search_stage_err("search_exact", e))
         },
         async {
-            readback::search_wide(
-                pool,
-                profile_id,
-                params.embedding.as_deref(),
-                VECTOR_K,
-                anchor,
-            )
-            .await
-            .map_err(|e| search_stage_err("search_wide", e))
+            readback::search_wide(pool, params.embedding.as_deref(), VECTOR_K, arm)
+                .await
+                .map_err(|e| search_stage_err("search_wide", e))
         },
     )?;
+
+    // Drop the probe row before anything else sees it, so enrichment pays for the page only.
+    let exact_hits: Vec<_> = exact_hits.into_iter().take(limit).collect();
+    let wide_hits: Vec<_> = wide_hits.into_iter().take(limit).collect();
 
     // Enrichment is shared: both arms name resources, and a resource's identity does not depend on
     // which arm found it. One batched round-trip over the union, then each arm keeps its own order.
@@ -943,7 +972,12 @@ pub async fn search_select(
     wanted.dedup();
     let identities = enrich_hits(pool, profile_id, &wanted).await?;
 
-    let mut exact: Vec<ExactHit> = exact_hits
+    // NO RE-SORT HERE. Each arm arrives ordered by its own quantity with `resource_id` as the
+    // tiebreak, decided by the SQL function that also applied the LIMIT. Re-deriving the order in
+    // Rust would be a second implementation of the page boundary: if the two rules ever disagreed
+    // on a tie, a row could appear on two pages or on none, and the Rust sort would silently win
+    // over the one that actually chose the rows. `filter_map` preserves order.
+    let exact: Vec<ExactHit> = exact_hits
         .into_iter()
         .filter_map(|h| {
             identities
@@ -951,15 +985,8 @@ pub async fn search_select(
                 .map(|i| i.clone().into_exact(h.fts_norm))
         })
         .collect();
-    exact.sort_by(|a, b| {
-        b.fts_norm
-            .partial_cmp(&a.fts_norm)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.resource.id.cmp(&b.resource.id))
-    });
-    let exact: Vec<ExactHit> = exact.into_iter().skip(offset).take(limit).collect();
 
-    let mut wide: Vec<WideHit> = wide_hits
+    let wide: Vec<WideHit> = wide_hits
         .into_iter()
         .filter_map(|h| {
             identities
@@ -967,26 +994,20 @@ pub async fn search_select(
                 .map(|i| i.clone().into_wide(h.vec_norm))
         })
         .collect();
-    wide.sort_by(|a, b| {
-        b.vec_norm
-            .partial_cmp(&a.vec_norm)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.resource.id.cmp(&b.resource.id))
-    });
-    let wide: Vec<WideHit> = wide.into_iter().skip(offset).take(limit).collect();
 
     let scope_size: Option<i64> = None;
     let exact_reason = arm_reason(exact.len());
     let wide_reason = arm_reason(wide.len());
 
+    let offset_i64 = i64::try_from(offset).unwrap_or(i64::MAX);
     Ok(SearchResponse {
         exact: ExactArm {
-            hint: search_hint(scope, exact_reason, scope_size, false),
+            hint: search_hint(scope, exact_reason, scope_size, false, offset_i64),
             reason: exact_reason,
             hits: exact,
         },
         wide: WideArm {
-            hint: search_hint(scope, wide_reason, scope_size, degraded),
+            hint: search_hint(scope, wide_reason, scope_size, degraded, offset_i64),
             reason: wide_reason,
             hits: wide,
             degraded,
@@ -1369,6 +1390,7 @@ mod clamp_tests {
             SearchReason::OutOfScope,
             Some(0),
             false,
+            0,
         )
         .expect("out-of-scope cogmap must hint");
         assert!(h.contains("cogmap"), "got: {h}");
@@ -1376,26 +1398,62 @@ mod clamp_tests {
 
     #[test]
     fn hint_no_match_reports_scope_size_when_known() {
-        let with = search_hint(SearchScope::Cogmap, SearchReason::NoMatch, Some(7), false)
-            .expect("no-match must hint");
+        let with = search_hint(
+            SearchScope::Cogmap,
+            SearchReason::NoMatch,
+            Some(7),
+            false,
+            0,
+        )
+        .expect("no-match must hint");
         assert!(with.contains('7'), "should surface scope_size; got: {with}");
         assert!(
             with.contains("rephras"),
             "should suggest rephrasing; got: {with}"
         );
 
-        let without = search_hint(SearchScope::Global, SearchReason::NoMatch, None, false)
+        let without = search_hint(SearchScope::Global, SearchReason::NoMatch, None, false, 0)
             .expect("no-match must hint even without scope_size");
         assert!(without.contains("matched"), "got: {without}");
+    }
+
+    /// An empty page at a non-zero offset must not be reported as an empty corpus.
+    ///
+    /// The old rule computed the arm's reason from the POST-pagination slice, so walking off the
+    /// end of a result set produced `NoMatch` plus "try rephrasing" — advice that is wrong twice:
+    /// the arm did match, and rephrasing would lose the results the caller already had. The reason
+    /// is still `NoMatch` because the wire enum has no past-the-end variant, so the whole of the
+    /// distinction is carried by the hint.
+    #[test]
+    fn hint_at_a_nonzero_offset_says_end_of_arm_not_empty_corpus() {
+        let paged = search_hint(SearchScope::Global, SearchReason::NoMatch, None, false, 20)
+            .expect("an empty page must still hint");
+        assert!(
+            paged.contains("offset 20"),
+            "the hint must name the offset the caller actually asked for; got: {paged}"
+        );
+        assert!(
+            !paged.contains("rephras"),
+            "rephrasing is the one thing that cannot help a past-the-end page; got: {paged}"
+        );
+
+        // The positive control. Without it, a rule that dropped the rephrasing advice everywhere
+        // would pass the assertion above while destroying the genuine no-match hint.
+        let fresh = search_hint(SearchScope::Global, SearchReason::NoMatch, None, false, 0)
+            .expect("a genuine no-match must hint");
+        assert!(
+            fresh.contains("rephras"),
+            "at offset 0 an empty arm really did match nothing; got: {fresh}"
+        );
     }
 
     #[test]
     fn hint_ok_is_silent_unless_degraded() {
         assert!(
-            search_hint(SearchScope::Global, SearchReason::Ok, None, false).is_none(),
+            search_hint(SearchScope::Global, SearchReason::Ok, None, false, 0).is_none(),
             "an unremarkable Ok result needs no hint"
         );
-        let degraded = search_hint(SearchScope::Global, SearchReason::Ok, None, true)
+        let degraded = search_hint(SearchScope::Global, SearchReason::Ok, None, true, 0)
             .expect("an arm that could not run must say so even with an Ok reason");
         assert!(
             degraded.contains("could not be embedded"),
@@ -1405,8 +1463,14 @@ mod clamp_tests {
 
     #[test]
     fn hint_appends_degraded_to_a_reason() {
-        let h = search_hint(SearchScope::Cogmap, SearchReason::OutOfScope, Some(0), true)
-            .expect("hint");
+        let h = search_hint(
+            SearchScope::Cogmap,
+            SearchReason::OutOfScope,
+            Some(0),
+            true,
+            0,
+        )
+        .expect("hint");
         assert!(h.contains("--cogmap scope"), "got: {h}");
         assert!(
             h.contains("could not be embedded"),
@@ -1438,11 +1502,15 @@ mod clamp_tests {
             for reason in reasons {
                 for degraded in [false, true] {
                     for size in [None, Some(0), Some(7)] {
-                        let Some(h) = search_hint(scope, reason, size, degraded) else {
-                            continue;
-                        };
-                        emitted += 1;
-                        assert!(h.is_ascii(), "hint carries non-ASCII: {h:?}");
+                        // Offsets both sides of the past-the-end branch, so its string is
+                        // enumerated too — an arm added later must not escape the ASCII rule.
+                        for offset in [0i64, 20] {
+                            let Some(h) = search_hint(scope, reason, size, degraded, offset) else {
+                                continue;
+                            };
+                            emitted += 1;
+                            assert!(h.is_ascii(), "hint carries non-ASCII: {h:?}");
+                        }
                     }
                 }
             }
