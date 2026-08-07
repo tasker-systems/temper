@@ -41,17 +41,18 @@ pub fn show_section_parser() -> clap::builder::PossibleValuesParser {
 
 /// The section names `list --with`/`--without` accept — **`body` is not among them**.
 ///
-/// The server can fill it (`fill_sections` handles [`ResourceSection::Body`]), so this is a
-/// deliberate refusal at the surface, not a missing capability: a page of reconstructed
-/// bodies is an unbounded payload behind a flag that reads as cheap, and `list` exists to
-/// orient before reading. One `show` per row is the honest way to ask for that, and it is
-/// self-limiting in a way `list --with body --all` is not.
+/// Derived from [`ResourceSection::LIST`] rather than typed out, for the same reason
+/// [`show_section_parser`] derives from `ALL`: this list used to be a local
+/// `[ResourceSection::OpenMeta]` while the *server* parsed against `ALL` and filled `body`
+/// for anyone who asked. That made the CLI the only door enforcing the rule — MCP, raw HTTP
+/// and temper-rb walked straight past it. The refusal now has one definition and both doors
+/// read it, so the surface cannot be stricter than the thing it fronts.
 ///
-/// [`ResourceSection::Edges`] is likewise absent — edges are fetched *alongside* a view and
-/// `list` has no edge fetch, so offering it would accept a word and then ignore it.
+/// Why the set is what it is — the unbounded body payload, and `edges` having nothing to fill
+/// it on this door — is on [`ResourceSection::LIST`].
 #[must_use]
 pub fn list_section_parser() -> clap::builder::PossibleValuesParser {
-    clap::builder::PossibleValuesParser::new([ResourceSection::OpenMeta.as_str()])
+    clap::builder::PossibleValuesParser::new(ResourceSection::LIST.map(ResourceSection::as_str))
 }
 
 /// Resolve `--with` / `--without` against a command's defaults.

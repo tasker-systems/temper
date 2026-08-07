@@ -112,9 +112,15 @@ pub struct ResourceListParams {
     pub limit: Option<i64>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
-    /// Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of
-    /// [`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,
-    /// `edges`). `None`/empty asks for none, which is the default list row.
+    /// Optional sections to fill on each returned [`ResourceView`]. **On this door the vocabulary
+    /// is `open-meta` and nothing else** — a comma-separated list, though there is currently one
+    /// name in it. `None`/empty asks for none, which is the default list row.
+    ///
+    /// `body` and `edges` are [`temper_core::types::resource_view::ResourceSection`] names but are
+    /// **not** list sections, and asking for either is a `400`. A page of reconstructed bodies is
+    /// unbounded — this endpoint sends no limit when the caller asks for everything, and the body
+    /// read has no batched form — so `list` orients and `GET /api/resources/{id}` reads. Nothing
+    /// fills `edges` on a list row at all. Both are accepted on the single-resource door.
     ///
     /// Replaces `meta_only`, which named a *response type* rather than a part: it selected a
     /// second envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is
@@ -122,8 +128,8 @@ pub struct ResourceListParams {
     ///
     /// A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —
     /// the list endpoint is a GET whose params ride the query string, and serde_urlencoded does
-    /// not encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name
-    /// naming the whole valid set.
+    /// not encode sequences. Parsed by `SectionSet::parse_csv_accepting` against
+    /// `ResourceSection::LIST`, which refuses an unknown name naming this door's valid set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sections: Option<String>,
 }
