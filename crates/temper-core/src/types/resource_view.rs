@@ -237,7 +237,54 @@ impl ResourceSection {
     /// message is built from it, so a section cannot be accepted without also being
     /// named. Public so a surface's help text lists the same three rather than
     /// hand-copying them into a fourth place that then drifts.
+    ///
+    /// **This is the `show` door's vocabulary, not every door's** — see [`Self::LIST`].
     pub const ALL: [Self; 3] = [Self::Body, Self::OpenMeta, Self::Edges];
+
+    /// The sections the **list** door accepts — the one definition, read by both the CLI's
+    /// `--with`/`--without` parser and the server's `sections=` parse.
+    ///
+    /// It exists because the vocabulary is genuinely per-door, and treating [`Self::ALL`] as
+    /// though it were universal is what let the two doors disagree: the CLI has refused `body`
+    /// on `list` since sections shipped, while the server filled it for anyone asking over raw
+    /// HTTP, MCP or temper-rb. That was not a second capability — it was the same refusal
+    /// missing from the door that actually enforces things.
+    ///
+    /// **[`Self::Body`] is absent because a page of reconstructed bodies is unbounded.** `list`
+    /// sends no limit under `--all`, and the body read is per-resource with no batched form, so
+    /// the payload and the statement count both scale with the corpus behind a flag that reads
+    /// as cheap. `list` exists to orient before reading; one `show` per row is the honest way to
+    /// ask for bodies, and it is self-limiting in a way `list --sections=body` is not.
+    ///
+    /// **[`Self::Edges`] is absent because nothing fills it on this door.** Edges are fetched
+    /// *alongside* a view rather than carried on it ([`ResourceView`] has no edges field), and
+    /// `list` composes no edge read — so accepting the word would be accepting it and then
+    /// silently ignoring it.
+    pub const LIST: [Self; 1] = [Self::OpenMeta];
+
+    /// Parse a section name against a door's accepted set, naming **only that set** in the
+    /// refusal.
+    ///
+    /// [`FromStr`] is this over [`Self::ALL`]. The accepted set is a parameter rather than a
+    /// second hard-coded list so a door cannot refuse a section and then advertise it in the
+    /// same breath — a refusal that names `body` as valid, on the one door that just declined
+    /// it, tells the caller to retry the thing that will not work.
+    pub fn parse_accepting(s: &str, accepted: &[Self]) -> Result<Self, TemperError> {
+        accepted
+            .iter()
+            .copied()
+            .find(|section| section.as_str() == s)
+            .ok_or_else(|| {
+                TemperError::BadRequest(format!(
+                    "unknown section {s:?} (expected one of: {})",
+                    accepted
+                        .iter()
+                        .map(|section| section.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })
+    }
 
     /// The canonical wire/CLI name — the same string serde emits.
     #[must_use]
@@ -268,15 +315,7 @@ impl FromStr for ResourceSection {
     /// `Project` maps to `ApiError::Internal` (`temper-services/src/error.rs:242`),
     /// and a mistyped section name is the caller's `400`, never the server's `500`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|section| section.as_str() == s)
-            .ok_or_else(|| {
-                TemperError::BadRequest(format!(
-                    "unknown section {s:?} (expected one of: {})",
-                    Self::ALL.map(Self::as_str).join(", ")
-                ))
-            })
+        Self::parse_accepting(s, &Self::ALL)
     }
 }
 
@@ -309,10 +348,24 @@ impl SectionSet {
     /// is the one place a caller's typo is caught, and it must be recoverable from the
     /// message alone.
     pub fn parse_csv(csv: &str) -> Result<Self, TemperError> {
+        Self::parse_csv_accepting(csv, &ResourceSection::ALL)
+    }
+
+    /// Parse the `sections` query parameter against a **door's** accepted set — the
+    /// door-scoped form of [`Self::parse_csv`], which is this over [`ResourceSection::ALL`].
+    ///
+    /// The list door passes [`ResourceSection::LIST`]. Everything [`Self::parse_csv`] documents
+    /// about trimming, empty pieces and the refusal naming the whole valid set holds here, with
+    /// "whole valid set" meaning *this door's* — which is the point, since a caller who just had
+    /// `body` declined must not be handed a list that still contains it.
+    pub fn parse_csv_accepting(
+        csv: &str,
+        accepted: &[ResourceSection],
+    ) -> Result<Self, TemperError> {
         csv.split(',')
             .map(str::trim)
             .filter(|piece| !piece.is_empty())
-            .map(ResourceSection::from_str)
+            .map(|piece| ResourceSection::parse_accepting(piece, accepted))
             .collect()
     }
 
@@ -600,6 +653,64 @@ mod tests {
             msg.contains("openMeta"),
             "and it repeats the rejected input back: {msg}"
         );
+    }
+
+    /// The list door's vocabulary excludes `body`, and a refusal on that door names only what
+    /// that door takes.
+    ///
+    /// Two conjuncts, and the second is the one with teeth. Excluding `body` from
+    /// [`ResourceSection::LIST`] is the rule; but a refusal built from
+    /// [`ResourceSection::ALL`] — which is what [`FromStr`] gives you, and what the server's
+    /// list parse used before this — would decline `body` and then list `body` among the valid
+    /// names. The caller retries the thing that just failed, and the message is worse than
+    /// useless because it reads authoritative. So the refusal is asserted to *omit* the section
+    /// it refused, not merely to mention the ones it accepts.
+    #[test]
+    fn the_list_door_refuses_body_and_names_only_what_it_accepts() {
+        assert!(
+            !ResourceSection::LIST.contains(&ResourceSection::Body),
+            "a page of reconstructed bodies is unbounded — `body` is not a list section"
+        );
+        assert!(
+            !ResourceSection::LIST.contains(&ResourceSection::Edges),
+            "nothing fills `edges` on the list door, so accepting the word would ignore it"
+        );
+        assert!(
+            ResourceSection::LIST
+                .iter()
+                .all(|section| ResourceSection::ALL.contains(section)),
+            "a door's vocabulary is a subset of the whole one, never a superset"
+        );
+
+        let err = SectionSet::parse_csv_accepting("body", &ResourceSection::LIST)
+            .expect_err("the list door refuses `body`");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("open-meta"),
+            "the refusal names what this door does accept: {msg}"
+        );
+        assert!(
+            !msg.contains("expected one of: body")
+                && !msg.contains(", body")
+                && !msg.contains("body,"),
+            "and must NOT offer `body` back as a valid choice — it just declined it: {msg}"
+        );
+    }
+
+    /// The show door is unchanged: it still takes all three.
+    ///
+    /// The pair to the test above. Narrowing one door is only correct if it narrows *one* door;
+    /// a change that quietly took `body` away from `show` would break the read path that
+    /// legitimately serves it (MCP's `get_resource`) and would pass every assertion above.
+    #[test]
+    fn the_show_door_still_accepts_every_section() {
+        let all = SectionSet::parse_csv("body,open-meta,edges").expect("show takes all three");
+        for section in ResourceSection::ALL {
+            assert!(
+                all.contains(section),
+                "`{section}` must still be reachable on the show door"
+            );
+        }
     }
 
     /// [`SectionSet::contains`] answers for a member and for a non-member.
