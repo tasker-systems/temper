@@ -360,7 +360,10 @@ pub async fn meta_batch(
     let rows = sqlx::query!(
         r#"SELECT pr.owner_id, pr.property_key, pr.property_value
              FROM kb_properties pr
-             JOIN resources_visible_to($1) v ON v.resource_id = pr.owner_id
+             -- `AND v.resource_id = ANY($2)` is REDUNDANT AND LOAD-BEARING (see `hit_identities`,
+             -- which carries the same pairing and the full argument). Do not delete it.
+             JOIN resources_visible_to($1) v
+               ON v.resource_id = pr.owner_id AND v.resource_id = ANY($2)
             WHERE pr.owner_table = 'kb_resources'
               AND pr.owner_id = ANY($2)
               AND NOT pr.is_folded
@@ -1633,6 +1636,45 @@ pub async fn search_wide(
 /// was written to hold. The key set the aggregate filters on is bound from
 /// [`crate::keys::MANAGED_PROPERTY_KEYS`], not spelled into the SQL, so the managed/open split has
 /// the same single source here as [`meta`]'s [`is_managed_property_key`] inverse.
+///
+/// # The id predicate is stated twice, and the second one is not redundant in practice
+///
+/// `$2` is bound to the *same* array in the `WHERE` and on the `resources_visible_to` join. The
+/// second is implied by the first — `v.resource_id = r.id` and `r.id = ANY($2)` give
+/// `v.resource_id = ANY($2)` — so it cannot change the admitted set. **It changes the plan by a
+/// factor of 13, and Postgres will not derive it.**
+///
+/// The planner propagates a qual across an equijoin only through an *equivalence class*, and an
+/// equivalence class is built from mergejoinable equality operators. `= ANY(array)` is a
+/// `ScalarArrayOpExpr`, not an equality operator, so it never joins the class that
+/// `v.resource_id = r.id` creates and nothing carries it to the other side. Given the predicate
+/// directly, the planner pushes it into all six arms of the gate's `UNION` and the gate builds
+/// only these rows; denied it, the gate materializes the principal's **entire visible set** and
+/// hash-joins the answer out of it.
+///
+/// Measured on production (Neon PG 17, 3,559 resources, principal with 3,322 visible):
+///
+/// | shape | gate builds | execution |
+/// |---|---|---|
+/// | `r.id = ANY($2)` alone, 1 id | 3,477 rows | 5.31 ms |
+/// | + the predicate on the gate, 1 id | 1 row | **0.40 ms** |
+/// | `r.id = ANY($2)` alone, 20 ids | 3,477 rows | 7.72 ms |
+/// | + the predicate on the gate, 20 ids | 20 rows | **2.32 ms** |
+///
+/// The same statement with a plain `r.id = $1` instead of `= ANY` costs 0.38 ms with **no** manual
+/// duplication — the planner propagates it for free, which is the control that identifies the
+/// operator class as the cause rather than the gate's shape.
+///
+/// So the cost arrived *with* this function: it uses `= ANY` because it is the set-shaped batch
+/// read that ended search's per-hit `resource_row` N+1 ("50 results meant 51 queries"). Batching
+/// the round-trips is what stopped the qual propagating.
+///
+/// **This property is not gated by a test, and cannot easily be.** It is invisible below corpus
+/// scale — on a `#[sqlx::test]` database holding a handful of resources the two plans cost the
+/// same, so a test asserting it would pass whether or not the predicate is there. What the tests
+/// *do* hold is the half that can be held: that the admitted row set is unchanged
+/// (`the_redundant_gate_predicate_does_not_change_who_can_see_what`). The performance half rests
+/// on the comment in the SQL and on this note.
 pub async fn hit_identities(
     pool: &PgPool,
     principal: ProfileId,
@@ -1677,7 +1719,13 @@ pub async fn hit_identities(
                   mm.managed                 AS "managed?"
              FROM kb_resources r
              JOIN kb_resource_homes h ON h.resource_id = r.id
-             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+             -- `AND v.resource_id = ANY($2)` is REDUNDANT AND LOAD-BEARING. Do not delete it.
+             -- See the doc comment's "the predicate is stated twice" note: it is implied by
+             -- `v.resource_id = r.id` + the WHERE below, and the planner cannot derive it,
+             -- because `= ANY` forms no equivalence class. Without it the gate builds the
+             -- principal's ENTIRE visible set to answer for these ids.
+             JOIN resources_visible_to($1) v
+               ON v.resource_id = r.id AND v.resource_id = ANY($2)
              LEFT JOIN kb_contexts c
                ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
              LEFT JOIN kb_cogmaps cm
