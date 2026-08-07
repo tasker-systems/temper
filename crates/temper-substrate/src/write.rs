@@ -628,10 +628,11 @@ struct AssertRegionCtx<'a> {
 /// How CORE a member is to its region: its average-link affinity to the region's other members.
 ///
 /// **This column was never written.** `kb_cogmap_region_members.affinity` has existed since the region
-/// tier shipped, and four readers order by it — `graph_region_members`, `graph_region_territories`,
-/// `graph_cogmap_territories`, `atlas_search`, all `ORDER BY m.affinity DESC NULLS LAST` — but nothing
-/// ever populated it, so every "top member" and every derived region label in the product has been
-/// arbitrary (whatever order the planner happened to return). Spec §3.9.1.
+/// tier shipped, and readers order by it — `graph_region_members`, `graph_region_territories`,
+/// `graph_cogmap_territories`, all `ORDER BY m.affinity DESC NULLS LAST` — but nothing ever populated
+/// it, so every "top member" and every derived region label in the product has been arbitrary
+/// (whatever order the planner happened to return). Spec §3.9.1. A fourth reader, `atlas_search`, was
+/// retired on 2026-08-06 with the blended search mechanism it called.
 ///
 /// Average-link is the same linkage the clustering itself uses, so a member's score is coherent with
 /// why it landed in this region. A singleton region yields 0.0 — there are no peers to be central to.

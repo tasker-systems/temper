@@ -4,8 +4,39 @@
 //! its own name and nothing sums them.
 //!
 //! Under task `019fd25e-95f0-7373-9a6e-0574deea5ab3` and decision
-//! `019fd25a-ef4c-7473-b72e-265a7d36dd65`. Isolated ephemeral DB via `MIGRATOR`, as
-//! `search_surface_a.rs` — which tests the blend these two replace.
+//! `019fd25a-ef4c-7473-b72e-265a7d36dd65`. Isolated ephemeral DB via `MIGRATOR`.
+//!
+//! ## Re-homed from `search_graph_expand.rs`
+//!
+//! `unified_search`, `search_fts_candidates` and `search_vector_candidates` are dropped by the
+//! commit that retires the blend. Their witnesses did not all die with them: the arms carry
+//! `search_fts_candidates`' `websearch_to_tsquery` + ts_rank flag 33 and `search_vector_candidates`'
+//! shrunk best-of-N, both branches and the `hnsw.ef_search` pin, VERBATIM (migration
+//! `20260805000020` header: "Body derived from `search_fts_candidates`' live definition, INCLUDING
+//! `websearch_to_tsquery` and ts_rank flag 33 … Re-deriving from an older migration silently reverts
+//! both"). Those properties are re-asserted below against `search_exact` / `search_wide` rather than
+//! deleted along with the function that used to carry them.
+//!
+//! One of them was a TRAP, not merely a move. `pinned_ef_search_covers_unified_search_vector_k`
+//! read `SELECT prosrc FROM pg_proc WHERE proname='unified_search'` with `fetch_one(…).unwrap()`.
+//! Once that function is dropped the read yields `RowNotFound` and the test PANICS instead of
+//! failing its assertion — the invariant would have died by crash while still looking like a test.
+//! `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for` (below) is its re-homing and
+//! predates this commit; what was still missing, and is added here, is the pin's SCOPE.
+//!
+//! ## Declared coverage loss
+//!
+//! Two Surface A properties have no home after the drop and are named rather than left to be
+//! inferred from a shorter file:
+//!
+//! * **`p_scope_ids` as an explicit resource-id allowlist** (`search_vector_candidates`' 5th
+//!   argument). `search_wide` scopes by anchor pair only; there is no per-resource allowlist to
+//!   witness. Retired with the parameter, not pending.
+//! * **The blend itself** — term zeroing, the dissolved either/or, `w_fts`/`w_vec`/`w_graph`
+//!   weighting, `seed_only`, the hop-0 self-score de-bias, and the `doc_type` post-filter. All were
+//!   properties of `unified_search`'s composition, which this phase exists to stop. The graph
+//!   mechanic they composed (`search_graph_expand`) survives and keeps its own tests in
+//!   `search_graph_expand.rs`; the composition does not.
 
 mod common;
 
@@ -256,6 +287,15 @@ fn vlit(v: &[f32]) -> String {
 fn unit(dim: usize) -> Vec<f32> {
     let mut e = vec![0.0_f32; 768];
     e[dim] = 1.0;
+    e
+}
+
+/// A unit vector whose cosine similarity to [`unit(0)`] is exactly `c` (so `<=>` distance is
+/// `1 - c`). Lets a fixture name the distance it wants instead of solving for a vector.
+fn at_cos(c: f32) -> Vec<f32> {
+    let mut e = vec![0.0_f32; 768];
+    e[0] = c;
+    e[1] = (1.0 - c * c).sqrt();
     e
 }
 
@@ -986,5 +1026,543 @@ async fn search_wide_returns_nothing_through_an_unreadable_cogmap_anchor(pool: s
     assert!(
         scoped.is_empty(),
         "search_wide must return nothing through an unreadable cogmap anchor; got {scoped:?}"
+    );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// RE-HOMED FROM `search_graph_expand.rs`
+//
+// Everything below asserts a property that was witnessed against `search_fts_candidates`,
+// `search_vector_candidates` or `unified_search` before those were dropped, and that the two arms
+// carry forward verbatim. Each is re-pointed at the surviving function rather than deleted with the
+// one that used to host it. See this file's header for the two that could NOT be re-homed.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+/// The `ef_search` pin is FUNCTION-scoped, not a session or database default.
+///
+/// The sibling half of `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for`: that one says
+/// the pin is big enough, this one says it is contained. A pin that leaked to the session would
+/// re-plan every other ANN caller in the same backend — including ones written after this decision —
+/// which is the reason migration `20260805000020` uses `ALTER FUNCTION … SET` rather than
+/// `ALTER DATABASE … SET`. Re-homed from `search_graph_expand.rs`'s
+/// `ef_search_pin_is_function_scoped_not_session_wide`, which read the pin off
+/// `search_vector_candidates`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ef_search_pin_on_search_wide_does_not_leak_to_the_session(pool: sqlx::PgPool) {
+    // BOTH statements must run on ONE connection. pgvector registers its GUCs in `_PG_init`, which
+    // runs per backend on first use of a vector type, so `current_setting` raises "unrecognized
+    // configuration parameter" on any connection that has not yet touched a vector. Against the pool
+    // these land on different backends and the test fails for a reason unrelated to its claim —
+    // which it did, on the original's first run.
+    let mut conn = pool.acquire().await.unwrap();
+    let _: f64 = sqlx::query_scalar("SELECT '[1,2]'::vector <=> '[1,3]'::vector")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+
+    let session: String = sqlx::query_scalar("SELECT current_setting('hnsw.ef_search')")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        session, "40",
+        "the session must keep the server default; a pin that leaked to the session would \
+         silently re-plan every other ANN caller"
+    );
+
+    let cfg: Option<Vec<String>> =
+        sqlx::query_scalar("SELECT proconfig FROM pg_proc WHERE proname = 'search_wide'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let pinned: i64 = cfg
+        .unwrap_or_default()
+        .iter()
+        .find_map(|e| e.strip_prefix("hnsw.ef_search=").map(str::to_owned))
+        .expect("hnsw.ef_search must be pinned on search_wide")
+        .parse()
+        .expect("ef_search pin is numeric");
+    assert!(
+        pinned > session.parse::<i64>().unwrap(),
+        "the function-scoped pin ({pinned}) must actually exceed the session default ({session}), \
+         or this test would pass vacuously against an unpinned function"
+    );
+}
+
+/// `search_wide`'s unscoped draw must reach `idx_kb_chunks_embedding`.
+///
+/// The whole point of the over-fetch shape is that the ANN is an index scan and admission lands
+/// after it. Re-homed unchanged from `search_graph_expand.rs`'s `vector_ann_uses_hnsw_index` — the
+/// index and the ORDER BY shape are the subject, and both outlived `search_vector_candidates`.
+///
+/// `SET LOCAL enable_seqscan = off` because on a small seeded corpus Postgres prefers a seq-scan on
+/// cost grounds. The index must still be *usable* — that is what is guarded — so forcing seqscan off
+/// is a valid probe: if the index were absent or broken, the plan would show something other than
+/// `idx_kb_chunks_embedding` even with seqscan off.
+///
+/// **The `c.embedding IS NOT NULL` guard that `43f864e8` added to the real `ann` CTE is
+/// deliberately NOT in this query**, so the probe stays the one already known green. The migration
+/// claims that guard cannot cost a scan and MEASURED it at 20k embedded + 50 unembedded chunks
+/// ("THE HNSW INDEX IS NOT DEFEATED … the partial index is `WHERE is_current`, which the guarded
+/// predicate still implies, and pgvector's HNSW never indexes a NULL vector"). A five-chunk
+/// ephemeral corpus cannot witness a claim measured at 20k — it would only be re-testing the
+/// planner's tie-breaking on a corpus production never sees, which is the failure mode
+/// `vec_norm_does_not_pay_for_chunk_count` already paid for once. That measurement stands on the
+/// migration's own evidence and is NOT witnessed here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_wide_arms_ann_draw_uses_the_hnsw_index(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ann").await;
+    for i in 0..5 {
+        mk_embedded(
+            &pool,
+            AnchorRef::context(home),
+            owner,
+            emitter,
+            &format!("e{i}"),
+            unit(i),
+        )
+        .await;
+    }
+
+    // Must run inside a transaction so `SET LOCAL` scopes correctly.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL enable_seqscan = off")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let plan: Vec<(String,)> = sqlx::query_as(
+        "EXPLAIN SELECT c.resource_id FROM kb_chunks c WHERE c.is_current \
+         ORDER BY c.embedding <=> $1::vector LIMIT 100",
+    )
+    .bind(vlit(&unit(0)))
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+
+    let text = plan
+        .iter()
+        .map(|(l,)| l.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("idx_kb_chunks_embedding"),
+        "the wide arm's ANN draw must use the HNSW index; plan was:\n{text}"
+    );
+}
+
+/// Visibility is a POST-ANN filter on the unscoped branch, and the over-fetch survives it.
+///
+/// The nearest chunk may belong to a resource the principal cannot see. With `k = 100 » limit` it
+/// sits inside the draw, gets pulled by the index `ORDER BY`, and is then dropped by the `admitted`
+/// CTE's `resources_visible_to` join — while a farther-but-visible resource still survives. This is
+/// the asymmetry the migration carries forward deliberately ("the unscoped branch applies `LIMIT
+/// p_k` inside `ann` and lands visibility/active/complete AFTER it, because applying them inside
+/// forces a seq-scan and defeats idx_kb_chunks_embedding"). Re-homed from
+/// `vector_over_fetch_survives_visibility_drop`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_wide_arm_drops_a_nearer_invisible_resource_after_the_ann(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "postann").await;
+
+    // Visible (caller-owned) and NEAR but not identical: dims 0 and 1 set ⇒ cosine distance ≈ 0.293
+    // from unit(0).
+    let mut visible_emb = vec![0.0_f32; 768];
+    visible_emb[0] = 1.0;
+    visible_emb[1] = 1.0;
+    let visible = mk_embedded(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "visible",
+        visible_emb,
+    )
+    .await;
+
+    // A SECOND owner whose resource is NOT visible to `owner`, embedded IDENTICALLY to the query
+    // (distance 0, i.e. the top ANN hit). A pre-filter ANN would have surfaced it first.
+    let stranger = ProfileId::from(common::insert_profile(&pool, "stranger").await);
+    let stranger_entity: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, 'stranger', '{}'::jsonb) RETURNING id",
+    )
+    .bind(stranger.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let stranger_home = ctx(&pool, stranger, "postann-stranger").await;
+    let hidden = mk_embedded(
+        &pool,
+        AnchorRef::context(stranger_home),
+        stranger,
+        EntityId::from(stranger_entity),
+        "hidden",
+        unit(0),
+    )
+    .await;
+
+    let ids: Vec<Uuid> = wide(&pool, owner, &unit(0), 100, None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        ids.contains(&visible),
+        "the farther-but-visible resource survives the post-ANN visibility join"
+    );
+    assert!(
+        !ids.contains(&hidden),
+        "the nearer non-visible resource (the top ANN hit) is dropped by the post-ANN visibility \
+         join"
+    );
+}
+
+/// An ANCHOR-SCOPED wide search is exhaustive where an unscoped one is approximate.
+///
+/// The scoped branch carries no top-k at all — it pre-filters into `scoped_res` and aggregates over
+/// every current embedded chunk of every scoped resource — so a resource that a global top-k starves
+/// is recovered by naming its anchor. `k = 1` is the sharpest form of the production `k = 100`
+/// starvation: the globally-nearest resource lives in another context, so the global top-1 excludes
+/// the target the scoped caller actually wants.
+///
+/// The migration names this as a change of ALGORITHM rather than of filter ("scoped is exhaustive,
+/// unscoped is approximate — so adding a scope can surface resources an unscoped search structurally
+/// cannot. Carried forward deliberately and unchanged"), which is exactly why it needs a witness on
+/// the new function and not just a comment. Re-homed from
+/// `vector_candidates_scope_beats_global_topk_starvation`, whose scoping used `p_context_id` and the
+/// now-absent `p_scope_ids` allowlist.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_anchor_scoped_wide_search_recovers_what_the_global_top_k_starves(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let query = unit(0);
+
+    // Target context: one resource embedded FAR from the query — never globally top-1.
+    let target_ctx = ctx(&pool, owner, "target").await;
+    let target = mk_embedded(
+        &pool,
+        AnchorRef::context(target_ctx),
+        owner,
+        emitter,
+        "target",
+        unit(5),
+    )
+    .await;
+
+    // Noise context: a resource whose embedding IS the query — wins any global top-k.
+    let noise_ctx = ctx(&pool, owner, "noise").await;
+    let noise = mk_embedded(
+        &pool,
+        AnchorRef::context(noise_ctx),
+        owner,
+        emitter,
+        "noise",
+        unit(0),
+    )
+    .await;
+
+    let global: Vec<Uuid> = wide(&pool, owner, &query, 1, None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        global.contains(&noise),
+        "precondition: the global top-1 is the noise resource"
+    );
+    assert!(
+        !global.contains(&target),
+        "precondition: the global top-1 starves the target context — otherwise the recovery below \
+         proves nothing"
+    );
+
+    let scoped: Vec<Uuid> = wide(
+        &pool,
+        owner,
+        &query,
+        1,
+        Some(("kb_contexts", target_ctx.uuid())),
+    )
+    .await
+    .into_iter()
+    .map(|(id, _)| id)
+    .collect();
+    assert!(
+        scoped.contains(&target),
+        "the anchor-scoped branch carries no top-k, so it returns the in-scope resource despite the \
+         global k of 1"
+    );
+    assert!(
+        !scoped.contains(&noise),
+        "the anchor pair excludes the other context's resource"
+    );
+}
+
+/// `vec_norm` must not pay for chunk count.
+///
+/// Best-of-N is an order statistic, so volume alone buys score that content did not earn. `long` is
+/// *better on its single best chunk* than `short` (distance 0.28 vs 0.30) and overwhelmingly worse
+/// everywhere else (19 chunks at 0.60). Under a plain `1 - MIN/2`, `long` scores 0.860 against
+/// `short`'s 0.850 and wins on volume; under the shrunk statistic `search_wide` carries
+/// (`MIN + (AVG - MIN)·(1 - 1/sqrt(count(*)))`) `long` falls to ≈0.742 while `short` is untouched,
+/// because the correction is exactly 0 at N = 1.
+///
+/// Re-homed from `vec_norm_does_not_pay_for_chunk_count`. It also carries the N = 1 identity that
+/// `vector_candidates_best_per_resource_normalized` asserted separately: a single-chunk resource is
+/// still scored `1 - dist/2`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vec_norm_does_not_pay_for_chunk_count(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "veclen").await;
+
+    let short = mk_chunked(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "short",
+        vec![Some(at_cos(0.70))],
+    )
+    .await;
+
+    let mut many = vec![Some(at_cos(0.72))];
+    many.extend(std::iter::repeat_n(Some(at_cos(0.40)), 19));
+    let long = mk_chunked(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "long",
+        many,
+    )
+    .await;
+
+    let rows = wide(&pool, owner, &unit(0), 100, None).await;
+    let score = |id: Uuid| {
+        rows.iter()
+            .find(|(r, _)| *r == id)
+            .map(|(_, s)| *s)
+            .expect("candidate")
+    };
+    let (s, l) = (score(short), score(long));
+
+    // The N = 1 identity: a single-chunk resource is scored EXACTLY as an unshrunk best-of-N would.
+    assert!(
+        (s - 0.85).abs() < 1e-4,
+        "at N=1 the shrinkage factor is 0, so vec_norm is still 1 - dist/2 = 0.85; got {s}"
+    );
+    assert!(
+        s > l,
+        "a resource that is worse on 19 of 20 chunks must not out-score a short one on the strength \
+         of its best draw alone: short={s} long={l}"
+    );
+}
+
+/// The unscoped aggregate is taken over the resource's FULL current embedded chunk set, never over
+/// `ann`.
+///
+/// `ann` is the top-k, so aggregating there conditions on the chunks that WON a slot — and
+/// conditioning on winners cannot correct a selection effect when the selection *is* the bias being
+/// corrected. Same fixture as above with `p_k = 2`, so the draw admits only `long`'s single best
+/// chunk (0.28) and `short`'s only chunk (0.30); `long`'s 19 poor chunks are cut.
+///
+/// **The bite:** aggregating over `ann` gives `long` n = 1, where the shrinkage factor is 0 AND
+/// `AVG` equals `MIN` identically — the correction is a no-op twice over and `long` keeps its
+/// unpenalized 0.86 against `short`'s 0.85. This is the case the `k = 100` witness above cannot see,
+/// because there every chunk is admitted and nothing is ever cut. Re-homed from
+/// `vec_norm_aggregates_over_full_chunk_set_not_the_admitted_slice`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vec_norm_aggregates_over_the_full_chunk_set_not_the_admitted_slice(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "vectopk").await;
+
+    let short = mk_chunked(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "short",
+        vec![Some(at_cos(0.70))],
+    )
+    .await;
+
+    let mut many = vec![Some(at_cos(0.72))];
+    many.extend(std::iter::repeat_n(Some(at_cos(0.40)), 19));
+    let long = mk_chunked(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "long",
+        many,
+    )
+    .await;
+
+    // k = 2: only long's best chunk and short's single chunk are admitted to the draw.
+    let rows = wide(&pool, owner, &unit(0), 2, None).await;
+    let score = |id: Uuid| {
+        rows.iter()
+            .find(|(r, _)| *r == id)
+            .map(|(_, s)| *s)
+            .expect("admitted by the top-k")
+    };
+    let (s, l) = (score(short), score(long));
+
+    assert!(
+        s > l,
+        "the shrinkage must be computed over all 20 of long's chunks, not the 1 that won a top-k \
+         slot — otherwise the correction is a no-op on exactly its target case: short={s} long={l}"
+    );
+}
+
+/// `fts_norm` is LENGTH-normalized: ts_rank flag 33, not flag 32.
+///
+/// Flag 32 applies `rank/(rank+1)` and no length normalization at all, so two documents containing
+/// the query term the same number of times score identically however much unrelated material one of
+/// them carries. Flag 33 adds flag 1's `1 + log(document length)` division and separates them by
+/// length alone.
+///
+/// **The bite:** under flag `32` both documents receive the SAME `ts_rank` (one match each, same
+/// weight) and `short > long` fails on equality. This is one of the two things migration
+/// `20260805000020` warns are silently reverted by re-deriving `search_exact` from an older
+/// migration; the other is the phrase parser below. Re-homed from `fts_norm_is_length_normalized`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fts_norm_is_length_normalized(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ftslen").await;
+
+    // Both bodies contain "peregrine" exactly once, at the same weight (B). Only their length
+    // differs, so only length can separate the two scores.
+    let filler: String = (0..300).map(|i| format!("filler{i} ")).collect::<String>();
+
+    let short = mk(&pool, home, owner, emitter, "short", "peregrine stoops").await;
+    let long = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "long",
+        &format!("peregrine stoops {filler}"),
+    )
+    .await;
+
+    let rows = exact(&pool, owner, "peregrine", None).await;
+    let score = |id: Uuid| {
+        rows.iter()
+            .find(|(r, _)| *r == id)
+            .map(|(_, s)| *s)
+            .expect("both documents carry the term")
+    };
+    let (s, l) = (score(short), score(long));
+
+    assert!(
+        s > l,
+        "one match in a short document must out-rank one match buried in a long one; \
+         short={s} long={l}"
+    );
+    assert!(
+        s > 0.0 && s < 1.0,
+        "flag 33 retains 32's rank/(rank+1), so the score stays in [0,1): got {s}"
+    );
+}
+
+/// `search_exact` parses with `websearch_to_tsquery`, so a quoted phrase forces adjacency.
+///
+/// Two resources carry both terms; only the one where they are ADJACENT matches the quoted query,
+/// while the unquoted query still surfaces both. The parser is the second thing migration
+/// `20260805000020` warns is silently reverted by re-deriving the arm from a pre-`20260801000010`
+/// definition — `plainto_tsquery` would return both for the quoted form, and no other assertion in
+/// this file could tell. Re-homed from `fts_candidates_supports_quoted_phrase` (issue #356).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_exact_honours_a_quoted_phrase(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "phrase").await;
+
+    let adjacent = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Adjacent",
+        "The peregrine falcon stoops at terminal velocity.",
+    )
+    .await;
+    let apart = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Apart",
+        "The peregrine is a bird; a falcon is any of several raptors.",
+    )
+    .await;
+
+    let unquoted: Vec<Uuid> = exact(&pool, owner, "peregrine falcon", None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        unquoted.contains(&adjacent) && unquoted.contains(&apart),
+        "precondition: both documents carry both terms, so the unquoted query returns both"
+    );
+
+    let quoted: Vec<Uuid> = exact(&pool, owner, "\"peregrine falcon\"", None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        quoted.contains(&adjacent),
+        "the quoted phrase matches the document whose terms are adjacent"
+    );
+    assert!(
+        !quoted.contains(&apart),
+        "the quoted phrase must NOT match a document that merely carries both terms apart — \
+         plainto_tsquery would return it and websearch_to_tsquery does not"
+    );
+}
+
+/// An empty query is a term-zero, not a match-everything.
+///
+/// `search_exact`'s `p_query IS NOT NULL AND p_query <> ''` guard: without it `websearch_to_tsquery`
+/// on `''` yields an empty tsquery and the `@@` operator would decide the corpus, which is not a
+/// decision this arm may make. Re-homed from `fts_candidates_normalized_and_scoped`'s empty-query
+/// arm, which was the only assertion in that test not already covered here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn search_exact_returns_nothing_for_an_empty_query(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "empty").await;
+
+    let present = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Falconry",
+        "The peregrine stoops at terminal velocity.",
+    )
+    .await;
+    assert!(
+        exact(&pool, owner, "peregrine", None)
+            .await
+            .iter()
+            .any(|(id, _)| *id == present),
+        "precondition: the corpus is non-empty and reachable, so an empty result below is the \
+         guard's doing and not the fixture's"
+    );
+
+    assert!(
+        exact(&pool, owner, "", None).await.is_empty(),
+        "an empty query yields no candidates"
     );
 }

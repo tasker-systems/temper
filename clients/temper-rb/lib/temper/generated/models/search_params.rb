@@ -19,7 +19,7 @@ module Temper::Generated
     # Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.  Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise a set `cogmap_id` is treated as a one-element set.
     attr_accessor :cogmap_id
 
-    # Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+    # Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.  **A set larger than one is now a `400`.** Search scopes to a single anchor; asking several maps at once is a composition, which is `/api/query`'s job. The plural is kept because clients send it and a one-element set is still honoured.
     attr_accessor :cogmap_ids
 
     # Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.
@@ -40,7 +40,7 @@ module Temper::Generated
     # Plain-text query for full-text search.
     attr_accessor :query
 
-    # Postgres text-search configuration (default \"english\").  NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates` (Beat 1 kept multilingual storage-only); this param does not affect results yet.
+    # Postgres text-search configuration (default \"english\").  NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     attr_accessor :search_config
 
     # Attribute mapping from ruby-style variable name to JSON key.

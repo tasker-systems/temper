@@ -4599,9 +4599,12 @@ export interface components {
              */
             cogmap_id?: string | null;
             /**
-             * @description Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive
-             *     beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older
-             *     server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+             * @description Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to
+             *     `cogmap_id`. Mutually exclusive with `context_ref`.
+             *
+             *     **A set larger than one is now a `400`.** Search scopes to a single anchor; asking several
+             *     maps at once is a composition, which is `/api/query`'s job. The plural is kept because
+             *     clients send it and a one-element set is still honoured.
              */
             cogmap_ids?: string[] | null;
             /** @description Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side. */
@@ -4625,7 +4628,7 @@ export interface components {
             /**
              * @description Postgres text-search configuration (default "english").
              *
-             *     NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates`
+             *     NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function
              *     (Beat 1 kept multilingual storage-only); this param does not affect results yet.
              */
             search_config?: string;

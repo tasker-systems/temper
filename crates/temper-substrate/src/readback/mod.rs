@@ -25,12 +25,25 @@
 //!
 //! Reads are compile-time `query!`-family macros, so each leaves an entry in the workspace `.sqlx`
 //! cache and is checked against the live schema at build time. **Three** are runtime `sqlx::query` /
-//! `query_as`, all for one reason — a `$n::vector` bind the macros cannot type ([`vector_search`],
-//! [`unified_search`], [`wayfind_scope_ids`]). That is the allow-listed exception class and the
-//! whole of it here; it is deliberately not a house style. Until 2026-07-30 sixteen further reads in
-//! this module were runtime *"for consistency"* with those three, which left them absent from the
-//! cache — and the cache is the record a schema/binary change detector reads, so an exemption taken
-//! for tidiness was subtracting from the coverage of a safety check.
+//! `query_as` — [`vector_search`], [`search_wide`], [`wayfind_region_diagnostics`] — each for the
+//! one allow-listed reason, a `$n::vector` bind the macros cannot type. That reason is the whole of
+//! the class: a read that cannot state it does not belong here, and none of the three is exempt for
+//! any other ground.
+//!
+//! **The count in this paragraph was wrong for longer than anyone noticed, which is worth knowing
+//! before trusting the next one.** Until 2026-08-06 it read *"Three"* and named `unified_search` and
+//! `wayfind_scope_ids` — while the file actually held **seven** runtime reads. Three of the seven
+//! (`unified_search`, `wayfind_scope_ids`, `wayfind_scope_reach`) were retired with the blended
+//! search mechanism. A fourth, [`search_exact`], was a genuine drift: it binds a principal, query
+//! text and an anchor pair, with **no vector and no cast**, so it had been sitting outside the cache
+//! with no reason anyone could state. It was converted to a `query!` macro rather than documented as
+//! an exception, because an exemption without a ground is exactly the failure the paragraph below
+//! records. **Count from the file, not from this sentence.**
+//!
+//! **The exemption must not spread.** Until 2026-07-30 sixteen further reads in this module were
+//! runtime *"for consistency"* with the vector ones, which left them absent from the cache — and the
+//! cache is the record a schema/binary change detector reads, so an exemption taken for tidiness was
+//! subtracting from the coverage of a safety check. They were clawed back.
 //!
 //! A macro read states its own nullability, so several carry `!` / `?` overrides. Each one is a
 //! claim about the SQL (a set-returning function's contract, a `COALESCE`, an INNER JOIN) and is
@@ -882,8 +895,8 @@ pub async fn find_edge(
 /// search read floor. Reads the stored `kb_resource_search_index` tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
 ///
-/// The query is parsed with `websearch_to_tsquery` (issue #356) — mirroring the Surface A
-/// `search_fts_candidates` SQL function — so `"quoted phrases"`, `OR`, and `-negation` are
+/// The query is parsed with `websearch_to_tsquery` (issue #356) — mirroring the `search_exact` SQL
+/// function, which the exact arm of `/api/search` runs — so `"quoted phrases"`, `OR`, and `-negation` are
 /// expressible. Plain unquoted input parses identically to `plainto_tsquery`, so this is fully
 /// backward-compatible (the `fts_search_parity_with_inline_recipe` test keeps a `plainto_tsquery`
 /// oracle precisely to pin that equivalence).
@@ -969,7 +982,7 @@ fn format_pgvector(v: &[f32]) -> String {
 ///
 /// The query embedding is formatted to a pgvector text literal and bound into a `$1::vector` cast.
 /// Runtime `sqlx::query` with the `::vector` cast is the ESTABLISHED pgvector-macro exception —
-/// production's own `unified_search` uses runtime `query_as` for exactly this reason (the `query!`
+/// production's own [`search_wide`] uses runtime `query_as` for exactly this reason (the `query!`
 /// macros don't support the `::vector` cast).
 ///
 /// Read-only; no writes. Schema-qualified throughout — see the module-level note.
@@ -1510,16 +1523,31 @@ pub async fn search_exact(
     query: Option<&str>,
     anchor: Option<HomeAnchor>,
 ) -> Result<Vec<ExactHit>> {
-    let hits = sqlx::query_as::<_, ExactHit>(
-        "SELECT resource_id, fts_norm FROM search_exact($1, $2, $3, $4)",
+    // Compile-time `query!`, unlike its sibling [`search_wide`]: this arm binds no vector, so the
+    // module note's `::vector` exemption never covered it and a runtime read here would sit outside
+    // the `.sqlx` cache for no stated reason — which is the drift that note exists to prevent.
+    //
+    // Both `!` overrides restate what the function's own `RETURNS TABLE(resource_id uuid, fts_norm
+    // real)` already guarantees: sqlx types every column of a set-returning function as nullable
+    // regardless of the declaration, so without them the row fields would arrive as `Option`.
+    let rows = sqlx::query!(
+        r#"SELECT resource_id AS "resource_id!", fts_norm AS "fts_norm!"
+             FROM search_exact($1, $2, $3, $4)"#,
+        principal.uuid(),
+        query,
+        anchor.map(|a| a.table()),
+        anchor.map(|a| a.uuid()),
     )
-    .bind(principal)
-    .bind(query)
-    .bind(anchor.map(|a| a.table()))
-    .bind(anchor.map(|a| a.uuid()))
     .fetch_all(pool)
     .await?;
-    Ok(hits)
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ExactHit {
+            resource_id: ResourceId::from(row.resource_id),
+            fts_norm: row.fts_norm,
+        })
+        .collect())
 }
 
 /// The wide arm. Runtime `sqlx::query_as` — the `::vector` cast forbids the compile-time macros
@@ -1690,74 +1718,12 @@ pub async fn hit_identities(
         .collect()
 }
 
-/// One scored hit from Surface A unified search (Beat 2). The scores are the real blended sub-scores —
-/// the either/or path's 0.0 placeholders are gone.
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct ScoredHit {
-    pub resource_id: ResourceId,
-    pub fts_score: f32,
-    pub vector_score: f32,
-    pub graph_score: f32,
-    pub combined_score: f32,
-}
-
-/// Request parameters for [`unified_search`] (params struct — 12 domain fields). Borrowed views; the
-/// caller owns the underlying `SearchParams`. Empty `seed_ids`/`edge_types` ⇒ no explicit seeds / all
-/// edge kinds. `None` `query`/`embedding` ⇒ that signal's term is zeroed in the blend.
-/// `scope_ids`: when `Some`, restricts the corpus to the supplied resource ids; `None` ⇒ unrestricted.
-#[derive(Debug, Clone)]
-pub struct UnifiedSearchQuery<'a> {
-    pub principal: ProfileId,
-    pub query: Option<&'a str>,
-    pub embedding: Option<&'a [f32]>,
-    pub seed_ids: &'a [ResourceId],
-    pub depth: i32,
-    pub edge_types: &'a [String],
-    pub context_id: Option<ContextId>,
-    pub doc_type: Option<&'a str>,
-    pub graph_expand: bool,
-    pub limit: i64,
-    pub offset: i64,
-    pub scope_ids: Option<&'a [Uuid]>,
-    /// When true AND `seed_ids` is non-empty, the auto-seed union (blend top-N) is suppressed so the
-    /// explicit seeds alone define the graph neighborhood (issue #357). No effect with no seeds.
-    pub seed_only: bool,
-}
-
-/// Surface A general search (Beat 2): one composed SQL statement (`unified_search`) blending FTS +
-/// vector + graph into ranked, scored hits. Runtime `sqlx::query_as` — the `::vector` cast forbids the
-/// compile-time macros (module note). All tuning constants live in the SQL function, not here.
-pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<Vec<ScoredHit>> {
-    let emb_text = q.embedding.map(format_pgvector);
-    let edge_types: Vec<String> = q.edge_types.to_vec();
-    let hits = sqlx::query_as::<_, ScoredHit>(
-        "SELECT resource_id, fts_score, vector_score, graph_score, combined_score
-           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[], $13)",
-    )
-    .bind(q.principal)
-    .bind(q.query)
-    .bind(emb_text)        // NULL when None → p_emb NULL → vector term zeroed
-    .bind(q.seed_ids)
-    .bind(q.depth)
-    .bind(edge_types)
-    .bind(q.context_id)
-    .bind(q.doc_type)
-    .bind(q.graph_expand)
-    .bind(q.limit)
-    .bind(q.offset)
-    .bind(q.scope_ids)     // $12 — Option<&[Uuid]> binds to uuid[] / NULL
-    .bind(q.seed_only)     // $13 — suppress the auto-seed union when explicit seeds are given
-    .fetch_all(pool)
-    .await?;
-    Ok(hits)
-}
-
-/// Request parameters for [`wayfind_scope_ids`] (params struct). Borrowed embedding view; the caller
-/// owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under that lens's
-/// `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None` `regions` ⇒ the
-/// SQL `k`-CTE default. `None` `anchor` ⇒ pool regions from **every** visible anchor over both kinds;
-/// `Some` ⇒ "wayfind within this anchor" (spec §3.7). A `Some` anchor the principal cannot read is not
-/// an error — it simply admits no rows, because the scope is still intersected with
+/// Request parameters for [`wayfind_region_diagnostics`] (params struct). Borrowed embedding view;
+/// the caller owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under
+/// that lens's `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None`
+/// `regions` ⇒ the SQL `k`-CTE default. `None` `anchor` ⇒ pool regions from **every** visible anchor
+/// over both kinds; `Some` ⇒ "wayfind within this anchor" (spec §3.7). A `Some` anchor the principal
+/// cannot read is not an error — it simply admits no rows, because the pool is still intersected with
 /// `visible_region_anchors` inside the SQL.
 #[derive(Debug, Clone)]
 pub struct WayfindScopeQuery<'a> {
@@ -1768,114 +1734,15 @@ pub struct WayfindScopeQuery<'a> {
     pub anchor: Option<HomeAnchor>,
 }
 
-/// Resolve the wayfind bounding resource-id set — the region-salience funnel across the principal's
-/// visible **anchors of both kinds** (cogmaps *and* contexts, spec §3.7), UNION the direct homed scope
-/// of region-less anchors (cold-start §5). The returned ids feed `unified_search` as `p_scope_ids`;
-/// this function only establishes scope.
-///
-/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
-/// macros (the same established exception as [`unified_search`] / [`vector_search`]). Since Task 2 the
-/// region SCORING and per-map round-robin selection live in `wayfind_region_scores`; this SQL function
-/// only ASSEMBLES scope from the winners (member-deref) plus cold-start. All tuning constants (α/β, the
-/// anchor prior κ, default/ceiling N, thin threshold, recall floor, and the per-anchor-kind
-/// normalization) live in the SQL, never here. Gate is in the SQL at every stage: a principal who can
-/// see no anchors gets zero rows, never an error.
-pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Result<Vec<Uuid>> {
-    let emb_text = q.embedding.map(format_pgvector);
-    let ids: Vec<(Uuid,)> =
-        sqlx::query_as("SELECT wayfind_scope_ids($1, $2, $3::vector, $4, $5, $6)")
-            .bind(q.principal)
-            .bind(q.lens_id)
-            .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
-            .bind(q.regions)
-            // NULL/NULL when None → unscoped: pool every visible anchor over both kinds.
-            .bind(q.anchor.map(HomeAnchor::table))
-            .bind(q.anchor.map(HomeAnchor::uuid))
-            .fetch_all(pool)
-            .await?;
-    Ok(ids.into_iter().map(|(id,)| id).collect())
-}
-
-/// A wayfind pass's bounding scope **plus** the reach scalars that make it legible (issue #585
-/// Task 4), as returned by `wayfind_scope_reach`.
-///
-/// [`scope_ids`](Self::scope_ids) is identical to what [`wayfind_scope_ids`] returns — that function
-/// is now a wrapper over the same SQL — so a caller that needs both pays one round-trip and one
-/// Stage-1 scan, not two.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WayfindScopeReach {
-    /// The bounding resource-id set fed to `unified_search` as `p_scope_ids`.
-    pub scope_ids: Vec<Uuid>,
-    /// How many region anchors the principal can see, after any single-anchor scoping — the
-    /// denominator "reached" is read against.
-    pub anchors_visible: i32,
-    /// How many of those actually contributed a resource to the scope, by **either** the
-    /// region-winner arm or the cold-start arm. This is the signal `scope_size` cannot give: a
-    /// resource count in the hundreds is compatible with every one of them coming from one anchor.
-    ///
-    /// **Has a floor, and on a real corpus not a small one.** Every region-less anchor holding
-    /// resources is admitted wholesale by cold-start on every query, so it is *always* reached —
-    /// measured at 6 of 10 visible anchors on prod. Read this together with
-    /// [`anchors_selected`](Self::anchors_selected), never alone.
-    pub anchors_reached: i32,
-    /// How many anchors won a region slot — the strictly **competitive** subset of
-    /// [`anchors_reached`](Self::anchors_reached). This is what makes a monopoly visible: one anchor
-    /// holding the whole width is `anchors_selected == 1` however high `anchors_reached` climbs.
-    /// The difference between the two is the count admitted wholesale, without any query relevance.
-    pub anchors_selected: i32,
-    /// The region width actually applied, after the SQL clamp into `[1, max_n]` with the SQL default
-    /// substituted for a `None` request. Reported rather than the constants being copied out of SQL,
-    /// so a caller can observe the default and the ceiling without a second definition of either
-    /// existing to drift.
-    pub regions_effective: i32,
-}
-
-/// Resolve a wayfind pass's bounding scope together with its reach scalars — one round-trip, one
-/// Stage-1 scan. Prefer this over [`wayfind_scope_ids`] anywhere the caller reports diagnostics;
-/// the plain id-set form remains for callers that genuinely only need ids.
-///
-/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
-/// macros (the same established exception as [`wayfind_scope_ids`] / [`unified_search`]). Always one
-/// row: an empty scope is an empty array with zeroed counts, never zero rows, because "nothing was
-/// reached" is the case a caller most needs reported and must not be indistinguishable from a
-/// missing answer. Gate is in the SQL; a principal who can see no anchors gets an empty scope, never
-/// an error.
-pub async fn wayfind_scope_reach(
-    pool: &PgPool,
-    q: WayfindScopeQuery<'_>,
-) -> Result<WayfindScopeReach> {
-    let emb_text = q.embedding.map(format_pgvector);
-    let row: (Vec<Uuid>, i32, i32, i32, i32) = sqlx::query_as(
-        "SELECT scope_ids, anchors_visible, anchors_reached, anchors_selected, regions_effective \
-         FROM wayfind_scope_reach($1, $2, $3::vector, $4, $5, $6)",
-    )
-    .bind(q.principal)
-    .bind(q.lens_id)
-    .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
-    .bind(q.regions)
-    .bind(q.anchor.map(HomeAnchor::table))
-    .bind(q.anchor.map(HomeAnchor::uuid))
-    .fetch_one(pool)
-    .await?;
-    Ok(WayfindScopeReach {
-        scope_ids: row.0,
-        anchors_visible: row.1,
-        anchors_reached: row.2,
-        anchors_selected: row.3,
-        regions_effective: row.4,
-    })
-}
-
 /// One candidate region's Stage-1 wayfind competition signal, as returned by
-/// `wayfind_region_diagnostics` (issue #585). These are the per-region scores `wayfind_scope_ids`
-/// consumes but discards — surfaced here keyed by map so the cross-map competition is observable.
+/// `wayfind_region_diagnostics` (issue #585). These are the per-region scores `wayfind_region_scores`
+/// computes — surfaced here keyed by map so the cross-map competition is observable.
 /// Substrate-local; read-only instrumentation, not a wire type.
 ///
-/// Since Task 2 both functions read ONE scoring home (`wayfind_region_scores`), so `in_top_n` is
-/// exactly the flag "this region's members are in the wayfind scope for this query" — computed once,
-/// not mirrored. Selection is per-map round-robin over `region_score = α·sal_norm + β·query_cos +
-/// κ·prior`, so `in_top_n`'s per-map distribution is the witness for "no single map monopolizes the
-/// top-N".
+/// There is ONE scoring home (`wayfind_region_scores`) and this is its only read surface, so
+/// `in_top_n` is the flag that function itself computes rather than a mirror of it. Selection is
+/// per-map round-robin over `region_score = α·sal_norm + β·query_cos + κ·prior`, so `in_top_n`'s
+/// per-map distribution is the witness for "no single map monopolizes the top-N".
 #[derive(Debug, Clone, PartialEq)]
 pub struct WayfindRegionDiagnosticRow {
     /// The candidate region (`kb_cogmap_regions.id`).
@@ -1897,21 +1764,23 @@ pub struct WayfindRegionDiagnosticRow {
     pub query_cos: f64,
     /// The composite `α·sal_norm + β·query_cos + κ·prior` the top-N cut is applied to.
     pub region_score: f64,
-    /// Whether this region cleared the Stage-1 top-N cut for this query — i.e. whether its members
-    /// enter the wayfind scope. The per-map distribution of `true`s is what makes a monopoly visible.
+    /// Whether this region cleared the Stage-1 top-N cut for this query. The per-map distribution of
+    /// `true`s is what makes a monopoly visible.
     pub in_top_n: bool,
 }
 
 /// Read-only instrumentation of wayfind's Stage-1 region selection (SQL `wayfind_region_diagnostics`,
 /// issue #585): one row per candidate region across the principal's visible anchors, carrying the
-/// `sal_norm` / `query_cos` / `region_score` and top-N flag that [`wayfind_scope_ids`] computes and
-/// discards. Takes the IDENTICAL [`WayfindScopeQuery`] inputs as [`wayfind_scope_ids`] — same principal,
-/// lens, embedding, region count, and anchor scope — so the reported competition is exactly the one that
-/// query would run. Rows come back highest-`region_score` first.
+/// `sal_norm` / `query_cos` / `region_score` and top-N flag that `wayfind_region_scores` computes and
+/// its own callers otherwise discard. Rows come back highest-`region_score` first.
+///
+/// **This is the ONLY read surface over those internals**, and the scope funnel that used to sit
+/// beside it (`wayfind_scope_ids` / `wayfind_scope_reach`) went with the blended search mechanism on
+/// 2026-08-06. So a change to `wayfind_region_scores` is observable from here or nowhere.
 ///
 /// Gate is in the SQL (`visible_region_anchors`): a principal who can see no anchors gets zero rows,
 /// never an error. Runtime `sqlx::query` — the `::vector` cast on the embedding forbids the compile-time
-/// macros (the same established exception as [`wayfind_scope_ids`] / [`unified_search`]).
+/// macros (the same established exception as [`vector_search`]).
 pub async fn wayfind_region_diagnostics(
     pool: &PgPool,
     q: WayfindScopeQuery<'_>,

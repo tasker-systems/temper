@@ -74,7 +74,8 @@ pub async fn list_resource_facets(
 
     // `query_as!`, not runtime `query_as`: the column list and the ORDER BY are both static, so
     // nothing here defeats the macro, and the runtime form would forfeit compile-time verification
-    // for no gain. The `::vector`/dynamic-ORDER-BY exception belongs to `unified_search`.
+    // for no gain. The `::vector` exception belongs to the vector reads (`search_wide` and the
+    // wayfind diagnostics), not here.
     //
     // Selected straight into the wire type rather than into a tuple destructured field-by-field —
     // the aliases below ARE the mapping, so there is no positional hand-off to get wrong. The three

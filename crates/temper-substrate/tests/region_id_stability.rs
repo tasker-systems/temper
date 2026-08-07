@@ -3,8 +3,9 @@
 //!
 //! `materialize` folds every live region and re-asserts the partition. Before this change every
 //! re-assert minted a fresh UUID, so a region that came back bit-for-bit identical came back with a
-//! **new id** — a lie to `graph_region_members`, `graph_cogmap_territories`, wayfind, `region_metrics`
-//! and `atlas_search`, all of which hold region ids.
+//! **new id** — a lie to `graph_region_members`, `graph_cogmap_territories`, `wayfind_region_scores`
+//! and `region_metrics`, all of which hold region ids. (`atlas_search` was a fifth such consumer
+//! until it was dropped alongside `unified_search`.)
 //!
 //! ## These tests assert on IDS, not counts
 //!

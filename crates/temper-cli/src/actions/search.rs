@@ -36,7 +36,7 @@ pub struct CliSearchArgs<'a> {
 
 /// Build a SearchParams from CLI arguments.
 pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
-    // Mirror the server's guard (`resolve_search_scope`): `--context` and `--cogmap` name two
+    // Mirror the server's guard (`resolve_search_anchor`): `--context` and `--cogmap` name two
     // different homes and remain mutually exclusive. Reject here rather than relying solely on the
     // server's BadRequest, so the error surfaces before any network round-trip.
     if args.context.is_some() && !args.cogmap.is_empty() {

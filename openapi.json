@@ -11810,7 +11810,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive\nbeside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older\nserver ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`."
+            "description": "Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to\n`cogmap_id`. Mutually exclusive with `context_ref`.\n\n**A set larger than one is now a `400`.** Search scopes to a single anchor; asking several\nmaps at once is a composition, which is `/api/query`'s job. The plural is kept because\nclients send it and a one-element set is still honoured."
           },
           "context_ref": {
             "type": [
@@ -11862,7 +11862,7 @@
           },
           "search_config": {
             "type": "string",
-            "description": "Postgres text-search configuration (default \"english\").\n\nNOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates`\n(Beat 1 kept multilingual storage-only); this param does not affect results yet."
+            "description": "Postgres text-search configuration (default \"english\").\n\nNOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function\n(Beat 1 kept multilingual storage-only); this param does not affect results yet."
           }
         }
       },

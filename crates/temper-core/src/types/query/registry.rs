@@ -23,16 +23,21 @@ use super::scalars::BoundTerm;
 ///
 /// Their mechanics are live — `search_graph_expand` and `wayfind_region_scores` are both still
 /// deployed — but as of phase 1 steps 2-3 **no door reaches either one**. `/api/search` no longer
-/// expands across edges and no longer runs the region funnel, and `unified_search` itself, the host
-/// named below, is now called from tests only. So `Fused` is imprecise in its second clause ("the
-/// host has one" — it does not), `Unbuilt` would be false about a function that is right there, and
-/// `Served` would be false about a door that does not exist.
+/// expands across edges and no longer runs the region funnel, and `unified_search`, the host named
+/// below, no longer exists at all: it was dropped from the schema on 2026-08-06 with the rest of the
+/// blended search mechanism. So `Fused` is now false in BOTH its clauses — there is no host, and it
+/// has no door — while `Unbuilt` would still be false about a function that is right there, and
+/// `Served` would still be false about a door that does not exist.
 ///
 /// **A fourth variant is deliberately NOT added.** `/api/query` is the next phase and is being taken
 /// up immediately; it gives both acts doors and expresses this remainder properly, so a variant
 /// minted here would be born obsolete — churn on a shipped contract type, and a semver-breaking
 /// widening at that. The declarations and their `served_by` mechanics are kept intact so the record
 /// that these functions exist and are stranded is not lost in the meantime.
+///
+/// The cost of holding the line is that the emitted `host` now names nothing. That is tolerable
+/// only because `build_state` has no runtime consumer — nothing branches on it; it is a wire and
+/// codegen marker — so a dangling host misleads a reader of the contract and misroutes no call.
 ///
 /// `[provisional — 2026-08-05; resolve in phase 4]`
 fn provisionally_unexpressed() -> BuildState {
@@ -41,12 +46,19 @@ fn provisionally_unexpressed() -> BuildState {
     }
 }
 
-/// Door coverage for the five acts fused into `unified_search`.
+/// The `/api/search` door shape: all three doors present and serving, differing only in which bound
+/// terms a door cannot supply. Five declarations write it.
 ///
-/// All three doors reach the host: `temper search`
-/// `[verified — crates/temper-cli/src/cli.rs:287]`, `POST /api/search`
+/// The name is historical — it was minted when those five acts were fused into one host. The host is
+/// gone (retired 2026-08-06) and the doors did not move with it, which is why this helper is
+/// unchanged: the three doors are `temper search`
+/// `[verified — crates/temper-cli/src/cli.rs:286]`, `POST /api/search`
 /// `[verified — crates/temper-api/src/routes.rs:164]`, and the MCP `search` tool
 /// `[verified — crates/temper-mcp/src/service.rs:351-360]`.
+///
+/// Two of the five — `follow-from` and `survey` — carry this shape while
+/// [`provisionally_unexpressed`] records that no door in fact reaches their mechanic. That tension is
+/// stated there, and `/api/query` is what resolves it; it is not resolved by editing this map.
 ///
 /// The MCP tool takes the whole [`crate::types::api::SearchParams`] as its `Parameters`, so every
 /// wire field is reachable from it — worth stating because grepping the `temper-mcp` crate for a
@@ -100,8 +112,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             asker_holds: "I can quote the exact words".to_string(),
             served_by: Some("search_exact".to_string()),
             build_state: BuildState::Served,
-            // Post-filter in unified_search's `corpus` CTE. Membership-equivalent to a pre-filter
-            // because the FTS arm carries no top-k, so nothing can be crowded out of it.
+            // The exact arm carries no top-k, so nothing can be crowded out of it and where the
+            // bound is applied cannot change WHICH resources come back — only how many rows the
+            // scan touches.
             accepts_bounds: vec![IdKind::Resource],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
@@ -317,9 +330,12 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::new(),
             produces: None,
-            // The anti-act is absent from every door BY DECLARATION, and that is the point: the
-            // cold-start admission it names still runs inside `unified_search`, but no door offers
-            // it AS an act. Promoting it means writing `Serves` here, deliberately.
+            // The anti-act is absent from every door BY DECLARATION, and that is the point: no door
+            // offers cold-start admission AS an act. Its one mechanized home was the `thin_anchors`
+            // arm of `wayfind_scope_reach`, retired 2026-08-06 with the wayfind scope funnel, so
+            // today it is neither offered nor deployed. That changes nothing here: the declaration
+            // was always about the DOOR, and the refusal is what a later phase must delete on
+            // purpose. Promoting it means writing `Serves` here, deliberately.
             door_coverage: BTreeMap::from([
                 (Door::Cli, DoorReach::Absent),
                 (Door::Api, DoorReach::Absent),

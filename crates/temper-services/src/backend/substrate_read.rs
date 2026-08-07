@@ -50,9 +50,9 @@ fn api_err(e: impl std::fmt::Display) -> ApiError {
 }
 
 /// Tag an internal search fault with the stage it came from (issue #427), so a generic surface error
-/// names the failing stage (`unified_search` — the blended FTS/vector/graph query — vs `enrichment` —
-/// per-row display assembly) instead of collapsing to one opaque "Error occurred during tool
-/// execution" string. Both surfaces (`temper-api`, `temper-mcp`) format the resulting `ApiError`
+/// names the failing stage (`search_exact` or `search_wide` — the two arms, which fail independently
+/// — vs `enrichment`, per-row display assembly) instead of collapsing to one opaque "Error occurred
+/// during tool execution" string. Both surfaces (`temper-api`, `temper-mcp`) format the resulting `ApiError`
 /// message verbatim, so the stage rides through to the client. Caller-facing 400/404s from scope
 /// resolution (a bad `context_ref`) return upstream and never pass through here — they are already
 /// self-describing. The embed stage cannot reach here: it degrades to FTS + graph rather than erroring.
@@ -160,7 +160,7 @@ async fn filtered_visible_page(
         _ => None,
     };
     // `context_ref` and a cogmap scope name two different homes — reject the pair server-side, exactly
-    // as `resolve_search_scope` does for search. The CLI/MCP already guard it; this closes the raw-HTTP
+    // as `resolve_search_anchor` does for search. The CLI/MCP already guard it; this closes the raw-HTTP
     // gap where the combination silently composed to the empty set instead of a 400.
     if context_id.is_some() && cogmap_ids.is_some() {
         return Err(ApiError::BadRequest(
@@ -222,8 +222,9 @@ async fn filtered_visible_page(
            LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
           WHERE r.is_active
             -- An interrupted segmented ingest is NOT a document. It is excluded from list (and from
-            -- search, in `unified_search`'s corpus CTE) until `resource_finalize` says the last block
-            -- landed. It stays addressable and readable via `show`, which reports `ingest_state`.
+            -- search, by the same predicate carried inline in `search_exact` and `search_wide`)
+            -- until `resource_finalize` says the last block landed. It stays addressable and
+            -- readable via `show`, which reports `ingest_state`.
             --
             -- Deliberately HERE and not in `resources_visible_to`: visibility is an *authorization*
             -- predicate, completeness is a *content* predicate. Folding one into the other would
@@ -585,16 +586,6 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
     }
 }
 
-/// Resolve the scope selectors (§6) into the corpus bounds for `unified_search`: an optional context id
-/// (Surface A `context_ref`) and an optional explicit scope-id set (Surface B — `cogmap_id` single-map,
-/// or the `wayfind` region-salience funnel). An empty scope-id set is the deny case — it yields zero
-/// rows downstream via `c.id = ANY('{}')`, never an error ("no view from nowhere", spec §5/§7).
-///
-/// `context_ref` and `cogmap_id` remain mutually exclusive — they name two different homes, and asking
-/// for both is incoherent. But **`wayfind` now composes with either** (spec §3.7): since wayfind pools
-/// regions over both anchor kinds, `--context X --wayfind` is no longer a contradiction, it means
-/// *"wayfind within this context"* — the anchor scopes the region pool. That composition is the whole
-/// point of T7, so the old three-way exclusion is gone.
 /// Resolve the scope selectors into the single thing both arms take: an anchor, or nothing.
 ///
 /// `context_ref` and `cogmap_id` name two different homes, so asking for both is incoherent and is a
@@ -850,9 +841,6 @@ fn search_hint(
     }
 }
 
-/// `search` — Surface A general search (Beat 2): one composed `unified_search` readback blending FTS +
-/// vector + graph into ranked, scored hits, then per-row display enrichment. Replaces the either/or,
-/// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
 /// Refuse an embedding that cannot have a cosine direction, BEFORE it reaches the database.
 ///
 /// pgvector's `<=>` against a zero-magnitude vector is **NaN**. That NaN propagates through
@@ -1011,9 +999,9 @@ pub async fn search_select(
 }
 
 /// How many nearest chunks the wide arm's UNSCOPED branch draws before visibility and completeness
-/// are applied. Carried over from `unified_search`'s `vector_k` — the one tuning constant this phase
-/// keeps, because it governs ADMISSION (how much the index is asked for) rather than ranking (how
-/// what came back is ordered). Nothing weighs it against anything.
+/// are applied. Carried over from the retired `unified_search`'s `vector_k` — the one tuning constant
+/// this phase keeps, because it governs ADMISSION (how much the index is asked for) rather than
+/// ranking (how what came back is ordered). Nothing weighs it against anything.
 ///
 /// **`hnsw.ef_search` is pinned on `search_wide` at or above this value.** Raising it past the pin
 /// silently truncates the draw — the pin's whole reason for existing. See

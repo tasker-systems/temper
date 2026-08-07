@@ -362,9 +362,12 @@ async fn search_rejects_empty_params(pool: sqlx::PgPool) {
     assert!(result.is_err(), "search with no inputs should fail");
 }
 
-/// Unified search with both text query and embedding returns results with origin "both".
+/// Both signals in one request: each arm answers under its own name, and nothing combines them.
+///
+/// Named `unified_search_both_modes` until that function was dropped; the body had already been
+/// rewritten to the two-arm response, so only the name was still describing the blend.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn unified_search_both_modes(pool: sqlx::PgPool) {
+async fn both_arms_answer_when_both_signals_are_supplied(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
         .profile()
