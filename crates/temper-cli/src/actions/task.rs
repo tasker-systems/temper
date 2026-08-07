@@ -104,7 +104,7 @@ pub fn load_tasks(config: &Config, context: Option<&str>) -> Result<Vec<TaskInfo
 /// the managed tier and `u32` on `TaskInfo`, so negative/out-of-range values clamp to `None`
 /// (unsequenced, sorts last). `branch`/`pr` are not in the list projection today — they read
 /// as `None` here (restored by task 019f3d55).
-fn task_info_from_row(
+pub(crate) fn task_info_from_row(
     row: temper_core::types::resource_view::ResourceView,
     context: &str,
 ) -> TaskInfo {

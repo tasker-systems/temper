@@ -4,6 +4,7 @@ use temper_workflow::operations::decorated_ref;
 use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
 use crate::actions::runtime;
+use crate::actions::types::TaskInfo;
 use crate::config::Config;
 use crate::error::Result;
 use crate::format::{render, OutputFormat};
@@ -260,11 +261,26 @@ fn session_from_row(row: &temper_core::types::resource_view::ResourceView) -> Wa
 }
 
 /// Collect in-progress tasks for a context from the cloud-backed task list.
+///
+/// The fetch and the filter are separate so the filter has a seam a test can reach: this
+/// half needs a server, [`in_progress_tasks`] does not.
 fn collect_in_progress_tasks(config: &Config, context_ref: &str) -> Vec<WarmupTask> {
     let tasks = match crate::commands::task::load_tasks(config, Some(context_ref)) {
         Ok(t) => t,
         Err(_) => return vec![],
     };
+    in_progress_tasks(tasks)
+}
+
+/// Keep the tasks whose stage is `in-progress`, as [`WarmupTask`]s.
+///
+/// `TaskInfo::stage` is not a column read. It is
+/// `ResourceView::managed_meta.stage` — `temper-stage` in the managed tier — routed through
+/// `task_info_from_row`. `stage`/`mode`/`effort`/`seq` used to be hoisted flat onto the
+/// retired `ResourceRow`, and this filter read them from there; dropping the hoist is
+/// lossless only because `managed_meta` is non-`Option`, so a task with no stage still
+/// reaches this predicate and is simply not `in-progress`.
+fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
     tasks
         .into_iter()
         .filter(|t| t.stage == "in-progress")
@@ -288,6 +304,112 @@ fn collect_in_progress_tasks(config: &Config, context_ref: &str) -> Vec<WarmupTa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `ResourceView` carrying its workflow values where they actually live.
+    ///
+    /// Built field-by-field rather than from a `Default`, deliberately: `ResourceView` has
+    /// no `Default`, and the reason is the point of this test — there is no top-level
+    /// `stage`/`mode`/`effort`/`seq` to accidentally set, so the only way to give this view
+    /// a stage is through `managed_meta`.
+    fn view_with_stage(
+        title: &str,
+        stage: &str,
+    ) -> temper_core::types::resource_view::ResourceView {
+        use temper_core::types::ids::{ProfileId, ResourceId};
+        use temper_core::types::managed_meta::ManagedMeta;
+
+        temper_core::types::resource_view::ResourceView {
+            id: ResourceId::from(uuid::Uuid::now_v7()),
+            r#ref: String::new(),
+            title: title.to_string(),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: None,
+            context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "task".to_string(),
+            owner_handle: "me".to_string(),
+            owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: ManagedMeta {
+                stage: Some(stage.to_string()),
+                mode: Some("build".to_string()),
+                effort: Some("small".to_string()),
+                ..Default::default()
+            },
+            open_meta: None,
+            content: None,
+        }
+    }
+
+    /// **The warmup in-progress filter reads `managed_meta`, not a hoisted column.**
+    ///
+    /// `stage`/`mode`/`effort`/`seq` were flat fields on the retired `ResourceRow`, and this
+    /// filter reached them there. They are not hoisted onto `ResourceView`; they live in
+    /// `managed_meta` under their canonical `temper-*` names, and dropping the hoist is
+    /// lossless only because `managed_meta` is non-`Option`. Nothing else in the repo read
+    /// those four (verified: every other `.stage`/`.mode`/`.effort` in `crates/` is either
+    /// `ManagedMeta` assembly in `readback`, a block ordinal, or `TaskInfo`'s own field), so
+    /// this path is the whole surface of that change and it gets the whole witness.
+    ///
+    /// Both directions are asserted. The positive half alone would pass against a filter
+    /// that admitted everything — which is exactly what a `stage` defaulting to `""` on a
+    /// mis-wired read would NOT do, but a `stage` defaulting to `"in-progress"` would.
+    #[test]
+    fn in_progress_filter_reads_managed_meta_stage() {
+        let rows = vec![
+            view_with_stage("Live Task", "in-progress"),
+            view_with_stage("Parked Task", "backlog"),
+        ];
+        let tasks: Vec<TaskInfo> = rows
+            .into_iter()
+            .map(|row| crate::actions::task::task_info_from_row(row, "@me/ctx"))
+            .collect();
+
+        // The value survived the trip from the managed tier onto `TaskInfo`.
+        assert_eq!(tasks[0].stage, "in-progress");
+        assert_eq!(tasks[1].stage, "backlog");
+
+        let warm = in_progress_tasks(tasks);
+
+        assert_eq!(
+            warm.len(),
+            1,
+            "only the in-progress task warms up: {warm:?}"
+        );
+        assert_eq!(warm[0].title, "Live Task");
+        // `mode` and `effort` came the same way, and they are what warmup actually prints.
+        assert_eq!(warm[0].mode.as_deref(), Some("build"));
+        assert_eq!(warm[0].effort.as_deref(), Some("small"));
+    }
+
+    /// A task with **no** stage in the managed tier is not in progress — and does not
+    /// panic. `managed_meta` is always present; the values inside it are not.
+    #[test]
+    fn a_task_with_no_managed_stage_is_not_in_progress() {
+        let mut row = view_with_stage("Stageless", "in-progress");
+        row.managed_meta.stage = None;
+
+        let task = crate::actions::task::task_info_from_row(row, "@me/ctx");
+        assert_eq!(
+            task.stage, "",
+            "an absent stage reads as empty, not as a stage"
+        );
+
+        assert!(
+            in_progress_tasks(vec![task]).is_empty(),
+            "no stage is not `in-progress`"
+        );
+    }
 
     fn cli_section(sessions: Option<usize>, goals: Option<usize>) -> CliSection {
         CliSection {
