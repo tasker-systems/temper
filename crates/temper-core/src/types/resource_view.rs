@@ -49,10 +49,15 @@ use crate::types::ids::{ContextId, ProfileId, ResourceId};
 // sequence into a single output directory (tools/cargo-make/main.toml:332), and ts-rs truncates
 // a target file on each process's first write. So a type survives the LAST crate's pass only if
 // that crate exports it directly or reaches it as a dependency. temper-workflow runs after
-// temper-core and reaches `BodyStorage`/`IngestState` through `ResourceRow`, so those two are
-// safe to leave in `resource.ts` — its pass re-emits them verbatim. Nothing in temper-workflow
-// references `ResourceView`, so sharing the file silently deleted it (measured: 122 lines, with
-// `generate-ts-types` still exiting 0). A file only temper-core writes cannot be clobbered.
+// temper-core and reaches `BodyStorage`/`IngestState`, so those two are safe to leave in
+// `resource.ts` — its pass re-emits them verbatim. When this type was added, nothing in
+// temper-workflow reached `ResourceView`, and sharing the file silently deleted it (measured: 122
+// lines, with `generate-ts-types` still exiting 0). `ResourceListResponse.rows` is
+// `Vec<ResourceView>` now, so that reachability has changed — but do NOT read that as licence to
+// move this back into `resource.ts`. Reachability is a property of whatever field types happen to
+// exist on the later crate's exported set; it is not a property anything asserts, so it can be
+// removed by an unrelated refactor with no gate saying so. A file only temper-core writes cannot
+// be clobbered, whatever temper-workflow does or stops doing.
 // A `//` comment, not a doc comment: utoipa renders doc comments into `openapi.json`, and a
 // build-system note is not part of the wire contract.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

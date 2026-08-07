@@ -115,12 +115,11 @@ impl From<anyhow::Error> for ReadbackError {
 }
 
 /// One projected list row over the substrate tables — the readback counterpart of production's
-/// `ResourceRow` for the fields the resource-list projection surfaces (`temper-api`'s
-/// `resource_service::list_visible` via the `vault_resources_browse` view): the resource's
-/// `origin_uri` + `title`, its `doc_type`, and the three workflow fields lifted from `managed_meta`
-/// (`temper-stage`/`temper-mode`/`temper-effort`). Each workflow field is `None` when the resource
-/// carries no such property (R1/R3/R5 in the prod-shape fixture), matching the view's
-/// `managed_meta->>'…'` NULL for an absent key.
+/// resource-list projection (temper-services' `substrate_read::filtered_visible_page`) for the
+/// fields that projection surfaces: the resource's `origin_uri` + `title`, its `doc_type`, and the
+/// three workflow fields lifted from `managed_meta` (`temper-stage`/`temper-mode`/`temper-effort`).
+/// Each workflow field is `None` when the resource carries no such property (R1/R3/R5 in the
+/// prod-shape fixture), matching the `kb_resource_workflow_props` pivot's NULL for an absent key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListRow {
     /// The verbatim-carried `origin_uri` (a provenance marker, NOT unique — empty for CLI/agent-created
@@ -138,27 +137,6 @@ pub struct ListRow {
     pub effort: Option<String>,
 }
 
-/// Port of production's resource-list projection (`resource_service::list_visible` over the
-/// `vault_resources_browse` view) onto the substrate tables: returns every synthesized resource (the §0
-/// active set — synthesis never carries soft-deleted rows, so there is no `is_active` filter to apply
-/// here) with the same projected fields production surfaces.
-///
-/// The doctype and the three workflow fields all live in `kb_properties` (synthesis writes
-/// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
-/// inner JOIN — every synthesized resource has one; the workflow keys come from a LEFT JOIN on the
-/// `kb_resource_workflow_props` pivot view (migration `20260709000002` — the one statement of the
-/// per-key pivot, shared with `resource_row` and temper-services' `filtered_visible_page`), so a
-/// resource without them comes back with `NULL` (not dropped). Property values are JSON scalars,
-/// extracted to text with `#>> '{}'` (the doc-type-as-property extraction).
-///
-/// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
-/// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
-/// ordered by `updated`: synthesis sources `kb_resources.created`/`updated` from the genesis event's
-/// `occurred_at`, which is `now()` = transaction-start time and therefore identical across every row
-/// written in the single synthesis transaction. Absolute recency ordering is not a migration-time
-/// invariant (event-sourced backfill collapses timestamps to synthesis time); the row set + projected
-/// fields are.
-///
 /// The one Rust-callable spelling of "can `principal` see `resource`?", under `resources_visible_to`.
 ///
 /// This exists so `ensure_visible` (below — private, so deliberately not an intra-doc link from a
@@ -220,6 +198,32 @@ async fn ensure_visible(
     }
 }
 
+/// Port of production's resource-list projection (temper-services'
+/// `substrate_read::filtered_visible_page`) onto the substrate tables: returns every synthesized
+/// resource (the §0 active set — synthesis never carries soft-deleted rows, so there is no
+/// `is_active` filter to apply here) with the same projected fields production surfaces.
+///
+/// This doc comment was stranded on [`is_resource_visible`] until the `ResourceView` convergence
+/// moved it back onto the function it describes. It also cited a `vault_resources_browse` view as
+/// production's source; that view was dropped by the WS6 endgame collapse (`2fc0412e`) when the
+/// migration baseline was rebuilt, and production's list has read the same `kb_properties` +
+/// `kb_resource_workflow_props` pair this function reads ever since.
+///
+/// The doctype and the three workflow fields all live in `kb_properties` (synthesis writes
+/// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
+/// inner JOIN — every synthesized resource has one; the workflow keys come from a LEFT JOIN on the
+/// `kb_resource_workflow_props` pivot view (migration `20260709000002` — the one statement of the
+/// per-key pivot, shared with [`resource_row`] and temper-services' `filtered_visible_page`), so a
+/// resource without them comes back with `NULL` (not dropped). Property values are JSON scalars,
+/// extracted to text with `#>> '{}'` (the doc-type-as-property extraction).
+///
+/// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
+/// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
+/// ordered by `updated`: synthesis sources `kb_resources.created`/`updated` from the genesis event's
+/// `occurred_at`, which is `now()` = transaction-start time and therefore identical across every row
+/// written in the single synthesis transaction. Absolute recency ordering is not a migration-time
+/// invariant (event-sourced backfill collapses timestamps to synthesis time); the row set + projected
+/// fields are.
 pub async fn list(pool: &PgPool, principal: ProfileId) -> Result<Vec<ListRow>> {
     // `doc_type!`: the JOIN is INNER, so the row exists; `#>> '{}'` is an expression, which sqlx
     // infers as nullable regardless. The override states the same thing the pre-macro

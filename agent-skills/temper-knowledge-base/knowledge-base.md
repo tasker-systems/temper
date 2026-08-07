@@ -137,14 +137,22 @@ Resources return structured data that clients can display and inject directly:
 
 - `list_resources` — paginated list with optional `context_ref` and `doc_type_name`
   filters. Use when you need programmatic filtering (limit, offset) beyond what resource
-  browsing provides. The response is a **capped page** — it carries `total` (all matching
-  rows) alongside `rows`. If `rows.len() < total`, the list is truncated: **do not conclude
-  a resource is absent, or that a set is complete, from a truncated page.** Raise `limit`
+  browsing provides. The response is a **capped page** — alongside `rows` it carries `total`
+  (all matching rows), `returned` (this page's count), `limit`/`offset`, and **`truncated`**.
+  Read `truncated`: it is the server's own answer to "are there matching rows beyond this
+  page?", and **when it is `true` you must not conclude a resource is absent or that a set is
+  complete.** Do not re-derive it from `rows.len() < total` — that is `true` on the last page
+  of a walk (total 25, offset 20, returned 5), where nothing is in fact hidden. Raise `limit`
   (up to 200), page with `offset`, or narrow the filters (`doc_type_name`, `stage`) first.
 - `get_resource` — single resource by ref (a UUID or the decorated `slug-<uuid>` form). Pass
   `include_content: true` to include the full markdown body.
-- `search` — semantic search using a 768-dimensional embedding vector. Returns
-  scored results with snippets. Use for "find me notes about X" queries.
+- `search` — returns **two arms that are never merged**: `exact` (full-text) and `wide`
+  (vector similarity over a 768-dimensional embedding), plus a shared `scope`. Each arm
+  carries `hits` and a `reason`; each hit is `{ resource, <quantity> }` — the same
+  `ResourceView` every other tool answers in, beside `fts_norm` on an exact hit and
+  `vec_norm` on a wide one. **The two quantities are not comparable and there is no combined
+  score**; read each arm on its own terms. There are no snippets — a hit names a resource,
+  it does not excerpt one. Use for "find me notes about X" queries.
 
 ## Writing Content
 
@@ -314,10 +322,12 @@ Contexts are workspaces that group resources. The typical flow:
 - **Resources are read-only and stateless** — they always reflect current state,
   no caching surprises.
 - **Search supports text queries** — the `search` tool accepts a plain text
-  `query` parameter for full-text search. No embedding vector needed.
+  `query` parameter. No embedding vector needed; the server embeds it for the
+  `wide` arm, and the `exact` arm needs no embedding at all.
 - **Pagination** — `list_resources` and `admin_ledger` support `limit` and
-  `offset`. Resources listing is capped at 200 items. Compare `rows.len()`
-  against the response's `total` before asserting a set is complete or a
-  resource is absent — a short page means there is more to fetch.
+  `offset`. Resources listing is capped at 200 items, and its response carries a
+  `truncated` flag — read it before asserting a set is complete or a resource is
+  absent; `true` means there is more to fetch. `admin_ledger` carries no such
+  flag, so page it until a short page comes back.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.

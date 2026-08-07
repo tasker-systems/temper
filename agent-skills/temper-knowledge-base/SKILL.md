@@ -205,7 +205,7 @@ Stated rather than left to be discovered, because coverage is never inferred fro
 
 - **Cognitive maps.** The tool surface exists (`cogmap_*`, and `knowledge-base.md` covers the
   orientation trio), but the *authoring discipline* — the authored-4 under an invocation envelope,
-  provenance, fold-then-recreate supersession, cross-map wayfind — ships only in the CLI packaging.
+  provenance, fold-then-recreate supersession, cross-map linking — ships only in the CLI packaging.
   Read from a map freely; before **authoring** into one, say so and ask.
 - **Teams.** Creating teams, invitations, roles and offboarding have no guide here.
 - **Per-cell workflow files.** The CLI packaging carries a file per `mode × effort` cell. They are

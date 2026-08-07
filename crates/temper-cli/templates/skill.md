@@ -183,7 +183,7 @@ authoring or amending a goal or sub-goal.
 | `task create [--context @me/<ctx>]` | On Task Create |
 | `session start [--context @me/<ctx>]` | On Session Start |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
-| Anything touching a cognitive map (read/author a map, telos, nodes/edges, wayfind) | Read `cognitive-maps.md` |
+| Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
@@ -323,7 +323,7 @@ A **context** homes resources as they are; a **cognitive map** homes *distilled 
 telos-governed graph (nodes · edges · facets · regions). They share storage but mean
 different things — a map node is a **new** resource that distills from its source(s), never
 the same row. Authoring into a map (the authored-4 under an invocation envelope,
-provenance, fold-then-recreate supersession, the access model, and cross-map wayfind) is
+provenance, fold-then-recreate supersession, the access model, and cross-map linking) is
 its own discipline.
 
 When a task involves reading from or authoring into a map, **read `cognitive-maps.md`** —

@@ -39,7 +39,7 @@ resource, created into the map, that **distills** from one or more sources and c
 | Structure | flat list | nodes · edges · facets · regions |
 | A "row" is | the thing itself | a distillation of source rows |
 | Authored via | `resource create/update` | the authored-4 under an invocation |
-| Read via | `list` / `show` / `search --context` | `cogmap shape` / `search --cogmap` / `--wayfind` |
+| Read via | `list` / `show` / `search --context` | `cogmap shape` / `search --cogmap` |
 
 ## When to reach for a map vs a context
 
@@ -258,25 +258,26 @@ Reading a map is **not** authoring it.
   `can_write`?"). The full human+agent re-distill flow's viability tracks that decision, so
   don't assume a map-write grant lets you fold/supersede a node you don't own until it lands.
 
-## Cross-map — wayfind, not edges
+## Cross-map — one map at a time, and a composition you run yourself
 
 You have several visible maps. To draw on more than one:
 
 - **Cross-map EDGES are inert at the region layer.** You *can* assert an edge from a node in
   one map to a node in another, and materialize accepts it — but it contributes nothing to
   the target map's regions. Don't reach for cross-map edges to make two maps "talk."
-- **Cross-map VALUE lives in wayfind.** `temper search "<query>" --wayfind --regions 20`
-  pools regions across *all* your visible maps, ranked by query relevance + each region's
-  own-telos salience — surfacing, e.g., one map's "Narrative Gravity" beside another's
-  "narrative gravity as a runtime-recomputed field" (same concept, two teloi). The
-  single-map **lens** (`--cogmap` / `cogmap shape`) is single-map by construction; **wayfind**
-  is the cross-map mechanism.
-  - Bump `--regions` (default is deliberately narrow) when pooling across several maps, or
-    the top-N will not reach past the nearest one.
+- **Search scopes to ONE map.** `temper search "<query>" --cogmap <MAP>` is the map-scoped
+  read. Passing `--cogmap` twice is refused, not silently unioned: *"search scopes to a
+  single anchor; pass at most one `--cogmap`."* Asking several maps at once is a
+  composition, and you run it — one search per map, and you compare the results yourself.
+- **Cross-map pooling is not currently offered.** There is no flag that ranks regions from
+  several maps against one query. An earlier `--wayfind` / `--regions` pair did that and was
+  removed when the read path became two arms; nothing replaced it, and this page will not
+  pretend otherwise. If you need the pooled view, run the per-map searches and pool by hand.
 - **Cross-map linking is a capability, not an instinct.** An agent won't search neighboring
   maps unprompted. If you *want* a node to reference a concept already present in a visible
-  neighbor rather than re-distilling it, **say so explicitly** — when directed, it's high
-  value (one pass asserted 16 quality cross-links and rejected 5 loose ones).
+  neighbor rather than re-distilling it, **say so explicitly** — and name the maps, since
+  nothing will sweep them for you. When directed, it's high value (one pass asserted 16
+  quality cross-links and rejected 5 loose ones).
 
 ## Worked example — a human+agent re-distill
 
