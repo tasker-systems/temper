@@ -3,10 +3,10 @@
 //! Reads delegate to `temper_substrate::readback`; writes compose `temper_substrate::writes`. The SQL is
 //! unqualified against the one schema (`public`); the connection's search_path resolves all references.
 //!
-//! The full-row read (`show_resource`) maps the substrate readback (`readback::resource_row`) to the
-//! native `ResourceRow` — real timestamps (event-sourced from `kb_events.occurred_at`), name-only
-//! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
-//! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
+//! Every read and write command answers in `ResourceView` — real timestamps (event-sourced from
+//! `kb_events.occurred_at`), name-only doc type, no fabricated fields. The §7-dissolved fields
+//! (`kb_doc_type_id`, `slug`, `managed_hash`, `open_hash`) are gone. See `native_resource_view` and
+//! the historical §9 parity floor.
 
 use crate::authz::{
     authorize, citation_subject, require_machine_principal, AuditAuthority, AuditorJobAuthority,
@@ -36,18 +36,17 @@ use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
 };
+use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{DispatchType, Persona, RegionJobPayload};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
     BodyUpdate, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, GoalPatch, ListResources,
-    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-    ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
-    SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
+    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship,
+    ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
-use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
@@ -481,48 +480,38 @@ fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(),
     )))
 }
 
-/// Maps the substrate readback (`readback::resource_row`) to the native `ResourceRow` — real
-/// timestamps (event-sourced from `kb_events.occurred_at`), name-only doc type, no fabrication.
-/// Shared by `show_resource` and the read selector arms (`list_select`, `show_select`,
-/// `search_select`). The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`, `open_hash`)
-/// are absent; `doc_type_name` is authoritative.
-pub(crate) async fn native_resource_row(
+/// The write path's readback — the resource it just wrote, as the one shape the [`Backend`] trait
+/// returns.
+///
+/// Reads through `substrate_read::show_view_select`, the same door `show` uses, so a resource's
+/// identity does not depend on whether it was just written or merely looked at. Visibility is gated
+/// inside that readback (WS2 — `resources_visible_to`).
+///
+/// Asks for **no sections**: the row shape this replaced on `create`/`update`/`annotate` carried
+/// neither meta tier nor the body, and `managed_meta` is not a section — it is always present.
+/// `show_resource` asks for `open-meta` on top, because the detail shape it replaced carried both
+/// tiers.
+async fn native_resource_view(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
-) -> Result<ResourceRow, TemperError> {
-    let p = readback::resource_row(pool, principal, new_id)
-        .await
-        .map_err(map_readback_err)?;
-    Ok(ResourceRow {
-        id: p.re_minted_id,
-        kb_context_id: p.re_minted_context_id,
-        origin_uri: p.origin_uri,
-        title: p.title,
-        originator_profile_id: p.originator_profile_id,
-        owner_profile_id: p.owner_profile_id,
-        is_active: p.is_active,
-        created: p.created,
-        updated: p.updated,
-        context_name: p.context_name,
-        doc_type_name: p.doc_type_name,
-        owner_handle: p.owner_handle,
-        context_slug: p.context_slug,
-        context_owner_ref: p.context_owner_ref,
-        cogmap_id: p.cogmap_id,
-        cogmap_name: p.cogmap_name,
-        stage: p.stage,
-        seq: p.seq,
-        mode: p.mode,
-        effort: p.effort,
-        body_hash: p.body_hash,
-        // The column is CHECK-constrained to {in_progress, complete}, so `from_wire` is total in
-        // practice; an unparseable value would be a schema violation, surfaced (not coerced) as None.
-        ingest_state: temper_workflow::types::IngestState::from_wire(&p.ingest_state),
-        // Likewise CHECK-constrained to {verbatim, derived}; `from_wire` is total in practice.
-        body_storage: temper_workflow::types::resource::BodyStorage::from_wire(&p.body_storage),
-    })
+) -> Result<ResourceView, TemperError> {
+    crate::backend::substrate_read::show_view_select(
+        pool,
+        principal,
+        new_id,
+        &SectionSet::default(),
+    )
+    .await
+    .map_err(TemperError::from)
 }
+
+// `native_resource_row` is GONE with `ResourceRow` itself. It mapped `readback::resource_row` onto
+// the retired row shape; every caller — `show_select`, and the update path's read of its own current
+// row — reads `native_resource_view` / `show_view_select` now. Both select `r.created`/`r.updated`
+// from `kb_resources` (populated from `kb_events.occurred_at` at write time), so the "real
+// timestamps, no fabrication" property this function carried is a property of the columns, not of
+// the projection, and survives its removal.
 
 /// The Postgres-backed backend. Holds a pool + the caller profile. The caller's profile id is the
 /// substrate principal directly (synthesis preserves profile ids verbatim, WS2); reads/writes are
@@ -1646,7 +1635,7 @@ impl DbBackend {
         &self,
         cmd: CreateResource,
         segmented: bool,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+    ) -> Result<CommandOutput<ResourceView>, TemperError> {
         // Resolve the caller's synthesized identity (natural-key).
         // `cmd.home` is a pre-resolved HomeAnchor — surfaces parse+resolve the ref
         // before building the command, so no `writes::resolve_context` call is needed here.
@@ -1790,10 +1779,10 @@ impl DbBackend {
         // standing memo, embed enqueue) already ran on the original create. Return it as-is — re-running
         // any of that on a replay is at best wasted work and at worst a double-assert.
         if replayed {
-            let row =
-                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
+            let view =
+                native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
                     .await?;
-            return Ok(CommandOutput::new(row));
+            return Ok(CommandOutput::new(view));
         }
 
         // Project the first-class goal link to a live `advances`→goal edge (issue 019f3d55). The
@@ -1847,9 +1836,10 @@ impl DbBackend {
         self.tick_resource_standing(ResourceId::from(new_id.uuid()))
             .await;
 
-        let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
-            .await?;
-        Ok(CommandOutput::new(row))
+        let view =
+            native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
+                .await?;
+        Ok(CommandOutput::new(view))
     }
 }
 
@@ -1858,7 +1848,7 @@ impl Backend for DbBackend {
     async fn create_resource(
         &self,
         cmd: CreateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+    ) -> Result<CommandOutput<ResourceView>, TemperError> {
         // An ordinary create is ATOMIC — the whole body lands in one act, so there is no interruption
         // window and nothing to finalize. It is born `ingest_state = 'complete'`.
         self.create_resource_inner(cmd, false).await
@@ -1867,29 +1857,35 @@ impl Backend for DbBackend {
     async fn show_resource(
         &self,
         cmd: ShowResource,
-    ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
+    ) -> Result<CommandOutput<ResourceView>, TemperError> {
         // The inbound id IS the substrate resource id — synthesis preserves resource ids verbatim, so
         // there is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
         let new_id = uuid::Uuid::from(cmd.resource);
-        // `show_detail_select` composes `native_resource_row` (which gates visibility per WS2 and maps
-        // the typed `ReadbackError` via `map_readback_err`: not-visible → NotFound (404, the leak-safe
-        // deny — never 403, no existence-leak oracle), a genuine fault → Api (500)) with the meta
-        // readback, so the full show carries both metadata tiers.
-        let detail = crate::backend::substrate_read::show_detail_select(
+        // `show_view_select` gates visibility inside `readback::hit_identities` (WS2) and renders a
+        // miss as the same `NotFound` (404, the leak-safe deny — never 403, no existence-leak oracle)
+        // `map_readback_err` produces, so this door and `native_resource_row`'s cannot disagree about
+        // how a miss reads.
+        //
+        // `open-meta` is the one section asked for: the managed tier is not a section (it is always
+        // present on a view), and the body has its own door in
+        // `GET /api/resources/{id}/content`.
+        let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
+        let view = crate::backend::substrate_read::show_view_select(
             &self.pool,
             self.profile_id,
             ResourceId::from(new_id),
+            &sections,
         )
         .await
         .map_err(TemperError::from)?;
-        Ok(CommandOutput::new(detail))
+        Ok(CommandOutput::new(view))
     }
 
     #[act_span]
     async fn update_resource(
         &self,
         cmd: UpdateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+    ) -> Result<CommandOutput<ResourceView>, TemperError> {
         // The inbound id IS the substrate resource id (native-id addressing — synthesis carries
         // resource ids verbatim, so no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
@@ -1948,7 +1944,7 @@ impl Backend for DbBackend {
             // carries no doc_type/context, so take the EFFECTIVE values from the current row
             // (already visibility-gated via `check_can_modify_next`).
             let current =
-                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+                native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
             // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
             // `move_to.type_to` (the file-move path); else the doc type is unchanged.
             let effective_doc_type = incoming
@@ -2139,9 +2135,9 @@ impl Backend for DbBackend {
         // the finding itself, so it always fires on a resource update.
         self.tick_resource_standing(ResourceId::from(new_id)).await;
 
-        let row =
-            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
-        Ok(CommandOutput::new(row))
+        let view =
+            native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+        Ok(CommandOutput::new(view))
     }
 
     #[act_span]
@@ -2169,7 +2165,7 @@ impl Backend for DbBackend {
     async fn annotate_resource(
         &self,
         cmd: AnnotateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+    ) -> Result<CommandOutput<ResourceView>, TemperError> {
         // The inbound id IS the substrate resource id (no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): the caller must be able to modify this resource.
@@ -2213,61 +2209,9 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(api_err)?;
-        let row =
-            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
-        Ok(CommandOutput::new(row))
-    }
-
-    async fn list_resources(
-        &self,
-        _cmd: ListResources,
-    ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        let rows = readback::list(&self.pool, self.profile_id)
-            .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
-        let summaries = rows
-            .into_iter()
-            .map(|r| ResourceSummary {
-                // slug is §7-dissolved; the list summary uses origin_uri as the stable handle.
-                slug: r.origin_uri,
-                doctype: r.doc_type,
-                // Context scoping for the list summary (WS2); unscoped at the §9 floor.
-                context: String::new(),
-                title: r.title,
-            })
-            .collect();
-        Ok(CommandOutput::new(summaries))
-    }
-
-    async fn search_resources(
-        &self,
-        cmd: SearchResources,
-    ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
-        // 4b: FTS only (the text query). Vector search needs a query embedding this layer does not
-        // carry; the HTTP search selector handles vector mode directly (read selector, Task 6/8).
-        // `fts_search` returns the preserved resource ids (origin_uri is non-unique — empty for
-        // CLI/agent-created resources, so it cannot identify a match). Each id reconstructs to its
-        // summary (origin_uri verbatim as the stable handle, like `list_resources`).
-        let ids = readback::fts_search(&self.pool, self.profile_id, &cmd.query.query)
-            .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
-        let mut hits = Vec::with_capacity(ids.len());
-        for new_id in ids {
-            let row = native_resource_row(&self.pool, self.profile_id, new_id).await?;
-            let context = row.home_display().unwrap_or_default().to_owned();
-            hits.push(SearchHit {
-                summary: ResourceSummary {
-                    // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
-                    slug: row.origin_uri,
-                    doctype: row.doc_type_name,
-                    context,
-                    title: row.title,
-                },
-                // §9 floor asserts the matching SET, not the score.
-                score: 0.0,
-            });
-        }
-        Ok(CommandOutput::new(hits))
+        let view =
+            native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+        Ok(CommandOutput::new(view))
     }
 
     #[act_span]

@@ -109,17 +109,15 @@ async fn fts_text_query_finds_resource(pool: sqlx::PgPool) {
         !results.is_empty(),
         "FTS text search should find the ingested resource"
     );
-    assert_eq!(results[0].title, "Kubernetes Deployment Strategy");
-    // Beat 2: unified_search pipeline — origin is always "unified".
-    assert_eq!(results[0].origin, "unified");
+    assert_eq!(results[0].resource.title, "Kubernetes Deployment Strategy");
     // The resource is a genuine lexical hit, so its FTS term is non-zero. #297: the server now
     // embeds a text-only query server-side (`search_select` fills `p_emb`), so the vector term may
     // also contribute — this is no longer the dead-vector-arm path, and `vector_score` is no longer
     // asserted to be 0 (its value depends on whether the embedder is available at runtime).
     assert!(
-        results[0].fts_score > 0.0,
-        "a real FTS match must carry a non-zero fts_score; got {}",
-        results[0].fts_score
+        results[0].fts_norm > 0.0,
+        "a real FTS match must carry a non-zero fts_norm; got {}",
+        results[0].fts_norm
     );
 }
 
@@ -165,7 +163,7 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
         !results.is_empty(),
         "FTS should find resource by body content"
     );
-    assert_eq!(results[0].title, "Infrastructure Notes");
+    assert_eq!(results[0].resource.title, "Infrastructure Notes");
 }
 
 /// open_meta convention v2: a term present ONLY in `tags` (not title or body) is still findable,
@@ -208,11 +206,11 @@ async fn fts_finds_by_open_meta_tags(pool: sqlx::PgPool) {
         !results.is_empty(),
         "a term present only in open_meta.tags must be findable via FTS (tags@C, v2)"
     );
-    assert_eq!(results[0].title, "Release Checklist");
+    assert_eq!(results[0].resource.title, "Release Checklist");
     assert!(
-        results[0].fts_score > 0.0,
-        "tag-only match must carry a non-zero fts_score; got {}",
-        results[0].fts_score
+        results[0].fts_norm > 0.0,
+        "tag-only match must carry a non-zero fts_norm; got {}",
+        results[0].fts_norm
     );
 }
 
@@ -261,7 +259,7 @@ async fn fts_finds_by_open_meta_descriptor(pool: sqlx::PgPool) {
         !results.is_empty(),
         "a term present only in open_meta.descriptor must be findable via FTS (descriptor@D, v1)"
     );
-    assert_eq!(results[0].title, "Section 4");
+    assert_eq!(results[0].resource.title, "Section 4");
 }
 
 /// Receive-side symmetric-defense gate (Deliverable D): the server rejects a create whose open_meta
@@ -364,9 +362,12 @@ async fn search_rejects_empty_params(pool: sqlx::PgPool) {
     assert!(result.is_err(), "search with no inputs should fail");
 }
 
-/// Unified search with both text query and embedding returns results with origin "both".
+/// Both signals in one request: each arm answers under its own name, and nothing combines them.
+///
+/// Named `unified_search_both_modes` until that function was dropped; the body had already been
+/// rewritten to the two-arm response, so only the name was still describing the blend.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn unified_search_both_modes(pool: sqlx::PgPool) {
+async fn both_arms_answer_when_both_signals_are_supplied(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
         .profile()
@@ -389,45 +390,43 @@ async fn unified_search_both_modes(pool: sqlx::PgPool) {
     )
     .await;
 
-    // Search with both text query and embedding
-    let results = app
+    // Send BOTH signals. Each arm answers on its own; nothing combines them.
+    let params = temper_core::types::api::SearchParams {
+        query: Some("observability tracing".into()),
+        embedding: Some(vec![0.1_f32; 768]),
+        context_ref: Some("@me/fts-unified".into()),
+        limit: Some(10),
+        ..Default::default()
+    };
+    let resp = app
         .client
         .search()
-        .search(
-            Some("observability tracing".into()),
-            Some(vec![0.1_f32; 768]),
-            Some("@me/fts-unified".into()),
-            None,
-            Some(10),
-        )
+        .search_with_params(&params)
         .await
-        .expect("unified search failed");
+        .expect("two-arm search failed");
 
     assert!(
-        !results.is_empty(),
-        "unified search should find the resource"
-    );
-    // ASSERT THE INTENT, NOT `origin`. This test used to require origin ∈ {"both","fts"}, which
-    // was a real distinction once and is not one now: `origin` is hardcoded to "unified" for every
-    // row (crates/temper-services/src/backend/substrate_read.rs), so it discriminates nothing and
-    // asserting on it can only ever re-test a constant. What the test is actually for — that BOTH
-    // arms contributed to this hit — is carried by the per-arm scores, so that is what is checked.
-    assert_eq!(
-        results[0].origin, "unified",
-        "origin is a constant today; if it becomes informative again, this assertion is the \
-         place that should fail and be rewritten"
+        !resp.exact.hits.is_empty(),
+        "the exact arm must answer a query whose terms are in the corpus"
     );
     assert!(
-        results[0].fts_score > 0.0,
-        "the FTS arm must have contributed: got fts_score {}",
-        results[0].fts_score
+        resp.exact.hits[0].fts_norm > 0.0,
+        "an exact hit carries a real fts_norm: got {}",
+        resp.exact.hits[0].fts_norm
     );
     assert!(
-        results[0].vector_score > 0.0,
-        "the vector arm must have contributed: got vector_score {}",
-        results[0].vector_score
+        !resp.wide.hits.is_empty(),
+        "the wide arm must answer once an embedding is supplied"
     );
-    assert!(results[0].combined_score > 0.0);
+    assert!(
+        resp.wide.hits[0].vec_norm > 0.0,
+        "a wide hit carries a real vec_norm: got {}",
+        resp.wide.hits[0].vec_norm
+    );
+    assert!(
+        !resp.wide.degraded,
+        "the caller supplied an embedding, so nothing was degraded"
+    );
 }
 
 /// FTS search respects context filtering.
@@ -483,7 +482,7 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
         .expect("alpha search failed");
 
     assert_eq!(alpha_results.len(), 1);
-    assert_eq!(alpha_results[0].title, "Alpha Specific Document");
+    assert_eq!(alpha_results[0].resource.title, "Alpha Specific Document");
 
     // Search in beta context — should only find beta doc
     let beta_results = app
@@ -499,7 +498,7 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
         .expect("beta search failed");
 
     assert_eq!(beta_results.len(), 1);
-    assert_eq!(beta_results[0].title, "Beta Specific Document");
+    assert_eq!(beta_results[0].resource.title, "Beta Specific Document");
 }
 
 /// A zero-magnitude embedding is refused with 400, rather than answered with JSON the caller cannot

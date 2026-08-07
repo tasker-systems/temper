@@ -79,7 +79,7 @@ async fn resolve_by_title(
     context: &str,
     doc_type: &str,
     title: &str,
-) -> temper_workflow::types::resource::ResourceRow {
+) -> temper_core::types::resource_view::ResourceView {
     let params = temper_workflow::types::resource::ResourceListParams {
         context_ref: Some(format!("@me/{context}")),
         doc_type_name: Some(doc_type.to_string()),

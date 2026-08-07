@@ -53,20 +53,17 @@ impl CloudBackend {
 #[cfg(feature = "embed")]
 mod embed_impl {
     use async_trait::async_trait;
+    use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
         AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
         Backend, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
-        CreateResource, DeleteResource, DomainEvent, FoldRelationship, ListResources,
-        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-        RetypeRelationship, ReweightRelationship, SearchResources, ShowResource,
-        StewardDispatchTick, UpdateResource,
+        CreateResource, DeleteResource, DomainEvent, FoldRelationship, MaterializeOnThreshold,
+        OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship,
+        ReweightRelationship, ShowResource, StewardDispatchTick, UpdateResource,
     };
-    use temper_workflow::operations::{ResourceSummary, SearchHit};
-    use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
     use super::super::translators::{
         cmd_to_ingest_payload, cmd_to_resource_annotate_request, cmd_to_resource_update_request,
-        wire_resource_to_resource_row,
     };
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -76,7 +73,7 @@ mod embed_impl {
         async fn create_resource(
             &self,
             cmd: CreateResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             let payload = cmd_to_ingest_payload(&cmd, &self.context_ref)?;
             let row = self
                 .client
@@ -86,7 +83,7 @@ mod embed_impl {
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = row.id;
             Ok(CommandOutput {
-                value: wire_resource_to_resource_row(&row),
+                value: row,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
@@ -94,7 +91,7 @@ mod embed_impl {
         async fn update_resource(
             &self,
             cmd: UpdateResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             let req = cmd_to_resource_update_request(&cmd)?;
             // The resource is addressed by id — dispatch straight to the by-id PATCH.
             let id = uuid::Uuid::from(cmd.resource);
@@ -106,7 +103,7 @@ mod embed_impl {
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = updated.id;
             Ok(CommandOutput {
-                value: wire_resource_to_resource_row(&updated),
+                value: updated,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
@@ -114,7 +111,7 @@ mod embed_impl {
         async fn annotate_resource(
             &self,
             cmd: AnnotateResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             let req = cmd_to_resource_annotate_request(&cmd);
             let id = uuid::Uuid::from(cmd.resource);
             let annotated = self
@@ -125,7 +122,7 @@ mod embed_impl {
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = annotated.id;
             Ok(CommandOutput {
-                value: wire_resource_to_resource_row(&annotated),
+                value: annotated,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
@@ -162,29 +159,9 @@ mod embed_impl {
         async fn show_resource(
             &self,
             _cmd: ShowResource,
-        ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::show_resource not implemented — reads stay surface-direct"
-                    .to_string(),
-            ))
-        }
-
-        async fn list_resources(
-            &self,
-            _cmd: ListResources,
-        ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-            Err(TemperError::Project(
-                "CloudBackend::list_resources not implemented — reads stay surface-direct"
-                    .to_string(),
-            ))
-        }
-
-        async fn search_resources(
-            &self,
-            _cmd: SearchResources,
-        ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
-            Err(TemperError::Project(
-                "CloudBackend::search_resources not implemented — reads stay surface-direct"
                     .to_string(),
             ))
         }
@@ -530,15 +507,14 @@ mod embed_impl {
 #[cfg(not(feature = "embed"))]
 mod non_embed_impl {
     use async_trait::async_trait;
+    use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
         AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
         Backend, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
-        CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
-        OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, ResourceSummary,
-        RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
-        StewardDispatchTick, UpdateResource,
+        CreateResource, DeleteResource, FoldRelationship, MaterializeOnThreshold, OpenInvocation,
+        ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship, ReweightRelationship,
+        ShowResource, StewardDispatchTick, UpdateResource,
     };
-    use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -552,7 +528,7 @@ mod non_embed_impl {
         async fn create_resource(
             &self,
             _cmd: CreateResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
@@ -561,7 +537,7 @@ mod non_embed_impl {
         async fn update_resource(
             &self,
             _cmd: UpdateResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
@@ -579,7 +555,7 @@ mod non_embed_impl {
         async fn annotate_resource(
             &self,
             _cmd: AnnotateResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
@@ -588,25 +564,7 @@ mod non_embed_impl {
         async fn show_resource(
             &self,
             _cmd: ShowResource,
-        ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
-            Err(TemperError::BadRequest(
-                "cloud mode requires --features embed".to_string(),
-            ))
-        }
-
-        async fn list_resources(
-            &self,
-            _cmd: ListResources,
-        ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-            Err(TemperError::BadRequest(
-                "cloud mode requires --features embed".to_string(),
-            ))
-        }
-
-        async fn search_resources(
-            &self,
-            _cmd: SearchResources,
-        ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
+        ) -> Result<CommandOutput<ResourceView>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

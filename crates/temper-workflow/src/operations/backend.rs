@@ -13,39 +13,23 @@
 
 use async_trait::async_trait;
 
-use crate::types::resource::{ResourceDetail, ResourceRow};
 use temper_core::error::TemperError;
 use temper_core::types::ids::{EdgeId, PropertyId, ResourceId};
 use temper_core::types::ingest::{
     AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentedBegin, SegmentedBeginResponse,
 };
 use temper_core::types::materialize::MaterializeAck;
+use temper_core::types::resource_view::ResourceView;
 
 use super::commands::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
     CloseInvocation, CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource,
-    FoldRelationship, ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
-    RecordCitationAudit, RetypeRelationship, ReweightRelationship, SearchResources, SetFacet,
-    ShowResource, StewardDispatchTick, UpdateResource,
+    FoldRelationship, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+    RecordCitationAudit, RetypeRelationship, ReweightRelationship, SetFacet, ShowResource,
+    StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
 use super::surface::Surface;
-
-/// Lightweight summary of a resource for `list` results.
-#[derive(Debug, Clone)]
-pub struct ResourceSummary {
-    pub slug: String,
-    pub doctype: String,
-    pub context: String,
-    pub title: String,
-}
-
-/// A search hit — a resource summary plus relevance metadata.
-#[derive(Debug, Clone)]
-pub struct SearchHit {
-    pub summary: ResourceSummary,
-    pub score: f32,
-}
 
 /// The shared contract for both DbBackend (in temper-api) and CloudBackend
 /// (in temper-cli). Each command method takes a command struct, executes it
@@ -56,42 +40,43 @@ pub trait Backend: Send + Sync {
     async fn create_resource(
         &self,
         cmd: CreateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError>;
+    ) -> Result<CommandOutput<ResourceView>, TemperError>;
 
-    /// Read one resource with both metadata tiers (`managed_meta` + `open_meta`).
-    /// `list_resources` keeps the lean `ResourceRow`; only the single-resource read pays
-    /// for the tiers.
+    /// Read one resource as the one shape every surface answers in.
+    ///
+    /// The open tier rides along (the `open-meta` section); `managed_meta` is not a section
+    /// and is always present. The body is not part of this shape —
+    /// `GET /api/resources/{id}/content` remains its door.
     async fn show_resource(
         &self,
         cmd: ShowResource,
-    ) -> Result<CommandOutput<ResourceDetail>, TemperError>;
+    ) -> Result<CommandOutput<ResourceView>, TemperError>;
 
     async fn update_resource(
         &self,
         cmd: UpdateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError>;
+    ) -> Result<CommandOutput<ResourceView>, TemperError>;
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError>;
 
     /// Attach provenance sources to an existing resource's block without a body revise (issue #355).
     /// Records `kb_block_provenance` rows only — no re-chunk/re-embed, body_hash unchanged. Gated on
     /// `can_modify_resource` (auth before write), like every other resource mutation. Returns the
-    /// updated resource row (the resource's own state is unchanged, but the row keeps the surface's
-    /// response shape uniform with `update_resource`).
+    /// updated resource view (the resource's own state is unchanged, but returning it keeps the
+    /// surface's response shape uniform with `update_resource`).
     async fn annotate_resource(
         &self,
         cmd: AnnotateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError>;
+    ) -> Result<CommandOutput<ResourceView>, TemperError>;
 
-    async fn list_resources(
-        &self,
-        cmd: ListResources,
-    ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError>;
-
-    async fn search_resources(
-        &self,
-        cmd: SearchResources,
-    ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError>;
+    // There is deliberately **no `list_resources` and no `search_resources` here.** Both were
+    // vestigial surface from before the reads-stay-service-direct decision: neither had a single
+    // call site anywhere in the workspace, and `CloudBackend`'s bodies for both said so out loud
+    // ("not implemented — reads stay surface-direct"). Read paths (list, show, get_meta, search)
+    // are service-direct on every surface by design — the trait's projections are lossy and reads
+    // are passthroughs — so converting them to `ResourceView` would have minted a shape nobody
+    // consumes. Deleting them is what retired `ResourceSummary` and its bare `score: f32`
+    // `SearchHit`, the quantity name the two-arm search exists to stop.
 
     // ── relationship/edge writes (WS6 4c) ──
     // Brought under the trait so surfaces dispatch them through `select_backend` to the selected
@@ -297,15 +282,4 @@ mod tests {
         reason = "object-safety compile guard; intentionally never invoked"
     )]
     fn assert_object_safe(_: &dyn Backend) {}
-
-    #[test]
-    fn resource_summary_can_be_constructed() {
-        let s = ResourceSummary {
-            slug: "x".to_string(),
-            doctype: "task".to_string(),
-            context: "temper".to_string(),
-            title: "X".to_string(),
-        };
-        assert_eq!(s.slug, "x");
-    }
 }

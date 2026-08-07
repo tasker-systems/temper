@@ -21,21 +21,13 @@ pub async fn search(
     .await
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Search failed: {e}"), None))?;
 
-    // First content block stays the ranked-results array — the unchanged tool-output contract.
-    let rows_text =
-        serde_json::to_string_pretty(&response.results).unwrap_or_else(|_| "[]".to_string());
-    let mut contents = vec![rmcp::model::Content::text(rows_text)];
-
-    // Additive (issue #360): when the scope stage has something to say (empty / out-of-scope /
-    // degraded — i.e. a hint is present), append a second block carrying the structured
-    // diagnostics, so an agent can branch on `reason`/`scope_size` instead of puzzling over an
-    // empty array. On the happy path this block is absent and the output is byte-identical to before.
-    if let Some(diag) = response.diagnostics.as_ref().filter(|d| d.hint.is_some()) {
-        if let Ok(diag_text) = serde_json::to_string_pretty(diag) {
-            contents.push(rmcp::model::Content::text(format!(
-                "search diagnostics: {diag_text}"
-            )));
-        }
-    }
+    // ONE content block carrying the whole response — both arms, their dispositions, and the shared
+    // scope. Deliberately not two blocks of hits: splitting them across content blocks would make an
+    // agent reassemble the pair, and reassembly is exactly where a reader re-invents the merge this
+    // shape exists to prevent. The per-arm `reason`/`hint` ride inside, so the old "append a second
+    // block when the scope stage has something to say" branch has nothing left to do.
+    let body = serde_json::to_string_pretty(&response)
+        .unwrap_or_else(|_| "{\"exact\":{},\"wide\":{}}".to_string());
+    let contents = vec![rmcp::model::Content::text(body)];
     Ok(CallToolResult::success(contents))
 }

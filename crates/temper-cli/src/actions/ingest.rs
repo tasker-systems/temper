@@ -344,7 +344,7 @@ async fn begin_segmented_attempt(
 #[cfg(feature = "embed")]
 pub async fn run_segmented_create(
     params: SegmentedCreateParams<'_>,
-) -> Result<temper_workflow::types::ResourceRow> {
+) -> Result<temper_core::types::resource_view::ResourceView> {
     // `SegmentedBegin` is built inside `begin_segmented_attempt` (full path); only the append +
     // finalize payloads are constructed inline here.
     use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload};
@@ -664,7 +664,6 @@ pub async fn run_segmented_create(
         .resources()
         .get(resource_id)
         .await
-        .map(|detail| detail.row)
         .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
@@ -775,7 +774,7 @@ fn display_name_from_url(url: &str) -> String {
 // Frontmatter construction
 // ---------------------------------------------------------------------------
 
-/// Build a complete `Frontmatter` from a server `ResourceRow` plus the
+/// Build a complete `Frontmatter` from a server `ResourceView` plus the
 /// caller-resolved canonical owner sigil.
 ///
 /// `canonical_owner` is the value to write into `temper-owner`. The caller
@@ -793,7 +792,7 @@ fn display_name_from_url(url: &str) -> String {
 /// `open_meta` are the optional two metadata tiers.
 #[derive(Debug)]
 pub struct BuildFrontmatterParams<'a> {
-    pub resource: &'a temper_workflow::types::ResourceRow,
+    pub resource: &'a temper_core::types::resource_view::ResourceView,
     pub context: &'a str,
     pub doc_type: &'a str,
     pub canonical_owner: &'a str,
@@ -1101,33 +1100,35 @@ mod tests {
         assert_eq!(display_name_from_url("https://example.com/"), "example");
     }
 
-    fn test_resource_row() -> temper_workflow::types::ResourceRow {
+    fn test_resource_row() -> temper_core::types::resource_view::ResourceView {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-        temper_workflow::types::ResourceRow {
+        temper_core::types::resource_view::ResourceView {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
-            origin_uri: "test://origin".to_string(),
+            r#ref: String::new(),
             title: "Test".to_string(),
-            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
+            context_name: Some("temper".to_string()),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: Some("temper".to_string()),
-            doc_type_name: "research".to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some("temper".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
+            ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
+            open_meta: None,
+            content: None,
         }
+        .with_derived_refs()
     }
 
     #[test]

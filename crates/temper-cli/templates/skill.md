@@ -183,15 +183,16 @@ authoring or amending a goal or sub-goal.
 | `task create [--context @me/<ctx>]` | On Task Create |
 | `session start [--context @me/<ctx>]` | On Session Start |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
-| Anything touching a cognitive map (read/author a map, telos, nodes/edges, wayfind) | Read `cognitive-maps.md` |
+| Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Listing Is Truncated — Enumerate Before Asserting
 
 > **Never claim a goal/task/session is absent, or that a set is complete, from a
-> default `temper resource list`.** The list returns a capped page (20 rows; 50
-> with `--meta-only`), so a resource you "don't see" may just be past the cap —
+> default `temper resource list`.** The list returns a capped page (20 rows,
+> whatever sections you ask for), so a resource you "don't see" may just be past
+> the cap —
 > this has repeatedly led agents to assert wrong backlog/status.
 
 Every list response carries `total` (all matching rows), `returned` (this page),
@@ -199,7 +200,7 @@ and `truncated`. When `truncated` is `true`, there is more than you can see.
 Before asserting absence or completeness:
 
 - **Narrow**: `--title-contains <substr>`, `--stage <s>`, `--status <s>`, or `--sort <field>[:asc|desc]`.
-- **Enumerate fully**: `--all` (or a larger `--limit`/`--offset`).
+- **Enumerate fully**: `--all`, a larger `--limit`, or walk with `--page <n>`.
 
 See `reference.md` → *Listing: truncation, sort, and filters* for the full flag set.
 
@@ -209,25 +210,35 @@ When you need to peek at a resource or scan a list without paying for the full
 body, use the projection flags. They make orientation reads dramatically
 cheaper, both in tokens and in API work:
 
-- `temper resource show <ref> --meta-only` — the full resource view
+`show` and `list` answer in the same shape, and `--with <section>` / `--without
+<section>` say which **parts** of it you want. The sections are `body`,
+`open-meta` and `edges`; the managed tier is not one, because it is always there.
+
+- `temper resource show <ref> --without body` — the full resource view
   (title, type, context, owner, and both the managed and open meta tiers)
-  minus the reconstructed body. Everything `show` gives you except the body.
-- `temper resource list --type <t> --context @me/<ctx> --meta-only` — each
-  matching resource as a full row **plus** both meta tiers (still no body). The
-  default `list` carries neither tier, so this is how you triage a whole context
-  on managed- or open-meta fields — stage, provenance, your own `open_meta`
-  keys — in one call instead of one `show` per resource.
+  minus the reconstructed body. Everything `show` gives you except the body,
+  and it skips the body round-trip rather than fetching and discarding it.
+- `temper resource list --type <t> --context @me/<ctx> --with open-meta` — each
+  matching resource as a full row **plus** the open tier (still no bodies). The
+  default `list` carries only the managed tier, so this is how you triage a whole
+  context on your own `open_meta` keys in one call instead of one `show` per
+  resource. `list` does not offer `--with body`: use `show` per row.
 - `--fields <a,b,c>` on either of the above — subselect top-level response
   keys (the anchor key `id` is always preserved). For nested projection, pipe
   through `jq`.
-- `temper resource show <ref> --edges` — adds the graph edges
-  connected to this resource. Cannot be combined with `--meta-only`.
+- `temper resource show <ref> --with edges` (or the short `--edges`) — adds the
+  graph edges connected to this resource. It **composes** with `--without body`:
+  "everything but the body, plus the edges" is one call.
 
-Reach for `--meta-only` whenever you need a resource's metadata but not its
+Reach for `--without body` whenever you need a resource's metadata but not its
 prose — triaging a context, comparing a few resources, or deciding whether to
 read the body. It is strictly cheaper than a full `show` (no body
-reconstruction) and strictly richer than the default `list` (which omits both
-meta tiers). Fall back to the full `show` only when you actually need the body.
+reconstruction) and strictly richer than the default `list` (which omits the
+open tier). Fall back to the full `show` only when you actually need the body.
+
+Naming one section in both `--with` and `--without` is an error, not a
+precedence rule — the two say incompatible things about one part, so neither
+answer would be right.
 
 ## Referencing Other Resources — full UUIDv7, and link it
 
@@ -312,7 +323,7 @@ A **context** homes resources as they are; a **cognitive map** homes *distilled 
 telos-governed graph (nodes · edges · facets · regions). They share storage but mean
 different things — a map node is a **new** resource that distills from its source(s), never
 the same row. Authoring into a map (the authored-4 under an invocation envelope,
-provenance, fold-then-recreate supersession, the access model, and cross-map wayfind) is
+provenance, fold-then-recreate supersession, the access model, and cross-map linking) is
 its own discipline.
 
 When a task involves reading from or authoring into a map, **read `cognitive-maps.md`** —

@@ -23,7 +23,7 @@ module Temper::Generated
     # @param resource_annotate_request [ResourceAnnotateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ResourceRow]
+    # @return [ResourceView]
     def annotate_resource(id, resource_annotate_request, opts = {})
       data, _status_code, _headers = annotate_resource_with_http_info(id, resource_annotate_request, opts)
       data
@@ -33,7 +33,7 @@ module Temper::Generated
     # @param resource_annotate_request [ResourceAnnotateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ResourceRow, Integer, Hash)>] ResourceRow data, response status code and response headers
+    # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def annotate_resource_with_http_info(id, resource_annotate_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ResourcesApi.annotate_resource ...'
@@ -74,7 +74,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(resource_annotate_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ResourceRow'
+      return_type = opts[:debug_return_type] || 'ResourceView'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -99,7 +99,7 @@ module Temper::Generated
     # @param resource_create_request [ResourceCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ResourceRow]
+    # @return [ResourceView]
     def create_resource(resource_create_request, opts = {})
       data, _status_code, _headers = create_resource_with_http_info(resource_create_request, opts)
       data
@@ -108,7 +108,7 @@ module Temper::Generated
     # @param resource_create_request [ResourceCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ResourceRow, Integer, Hash)>] ResourceRow data, response status code and response headers
+    # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def create_resource_with_http_info(resource_create_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ResourcesApi.create_resource ...'
@@ -145,7 +145,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(resource_create_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ResourceRow'
+      return_type = opts[:debug_return_type] || 'ResourceView'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -323,7 +323,7 @@ module Temper::Generated
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ResourceDetail]
+    # @return [ResourceView]
     def get_resource(id, opts = {})
       data, _status_code, _headers = get_resource_with_http_info(id, opts)
       data
@@ -332,7 +332,7 @@ module Temper::Generated
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ResourceDetail, Integer, Hash)>] ResourceDetail data, response status code and response headers
+    # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def get_resource_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ResourcesApi.get_resource ...'
@@ -364,7 +364,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ResourceDetail'
+      return_type = opts[:debug_return_type] || 'ResourceView'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -599,6 +599,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # `GET /api/resources` — **one response type, unconditionally.**
+    # This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`, selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the caller varies which *parts* of `ResourceView` are filled, never which type comes back. The `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kb_doc_type_id 
     # @option opts [String] :context_ref Context filter: UUID string or &#x60;@owner/slug&#x60; decorated ref. Bare context names are rejected server-side (spec Decision 1).
@@ -614,14 +616,16 @@ module Temper::Generated
     # @option opts [SortOrder] :order 
     # @option opts [Integer] :limit 
     # @option opts [Integer] :offset 
-    # @option opts [Boolean] :meta_only When true, the list endpoint returns &#x60;ResourceMetaListResponse&#x60; (&#x60;Vec&lt;ResourceDetail&gt;&#x60; rows — full row + both meta tiers) instead of &#x60;ResourceListResponse&#x60; (&#x60;Vec&lt;ResourceRow&gt;&#x60; rows). Default: false.
+    # @option opts [String] :sections Optional sections to fill on each returned [&#x60;ResourceView&#x60;]: a comma-separated list of [&#x60;temper_core::types::resource_view::ResourceSection&#x60;] names (&#x60;open-meta&#x60;, &#x60;body&#x60;, &#x60;edges&#x60;). &#x60;None&#x60;/empty asks for none, which is the default list row.  Replaces &#x60;meta_only&#x60;, which named a *response type* rather than a part: it selected a second envelope (&#x60;ResourceMetaListResponse&#x60;) whose rows were a different shape. There is one response shape now, so what the caller varies is which parts of it are filled.  A CSV string rather than a &#x60;Vec&#x60; for the same reason as &#x60;tags&#x60; and &#x60;cogmap_ids&#x60; above — the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Parsed by &#x60;SectionSet::parse_csv&#x60;, which refuses an unknown name naming the whole valid set.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ListResourcesResponse]
+    # @return [ResourceListResponse]
     def list_resources(opts = {})
       data, _status_code, _headers = list_resources_with_http_info(opts)
       data
     end
 
+    # &#x60;GET /api/resources&#x60; — **one response type, unconditionally.**
+    # This endpoint used to answer in &#x60;oneOf&lt;ResourceListResponse, ResourceMetaListResponse&gt;&#x60;, selected by &#x60;?meta_only&#x3D;true&#x60;: two envelopes over two row types, so a generated client had a union to discriminate and an agent had two shapes to learn. &#x60;?sections&#x3D;&#x60; replaces it — the caller varies which *parts* of &#x60;ResourceView&#x60; are filled, never which type comes back. The &#x60;ListResourcesResponse&#x60; enum, its &#x60;untagged&#x60; serde impl and its hand-written &#x60;IntoResponse&#x60; are gone with it; &#x60;ResourceListResponse&#x60; is a plain &#x60;Json&#x60; return like every other read here.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kb_doc_type_id 
     # @option opts [String] :context_ref Context filter: UUID string or &#x60;@owner/slug&#x60; decorated ref. Bare context names are rejected server-side (spec Decision 1).
@@ -637,9 +641,9 @@ module Temper::Generated
     # @option opts [SortOrder] :order 
     # @option opts [Integer] :limit 
     # @option opts [Integer] :offset 
-    # @option opts [Boolean] :meta_only When true, the list endpoint returns &#x60;ResourceMetaListResponse&#x60; (&#x60;Vec&lt;ResourceDetail&gt;&#x60; rows — full row + both meta tiers) instead of &#x60;ResourceListResponse&#x60; (&#x60;Vec&lt;ResourceRow&gt;&#x60; rows). Default: false.
+    # @option opts [String] :sections Optional sections to fill on each returned [&#x60;ResourceView&#x60;]: a comma-separated list of [&#x60;temper_core::types::resource_view::ResourceSection&#x60;] names (&#x60;open-meta&#x60;, &#x60;body&#x60;, &#x60;edges&#x60;). &#x60;None&#x60;/empty asks for none, which is the default list row.  Replaces &#x60;meta_only&#x60;, which named a *response type* rather than a part: it selected a second envelope (&#x60;ResourceMetaListResponse&#x60;) whose rows were a different shape. There is one response shape now, so what the caller varies is which parts of it are filled.  A CSV string rather than a &#x60;Vec&#x60; for the same reason as &#x60;tags&#x60; and &#x60;cogmap_ids&#x60; above — the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Parsed by &#x60;SectionSet::parse_csv&#x60;, which refuses an unknown name naming the whole valid set.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ListResourcesResponse, Integer, Hash)>] ListResourcesResponse data, response status code and response headers
+    # @return [Array<(ResourceListResponse, Integer, Hash)>] ResourceListResponse data, response status code and response headers
     def list_resources_with_http_info(opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ResourcesApi.list_resources ...'
@@ -667,7 +671,7 @@ module Temper::Generated
       query_params[:'order'] = opts[:'order'] if !opts[:'order'].nil?
       query_params[:'limit'] = opts[:'limit'] if !opts[:'limit'].nil?
       query_params[:'offset'] = opts[:'offset'] if !opts[:'offset'].nil?
-      query_params[:'meta_only'] = opts[:'meta_only'] if !opts[:'meta_only'].nil?
+      query_params[:'sections'] = opts[:'sections'] if !opts[:'sections'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}
@@ -682,7 +686,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ListResourcesResponse'
+      return_type = opts[:debug_return_type] || 'ResourceListResponse'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -1067,7 +1071,7 @@ module Temper::Generated
     # @param resource_update_request [ResourceUpdateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ResourceRow]
+    # @return [ResourceView]
     def update_resource(id, resource_update_request, opts = {})
       data, _status_code, _headers = update_resource_with_http_info(id, resource_update_request, opts)
       data
@@ -1077,7 +1081,7 @@ module Temper::Generated
     # @param resource_update_request [ResourceUpdateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ResourceRow, Integer, Hash)>] ResourceRow data, response status code and response headers
+    # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def update_resource_with_http_info(id, resource_update_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ResourcesApi.update_resource ...'
@@ -1118,7 +1122,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(resource_update_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ResourceRow'
+      return_type = opts[:debug_return_type] || 'ResourceView'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

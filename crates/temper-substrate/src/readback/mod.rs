@@ -24,13 +24,26 @@
 //! provably the self-audit arm and not a readability failure).
 //!
 //! Reads are compile-time `query!`-family macros, so each leaves an entry in the workspace `.sqlx`
-//! cache and is checked against the live schema at build time. **Three** are runtime `sqlx::query` /
-//! `query_as`, all for one reason — a `$n::vector` bind the macros cannot type ([`vector_search`],
-//! [`unified_search`], [`wayfind_scope_ids`]). That is the allow-listed exception class and the
-//! whole of it here; it is deliberately not a house style. Until 2026-07-30 sixteen further reads in
-//! this module were runtime *"for consistency"* with those three, which left them absent from the
-//! cache — and the cache is the record a schema/binary change detector reads, so an exemption taken
-//! for tidiness was subtracting from the coverage of a safety check.
+//! cache and is checked against the live schema at build time. A few are runtime `sqlx::query` /
+//! `query_as` — [`vector_search`], [`search_wide`], [`wayfind_region_diagnostics`] — for one
+//! allow-listed reason only: a `$n::vector` bind the macros cannot type.
+//!
+//! **That reason is the whole of the class.** A runtime read that cannot state it is drift, not an
+//! exception, and belongs as a macro. Do not add one for tidiness, consistency, or because a
+//! neighbour is runtime.
+//!
+//! **Count the members by reading the file, never by trusting a number written in prose** — here or
+//! in any document describing this module. A restated count drifts silently as reads are added and
+//! retired. Count them with `python3 scripts/classify-sqlx-calls.py`, which is the enumerator the
+//! `audit-sqlx-macro-exceptions` CI gate itself runs, so the number you get is the number that
+//! gates. A literal grep pattern for the call spelling is deliberately NOT written here: that
+//! scanner matches the call head anywhere in the file and does not strip comments, so a pattern
+//! quoted in this note counts itself and inflates this module's total by one.
+//!
+//! **The exemption must not spread.** Until 2026-07-30 sixteen further reads in this module were
+//! runtime *"for consistency"* with the vector ones, which left them absent from the cache — and the
+//! cache is the record a schema/binary change detector reads, so an exemption taken for tidiness was
+//! subtracting from the coverage of a safety check. They were clawed back.
 //!
 //! A macro read states its own nullability, so several carry `!` / `?` overrides. Each one is a
 //! claim about the SQL (a set-returning function's contract, a `COALESCE`, an INNER JOIN) and is
@@ -56,7 +69,10 @@ use uuid::Uuid;
 use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId,
 };
-use crate::keys::is_managed_property_key;
+use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
+use temper_core::types::managed_meta::ManagedMeta;
+use temper_core::types::resource::{BodyStorage, IngestState};
+use temper_core::types::ResourceView;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
 /// the surface can map each mode to the right HTTP status. The alternative — string-matching one
@@ -112,12 +128,11 @@ impl From<anyhow::Error> for ReadbackError {
 }
 
 /// One projected list row over the substrate tables — the readback counterpart of production's
-/// `ResourceRow` for the fields the resource-list projection surfaces (`temper-api`'s
-/// `resource_service::list_visible` via the `vault_resources_browse` view): the resource's
-/// `origin_uri` + `title`, its `doc_type`, and the three workflow fields lifted from `managed_meta`
-/// (`temper-stage`/`temper-mode`/`temper-effort`). Each workflow field is `None` when the resource
-/// carries no such property (R1/R3/R5 in the prod-shape fixture), matching the view's
-/// `managed_meta->>'…'` NULL for an absent key.
+/// resource-list projection (temper-services' `substrate_read::filtered_visible_page`) for the
+/// fields that projection surfaces: the resource's `origin_uri` + `title`, its `doc_type`, and the
+/// three workflow fields lifted from `managed_meta` (`temper-stage`/`temper-mode`/`temper-effort`).
+/// Each workflow field is `None` when the resource carries no such property (R1/R3/R5 in the
+/// prod-shape fixture), matching the `kb_resource_workflow_props` pivot's NULL for an absent key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListRow {
     /// The verbatim-carried `origin_uri` (a provenance marker, NOT unique — empty for CLI/agent-created
@@ -135,27 +150,6 @@ pub struct ListRow {
     pub effort: Option<String>,
 }
 
-/// Port of production's resource-list projection (`resource_service::list_visible` over the
-/// `vault_resources_browse` view) onto the substrate tables: returns every synthesized resource (the §0
-/// active set — synthesis never carries soft-deleted rows, so there is no `is_active` filter to apply
-/// here) with the same projected fields production surfaces.
-///
-/// The doctype and the three workflow fields all live in `kb_properties` (synthesis writes
-/// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
-/// inner JOIN — every synthesized resource has one; the workflow keys come from a LEFT JOIN on the
-/// `kb_resource_workflow_props` pivot view (migration `20260709000002` — the one statement of the
-/// per-key pivot, shared with `resource_row` and temper-services' `filtered_visible_page`), so a
-/// resource without them comes back with `NULL` (not dropped). Property values are JSON scalars,
-/// extracted to text with `#>> '{}'` (the doc-type-as-property extraction).
-///
-/// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
-/// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
-/// ordered by `updated`: synthesis sources `kb_resources.created`/`updated` from the genesis event's
-/// `occurred_at`, which is `now()` = transaction-start time and therefore identical across every row
-/// written in the single synthesis transaction. Absolute recency ordering is not a migration-time
-/// invariant (event-sourced backfill collapses timestamps to synthesis time); the row set + projected
-/// fields are.
-///
 /// The one Rust-callable spelling of "can `principal` see `resource`?", under `resources_visible_to`.
 ///
 /// This exists so `ensure_visible` (below — private, so deliberately not an intra-doc link from a
@@ -217,6 +211,32 @@ async fn ensure_visible(
     }
 }
 
+/// Port of production's resource-list projection (temper-services'
+/// `substrate_read::filtered_visible_page`) onto the substrate tables: returns every synthesized
+/// resource (the §0 active set — synthesis never carries soft-deleted rows, so there is no
+/// `is_active` filter to apply here) with the same projected fields production surfaces.
+///
+/// This doc comment was stranded on [`is_resource_visible`] until the `ResourceView` convergence
+/// moved it back onto the function it describes. It also cited a `vault_resources_browse` view as
+/// production's source; that view was dropped by the WS6 endgame collapse (`2fc0412e`) when the
+/// migration baseline was rebuilt, and production's list has read the same `kb_properties` +
+/// `kb_resource_workflow_props` pair this function reads ever since.
+///
+/// The doctype and the three workflow fields all live in `kb_properties` (synthesis writes
+/// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
+/// inner JOIN — every synthesized resource has one; the workflow keys come from a LEFT JOIN on the
+/// `kb_resource_workflow_props` pivot view (migration `20260709000002` — the one statement of the
+/// per-key pivot, shared with [`resource_row`] and temper-services' `filtered_visible_page`), so a
+/// resource without them comes back with `NULL` (not dropped). Property values are JSON scalars,
+/// extracted to text with `#>> '{}'` (the doc-type-as-property extraction).
+///
+/// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
+/// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
+/// ordered by `updated`: synthesis sources `kb_resources.created`/`updated` from the genesis event's
+/// `occurred_at`, which is `now()` = transaction-start time and therefore identical across every row
+/// written in the single synthesis transaction. Absolute recency ordering is not a migration-time
+/// invariant (event-sourced backfill collapses timestamps to synthesis time); the row set + projected
+/// fields are.
 pub async fn list(pool: &PgPool, principal: ProfileId) -> Result<Vec<ListRow>> {
     // `doc_type!`: the JOIN is INNER, so the row exists; `#>> '{}'` is an expression, which sqlx
     // infers as nullable regardless. The override states the same thing the pre-macro
@@ -302,6 +322,81 @@ pub async fn meta(
     .fetch_all(pool)
     .await?;
 
+    classify_properties(
+        new_id,
+        rows.into_iter()
+            .map(|row| (row.property_key, row.property_value)),
+    )
+}
+
+/// The batched [`meta`] — the managed/open/doc_type split for MANY resources in ONE statement.
+///
+/// Exists because the per-resource loop above it was the surviving N+1 on the list surface: the
+/// `open-meta` section fill ran `meta` once per page row (and `meta` itself is two statements, its
+/// own `ensure_visible` plus the read), so a 13-row page asking for the open tier cost **28
+/// statements, measured** — the same defect [`hit_identities`] was written to end for search, one
+/// section down. It is 3 now.
+///
+/// Visibility is gated by the `resources_visible_to` JOIN rather than by `ensure_visible`, matching
+/// the set reads in this module: a resource the principal cannot see is simply ABSENT from the map,
+/// never an error. That is the right convention here — every caller has already read the resource's
+/// identity through a visibility-gated read, so a miss means the row disappeared between the two
+/// statements, which is a dropped row rather than a fault.
+///
+/// The classification is `classify_properties`, shared verbatim with [`meta`]: the `facet` merge
+/// and the newest-wins rule are subtle enough that a second copy would drift, and a drift here means
+/// two doors disagreeing about what a resource's open tier IS.
+pub async fn meta_batch(
+    pool: &PgPool,
+    principal: ProfileId,
+    ids: &[ResourceId],
+) -> std::result::Result<std::collections::HashMap<ResourceId, ReconstructedMeta>, ReadbackError> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let raw: Vec<Uuid> = ids.iter().map(|id| id.uuid()).collect();
+    // `ORDER BY owner_id` first so each resource's rows arrive contiguously; `created, id` within a
+    // resource is `meta`'s ordering verbatim, which is what makes newest-wins mean the same thing.
+    let rows = sqlx::query!(
+        r#"SELECT pr.owner_id, pr.property_key, pr.property_value
+             FROM kb_properties pr
+             JOIN resources_visible_to($1) v ON v.resource_id = pr.owner_id
+            WHERE pr.owner_table = 'kb_resources'
+              AND pr.owner_id = ANY($2)
+              AND NOT pr.is_folded
+            ORDER BY pr.owner_id, pr.created, pr.id"#,
+        principal.uuid(),
+        &raw,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut grouped: Vec<(ResourceId, Vec<(String, Value)>)> = Vec::new();
+    for row in rows {
+        let id = ResourceId::from(row.owner_id);
+        match grouped.last_mut() {
+            Some((last, props)) if *last == id => {
+                props.push((row.property_key, row.property_value));
+            }
+            _ => grouped.push((id, vec![(row.property_key, row.property_value)])),
+        }
+    }
+
+    grouped
+        .into_iter()
+        .map(|(id, props)| Ok((id, classify_properties(id, props)?)))
+        .collect()
+}
+
+/// The §7 fate split for one resource's property rows — the **one** implementation, shared by
+/// [`meta`] (one statement per resource) and [`meta_batch`] (one statement for many).
+///
+/// `rows` must arrive in `created, id` order, which is what makes the last-write-wins inserts below
+/// mean *newest wins*.
+fn classify_properties(
+    new_id: ResourceId,
+    rows: impl IntoIterator<Item = (String, Value)>,
+) -> std::result::Result<ReconstructedMeta, ReadbackError> {
     let mut managed = Map::new();
     let mut open = Map::new();
     let mut doc_type: Option<String> = None;
@@ -325,9 +420,7 @@ pub async fn meta(
     // Per-mark weight still does not appear here — `open_meta` is a key→value map with
     // nowhere to put it. The facet read remains the faithful door; this one is honest
     // about the marks, not about their strength.
-    for row in rows {
-        let key = row.property_key;
-        let value = row.property_value;
+    for (key, value) in rows {
         if key == "doc_type" {
             // The authoritative doctype is a JSON string scalar; surface it as the typed field.
             doc_type = Some(match value {
@@ -802,8 +895,8 @@ pub async fn find_edge(
 /// search read floor. Reads the stored `kb_resource_search_index` tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
 ///
-/// The query is parsed with `websearch_to_tsquery` (issue #356) — mirroring the Surface A
-/// `search_fts_candidates` SQL function — so `"quoted phrases"`, `OR`, and `-negation` are
+/// The query is parsed with `websearch_to_tsquery` (issue #356) — mirroring the `search_exact` SQL
+/// function, which the exact arm of `/api/search` runs — so `"quoted phrases"`, `OR`, and `-negation` are
 /// expressible. Plain unquoted input parses identically to `plainto_tsquery`, so this is fully
 /// backward-compatible (the `fts_search_parity_with_inline_recipe` test keeps a `plainto_tsquery`
 /// oracle precisely to pin that equivalence).
@@ -889,7 +982,7 @@ fn format_pgvector(v: &[f32]) -> String {
 ///
 /// The query embedding is formatted to a pgvector text literal and bound into a `$1::vector` cast.
 /// Runtime `sqlx::query` with the `::vector` cast is the ESTABLISHED pgvector-macro exception —
-/// production's own `unified_search` uses runtime `query_as` for exactly this reason (the `query!`
+/// production's own [`search_wide`] uses runtime `query_as` for exactly this reason (the `query!`
 /// macros don't support the `::vector` cast).
 ///
 /// Read-only; no writes. Schema-qualified throughout — see the module-level note.
@@ -1399,74 +1492,273 @@ pub(crate) async fn neighbors(
         .collect())
 }
 
-/// One scored hit from Surface A unified search (Beat 2). The scores are the real blended sub-scores —
-/// the either/or path's 0.0 placeholders are gone.
+/// One hit from the **exact** arm (`search_exact`), carrying that arm's own quantity and no other.
+///
+/// There is deliberately no companion score here. The arm is ordered by `fts_norm` alone, and a
+/// second number on this row would be something to rank it against.
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct ScoredHit {
+pub struct ExactHit {
     pub resource_id: ResourceId,
-    pub fts_score: f32,
-    pub vector_score: f32,
-    pub graph_score: f32,
-    pub combined_score: f32,
+    /// `ts_rank` with flag 33 — 32's `rank/(rank+1)` normalization plus flag 1's log-length
+    /// division — so it lies in `[0,1)`.
+    pub fts_norm: f32,
 }
 
-/// Request parameters for [`unified_search`] (params struct — 12 domain fields). Borrowed views; the
-/// caller owns the underlying `SearchParams`. Empty `seed_ids`/`edge_types` ⇒ no explicit seeds / all
-/// edge kinds. `None` `query`/`embedding` ⇒ that signal's term is zeroed in the blend.
-/// `scope_ids`: when `Some`, restricts the corpus to the supplied resource ids; `None` ⇒ unrestricted.
-#[derive(Debug, Clone)]
-pub struct UnifiedSearchQuery<'a> {
+/// One hit from the **wide** arm (`search_wide`).
+///
+/// `vec_norm` rescales the pgvector cosine DISTANCE (which spans `[0,2]`) as `1 - d/2`, landing in
+/// `[0,1]`. Note that `wayfind_region_scores.query_cos` rescales the SAME operator as `1 - d`,
+/// spanning `[-1,1]` — the two are not one quantity and neither column name says so.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WideHit {
+    pub resource_id: ResourceId,
+    pub vec_norm: f32,
+}
+
+/// What both arms take besides their own retrieval input.
+///
+/// A params struct because the alternative is seven positional arguments per arm, four of which are
+/// `Option`s of the same shape — and because `limit`/`offset` mean the same thing to both arms and
+/// should not be able to drift apart in two signatures.
+#[derive(Debug, Clone, Copy)]
+pub struct ArmQuery<'a> {
     pub principal: ProfileId,
-    pub query: Option<&'a str>,
-    pub embedding: Option<&'a [f32]>,
-    pub seed_ids: &'a [ResourceId],
-    pub depth: i32,
-    pub edge_types: &'a [String],
-    pub context_id: Option<ContextId>,
+    /// The anchor pair, `None` ⇒ unscoped.
+    pub anchor: Option<HomeAnchor>,
+    /// Filter on the resource's `doc_type` property. `None` ⇒ no filter.
     pub doc_type: Option<&'a str>,
-    pub graph_expand: bool,
-    pub limit: i64,
-    pub offset: i64,
-    pub scope_ids: Option<&'a [Uuid]>,
-    /// When true AND `seed_ids` is non-empty, the auto-seed union (blend top-N) is suppressed so the
-    /// explicit seeds alone define the graph neighborhood (issue #357). No effect with no seeds.
-    pub seed_only: bool,
+    /// Rows to fetch. `None` ⇒ unbounded, which is `LIMIT NULL` in SQL.
+    ///
+    /// **The read path deliberately asks for one MORE row than it will return.** That extra row is
+    /// how an arm tells "you have paged past the end" from "nothing matched" without paying for a
+    /// second count — the two are indistinguishable from an empty page alone, and reporting
+    /// `NoMatch` with "try rephrasing" to a caller who simply walked off the end is a wrong answer
+    /// to the question they asked.
+    pub limit: Option<i32>,
+    pub offset: i32,
 }
 
-/// Surface A general search (Beat 2): one composed SQL statement (`unified_search`) blending FTS +
-/// vector + graph into ranked, scored hits. Runtime `sqlx::query_as` — the `::vector` cast forbids the
-/// compile-time macros (module note). All tuning constants live in the SQL function, not here.
-pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<Vec<ScoredHit>> {
-    let emb_text = q.embedding.map(format_pgvector);
-    let edge_types: Vec<String> = q.edge_types.to_vec();
-    let hits = sqlx::query_as::<_, ScoredHit>(
-        "SELECT resource_id, fts_score, vector_score, graph_score, combined_score
-           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[], $13)",
+/// The exact arm. Scope is the anchor pair, taken as a [`HomeAnchor`] so the `(table, id)` literal is
+/// derived in one place rather than at each call site — `None` ⇒ unscoped.
+///
+/// Ordering and paging are the SQL function's, not this caller's: `ORDER BY fts_norm DESC,
+/// resource_id` then `LIMIT`/`OFFSET`. The tiebreak is part of the contract — without a total order
+/// a tied row can appear on two pages or on none.
+pub async fn search_exact(
+    pool: &PgPool,
+    query: Option<&str>,
+    arm: ArmQuery<'_>,
+) -> Result<Vec<ExactHit>> {
+    // Compile-time `query!`, unlike its sibling [`search_wide`]: this arm binds no vector, so the
+    // module note's `::vector` exemption never covered it and a runtime read here would sit outside
+    // the `.sqlx` cache for no stated reason — which is the drift that note exists to prevent.
+    //
+    // Both `!` overrides restate what the function's own `RETURNS TABLE(resource_id uuid, fts_norm
+    // real)` already guarantees: sqlx types every column of a set-returning function as nullable
+    // regardless of the declaration, so without them the row fields would arrive as `Option`.
+    let rows = sqlx::query!(
+        r#"SELECT resource_id AS "resource_id!", fts_norm AS "fts_norm!"
+             FROM search_exact($1, $2, $3, $4, $5, $6, $7)"#,
+        arm.principal.uuid(),
+        query,
+        arm.anchor.map(|a| a.table()),
+        arm.anchor.map(|a| a.uuid()),
+        arm.doc_type,
+        arm.limit,
+        arm.offset,
     )
-    .bind(q.principal)
-    .bind(q.query)
-    .bind(emb_text)        // NULL when None → p_emb NULL → vector term zeroed
-    .bind(q.seed_ids)
-    .bind(q.depth)
-    .bind(edge_types)
-    .bind(q.context_id)
-    .bind(q.doc_type)
-    .bind(q.graph_expand)
-    .bind(q.limit)
-    .bind(q.offset)
-    .bind(q.scope_ids)     // $12 — Option<&[Uuid]> binds to uuid[] / NULL
-    .bind(q.seed_only)     // $13 — suppress the auto-seed union when explicit seeds are given
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ExactHit {
+            resource_id: ResourceId::from(row.resource_id),
+            fts_norm: row.fts_norm,
+        })
+        .collect())
+}
+
+/// The wide arm. Runtime `sqlx::query_as` — the `::vector` cast forbids the compile-time macros
+/// (module note).
+///
+/// `k` bounds the ANN draw in CHUNKS on the UNSCOPED branch only; the scoped branch is exhaustive
+/// and ignores it. [`ArmQuery::limit`] is a different unit — it bounds the answer in RESOURCES,
+/// after aggregation, on both branches. Collapsing the two would change what the shrinkage factor
+/// is computed over.
+///
+/// `hnsw.ef_search` is pinned on the SQL function at or above the `k` used here — see
+/// `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for`. Raising `k` past the pin
+/// re-introduces the silent truncation the pin exists to prevent.
+pub async fn search_wide(
+    pool: &PgPool,
+    embedding: Option<&[f32]>,
+    k: i32,
+    arm: ArmQuery<'_>,
+) -> Result<Vec<WideHit>> {
+    let emb_text = embedding.map(format_pgvector);
+    let hits = sqlx::query_as::<_, WideHit>(
+        "SELECT resource_id, vec_norm FROM search_wide($1, $2::vector, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(arm.principal)
+    .bind(emb_text) // NULL when None → p_emb NULL → the arm returns nothing
+    .bind(k)
+    .bind(arm.anchor.map(|a| a.table()))
+    .bind(arm.anchor.map(|a| a.uuid()))
+    .bind(arm.doc_type)
+    .bind(arm.limit)
+    .bind(arm.offset)
     .fetch_all(pool)
     .await?;
     Ok(hits)
 }
 
-/// Request parameters for [`wayfind_scope_ids`] (params struct). Borrowed embedding view; the caller
-/// owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under that lens's
-/// `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None` `regions` ⇒ the
-/// SQL `k`-CTE default. `None` `anchor` ⇒ pool regions from **every** visible anchor over both kinds;
-/// `Some` ⇒ "wayfind within this anchor" (spec §3.7). A `Some` anchor the principal cannot read is not
-/// an error — it simply admits no rows, because the scope is still intersected with
+/// Enrich a set of resource ids in ONE round-trip, visibility-gated.
+///
+/// This replaces a per-hit `resource_row` call — 50 results meant 51 queries. Both arms feed the
+/// same call because a resource's identity does not depend on which arm found it.
+///
+/// A resource the principal cannot see is simply absent from the result, never an error: the arms
+/// already gate visibility inside SQL, so a miss here would mean the row disappeared between the two
+/// statements, which is a dropped hit rather than a fault.
+///
+/// Answers in [`ResourceView`] — the one shape a resource has — rather than in a search-local
+/// projection, so an `ExactHit` and a list row describe the same resource identically. Two fields
+/// are deliberately absent on every view this returns: `content` (the body is a section, and
+/// reconstructing markdown for every hit is what this call exists NOT to do) and `open_meta` (the
+/// open tier is a section too; `None` means *not requested*, never "empty").
+///
+/// The managed tier is not a section, so it is joined in here. It arrives as one `jsonb` object per
+/// resource from a LATERAL aggregate — **still one statement**, which is the property this function
+/// was written to hold. The key set the aggregate filters on is bound from
+/// [`crate::keys::MANAGED_PROPERTY_KEYS`], not spelled into the SQL, so the managed/open split has
+/// the same single source here as [`meta`]'s [`is_managed_property_key`] inverse.
+pub async fn hit_identities(
+    pool: &PgPool,
+    principal: ProfileId,
+    ids: &[ResourceId],
+) -> Result<Vec<ResourceView>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let raw: Vec<Uuid> = ids.iter().map(|r| r.uuid()).collect();
+    let managed_keys: Vec<String> = MANAGED_PROPERTY_KEYS
+        .iter()
+        .map(|k| (*k).to_string())
+        .collect();
+    // The `?` overrides on the LEFT-JOINed anchors are the load-bearing ones (as in
+    // `resource_row`): a resource is homed in EITHER a context or a cogmap, so exactly one side is
+    // NULL on every row. `managed` is `?` because `jsonb_object_agg` over an empty set is NULL —
+    // a resource with no managed property at all.
+    let rows = sqlx::query!(
+        r#"SELECT r.id AS "id!",
+                  r.title,
+                  r.origin_uri,
+                  r.is_active,
+                  r.created,
+                  r.updated,
+                  r.body_hash,
+                  r.ingest_state,
+                  r.body_storage,
+                  h.owner_profile_id,
+                  h.originator_profile_id,
+                  p.handle                   AS owner_handle,
+                  dt.property_value #>> '{}' AS "doc_type_name!",
+                  c.id                       AS "kb_context_id?",
+                  c.name                     AS "context_name?",
+                  cm.id                      AS "cogmap_id?",
+                  cm.name                    AS "cogmap_name?",
+                  c.slug                     AS "context_slug?",
+                  CASE c.owner_table
+                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                    WHEN 'kb_profiles' THEN '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+                    ELSE NULL
+                  END                        AS "context_owner_ref?",
+                  mm.managed                 AS "managed?"
+             FROM kb_resources r
+             JOIN kb_resource_homes h ON h.resource_id = r.id
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+             LEFT JOIN kb_contexts c
+               ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+             LEFT JOIN kb_cogmaps cm
+               ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'
+             JOIN kb_profiles p ON p.id = h.owner_profile_id
+             JOIN kb_properties dt
+               ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+              AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+             LEFT JOIN LATERAL (
+               SELECT jsonb_object_agg(newest.property_key, newest.property_value) AS managed
+                 FROM (SELECT DISTINCT ON (mp.property_key)
+                              mp.property_key, mp.property_value
+                         FROM kb_properties mp
+                        WHERE mp.owner_table = 'kb_resources' AND mp.owner_id = r.id
+                          AND NOT mp.is_folded AND mp.property_key = ANY($3)
+                        ORDER BY mp.property_key, mp.created DESC, mp.id DESC) newest
+             ) mm ON TRUE
+            WHERE r.id = ANY($2)"#,
+        principal.uuid(),
+        &raw,
+        &managed_keys,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            // Newest-wins per key is done by the `DISTINCT ON` above, matching `meta`'s
+            // ORDER BY + last-write-wins. `deny_unknown_fields` on `ManagedMeta` is what makes the
+            // bound key filter load-bearing rather than an optimization: an open key reaching here
+            // is an error, not a silently-carried extra.
+            let managed_meta: ManagedMeta = match row.managed {
+                Some(v) => serde_json::from_value(v).map_err(|e| {
+                    anyhow::anyhow!(
+                        "managed meta for resource {} is not a ManagedMeta: {e}",
+                        row.id
+                    )
+                })?,
+                None => ManagedMeta::default(),
+            };
+            Ok(ResourceView {
+                id: ResourceId::from(row.id),
+                // Filled by `with_derived_refs` below — neither is a column.
+                r#ref: String::new(),
+                title: row.title,
+                origin_uri: row.origin_uri,
+                kb_context_id: row.kb_context_id.map(ContextId::from),
+                context_name: row.context_name,
+                context_slug: row.context_slug,
+                context_owner_ref: row.context_owner_ref,
+                context_ref: None,
+                cogmap_id: row.cogmap_id,
+                cogmap_name: row.cogmap_name,
+                doc_type_name: row.doc_type_name,
+                owner_handle: row.owner_handle,
+                owner_profile_id: ProfileId::from(row.owner_profile_id),
+                originator_profile_id: ProfileId::from(row.originator_profile_id),
+                is_active: row.is_active,
+                created: row.created,
+                updated: row.updated,
+                body_hash: row.body_hash,
+                // Both columns are CHECK-constrained, so `from_wire` is total in practice; an
+                // unparseable value is a schema violation, surfaced as None rather than coerced.
+                ingest_state: IngestState::from_wire(&row.ingest_state),
+                body_storage: BodyStorage::from_wire(&row.body_storage),
+                managed_meta,
+                // Both are sections this read does not serve — see the doc comment.
+                open_meta: None,
+                content: None,
+            }
+            .with_derived_refs())
+        })
+        .collect()
+}
+
+/// Request parameters for [`wayfind_region_diagnostics`] (params struct). Borrowed embedding view;
+/// the caller owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under
+/// that lens's `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None`
+/// `regions` ⇒ the SQL `k`-CTE default. `None` `anchor` ⇒ pool regions from **every** visible anchor
+/// over both kinds; `Some` ⇒ "wayfind within this anchor" (spec §3.7). A `Some` anchor the principal
+/// cannot read is not an error — it simply admits no rows, because the pool is still intersected with
 /// `visible_region_anchors` inside the SQL.
 #[derive(Debug, Clone)]
 pub struct WayfindScopeQuery<'a> {
@@ -1477,114 +1769,15 @@ pub struct WayfindScopeQuery<'a> {
     pub anchor: Option<HomeAnchor>,
 }
 
-/// Resolve the wayfind bounding resource-id set — the region-salience funnel across the principal's
-/// visible **anchors of both kinds** (cogmaps *and* contexts, spec §3.7), UNION the direct homed scope
-/// of region-less anchors (cold-start §5). The returned ids feed `unified_search` as `p_scope_ids`;
-/// this function only establishes scope.
-///
-/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
-/// macros (the same established exception as [`unified_search`] / [`vector_search`]). Since Task 2 the
-/// region SCORING and per-map round-robin selection live in `wayfind_region_scores`; this SQL function
-/// only ASSEMBLES scope from the winners (member-deref) plus cold-start. All tuning constants (α/β, the
-/// anchor prior κ, default/ceiling N, thin threshold, recall floor, and the per-anchor-kind
-/// normalization) live in the SQL, never here. Gate is in the SQL at every stage: a principal who can
-/// see no anchors gets zero rows, never an error.
-pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Result<Vec<Uuid>> {
-    let emb_text = q.embedding.map(format_pgvector);
-    let ids: Vec<(Uuid,)> =
-        sqlx::query_as("SELECT wayfind_scope_ids($1, $2, $3::vector, $4, $5, $6)")
-            .bind(q.principal)
-            .bind(q.lens_id)
-            .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
-            .bind(q.regions)
-            // NULL/NULL when None → unscoped: pool every visible anchor over both kinds.
-            .bind(q.anchor.map(HomeAnchor::table))
-            .bind(q.anchor.map(HomeAnchor::uuid))
-            .fetch_all(pool)
-            .await?;
-    Ok(ids.into_iter().map(|(id,)| id).collect())
-}
-
-/// A wayfind pass's bounding scope **plus** the reach scalars that make it legible (issue #585
-/// Task 4), as returned by `wayfind_scope_reach`.
-///
-/// [`scope_ids`](Self::scope_ids) is identical to what [`wayfind_scope_ids`] returns — that function
-/// is now a wrapper over the same SQL — so a caller that needs both pays one round-trip and one
-/// Stage-1 scan, not two.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WayfindScopeReach {
-    /// The bounding resource-id set fed to `unified_search` as `p_scope_ids`.
-    pub scope_ids: Vec<Uuid>,
-    /// How many region anchors the principal can see, after any single-anchor scoping — the
-    /// denominator "reached" is read against.
-    pub anchors_visible: i32,
-    /// How many of those actually contributed a resource to the scope, by **either** the
-    /// region-winner arm or the cold-start arm. This is the signal `scope_size` cannot give: a
-    /// resource count in the hundreds is compatible with every one of them coming from one anchor.
-    ///
-    /// **Has a floor, and on a real corpus not a small one.** Every region-less anchor holding
-    /// resources is admitted wholesale by cold-start on every query, so it is *always* reached —
-    /// measured at 6 of 10 visible anchors on prod. Read this together with
-    /// [`anchors_selected`](Self::anchors_selected), never alone.
-    pub anchors_reached: i32,
-    /// How many anchors won a region slot — the strictly **competitive** subset of
-    /// [`anchors_reached`](Self::anchors_reached). This is what makes a monopoly visible: one anchor
-    /// holding the whole width is `anchors_selected == 1` however high `anchors_reached` climbs.
-    /// The difference between the two is the count admitted wholesale, without any query relevance.
-    pub anchors_selected: i32,
-    /// The region width actually applied, after the SQL clamp into `[1, max_n]` with the SQL default
-    /// substituted for a `None` request. Reported rather than the constants being copied out of SQL,
-    /// so a caller can observe the default and the ceiling without a second definition of either
-    /// existing to drift.
-    pub regions_effective: i32,
-}
-
-/// Resolve a wayfind pass's bounding scope together with its reach scalars — one round-trip, one
-/// Stage-1 scan. Prefer this over [`wayfind_scope_ids`] anywhere the caller reports diagnostics;
-/// the plain id-set form remains for callers that genuinely only need ids.
-///
-/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
-/// macros (the same established exception as [`wayfind_scope_ids`] / [`unified_search`]). Always one
-/// row: an empty scope is an empty array with zeroed counts, never zero rows, because "nothing was
-/// reached" is the case a caller most needs reported and must not be indistinguishable from a
-/// missing answer. Gate is in the SQL; a principal who can see no anchors gets an empty scope, never
-/// an error.
-pub async fn wayfind_scope_reach(
-    pool: &PgPool,
-    q: WayfindScopeQuery<'_>,
-) -> Result<WayfindScopeReach> {
-    let emb_text = q.embedding.map(format_pgvector);
-    let row: (Vec<Uuid>, i32, i32, i32, i32) = sqlx::query_as(
-        "SELECT scope_ids, anchors_visible, anchors_reached, anchors_selected, regions_effective \
-         FROM wayfind_scope_reach($1, $2, $3::vector, $4, $5, $6)",
-    )
-    .bind(q.principal)
-    .bind(q.lens_id)
-    .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
-    .bind(q.regions)
-    .bind(q.anchor.map(HomeAnchor::table))
-    .bind(q.anchor.map(HomeAnchor::uuid))
-    .fetch_one(pool)
-    .await?;
-    Ok(WayfindScopeReach {
-        scope_ids: row.0,
-        anchors_visible: row.1,
-        anchors_reached: row.2,
-        anchors_selected: row.3,
-        regions_effective: row.4,
-    })
-}
-
 /// One candidate region's Stage-1 wayfind competition signal, as returned by
-/// `wayfind_region_diagnostics` (issue #585). These are the per-region scores `wayfind_scope_ids`
-/// consumes but discards — surfaced here keyed by map so the cross-map competition is observable.
+/// `wayfind_region_diagnostics` (issue #585). These are the per-region scores `wayfind_region_scores`
+/// computes — surfaced here keyed by map so the cross-map competition is observable.
 /// Substrate-local; read-only instrumentation, not a wire type.
 ///
-/// Since Task 2 both functions read ONE scoring home (`wayfind_region_scores`), so `in_top_n` is
-/// exactly the flag "this region's members are in the wayfind scope for this query" — computed once,
-/// not mirrored. Selection is per-map round-robin over `region_score = α·sal_norm + β·query_cos +
-/// κ·prior`, so `in_top_n`'s per-map distribution is the witness for "no single map monopolizes the
-/// top-N".
+/// There is ONE scoring home (`wayfind_region_scores`) and this is its only read surface, so
+/// `in_top_n` is the flag that function itself computes rather than a mirror of it. Selection is
+/// per-map round-robin over `region_score = α·sal_norm + β·query_cos + κ·prior`, so `in_top_n`'s
+/// per-map distribution is the witness for "no single map monopolizes the top-N".
 #[derive(Debug, Clone, PartialEq)]
 pub struct WayfindRegionDiagnosticRow {
     /// The candidate region (`kb_cogmap_regions.id`).
@@ -1606,21 +1799,23 @@ pub struct WayfindRegionDiagnosticRow {
     pub query_cos: f64,
     /// The composite `α·sal_norm + β·query_cos + κ·prior` the top-N cut is applied to.
     pub region_score: f64,
-    /// Whether this region cleared the Stage-1 top-N cut for this query — i.e. whether its members
-    /// enter the wayfind scope. The per-map distribution of `true`s is what makes a monopoly visible.
+    /// Whether this region cleared the Stage-1 top-N cut for this query. The per-map distribution of
+    /// `true`s is what makes a monopoly visible.
     pub in_top_n: bool,
 }
 
 /// Read-only instrumentation of wayfind's Stage-1 region selection (SQL `wayfind_region_diagnostics`,
 /// issue #585): one row per candidate region across the principal's visible anchors, carrying the
-/// `sal_norm` / `query_cos` / `region_score` and top-N flag that [`wayfind_scope_ids`] computes and
-/// discards. Takes the IDENTICAL [`WayfindScopeQuery`] inputs as [`wayfind_scope_ids`] — same principal,
-/// lens, embedding, region count, and anchor scope — so the reported competition is exactly the one that
-/// query would run. Rows come back highest-`region_score` first.
+/// `sal_norm` / `query_cos` / `region_score` and top-N flag that `wayfind_region_scores` computes and
+/// its own callers otherwise discard. Rows come back highest-`region_score` first.
+///
+/// **This is the ONLY read surface over those internals**, and the scope funnel that used to sit
+/// beside it (`wayfind_scope_ids` / `wayfind_scope_reach`) went with the blended search mechanism on
+/// 2026-08-06. So a change to `wayfind_region_scores` is observable from here or nowhere.
 ///
 /// Gate is in the SQL (`visible_region_anchors`): a principal who can see no anchors gets zero rows,
 /// never an error. Runtime `sqlx::query` — the `::vector` cast on the embedding forbids the compile-time
-/// macros (the same established exception as [`wayfind_scope_ids`] / [`unified_search`]).
+/// macros (the same established exception as [`vector_search`]).
 pub async fn wayfind_region_diagnostics(
     pool: &PgPool,
     q: WayfindScopeQuery<'_>,

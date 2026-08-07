@@ -50,7 +50,7 @@ async fn try_seed(
     doc_type: &str,
     slug: &str,
     goal: Option<Uuid>,
-) -> temper_client::error::Result<temper_workflow::types::resource::ResourceRow> {
+) -> temper_client::error::Result<temper_core::types::resource_view::ResourceView> {
     client
         .ingest()
         .create(&seed_payload(context, doc_type, slug, goal))

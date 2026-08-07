@@ -139,15 +139,16 @@ carry a `slug` field. A slug placed in managed frontmatter is likewise inert.
 1. `temper search "<topic>"` -- find relevant documents and notes
 2. `temper context [<name>]` -- understand current context and recent activity
 3. Use search results to guide targeted file reads
-4. Reach for `--meta-only` / `--fields` on `resource show` and `resource list`
-   when you need cheap orientation rather than full bodies (see below)
+4. Reach for `--without body` / `--fields` on `resource show`, or `--with
+   open-meta` on `resource list`, when you need cheap orientation rather than
+   full bodies (see below)
 
 Search first, read second. Don't guess at file paths.
 
 ## Listing: truncation, sort, and filters
 
-`temper resource list` returns a **capped page** — 20 rows by default (50 with
-`--meta-only`). **Never conclude a resource is absent, or that a set is
+`temper resource list` returns a **capped page** — 20 rows by default, whatever
+sections you ask for. **Never conclude a resource is absent, or that a set is
 complete, from a default `list`.** A goal/task/session you "don't see" may just
 be past the cap.
 
@@ -165,7 +166,8 @@ absence or completeness, **expand or narrow**:
 | Flag | Use |
 |------|-----|
 | `--all` | Return every matching row (no cap). Reach for this before claiming a set is complete. Conflicts with `--limit`. |
-| `--limit <n>` / `--offset <n>` | A bigger page, or page through the set. |
+| `--limit <n>` | A bigger page. It is a DEFAULT, not a cap — whatever you pass is honoured, and there is no server-side clamp. |
+| `--page <n>` / `--offset <n>` | Walk the set, in pages or in rows. `--page` is 1-indexed and counts in the effective `--limit`, so `--page 3 --limit 5` starts at row 10. The two are mutually exclusive, as is either with `--all`. |
 | `--sort <field>[:asc\|desc]` | Order by `updated`, `created`, `title`, `stage`, `seq`, `context`, or `doctype`. Direction defaults per field (time/seq → desc, text → asc); default sort is `updated:desc`. |
 | `--title-contains <substr>` | Case-insensitive title filter — narrow instead of paging blind (for topical/semantic search use `temper search`). |
 | `--stage <s>` / `--goal <ref>` (task) · `--status <s>` (goal) | Type-specific filters. Naming a `--type` they don't apply to is an error, not a silent no-op. |
@@ -193,10 +195,10 @@ deciding whether to read more deeply.
 
 | Pattern | What it returns |
 |---------|-----------------|
-| `temper resource show <ref> --meta-only` | The full `show` view — the row (title, type, context, owner, stage/seq/mode/effort) plus both the managed and open meta tiers — minus the reconstructed body. |
-| `temper resource list --type <t> --context @me/<ctx> --meta-only` | Each row as a full payload **plus** both meta tiers (no bodies). The default `list` carries neither tier, so this triages a whole context on managed/open-meta fields in one call. |
+| `temper resource show <ref> --without body` | The full `show` view — identity, home, attribution, plus both the managed and open meta tiers — minus the reconstructed body. Skips the body round-trip rather than discarding it. |
+| `temper resource list --type <t> --context @me/<ctx> --with open-meta` | Each row as a full payload **plus** the open tier (no bodies). The default `list` carries only the managed tier, so this triages a whole context on open-meta fields in one call. `body` is not a section `list` offers — use `show` per row. |
 | `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key `id` is always preserved. Pipe through `jq` for nested projection. |
-| `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
+| `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. The long spelling is `--with edges`, and it **composes** with `--without body`. |
 
 ## Referencing Other Resources — full UUIDv7, and link it
 

@@ -63,7 +63,7 @@ pub struct IngestPayload {
     pub act: ActInput,
     /// When set, this create is the **begin** of a segmented (multi-block) ingest: `content`
     /// carries only segment 0's text, and the ingest handler returns a
-    /// [`SegmentedBeginResponse`] instead of the one-shot `ResourceRow`. `None` (the default) is
+    /// [`SegmentedBeginResponse`] instead of the one-shot `ResourceView`. `None` (the default) is
     /// the unchanged one-shot path — every existing small-body caller is unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segmented: Option<SegmentedBegin>,

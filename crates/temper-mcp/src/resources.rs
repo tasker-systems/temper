@@ -134,10 +134,14 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let row = temper_services::backend::substrate_read::show_select(
+        // `show_view_select` with no sections: the browse surface returns the metadata object and
+        // the markdown as two separate content parts, so the body is fetched below rather than
+        // asked for as a section (`get_content_select` is the door a `…/content` URI uses too).
+        let row = temper_services::backend::substrate_read::show_view_select(
             &state.pool,
             ProfileId::from(profile.id),
             ResourceId::from(id),
+            &temper_core::types::resource_view::SectionSet::default(),
         )
         .await
         .map_err(|e| {

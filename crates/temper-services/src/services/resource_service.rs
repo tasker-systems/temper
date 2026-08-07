@@ -8,6 +8,5 @@
 
 pub use temper_workflow::types::resource::{
     ContentChunk, ContentResponse, ResourceAnnotateRequest, ResourceCreateRequest, ResourceFacets,
-    ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
-    ResourceUpdateRequest, SortOrder,
+    ResourceListParams, ResourceListResponse, ResourceSortField, ResourceUpdateRequest, SortOrder,
 };

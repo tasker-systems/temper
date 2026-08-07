@@ -32,6 +32,9 @@ sqlx = { version = "0.8", features = [
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"
+# `sluggify` (crate::refs) NFKD-normalizes a title and drops combining marks before
+# folding to ASCII — the transliteration in issue #320.
+unicode-normalization = "0.1"
 ts-rs = { version = "10", features = [
   "chrono-impl",
   "serde-json-impl",

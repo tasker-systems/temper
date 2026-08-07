@@ -299,23 +299,32 @@ cache discipline assumes static statements.
 with tests rather than avoided.]`
 
 **It is not unprecedented, and the precedent comes with an instruction the plan must obey.**
-`readback/mod.rs` already carries three runtime `sqlx::query_as` reads — `vector_search`,
-`unified_search`, `wayfind_scope_ids` — and its module note is explicit about their status:
-*"all for one reason — a `$n::vector` bind the macros cannot type. That is the allow-listed exception
-class and the whole of it here; it is deliberately not a house style."* The note also records what
-happened when the exemption spread: *"Until 2026-07-30 sixteen further reads in this module were
-runtime 'for consistency' with those three, which left them absent from the cache — and the cache is
-the record a schema/binary change detector reads, so an exemption taken for tidiness was subtracting
-from the coverage of a safety check."* `[verified — 2026-08-05,
-crates/temper-substrate/src/readback/mod.rs:1-34]`
+`readback/mod.rs` carries runtime `sqlx::query` / `query_as` reads — `vector_search`, `search_wide`,
+`wayfind_region_diagnostics` — and its module note is explicit about their status: they are runtime
+*"for one allow-listed reason only: a `$n::vector` bind the macros cannot type. **That reason is the
+whole of the class.** A runtime read that cannot state it is drift, not an exception, and belongs as
+a macro."* The note also records what happened when the exemption spread: *"Until 2026-07-30 sixteen
+further reads in this module were runtime 'for consistency' with the vector ones, which left them
+absent from the cache — and the cache is the record a schema/binary change detector reads, so an
+exemption taken for tidiness was subtracting from the coverage of a safety check."*
+`[verified — 2026-08-07, crates/temper-substrate/src/readback/mod.rs module note]`
 
-So the builder is a **fourth runtime read with a second, different reason** — dynamic composition
-rather than a `::vector` bind. **Amending that module note to name the second class is a required
-step of the build, not documentation hygiene.** Left unamended, the note instructs the next cleanup
-sweep to claw the builder back exactly as it clawed back the sixteen, and it would be right to.
+**That class admits only what can state its ground, and the discipline is enforced rather than
+described.** `search_exact` binds a principal, query text and an anchor pair — **no vector, no
+cast** — so the class's stated reason never covered it, and it is a `sqlx::query!` macro with
+`"resource_id!"` / `"fts_norm!"` overrides and an entry in the workspace cache, not a runtime read
+`[verified — 2026-08-07, readback/mod.rs, the search_exact read]`.
 
-*(Note for whoever lands phase 1: `wayfind_scope_ids` is one of the three and phase 1 retires it, so
-the `::vector` class shrinks to two as this one arrives.)*
+So the builder is a **runtime read with a second, different reason** — dynamic composition rather
+than a `::vector` bind. **Amending that module note to name the second class is a required step of
+the build, not documentation hygiene.** Left unamended, the note instructs the next cleanup sweep to
+claw the builder back exactly as it clawed back the sixteen, and it would be right to.
+
+**The module note is the authority, and its members are counted from the file, never from prose
+here.** The note says so itself — *"Count the members by reading the file, never by trusting a number
+written in prose — here or in any document describing this module"* `[verified — 2026-08-07,
+readback/mod.rs module note]`. This section names the incumbent reads to identify the class; it
+carries no number out. When Task 10 lands, read the note there.
 
 Three obligations make it tolerable, and each is a plan step rather than a hope:
 
@@ -352,32 +361,63 @@ dependency on the sibling's work**, against exactly the acts most in need of a d
 | **C** | no | The compiler: kind-parametric fragment contract, CTE assembly, `vis` hoist, identifier allowlist, generative `EXPLAIN` harness — **executing compositions over `survey` and `follow-from`**. Owns the edge-provenance check (§3): can `search_graph_expand` emit path provenance without a body change, given its `MAX(score) GROUP BY node` collapse |
 | **D** | **yes** | Bind `find-exact` / `find-about-*` to `search_exact` / `search_wide` |
 | **E** | no | The doors: `POST /api/query`, an MCP tool, `temper query`, and a `door_coverage` entry per act |
-| **F** | **yes** | Reconcile act declarations — `Fused { unified_search }` → `Served` where `/api/query` serves an act alone |
+| **F** | **done** | Reconcile act declarations — landed in phase 1's own step 5, before this phase begins |
 
 **Coordination points with phase 1, and only these two.** D consumes the sibling's two new functions.
-F is the same declaration reconciliation phase 1's own step 5 owns — one reconciliation, not two.
+F is the same declaration reconciliation phase 1's own step 5 owns — one reconciliation, not two —
+and it is done `[verified — 59ee9100, "Phase 1 step 5 — the declarations describe the deployed system
+again, and offset stops being ignored"]`: `find-exact`, `find-about-anywhere` and `find-about-within`
+are `BuildState::Served` with `served_by` `search_exact` / `search_wide`
+`[verified — registry.rs: the FindExact, FindAboutAnywhere and FindAboutWithin declarations each
+carry build_state: BuildState::Served]`. It did not wait for `/api/query`, because the declarations
+became wrong the moment the read path moved — *"The declarations did not have to wait for step 4 to
+become wrong — they became wrong when the read path moved"* `[verified — 59ee9100 commit body]`.
+What step 5 did **not** reconcile is `follow-from` and `survey`; that remainder is the subsection
+below, and it is this phase's.
 
 ### The state between C and D, and the `BuildState` gap it lands on
 
-Between beats C and D the three `find` acts are declared `Fused { host: "unified_search" }` and the
-builder **cannot call them**: their mechanics live inside a composite the builder has no way to reach
-into, and the standalone functions do not exist yet. So a plan naming `find-exact` must refuse — and
-`RefusalReason` has no honest variant for it. `NotImplemented` is documented as *"the act is declared
-but not built (`build_state` is not `served` or `fused`)"* `[verified — disposition.rs:64-65]`, which
-is false of a fused act.
+**The live instance of the gap is `follow-from` and `survey`.** Both declare
+`provisionally_unexpressed()`, a helper whose only job is to record the imprecision at the point where
+it lives rather than hide it: it returns `BuildState::Fused { host: "unified_search" }` as the
+least-wrong of the available values, and says so — *"Their mechanics are live — `search_graph_expand`
+and `wayfind_region_scores` are both still deployed — but as of phase 1 steps 2-3 **no door reaches
+either one**. … So `Fused` is now false in BOTH its clauses — there is no host, and it has no door —
+while `Unbuilt` would still be false about a function that is right there, and `Served` would still be
+false about a door that does not exist."* `[verified — registry.rs, provisionally_unexpressed and its
+two call sites, the FollowFrom and Survey declarations]`. The host string names nothing:
+`unified_search` was dropped from the schema
+`[verified — migrations/20260806000010_retire_unified_search.sql]`. A fourth variant is deliberately
+**not** minted there, on the grounds that *"`/api/query` is the next phase and is being taken up
+immediately; it gives both acts doors and expresses this remainder properly, so a variant minted here
+would be born obsolete"* — tagged `[provisional — 2026-08-05; resolve in phase 4]`, which is this
+phase.
 
-**This is the same `BuildState` gap phase 1 already flagged, reached from the other side.** That task
-records that after its step 4 `survey`'s mechanic exists and no door reaches it — *"neither `Fused`
-(no host has a door either) nor `Unbuilt` (the function is right there). The type cannot currently
-say it."* Here the shape is *fused into a host this caller cannot invoke*. Both are the same missing
-distinction: **`BuildState` conflates whether a mechanic exists with whether the asking surface can
+**Two consequences for the builder, and they point in opposite directions.** A validator that keys on
+the `BuildState` discriminant — *refuse anything `Fused`, the builder cannot reach into a composite* —
+refuses exactly the two acts beat C exists to execute, because the `Fused` they carry is a placeholder
+and their `served_by` values name standalone functions the builder calls directly. And a plan naming
+`find-exact` between beats C and D must still refuse, because the compiler emits no fragment for
+`search_exact` / `search_wide` until beat D — but `NotImplemented`, documented as *"the act is declared
+but not built (`build_state` is not `served` or `fused`)"* `[verified — disposition.rs:64-65]`, is
+false of it: the act is `Served` `[verified — registry.rs, the FindExact declaration]`.
+
+**This is the same `BuildState` gap phase 1 flagged, and phase 1 states it in the same words** —
+*"`follow-from` and `survey` are in a state `BuildState` cannot express: their mechanics … are live and
+deployed, and no door reaches either"* `[verified — 59ee9100 commit body]`. The missing distinction is
+unchanged: **`BuildState` conflates whether a mechanic exists with whether the asking surface can
 reach it.**
 
 Named, not solved here. Two things follow for the plan: `RefusalReason` is **open**
 `[verified — disposition.rs, and decision 019fcd13]`, so a variant for *"declared, built, not
-reachable from this surface"* is additive and can be added when beat C needs it; and whichever of the
-two phases reaches the gap first should settle it once, since fixing it twice differently is the
-outcome to avoid.
+reachable from this surface"* is additive and can be added when beat C needs it; and **the settling
+falls to this phase**, once, since fixing it twice differently is the outcome to avoid. Phase 1
+reached the gap first and **declined on purpose**, leaving `provisionally_unexpressed()` and its
+`[provisional — 2026-08-05; resolve in phase 4]` tag in place because widening `BuildState` is
+*"semver-breaking on a shipped contract type"* and a variant minted there would be *"born obsolete"*
+`[verified — 59ee9100 commit body, and provisionally_unexpressed's doc comment]`. **How** it settles
+is deliberately still open — the `RefusalReason` variant just named, or the doors of beat E, which is
+what `provisionally_unexpressed()` itself anticipates.
 
 ---
 

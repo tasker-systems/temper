@@ -19,19 +19,23 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # `POST /api/search`.
+    # The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics` beside a body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that reason; the body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That also retires the header's percent-encoding scar — non-ASCII hint text was arriving at clients as `%E2%80%94` because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded by `every_emitted_hint_is_ascii`, since nothing is gained by relaxing it.
     # @param search_params [SearchParams] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<UnifiedSearchResultRow>]
+    # @return [SearchResponse]
     def search(search_params, opts = {})
       data, _status_code, _headers = search_with_http_info(search_params, opts)
       data
     end
 
+    # &#x60;POST /api/search&#x60;.
+    # The &#x60;x-temper-search-diagnostics&#x60; response header is GONE. It carried &#x60;SearchDiagnostics&#x60; beside a body that was a bare &#x60;Vec&lt;UnifiedSearchResultRow&gt;&#x60;, and existed for exactly that reason; the body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That also retires the header&#39;s percent-encoding scar — non-ASCII hint text was arriving at clients as &#x60;%E2%80%94&#x60; because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded by &#x60;every_emitted_hint_is_ascii&#x60;, since nothing is gained by relaxing it.
     # @param search_params [SearchParams] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Array<UnifiedSearchResultRow>, Integer, Hash)>] Array<UnifiedSearchResultRow> data, response status code and response headers
+    # @return [Array<(SearchResponse, Integer, Hash)>] SearchResponse data, response status code and response headers
     def search_with_http_info(search_params, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: SearchApi.search ...'
@@ -68,7 +72,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(search_params)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Array<UnifiedSearchResultRow>'
+      return_type = opts[:debug_return_type] || 'SearchResponse'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

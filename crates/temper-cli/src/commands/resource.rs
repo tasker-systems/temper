@@ -1,6 +1,8 @@
 use chrono::Local;
+use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_workflow::schema;
 
+use crate::commands::resource_sections;
 use crate::config::Config;
 use crate::error::{Result, TemperError};
 use crate::output;
@@ -8,14 +10,14 @@ use crate::vault;
 
 /// Flat result emitted by `temper resource create`.
 ///
-/// `ResourceRow` is flattened so all wire-type fields appear at the top level
+/// `ResourceView` is flattened so all wire-type fields appear at the top level
 /// alongside `status`. Breaking change (Task 9): replaces the 7-variant
 /// per-doctype JSON shape map (Task/Goal/Session/Research/Concept/Decision/default).
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct CreateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
-    pub resource: temper_workflow::types::resource::ResourceRow,
+    pub resource: temper_core::types::resource_view::ResourceView,
     /// Targets of the `derived_from` edges asserted by `--sources-as-edges`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub edges_asserted: Vec<uuid::Uuid>,
@@ -30,7 +32,7 @@ pub(crate) struct CreateActionResult {
 pub(crate) struct UpdateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
-    pub resource: temper_workflow::types::resource::ResourceRow,
+    pub resource: temper_core::types::resource_view::ResourceView,
 }
 
 /// Result emitted by `temper resource delete`.
@@ -56,8 +58,8 @@ pub(crate) struct EdgesReport {
 /// Insert a derived `ref` key (the decorated, self-resolving identifier)
 /// into a serialized resource row, computed from its id + `title`. The
 /// `ref` is render-time only — never persisted, never on the wire type.
-/// Reads the anchor id from `id` (ResourceRow / ResourceDetail /
-/// ResourceMetaResponse) OR `resource_id` (UnifiedSearchResultRow, which still
+/// Reads the anchor id from `id` (ResourceView) OR `resource_id`
+/// (UnifiedSearchResultRow, which still
 /// anchors on the longer name). Both branches are live — do not collapse them.
 /// No-op if the id is absent or unparseable.
 ///
@@ -71,8 +73,9 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
         .or_else(|| row.get("resource_id"))
         .and_then(|v| v.as_str());
     let Some(id) = id else { return };
-    // A row carrying no `title` — the `--meta-only` projection is the one that doesn't —
-    // cannot form the decorated half of a ref. This used to default the title to `""` and
+    // A row carrying no `title` cannot form the decorated half of a ref. No read path emits
+    // one today (the retired `--meta-only` projection was the one that did), so this arm is
+    // a guard rather than a live case. It used to default the title to `""` and
     // emit `-<uuid>`: a malformed ref that resolved only by accident (resolution is
     // trailing-UUID-only) and that made the meta projection disagree with the full `show`
     // on the value of `ref`. Emit nothing instead; a bare UUID is itself a valid ref.
@@ -563,7 +566,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         }
     };
     #[cfg(not(feature = "embed"))]
-    let created_resource = runtime.block_on(backend.create_resource(cmd))?.value;
+    let created_resource: temper_core::types::resource_view::ResourceView =
+        runtime.block_on(backend.create_resource(cmd))?.value;
 
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
@@ -780,7 +784,10 @@ pub struct ShowParams<'a> {
     pub edges: bool,
     pub lineage: bool,
     pub provenance: bool,
-    pub meta_only: bool,
+    /// `--with <section>[,…]`: sections to add on top of [`resource_sections::show_defaults`].
+    pub with: &'a [String],
+    /// `--without <section>[,…]`: sections to drop. A section named in both is a hard error.
+    pub without: &'a [String],
     pub fields: &'a [String],
 }
 
@@ -808,6 +815,10 @@ pub struct ListParams<'a> {
     pub all: bool,
     /// `--offset`: skip the first N matching rows (pagination).
     pub offset: Option<usize>,
+    /// `--page`: the same axis counted in pages, 1-indexed. Clap makes it mutually
+    /// exclusive with both `offset` and `all`, so at most one of the two is ever set and
+    /// a paged call always has a page size to count in.
+    pub page: Option<usize>,
     /// `--sort <field>[:asc|desc]`. Parsed by `parse_sort_arg`; `None` keeps
     /// the default `updated:desc`.
     pub sort: Option<&'a str>,
@@ -818,19 +829,29 @@ pub struct ListParams<'a> {
     pub goal: Option<&'a str>,
     pub status: Option<&'a str>,
     pub format: crate::format::OutputFormat,
-    pub meta_only: bool,
+    /// `--with <section>[,…]`: sections to fill on every row, on top of
+    /// [`resource_sections::list_defaults`] (which asks for none). `body` is not offered.
+    pub with: &'a [String],
+    /// `--without <section>[,…]`: sections to drop. A section named in both is a hard error.
+    pub without: &'a [String],
     pub fields: &'a [String],
 }
 
-/// The default page cap for `list` when neither `--limit` nor `--all` is given.
-/// `--meta-only` uses [`DEFAULT_META_LIST_LIMIT`]. Kept small enough to be cheap,
-/// large enough that the common case fits — but the `total`/`truncated` signal
-/// makes any cap self-evident, so an agent never has to guess whether it saw
-/// the whole set.
+/// The page size `list` uses when neither `--limit` nor `--all` is given.
+///
+/// **A default, not a cap.** An explicit `--limit` is honoured unchanged and no server-side
+/// clamp exists (`crates/temper-api/src/handlers/resources.rs`), so this number bounds only
+/// the call that asked for nothing. Kept small enough to be cheap, large enough that the
+/// common case fits — and the `total`/`returned`/`truncated` trio makes any page
+/// self-evident, so an agent never has to guess whether it saw the whole set.
+///
+/// **The one default.** There used to be a second, `DEFAULT_META_LIST_LIMIT = 50`, on the
+/// `--meta-only` path, justified by meta rows being cheaper. That justification died with the
+/// row types: `list` and `list --with open-meta` return the same `ResourceView`, differing by
+/// one optional tier, so two page sizes meant a caller's page silently changed size when they
+/// asked for a section. Worse, it is the number `--page` counts in — two defaults would make
+/// `--page 3` mean row 40 or row 100 depending on an unrelated flag.
 const DEFAULT_LIST_LIMIT: usize = 20;
-/// The default page cap for `list --meta-only` (meta rows are cheaper, so the
-/// default is larger).
-const DEFAULT_META_LIST_LIMIT: usize = 50;
 
 /// Resolve repeated `--cogmap` refs (trailing-UUID-only) into the comma-separated UUID string the
 /// list endpoint's `cogmap_ids` query param expects (the GET can't carry a `Vec`). `None` when no
@@ -981,41 +1002,76 @@ fn parse_sort_arg(
 
 /// Resolve the effective page limit for a list call. `--all` means "no cap"
 /// (`None` — the server returns every matching row); otherwise the explicit
-/// `--limit`, falling back to `default`.
-fn resolve_list_limit(all: bool, limit: Option<usize>, default: usize) -> Option<i64> {
+/// `--limit`, falling back to [`DEFAULT_LIST_LIMIT`].
+///
+/// The fallback is read from the constant rather than passed in: a `default` parameter is
+/// what let two page sizes exist, and the caller that chose between them is gone.
+fn resolve_list_limit(all: bool, limit: Option<usize>) -> Option<i64> {
     if all {
         None
     } else {
-        Some(limit.unwrap_or(default) as i64)
+        Some(limit.unwrap_or(DEFAULT_LIST_LIMIT) as i64)
     }
 }
 
-/// Inject the truncation signal into a `list`/`list --meta-only` envelope and
-/// report whether the page was capped.
+/// Resolve the row offset a list call starts at, from `--offset` or `--page`.
 ///
-/// The server already returns `total` (the FILTERED match count, before
-/// limit/offset) alongside `rows`. Silent truncation — reasoning over a capped
-/// page as if it were the whole set — is the root footgun this task fixes, so
-/// we surface it two ways: a machine-readable `truncated` boolean on the
-/// envelope, and (via the returned bool) a stderr hint for humans. `truncated`
-/// is true iff there are matching rows beyond this page (`offset + returned <
-/// total`). Also injects `returned` (this page's row count) for symmetry with
-/// `total`.
-fn inject_truncation_signal(envelope: &mut serde_json::Value, offset: usize) -> bool {
-    let obj = match envelope.as_object_mut() {
-        Some(o) => o,
-        None => return false,
-    };
-    let returned = obj
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let total = obj.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let truncated = (offset as i64) + (returned as i64) < total;
-    obj.insert("returned".to_string(), serde_json::json!(returned));
-    obj.insert("truncated".to_string(), serde_json::json!(truncated));
-    truncated
+/// `--offset` is passed through; `--page` is 1-indexed and multiplied by the **effective**
+/// page size — the explicit `--limit` when there is one, else [`DEFAULT_LIST_LIMIT`]. That
+/// is the whole subtlety: resolving `--page` against a hardcoded 20 would make
+/// `--page 3 --limit 5` start at row 40 instead of row 10, silently skipping 30 rows and
+/// returning a page the caller would have no reason to distrust.
+///
+/// Clap makes `--page` mutually exclusive with `--offset` and with `--all`, so the two arms
+/// cannot both apply and an uncapped page never reaches the multiplication.
+fn resolve_list_offset(page: Option<usize>, offset: Option<usize>, limit: Option<usize>) -> usize {
+    match page {
+        // `saturating_sub`, not `- 1`: clap's `range(1..)` makes page 0 unreachable, and this
+        // keeps an unreachable input from being an arithmetic panic rather than encoding a
+        // second opinion about what page 0 means.
+        Some(page) => page.saturating_sub(1) * limit.unwrap_or(DEFAULT_LIST_LIMIT),
+        None => offset.unwrap_or(0),
+    }
+}
+
+/// Serialize a list response into the envelope the CLI prints: every row decorated with its
+/// `ref`, then the optional `--fields` projection applied per row.
+///
+/// **`returned` and `truncated` are NOT computed here.** They arrive on the wire
+/// (`ResourceListResponse`), derived by the server from the page it actually built. The CLI
+/// used to inject them — `inject_truncation_signal` recomputed `offset + returned < total`
+/// from the serialized JSON — which made the client a second, independent implementation of
+/// a rule the server already applies, reachable only through the CLI. MCP callers got
+/// neither key. Reading them off the response is what makes the signal a property of the
+/// answer rather than of the surface that rendered it.
+///
+/// Pure, so the rendering half of `list` is testable without a server: `list` itself returns
+/// `Result<()>` and prints, so nothing downstream of it can be observed.
+fn build_list_envelope(
+    response: &temper_workflow::types::resource::ResourceListResponse,
+    fields: &[String],
+) -> Result<serde_json::Value> {
+    let mut envelope = serde_json::to_value(response)
+        .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
+
+    // Identity-out: every printed row carries its decorated `ref`.
+    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
+        for row in rows.iter_mut() {
+            inject_ref(row);
+        }
+    }
+
+    if !fields.is_empty() {
+        let rows = envelope
+            .get_mut("rows")
+            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
+            .take();
+        let filtered_rows = temper_core::projection::apply_top_level_filter(rows, fields, "id")
+            .map_err(map_projection_error)?;
+        envelope["rows"] = filtered_rows;
+    }
+
+    Ok(envelope)
 }
 
 /// Emit the stderr note shown when a `list` page is truncated. Routed through
@@ -1023,15 +1079,20 @@ fn inject_truncation_signal(envelope: &mut serde_json::Value, offset: usize) -> 
 /// choice — both now write to stderr, so neither can corrupt the JSON document
 /// an agent parses on stdout. A capped page an agent silently mistakes for the
 /// whole set is a wrong answer, not a suggestion. Names the exact escape
-/// hatches (`--all`, a bigger `--limit`, `--offset`, or narrowing with
+/// hatches (`--all`, a bigger `--limit`, `--page`/`--offset`, or narrowing with
 /// `--sort`/filters) so an agent self-corrects instead of asserting a set is
 /// complete from a capped page.
-fn warn_truncated(total: i64, returned: usize) {
+///
+/// Both arguments now come off `ResourceListResponse` rather than being counted from the
+/// serialized rows, so the number a human reads and the `truncated` flag an agent reads are
+/// the same server-side facts. `returned` is `i64` for that reason — it is the wire field,
+/// not a `rows.len()`.
+fn warn_truncated(total: i64, returned: i64) {
     output::warning(format!(
         "Showing {returned} of {total} matching results — the list is TRUNCATED. \
          Do not conclude a resource is absent or a set is complete from this page. \
-         Re-run with --all (or a larger --limit/--offset), or narrow with \
-         --title-contains/--stage/--sort first."
+         Re-run with --all (or a larger --limit, or --page/--offset to walk), or narrow \
+         with --title-contains/--stage/--sort first."
     ));
 }
 
@@ -1069,8 +1130,8 @@ fn validate_status_filter(value: &str) -> Result<()> {
 
 /// Build the wire params both list endpoints take from the CLI's own `ListParams`.
 ///
-/// `list` and `list --meta-only` differ only in their default page cap and the `meta_only`
-/// flag, and until 2026-07-29 each carried a character-identical copy of this block. The tag
+/// `list` and `list --with open-meta` differ only in their default page cap and the `sections`
+/// request, and until 2026-07-29 each carried a character-identical copy of this block. The tag
 /// filter had to be added to both — which is exactly the drift the project's "never duplicate
 /// filter logic; the two copies will drift" rule names.
 ///
@@ -1082,8 +1143,7 @@ fn validate_status_filter(value: &str) -> Result<()> {
 /// stops landing in its field.
 fn list_api_params(
     params: &ListParams<'_>,
-    default_limit: usize,
-    meta_only: bool,
+    sections: &SectionSet,
 ) -> Result<temper_workflow::types::resource::ResourceListParams> {
     let (sort, order) = match params.sort {
         Some(raw) => {
@@ -1110,16 +1170,27 @@ fn list_api_params(
         goal,
         sort,
         order,
-        limit: resolve_list_limit(params.all, params.limit, default_limit),
-        offset: Some(params.offset.unwrap_or(0) as i64),
-        // The full-list path leaves this at its `None` default; only the meta path asserts it.
-        meta_only: meta_only.then_some(true),
+        limit: resolve_list_limit(params.all, params.limit),
+        offset: Some(resolve_list_offset(params.page, params.offset, params.limit) as i64),
+        // One envelope either way — the section is what varies, not the row type. Rendered
+        // through `SectionSet::to_csv` rather than from a `contains` check per section, so a
+        // section added to the vocabulary rides the wire instead of being silently dropped.
+        sections: sections.to_csv(),
         ..Default::default()
     })
 }
 
 /// List resources of a given type (unified pipeline for all doc types).
-pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
+///
+/// **One path, whatever sections are asked for.** There used to be two — `list` and
+/// `list_meta_only` — character-identical but for the client method they called and their
+/// default page cap, because `--meta-only` selected a second *response type*. It selects a
+/// *part* now (`?sections=open-meta` over the same `ResourceListResponse`), and the second
+/// page cap went with it, so the branch has nothing left to branch on.
+///
+/// The paging state it prints (`returned`, `truncated`, `limit`, `offset`) is read off the
+/// response, never recomputed here — see `build_list_envelope`.
+pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
     check_type_scoped_filters(params.doc_type, params.stage, params.goal, params.status)?;
 
     if let Some(s) = params.stage {
@@ -1129,16 +1200,16 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         validate_status_filter(s)?;
     }
 
-    if params.meta_only {
-        return list_meta_only(config, params);
-    }
+    let sections = resource_sections::resolve_sections(
+        params.with,
+        params.without,
+        resource_sections::list_defaults(),
+    )?;
 
     use crate::actions::runtime;
 
     let fmt = params.format;
-    let offset = params.offset.unwrap_or(0);
-    let fields_owned: Vec<String> = params.fields.to_vec();
-    let api_params = list_api_params(&params, DEFAULT_LIST_LIMIT, false)?;
+    let api_params = list_api_params(&params, &sections)?;
 
     // Cloud-only list: the server query. Any error (network, auth, 4xx/5xx)
     // surfaces as-is — there is no local-scan fallback.
@@ -1152,106 +1223,11 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         })
     })?;
 
-    let mut envelope = serde_json::to_value(&response)
-        .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
-
-    // Identity-out: every printed row carries its decorated `ref`.
-    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
-        for row in rows.iter_mut() {
-            inject_ref(row);
-        }
-    }
-
-    // Truncation signal — injected BEFORE the optional `--fields` projection so
-    // the `total`/`returned`/`truncated` envelope keys are always present (they
-    // survive the filter, which only prunes per-row keys, not envelope keys).
-    let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let returned = envelope
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let truncated = inject_truncation_signal(&mut envelope, offset);
-
-    if !fields_owned.is_empty() {
-        let rows = envelope
-            .get_mut("rows")
-            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
-            .take();
-        let filtered_rows =
-            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
-                .map_err(map_projection_error)?;
-        envelope["rows"] = filtered_rows;
-    }
-
+    let envelope = build_list_envelope(&response, params.fields)?;
     let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
-    if truncated {
-        warn_truncated(total, returned);
-    }
-    Ok(())
-}
-
-/// `list --meta-only`: call client.resources().list_meta() and emit the
-/// meta-list envelope, whose rows are now full `ResourceDetail`s (row + both
-/// meta tiers per item — the whole view minus each body). Injects each row's
-/// decorated `ref` (rows carry a title now), then applies the shared top-level
-/// projection filter to each row when `fields` is non-empty; the envelope keys
-/// (`rows`, `total`, `facets`) are preserved untouched.
-fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
-    use crate::actions::runtime;
-
-    let offset = params.offset.unwrap_or(0);
-    let api_params = list_api_params(&params, DEFAULT_META_LIST_LIMIT, true)?;
-    let fmt = params.format;
-    let fields_owned: Vec<String> = params.fields.to_vec();
-
-    let response = runtime::with_client(|client| {
-        Box::pin(async move {
-            client
-                .resources()
-                .list_meta(&api_params)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let mut envelope = serde_json::to_value(&response)
-        .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
-
-    // Identity-out: every printed row carries its decorated `ref` (parity with the
-    // full `list` path). Rows are `ResourceDetail` now, so they carry the title
-    // `inject_ref` needs.
-    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
-        for row in rows.iter_mut() {
-            inject_ref(row);
-        }
-    }
-
-    // Truncation signal — parity with the full `list` path (see `inject_truncation_signal`).
-    let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let returned = envelope
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let truncated = inject_truncation_signal(&mut envelope, offset);
-
-    if !fields_owned.is_empty() {
-        let rows = envelope
-            .get_mut("rows")
-            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
-            .take();
-        let filtered_rows =
-            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
-                .map_err(map_projection_error)?;
-        envelope["rows"] = filtered_rows;
-    }
-
-    let rendered = crate::format::render(&envelope, fmt)?;
-    println!("{rendered}");
-    if truncated {
-        warn_truncated(total, returned);
+    if response.truncated {
+        warn_truncated(response.total, response.returned);
     }
     Ok(())
 }
@@ -1395,8 +1371,7 @@ pub fn delete(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?
-    .row;
+    })?;
 
     let cmd = DeleteResource {
         resource: id,
@@ -1442,7 +1417,7 @@ pub fn delete(
 /// JSON response structurally impossible rather than merely test-detectable.
 pub(crate) fn build_show_document(
     metadata: serde_json::Value,
-    body: &str,
+    body: Option<&str>,
     edges: Option<EdgesReport>,
     lineage: Option<temper_core::types::lineage::ResourceLineage>,
     provenance: Option<Vec<temper_core::types::provenance::BlockProvenanceRow>>,
@@ -1452,10 +1427,16 @@ pub(crate) fn build_show_document(
         .as_object_mut()
         .ok_or_else(|| TemperError::Api("resource metadata is not a JSON object".to_string()))?;
 
-    obj.insert(
-        "content".to_string(),
-        serde_json::Value::String(body.to_string()),
-    );
+    // `None` omits the key rather than emitting `""` — the same distinction `ResourceView`
+    // draws with `content: Option<String>`, where absent means "not requested" and never
+    // "the body is empty". A `--without body` read that emitted `"content": ""` would be
+    // indistinguishable from a resource whose body really is empty.
+    if let Some(body) = body {
+        obj.insert(
+            "content".to_string(),
+            serde_json::Value::String(body.to_string()),
+        );
+    }
 
     if let Some(edges) = edges {
         obj.insert(
@@ -1486,54 +1467,80 @@ pub(crate) fn build_show_document(
 
 /// Show a resource's content.
 ///
-/// Cloud-only and context-free: the ref resolves to a `ResourceId`, the row +
+/// Cloud-only and context-free: the ref resolves to a `ResourceId`, the view +
 /// content are fetched by id (no `resolve_by_uri`, no doctype dispatch — the
 /// three former per-doctype shows rendered identically), the canonical
-/// projection file is refreshed best-effort, and the row+body is rendered.
+/// projection file is refreshed best-effort, and the view+body is rendered.
+///
+/// **Sections decide what is fetched, not just what is printed.** `--without body` skips the
+/// `GET /content` round-trip entirely, which is the whole reason the old `--meta-only` was
+/// cheap; it is the same saving under a name that composes. `--without open-meta` is a
+/// render-time drop rather than a saving, because `GET /api/resources/{id}` carries both tiers
+/// unconditionally — one call either way, so there is nothing to skip.
 pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
 
-    if params.meta_only {
-        return show_meta_only(config, id, params.format, params.fields);
-    }
+    let sections = resource_sections::resolve_sections(
+        params.with,
+        params.without,
+        resource_sections::show_defaults(),
+    )?;
+    let want_body = sections.contains(ResourceSection::Body);
 
     let config_clone = config.clone();
-    let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
+    let (mut metadata, body) = crate::actions::runtime::with_client(move |client| {
         Box::pin(async move {
-            // `get` returns a `ResourceDetail`: the row flattened, plus both meta tiers.
-            // The tiers are what make the full `show` a superset of `--meta-only`.
+            // `get` returns a `ResourceView` — the same shape a `list` row is, with the
+            // `open-meta` section filled. The tiers are what make a body-less `show` a
+            // strict subset of the full one.
             let detail = client
                 .resources()
                 .get(uuid::Uuid::from(id))
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let resp = client
-                .resources()
-                .content(uuid::Uuid::from(id))
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-            // Per-resource projection refresh — best-effort. The projection writer takes the
-            // row; the meta tiers reach the file via `resp`'s managed/open fields.
-            if let Err(e) = crate::projection::write_resource_file_from_parts(
-                &config_clone.vault_root,
-                &detail.row,
-                &resp,
-            ) {
-                crate::output::warning(format!("could not refresh projection file: {e}"));
-            }
+            let body = if want_body {
+                let resp = client
+                    .resources()
+                    .content(uuid::Uuid::from(id))
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+                // Per-resource projection refresh — best-effort, and only on the path that
+                // actually holds a body. The projection file IS the body plus frontmatter,
+                // so refreshing it from a body-less read would write a truncated file over a
+                // complete one: a cheap read must not damage the cache.
+                if let Err(e) = crate::projection::write_resource_file_from_parts(
+                    &config_clone.vault_root,
+                    &detail,
+                    &resp,
+                ) {
+                    crate::output::warning(format!("could not refresh projection file: {e}"));
+                }
+                Some(resp.markdown)
+            } else {
+                None
+            };
 
             let metadata = serde_json::to_value(&detail)
                 .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
-            Ok((metadata, resp.markdown))
+            Ok((metadata, body))
         })
     })?;
 
     inject_ref(&mut metadata);
+    if !sections.contains(ResourceSection::OpenMeta) {
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.remove("open_meta");
+        }
+    }
 
     // Fetch every requested section BEFORE rendering: the JSON arm folds them into
     // one document, so nothing may be printed until all of them are in hand.
-    let edges = if params.edges {
+    //
+    // `--edges` is the short spelling of `--with edges`; they are one request, not two, so
+    // they OR rather than each triggering a fetch.
+    let edges = if params.edges || sections.contains(ResourceSection::Edges) {
         Some(fetch_edges(id)?)
     } else {
         None
@@ -1551,15 +1558,24 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
 
     match params.format {
         crate::format::OutputFormat::Json => {
-            let doc = build_show_document(metadata, &body, edges, lineage, provenance)?;
-            let rendered = crate::format::render(&doc, params.format)?;
+            let doc = build_show_document(metadata, body.as_deref(), edges, lineage, provenance)?;
+            let filtered =
+                temper_core::projection::apply_top_level_filter(doc, params.fields, "id")
+                    .map_err(map_projection_error)?;
+            let rendered = crate::format::render(&filtered, params.format)?;
             crate::output::plain(rendered);
         }
         // Toon is the human TTY surface: keep the frontmatter+body document, then append
         // each requested section as its own block. The one-document contract is a JSON
         // (agent-surface) invariant, not a Toon one.
         crate::format::OutputFormat::Toon => {
-            let rendered = crate::format::render_resource_show(&metadata, &body, params.format)?;
+            let metadata =
+                temper_core::projection::apply_top_level_filter(metadata, params.fields, "id")
+                    .map_err(map_projection_error)?;
+            let rendered = match body.as_deref() {
+                Some(body) => crate::format::render_resource_show(&metadata, body, params.format)?,
+                None => crate::format::render(&metadata, params.format)?,
+            };
             crate::output::plain(rendered);
             if let Some(edges) = edges {
                 crate::output::plain(crate::format::render(&edges, params.format)?);
@@ -1601,55 +1617,6 @@ pub fn evidence(_config: &Config, r#ref: &str, format: crate::format::OutputForm
 
     let rendered = crate::format::render(&shape, format)?;
     crate::output::plain(rendered);
-    Ok(())
-}
-
-/// `show --meta-only`: the full `show` view **minus the body**.
-///
-/// Fetches the same `ResourceDetail` the default path does (the row flattened
-/// — title, doc_type, context, owner, the stage/seq/mode/effort projections —
-/// plus both `managed_meta` and `open_meta` tiers), and simply skips the
-/// separate `content` body fetch. So `--meta-only` is a strict subset of the
-/// full `show`: everything except the (expensive-to-reconstruct) body. Applies
-/// the shared top-level projection filter when `fields` is non-empty.
-///
-/// This deliberately hits `GET /api/resources/{id}` (row + tiers, no body
-/// reconstruction) rather than the narrower `GET /api/resources/{id}/meta`:
-/// the meta endpoint omits every identity/display field (title included), which
-/// made the projection too lossy to orient from.
-///
-/// Cloud-only and context-free: the id was already resolved from the ref by
-/// `show`; this calls `get` by id directly (no `resolve_by_uri`).
-fn show_meta_only(
-    _config: &Config,
-    id: temper_core::types::ids::ResourceId,
-    fmt: crate::format::OutputFormat,
-    fields: &[String],
-) -> Result<()> {
-    use crate::actions::runtime;
-
-    let fields_inner = fields.to_vec();
-
-    let detail = runtime::with_client(|client| {
-        Box::pin(async move {
-            client
-                .resources()
-                .get(uuid::Uuid::from(id))
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let mut value = serde_json::to_value(&detail)
-        .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    // Inject `ref` (and `context_ref`) before the `--fields` filter, exactly as the full
-    // `show` and `list` do: the anchor `id` is always preserved. Now that `--meta-only`
-    // carries the title, this produces the same decorated `ref` the full `show` emits.
-    inject_ref(&mut value);
-    let filtered = temper_core::projection::apply_top_level_filter(value, &fields_inner, "id")
-        .map_err(map_projection_error)?;
-    let rendered = crate::format::render(&filtered, fmt)?;
-    println!("{rendered}");
     Ok(())
 }
 
@@ -2077,7 +2044,7 @@ fn resolve_update_target(
     params: &UpdateParams<'_>,
 ) -> Result<(
     temper_core::types::ids::ResourceId,
-    temper_workflow::types::resource::ResourceRow,
+    temper_core::types::resource_view::ResourceView,
 )> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
     // Update needs only the row (home context + doctype for schema-keyed flag validation);
@@ -2090,8 +2057,7 @@ fn resolve_update_target(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?
-    .row;
+    })?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
     }
@@ -2190,6 +2156,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         row.context_name.as_deref().unwrap_or_default(),
     )?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
+    let updated_row: temper_core::types::resource_view::ResourceView = output.value;
 
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
@@ -2197,7 +2164,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
         &client,
         &config.vault_root,
-        &output.value,
+        &updated_row,
     )) {
         output::warning(format!("could not rewrite projection file: {e}"));
     }
@@ -2206,7 +2173,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     //    bespoke { "temper-slug", "content_hash" } shape).
     let result = UpdateActionResult {
         status: "ok",
-        resource: output.value,
+        resource: updated_row,
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);
@@ -2247,8 +2214,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?
-    .row;
+    })?;
 
     // Resolve --sources refs → provenance records. A ref that fails to parse is a hard error
     // (escalate, never a silent drop). clap guarantees the list is non-empty (`required = true`).
@@ -2270,6 +2236,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
 
     // The resource body is unchanged, so there is no projection file to rewrite — emit the same flat
     // action result `update` does (status + resource row), so the two write verbs read identically.
+    // Transitional narrowing — see the note in `create`.
     let result = UpdateActionResult {
         status: "ok",
         resource: output.value,
@@ -2442,15 +2409,27 @@ mod list_helpers_tests {
             limit: None,
             all: false,
             offset: None,
+            page: None,
             sort: None,
             title_contains: None,
             stage: None,
             goal: None,
             status: None,
             format: crate::format::OutputFormat::Json,
-            meta_only: false,
+            with: &[],
+            without: &[],
             fields: &[],
         }
+    }
+
+    /// The empty set — a default `list`.
+    fn no_sections() -> SectionSet {
+        SectionSet::default()
+    }
+
+    /// What `--with open-meta` resolves to.
+    fn open_meta_section() -> SectionSet {
+        [ResourceSection::OpenMeta].into_iter().collect()
     }
 
     /// Every `--flag` on `ListParams` lands in the wire field it names.
@@ -2485,8 +2464,8 @@ mod list_helpers_tests {
         params.limit = Some(7);
         params.offset = Some(3);
 
-        let api = list_api_params(&params, DEFAULT_LIST_LIMIT, false)
-            .expect("a well-formed ListParams must build");
+        let api =
+            list_api_params(&params, &no_sections()).expect("a well-formed ListParams must build");
 
         assert_eq!(api.doc_type_name.as_deref(), Some("task"), "--type");
         assert_eq!(api.tags.as_deref(), Some("ci,security"), "--tag");
@@ -2521,12 +2500,12 @@ mod list_helpers_tests {
         let mut goal_params = list_params(&[], &[]);
         goal_params.doc_type = Some("goal");
         goal_params.status = Some("active");
-        let api = list_api_params(&goal_params, DEFAULT_LIST_LIMIT, false)
+        let api = list_api_params(&goal_params, &no_sections())
             .expect("a goal-scoped --status must build");
         assert_eq!(api.status.as_deref(), Some("active"), "--status");
 
         let cogmap_params = list_params(&[], &cogmaps);
-        let api = list_api_params(&cogmap_params, DEFAULT_LIST_LIMIT, false)
+        let api = list_api_params(&cogmap_params, &no_sections())
             .expect("a --cogmap with no --context must build");
         assert_eq!(
             api.cogmap_ids.as_deref(),
@@ -2535,30 +2514,40 @@ mod list_helpers_tests {
         );
     }
 
-    /// The two list paths differ in exactly two things, and nothing else.
+    /// Asking for a section changes the `sections` param and **nothing else** — the page
+    /// size included.
     ///
     /// This is what makes one builder safe to share. `list` and `list --meta-only` carried
     /// character-identical copies of the param build until they were collapsed; the risk of
-    /// collapsing them is that a difference gets flattened away, so both surviving differences
-    /// are pinned. `meta_only` must stay `None` on the full path rather than `Some(false)` —
-    /// the field is `skip_serializing_if = "Option::is_none"`, so the two are different wires.
+    /// collapsing them is that a difference gets flattened away, so the one surviving
+    /// difference is pinned. `sections` must stay `None` on the default path rather than
+    /// `Some("")` — the field is `skip_serializing_if = "Option::is_none"`, so the two are
+    /// different wires, which is why `SectionSet::to_csv` answers `None` for the empty set.
+    ///
+    /// **`limit` is now inside the equality**, not excluded from it. It used to be the
+    /// second permitted difference (`DEFAULT_META_LIST_LIMIT = 50`); with one default,
+    /// asking for a section that no longer changes the row type must not change how many
+    /// rows come back either.
     #[test]
-    fn the_two_list_paths_differ_only_in_page_cap_and_meta_flag() {
+    fn asking_for_a_section_changes_only_the_sections_param() {
         let params = list_params(&[], &[]);
 
-        let full = list_api_params(&params, DEFAULT_LIST_LIMIT, false).expect("full list builds");
-        let meta =
-            list_api_params(&params, DEFAULT_META_LIST_LIMIT, true).expect("meta list builds");
+        let full = list_api_params(&params, &no_sections()).expect("full list builds");
+        let meta = list_api_params(&params, &open_meta_section()).expect("meta list builds");
 
         assert_eq!(full.limit, Some(DEFAULT_LIST_LIMIT as i64));
-        assert_eq!(meta.limit, Some(DEFAULT_META_LIST_LIMIT as i64));
         assert_eq!(
-            full.meta_only, None,
-            "the full path must not send meta_only"
+            meta.limit, full.limit,
+            "one default: a section request must not resize the page"
         );
-        assert_eq!(meta.meta_only, Some(true));
+        assert_eq!(full.sections, None, "the default path asks for no sections");
+        assert_eq!(
+            meta.sections.as_deref(),
+            Some("open-meta"),
+            "the section path asks for a PART of the one shape, not a second response type"
+        );
 
-        // Every OTHER field agrees, so the shared builder is not flattening a third
+        // Every OTHER field agrees, so the shared builder is not flattening a second
         // difference. Compared through serde because `ResourceListParams` derives no
         // `PartialEq` — and comparing the wire form is the stronger check anyway, since the
         // wire is what the two paths actually differ on.
@@ -2566,12 +2555,11 @@ mod list_helpers_tests {
         let mut meta_wire = serde_json::to_value(&meta).expect("serialize meta params");
         for wire in [&mut full_wire, &mut meta_wire] {
             let obj = wire.as_object_mut().expect("params serialize to an object");
-            obj.remove("limit");
-            obj.remove("meta_only");
+            obj.remove("sections");
         }
         assert_eq!(
             full_wire, meta_wire,
-            "the two paths must differ ONLY in page cap and meta_only"
+            "the two paths must differ ONLY in sections"
         );
     }
 
@@ -2583,13 +2571,13 @@ mod list_helpers_tests {
         params.all = true;
 
         assert_eq!(
-            list_api_params(&params, DEFAULT_LIST_LIMIT, false)
+            list_api_params(&params, &no_sections())
                 .expect("builds")
                 .limit,
             None
         );
         assert_eq!(
-            list_api_params(&params, DEFAULT_META_LIST_LIMIT, true)
+            list_api_params(&params, &open_meta_section())
                 .expect("builds")
                 .limit,
             None
@@ -2669,47 +2657,90 @@ mod list_helpers_tests {
 
     #[test]
     fn resolve_list_limit_all_means_no_cap() {
-        assert_eq!(resolve_list_limit(true, None, 20), None);
+        assert_eq!(resolve_list_limit(true, None), None);
         // `--all` wins over any (clap-excluded) limit.
-        assert_eq!(resolve_list_limit(true, Some(5), 20), None);
+        assert_eq!(resolve_list_limit(true, Some(5)), None);
     }
 
+    /// An explicit `--limit` is honoured unchanged — the default applies only when the
+    /// caller asked for nothing, and no clamp exists on either side.
     #[test]
-    fn resolve_list_limit_uses_explicit_then_default() {
-        assert_eq!(resolve_list_limit(false, Some(5), 20), Some(5));
-        assert_eq!(resolve_list_limit(false, None, 20), Some(20));
-        assert_eq!(resolve_list_limit(false, None, 50), Some(50));
+    fn resolve_list_limit_uses_explicit_then_the_one_default() {
+        assert_eq!(resolve_list_limit(false, Some(5)), Some(5));
+        assert_eq!(resolve_list_limit(false, Some(10_000)), Some(10_000));
+        assert_eq!(
+            resolve_list_limit(false, None),
+            Some(DEFAULT_LIST_LIMIT as i64)
+        );
     }
 
+    /// `--page 1` is the first page, which is offset 0 — not offset 20.
     #[test]
-    fn truncation_signal_flags_a_capped_page() {
-        // 2 of 5 shown from offset 0 → truncated.
-        let mut env = serde_json::json!({
-            "rows": [{"id": "a"}, {"id": "b"}],
-            "total": 5,
-        });
-        assert!(inject_truncation_signal(&mut env, 0));
-        assert_eq!(env["truncated"], serde_json::json!(true));
-        assert_eq!(env["returned"], serde_json::json!(2));
+    fn page_one_is_offset_zero() {
+        assert_eq!(resolve_list_offset(Some(1), None, None), 0);
+        assert_eq!(resolve_list_offset(Some(1), None, Some(5)), 0);
     }
 
+    /// **`--page` counts in the effective page size, not in a hardcoded default.**
+    ///
+    /// `--page 3 --limit 5` starts at row 10. Resolving against a hardcoded 20 would give
+    /// 40 — a page that skips 30 rows and looks entirely plausible from the outside, which
+    /// is what makes this the failure mode worth a named witness rather than a comment.
     #[test]
-    fn truncation_signal_clear_when_page_covers_the_tail() {
-        // offset 3 + 2 returned == total 5 → nothing beyond this page.
-        let mut env = serde_json::json!({
-            "rows": [{"id": "d"}, {"id": "e"}],
-            "total": 5,
-        });
-        assert!(!inject_truncation_signal(&mut env, 3));
-        assert_eq!(env["truncated"], serde_json::json!(false));
+    fn page_resolves_against_the_effective_limit() {
+        assert_eq!(resolve_list_offset(Some(3), None, Some(5)), 10);
+        // And with no `--limit`, the same page number counts in the one default.
+        assert_eq!(
+            resolve_list_offset(Some(3), None, None),
+            2 * DEFAULT_LIST_LIMIT
+        );
+    }
 
-        // Whole set on one page.
-        let mut whole = serde_json::json!({
-            "rows": [{"id": "a"}, {"id": "b"}],
-            "total": 2,
-        });
-        assert!(!inject_truncation_signal(&mut whole, 0));
-        assert_eq!(whole["truncated"], serde_json::json!(false));
+    /// With no `--page`, `--offset` passes through verbatim; with neither, the walk starts
+    /// at the top.
+    #[test]
+    fn offset_passes_through_when_no_page_is_given() {
+        assert_eq!(resolve_list_offset(None, Some(37), Some(5)), 37);
+        assert_eq!(resolve_list_offset(None, None, Some(5)), 0);
+    }
+
+    /// **`truncated` is read off the wire, never recomputed from the rendered page.**
+    ///
+    /// The response here is deliberately self-contradictory by the client's OLD rule:
+    /// `offset + returned == total`, which `inject_truncation_signal` would have rendered as
+    /// `truncated: false`. The server said `true`. The envelope must say what the server
+    /// said — the client is not a second opinion about a page it did not build.
+    #[test]
+    fn truncated_comes_from_the_wire_not_the_client() {
+        use temper_workflow::types::resource::{ResourceFacets, ResourceListResponse};
+
+        let response = ResourceListResponse {
+            rows: Vec::new(),
+            total: 5,
+            facets: ResourceFacets::default(),
+            returned: 5,
+            // `offset + returned == total`: the retired client-side derivation says `false`.
+            truncated: true,
+            limit: Some(5),
+            offset: 0,
+        };
+
+        let envelope = build_list_envelope(&response, &[]).expect("envelope builds");
+
+        assert_eq!(
+            envelope["truncated"],
+            serde_json::json!(true),
+            "the wire's verdict survives: {envelope}"
+        );
+        assert_eq!(
+            envelope["returned"],
+            serde_json::json!(5),
+            "`returned` is the wire field, not `rows.len()` — the page here carries no rows"
+        );
+        // And the rest of the paging state rides along, which is what a caller pages on.
+        assert_eq!(envelope["limit"], serde_json::json!(5));
+        assert_eq!(envelope["offset"], serde_json::json!(0));
+        assert_eq!(envelope["total"], serde_json::json!(5));
     }
 }
 
@@ -3104,44 +3135,47 @@ mod build_helpers_tests {
 #[cfg(test)]
 mod action_result_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::types::resource::ResourceRow;
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource_view::ResourceView;
 
     use super::{
         render_action_result_with_ref, CreateActionResult, DeleteActionResult, UpdateActionResult,
     };
 
-    /// Build a minimal `ResourceRow` fixture for action result tests.
+    /// Build a minimal `ResourceView` fixture for action result tests.
     pub(super) fn make_resource_row(
         _slug: &str,
         doc_type: &str,
         title: &str,
         context: &str,
-    ) -> ResourceRow {
-        ResourceRow {
+    ) -> ResourceView {
+        ResourceView {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
-            origin_uri: "test://origin".to_string(),
+            r#ref: String::new(),
             title: title.to_string(),
-            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
+            context_name: Some(context.to_string()),
+            context_slug: Some(context.to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: doc_type.to_string(),
+            owner_handle: "@me".to_string(),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: Some(context.to_string()),
-            doc_type_name: doc_type.to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some(context.to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
+            ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
         }
+        .with_derived_refs()
     }
 
     /// Task 9: `CreateActionResult` flattens `ResourceRow` — all wire-type
@@ -3493,38 +3527,41 @@ mod from_flag_tests {
 #[cfg(test)]
 mod resource_list_render_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::types::resource::ResourceRow;
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource_view::ResourceView;
 
     /// Task 7: verify that `render()` passthrough includes internal wire fields
     /// like `body_hash` that the old `row_to_frontmatter_value` + `render_server_rows`
     /// path deliberately dropped. This is the canary for the breaking change.
     #[test]
     fn render_resource_list_json_passes_wire_type_with_internals() {
-        let rows: Vec<ResourceRow> = vec![ResourceRow {
+        let rows: Vec<ResourceView> = vec![ResourceView {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
-            origin_uri: "test://origin".to_string(),
+            r#ref: String::new(),
             title: "Test Resource".to_string(),
-            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
+            context_name: Some("temper".to_string()),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
             created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             updated: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            context_name: Some("temper".to_string()),
-            doc_type_name: "research".to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some("temper".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: Some("abc123deadbeef".to_string()),
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
-        }];
+            ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        }
+        .with_derived_refs()];
 
         let out =
             crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");
@@ -3725,13 +3762,13 @@ mod resource_show_render_tests {
 }
 
 #[cfg(test)]
-mod list_meta_only_tests {
+mod list_section_projection_tests {
     use temper_core::projection::apply_top_level_filter;
 
     #[test]
     fn list_meta_filter_applies_per_row_and_preserves_envelope() {
-        // Build a stub meta-list envelope. Rows are `ResourceDetail`-shaped now
-        // (full row + both tiers), so they carry `title`/`doc_type_name` too.
+        // Build a stub meta-list envelope. Rows are `ResourceView`-shaped (identity plus
+        // both tiers), so they carry `title`/`doc_type_name` too.
         let envelope = serde_json::json!({
             "rows": [
                 {
@@ -3795,9 +3832,9 @@ mod inject_ref_tests {
         );
     }
 
-    /// A titleless row (the `--meta-only` projection) gets no `ref` rather than a
-    /// fabricated `-<uuid>` one. Surfaced by the #330 differential e2e: the malformed ref
-    /// made `--meta-only` disagree with the full `show` on the same key.
+    /// A titleless row gets no `ref` rather than a fabricated `-<uuid>` one. Surfaced by the
+    /// #330 differential e2e: the malformed ref made the then-`--meta-only` projection
+    /// disagree with the full `show` on the same key.
     #[test]
     fn inject_ref_skips_rows_without_a_title() {
         let mut row = serde_json::json!({
@@ -3813,23 +3850,24 @@ mod inject_ref_tests {
 }
 
 #[cfg(test)]
-mod show_meta_only_tests {
+mod show_projection_tests {
     use temper_core::projection::apply_top_level_filter;
-    use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource_view::ResourceView;
 
-    fn fake_meta_response() -> ResourceMetaResponse {
-        ResourceMetaResponse {
-            id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
-            managed_meta: Some(ManagedMeta {
+    fn fake_meta_response() -> ResourceView {
+        ResourceView {
+            managed_meta: ManagedMeta {
                 stage: Some("in-progress".to_string()),
                 ..Default::default()
-            }),
+            },
             open_meta: Some(serde_json::json!({"tags": ["x"]})),
+            ..super::action_result_tests::make_resource_row("s", "task", "A Task", "temper")
         }
     }
 
     #[test]
-    fn show_meta_only_fields_filter_preserves_anchor_and_managed_meta_only() {
+    fn show_fields_filter_preserves_anchor_and_managed_meta_only() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
         let filtered =
@@ -3846,7 +3884,7 @@ mod show_meta_only_tests {
     }
 
     #[test]
-    fn show_meta_only_no_fields_returns_full_response() {
+    fn show_no_fields_returns_full_response() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
         let unfiltered = apply_top_level_filter(value.clone(), &[], "id").expect("filter");
@@ -3881,7 +3919,7 @@ mod build_show_document_tests {
 
         let doc = build_show_document(
             metadata,
-            "# body\n",
+            Some("# body\n"),
             Some(edges),
             Some(lineage),
             Some(vec![]),
@@ -3911,8 +3949,8 @@ mod build_show_document_tests {
     #[test]
     fn build_show_document_omits_absent_sections() {
         let metadata = serde_json::json!({ "id": "11111111-1111-1111-1111-111111111111" });
-        let doc =
-            build_show_document(metadata, "b", None, None, None).expect("build show document");
+        let doc = build_show_document(metadata, Some("b"), None, None, None)
+            .expect("build show document");
 
         assert_eq!(doc["content"], "b");
         assert!(

@@ -13,20 +13,20 @@ use temper_core::context_ref::parse_context_ref;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_core::types::ingest::{IngestPayload, SegmentedBeginResponse};
+use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
-use temper_workflow::types::resource::ResourceRow;
 
 /// `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
-/// the one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`]
+/// the one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`]
 /// when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
 /// discriminates by which fields are present (`SegmentedBeginResponse` always carries
-/// `correlation_id`/`blocks`, which `ResourceRow` never does).
+/// `correlation_id`/`blocks`, which `ResourceView` never does).
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum IngestCreateResponse {
-    // Boxed: ResourceRow is much larger than SegmentedBeginResponse (clippy large_enum_variant).
-    OneShot(Box<ResourceRow>),
+    // Boxed: ResourceView is much larger than SegmentedBeginResponse (clippy large_enum_variant).
+    OneShot(Box<ResourceView>),
     Segmented(SegmentedBeginResponse),
 }
 
@@ -146,6 +146,7 @@ pub async fn create(
     let Some(seg) = segmented else {
         // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
         let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
+        // The trait's `ResourceView` IS this endpoint's response — no narrowing.
         return Ok(IngestCreateResponse::OneShot(Box::new(out.value)));
     };
 
@@ -167,7 +168,7 @@ pub async fn create(
     security(("bearer_auth" = [])),
     request_body = IngestPayload,
     responses(
-        (status = 200, description = "Resource updated", body = ResourceRow),
+        (status = 200, description = "Resource updated", body = ResourceView),
         (status = 400, description = "Invalid payload"),
         (status = 404, description = "Resource not found"),
     )
@@ -178,7 +179,7 @@ pub async fn update(
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<IngestPayload>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<Json<ResourceView>> {
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     let managed_meta: Option<ManagedMeta> = match payload.managed_meta {
         Some(v) => Some(serde_json::from_value(v).map_err(|e| {

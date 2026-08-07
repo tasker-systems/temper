@@ -8,7 +8,7 @@ use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::resource_service::{
     ResourceAnnotateRequest, ResourceCreateRequest, ResourceListParams, ResourceListResponse,
-    ResourceRow, ResourceUpdateRequest,
+    ResourceUpdateRequest,
 };
 use temper_services::services::{access_service, context_service};
 use temper_services::state::AppState;
@@ -21,30 +21,19 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
+use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource};
-use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
-use temper_workflow::types::resource::{ContentResponse, DeleteResponse, ResourceDetail};
+use temper_workflow::types::managed_meta::ManagedMeta;
+use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
 
-/// Combined response for `GET /api/resources`.
+/// `GET /api/resources` — **one response type, unconditionally.**
 ///
-/// Returned shape depends on the `meta_only` query parameter. utoipa
-/// represents this as `oneOf<ResourceListResponse, ResourceMetaListResponse>`.
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum ListResourcesResponse {
-    Default(ResourceListResponse),
-    Meta(ResourceMetaListResponse),
-}
-
-impl axum::response::IntoResponse for ListResourcesResponse {
-    fn into_response(self) -> axum::response::Response {
-        match self {
-            Self::Default(r) => axum::Json(r).into_response(),
-            Self::Meta(r) => axum::Json(r).into_response(),
-        }
-    }
-}
-
+/// This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,
+/// selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a
+/// union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the
+/// caller varies which *parts* of `ResourceView` are filled, never which type comes back. The
+/// `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are
+/// gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
 #[utoipa::path(
     get,
     operation_id = "list_resources",
@@ -53,7 +42,8 @@ impl axum::response::IntoResponse for ListResourcesResponse {
     params(ResourceListParams),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Paginated list of visible resources with facets, or meta-only rows when meta_only=true", body = ListResourcesResponse),
+        (status = 200, description = "Paginated list of visible resources with facets and paging state", body = ResourceListResponse),
+        (status = 400, description = "Unknown section name", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -61,24 +51,16 @@ pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(params): Query<ResourceListParams>,
-) -> ApiResult<ListResourcesResponse> {
-    if params.meta_only.unwrap_or(false) {
-        let response = temper_services::backend::substrate_read::list_meta_select(
-            &state.pool,
-            ProfileId::from(auth.0.profile().id),
-            params,
-        )
-        .await?;
-        Ok(ListResourcesResponse::Meta(response))
-    } else {
-        let response = temper_services::backend::substrate_read::list_select(
-            &state.pool,
-            ProfileId::from(auth.0.profile().id),
-            params,
-        )
-        .await?;
-        Ok(ListResourcesResponse::Default(response))
-    }
+) -> ApiResult<Json<ResourceListResponse>> {
+    // `sections` is parsed inside `list_select`, not here: MCP and any other in-process caller
+    // reach that function directly, and a vocabulary parsed at one door is one the others lack.
+    let response = temper_services::backend::substrate_read::list_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        params,
+    )
+    .await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -89,7 +71,7 @@ pub async fn list(
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Resource plus both metadata tiers", body = ResourceDetail),
+        (status = 200, description = "Resource plus both metadata tiers", body = ResourceView),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
     )
@@ -99,7 +81,7 @@ pub async fn get(
     auth: AuthUser,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
-) -> ApiResult<Json<ResourceDetail>> {
+) -> ApiResult<Json<ResourceView>> {
     use temper_core::types::ids::ResourceId;
     use temper_workflow::operations::ShowResource;
 
@@ -109,6 +91,9 @@ pub async fn get(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
+    // The trait's `ResourceView` IS this endpoint's response now — no narrowing. A single-row
+    // `GET /api/resources` and this call serialize identically for the same resource, which is
+    // what `show_and_single_row_list_agree_when_body_excluded` holds in place.
     Ok(Json(out.value))
 }
 
@@ -173,7 +158,7 @@ pub async fn provenance(
     request_body = ResourceAnnotateRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Annotated resource (unchanged body; new provenance rows recorded)", body = ResourceRow),
+        (status = 200, description = "Annotated resource (unchanged body; new provenance rows recorded)", body = ResourceView),
         (status = 400, description = "No sources, or an invalid content_block", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
@@ -186,7 +171,7 @@ pub async fn annotate(
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceAnnotateRequest>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<Json<ResourceView>> {
     use temper_workflow::operations::AnnotateResource;
 
     let act = req.act.into_act_context().map_err(ApiError::from)?;
@@ -213,7 +198,7 @@ pub async fn annotate(
     request_body = ResourceCreateRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Created resource", body = ResourceRow),
+        (status = 200, description = "Created resource", body = ResourceView),
         (status = 400, description = "Unknown context or doc_type ID", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Context not visible to profile", body = ErrorBody),
@@ -225,7 +210,7 @@ pub async fn create(
     auth: AuthUser,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<ResourceCreateRequest>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<Json<ResourceView>> {
     // Resolve the context UUID from the request — visibility-gated to the principal.
     // `ContextRef::Id` does the profile-visibility check without needing a name lookup.
     let context = context_service::resolve_context_ref(
@@ -277,7 +262,7 @@ pub async fn create(
     request_body = ResourceUpdateRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Updated resource", body = ResourceRow),
+        (status = 200, description = "Updated resource", body = ResourceView),
         (status = 400, description = "Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
@@ -290,7 +275,7 @@ pub async fn update(
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<Json<ResourceView>> {
     use temper_core::context_ref::parse_context_ref;
     use temper_core::types::ids::ResourceId;
     use temper_workflow::operations::{BodyUpdate, GoalPatch, MoveSpec, UpdateResource};

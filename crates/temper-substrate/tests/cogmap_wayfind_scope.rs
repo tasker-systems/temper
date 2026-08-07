@@ -1,27 +1,52 @@
 #![cfg(feature = "artifact-tests")]
-//! `readback::wayfind_scope_ids` — Surface B Half 2's lens-driven region-salience scope funnel
-//! (spec §4/§5/§7). Determinism: region rows are inserted DIRECTLY with hand-chosen
-//! centroids/salience/components (no `materialize_cogmap`, no ONNX), so the
-//! `region_score = α·salience_norm + β·query_centroid_cosine` blend is exactly predictable.
+//! `wayfind_region_scores` — Surface B Half 2's lens-driven region-salience competition — read
+//! through `wayfind_region_diagnostics`, its only read surface. Determinism: region rows are
+//! inserted DIRECTLY with hand-chosen centroids/salience/components (no `materialize_cogmap`, no
+//! ONNX), so the `region_score = α·sal_norm + β·query_cos + κ·prior` blend is exactly predictable.
 //!
-//! Proves: top-N region selection (1); the §9 regression — a sparse high-cosine region beats a large
-//! high-salience low-cosine one, i.e. relevance buys a top-N slot (2); cold-start — a region-less map
-//! degrades to its direct homed scope, never errors (3); deny — a non-member of the map's team gets
-//! zero ids (4); lens override recomputes salience from the stored components, reordering selection (5).
+//! Proves: top-N region selection (1); the width clamp (1b); the §9 regression — a sparse
+//! high-cosine region beats a large high-salience low-cosine one, i.e. relevance buys a top-N slot
+//! (2); deny — a non-member of the map's team gets no candidate rows from it (4); lens override
+//! recomputes salience from the stored components, reordering selection (5); per-map fairness
+//! (issue #585, Task 2) — a relevant sibling map, volume-crowded by a dominant map, reaches the
+//! top-N under round-robin (6); the wrapper projects the scoring function verbatim (7); the
+//! reported scores are the real Stage-1 blend (8); and the `k` CTE's clamp literals (10).
 //!
-//! Per-map fairness (issue #585, Task 2): a relevant sibling map, volume-crowded by a dominant map,
-//! reaches the top-N under per-map round-robin — the monopoly a global `LIMIT` would produce is broken
-//! without a tuning constant (6). The diagnostics and the scope funnel read ONE scoring home
-//! (`wayfind_region_scores`), so their selection cannot drift (7), and the reported scores are the real
-//! Stage-1 blend (8).
+//! ## What this file used to test, and no longer can
+//!
+//! It was named for `readback::wayfind_scope_ids`, which with `wayfind_scope_reach` is dropped by
+//! the commit that retires the wayfind scope funnel. Those two functions did TWO things:
+//! selection, which lives in `wayfind_region_scores` and is still witnessed below; and the
+//! member/cold-start DEREFERENCE from winning regions to a resource-id scope, which has no
+//! surviving home. Everything that turned on the dereference is a declared coverage loss, named
+//! here rather than left to be inferred from a shorter file:
+//!
+//! * **Cold start** — a region-less anchor contributing its directly-homed resources (§5). Both the
+//!   plain case (`region_less_map_degrades_to_direct_scope`) and the reach-accounting case
+//!   (`a_region_less_anchor_reached_by_cold_start_counts_as_reached`). `wayfind_region_scores`
+//!   scores regions and a region-less anchor has none, so it cannot observe this arm at all.
+//! * **The scope BOUND on a denied principal** — that `p2`'s ids are exactly the public L0 kernel
+//!   telos and nothing from a map it cannot read. Test 4 below keeps the region-level half (the
+//!   private map contributes no candidate row); the id-level half needs the dereference.
+//! * **Reach legibility** (`wayfind_scope_reach`'s `anchors_visible` / `anchors_reached` /
+//!   `anchors_selected` / `regions_effective`, issue #585 Task 4) — the narrow-vs-broad witness and
+//!   the cold-start-floor monopoly mask. These were properties of the reach reporter, which is
+//!   dropped whole. Test 10 keeps the half that pins the CLAMP against the scoring function; the
+//!   half that pinned the REPORTER's literals against it has nothing left to compare.
+//! * **The equivalence guard's WIRING half** — that a diagnostics `in_top_n` region's members are
+//!   the ids the funnel actually returns. Test 7 re-homes the guard onto `wayfind_region_scores`
+//!   directly, which pins the projection but not the dereference, because the dereference is gone.
+//!
+//! When the `survey` act gets a door onto `wayfind_region_scores` and a scope is derived again,
+//! those are the properties to re-home — alongside the two already-orphaned ones from the earlier
+//! commit on this branch (`salience_is_normalized_per_anchor_kind`,
+//! `zero_centroid_region_does_not_hijack_the_top_n`).
 
 use std::collections::HashSet;
 
 use sqlx::PgPool;
 use temper_core::types::ids::{LensId, ProfileId};
-use temper_substrate::readback::{
-    wayfind_region_diagnostics, wayfind_scope_ids, wayfind_scope_reach, WayfindScopeQuery,
-};
+use temper_substrate::readback::{wayfind_region_diagnostics, WayfindScopeQuery};
 use uuid::Uuid;
 
 mod common;
@@ -55,8 +80,7 @@ fn query_axis0() -> Vec<f32> {
 
 /// Shared fixture: a genesis cogmap joined to a fresh team; `p1` is a member (its maps are visible),
 /// `p2` is not (deny). `sys` (the boot-seeded system profile) owns the seeded member resources — they
-/// are visible to `p1` purely through the A0 cogmap-membership read clause, which is what the funnel
-/// dereferences members through.
+/// are visible to `p1` purely through the A0 cogmap-membership read clause.
 struct Fx {
     cogmap: Uuid,
     lens: Uuid,
@@ -119,10 +143,10 @@ struct RegionSeed<'a> {
 ///
 /// The **anchor pair is mandatory**: since T7 the wayfind pool is keyed on
 /// `(home_anchor_table, home_anchor_id)` — not `cogmap_id` — and `kb_cogmap_regions` has **no trigger**
-/// deriving one from the other. A fixture writing only `cogmap_id` plants regions the funnel cannot
-/// see, and the map then looks region-*less*, silently falling through to the cold-start branch that
-/// returns its whole homed scope. Every one of these tests would still "pass a search" while asserting
-/// nothing about region selection. The producer dual-writes both (spec §3.6 M1); so does this.
+/// deriving one from the other. A fixture writing only `cogmap_id` plants regions the scoring function
+/// cannot see, and the map then looks region-*less*, contributing no candidate rows at all. Every one
+/// of these tests would still "pass a query" while asserting nothing about region selection. The
+/// producer dual-writes both (spec §3.6 M1); so does this.
 async fn insert_region(pool: &PgPool, s: RegionSeed<'_>) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO kb_cogmap_regions
@@ -146,8 +170,8 @@ async fn insert_region(pool: &PgPool, s: RegionSeed<'_>) -> Uuid {
     .expect("insert region")
 }
 
-/// Insert a resource homed to the fixture cogmap (so it is visible to `p1` via the A0
-/// cogmap-membership clause), returning its id.
+/// Insert a resource homed to `cogmap` (so it is visible to `p1` via the A0 cogmap-membership
+/// clause), returning its id.
 async fn insert_homed_resource(pool: &PgPool, cogmap: Uuid, owner: Uuid, title: &str) -> Uuid {
     let rid: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $2) RETURNING id",
@@ -183,17 +207,22 @@ async fn add_member(pool: &PgPool, region: Uuid, resource: Uuid) {
     .expect("add region member");
 }
 
-/// Seed one region (salience + optional `(telos_alignment, reference_standing, centrality)` components
-/// for override-lens recompute; `None` ⇒ all NULL), create+home one member resource per title, attach
-/// them. Returns the member resource ids.
-async fn seed_region(
+/// Plant a region on an ARBITRARY cogmap, with optional
+/// `(telos_alignment, reference_standing, centrality)` components for override-lens recompute
+/// (`None` ⇒ all NULL), creating and homing one member resource per title.
+///
+/// Returns the region id. Members are still planted even though nothing dereferences them any more:
+/// `member_count` and the membership rows are part of the shape the producer writes, and a region
+/// with no members is a different fixture than the one these tests mean.
+async fn seed_region_on(
     pool: &PgPool,
     fx: &Fx,
+    cogmap: Uuid,
     salience: f64,
     components: Option<(f64, f64, f64)>,
     centroid: &str,
     member_titles: &[&str],
-) -> Vec<Uuid> {
+) -> Uuid {
     let (ta, rs, ce) = match components {
         Some((a, b, c)) => (Some(a), Some(b), Some(c)),
         None => (None, None, None),
@@ -201,7 +230,7 @@ async fn seed_region(
     let region = insert_region(
         pool,
         RegionSeed {
-            cogmap: fx.cogmap,
+            cogmap,
             lens: fx.lens,
             event: fx.event,
             salience,
@@ -213,18 +242,90 @@ async fn seed_region(
         },
     )
     .await;
-    let mut ids = Vec::new();
     for t in member_titles {
-        let rid = insert_homed_resource(pool, fx.cogmap, fx.sys, t).await;
+        let rid = insert_homed_resource(pool, cogmap, fx.sys, t).await;
         add_member(pool, region, rid).await;
-        ids.push(rid);
     }
-    ids
+    region
 }
 
-// 1. top-N selection: 3 regions, regions=2 → only the 2 top-scoring regions' members are in scope.
-//    A: salience 1.0 + cos 1.0 → score 1.0; B: salience 0.5 + cos 0.0 → 0.2; C: salience 0.0 + cos 0.0
-//    → 0.0. Top-2 = {A,B}; C excluded. (α=0.4, β=0.6, min-max norm over the pool.)
+/// [`seed_region_on`] against the fixture's own map.
+async fn seed_region(
+    pool: &PgPool,
+    fx: &Fx,
+    salience: f64,
+    components: Option<(f64, f64, f64)>,
+    centroid: &str,
+    member_titles: &[&str],
+) -> Uuid {
+    seed_region_on(
+        pool,
+        fx,
+        fx.cogmap,
+        salience,
+        components,
+        centroid,
+        member_titles,
+    )
+    .await
+}
+
+/// Genesis a SECOND cogmap named `name` and make it visible to `p1` (a fresh team `p1` joins), with
+/// `slug` giving the team its slug. Returns its id — this is how a test puts two sibling maps in one
+/// wayfind pool, the setup the #585 monopoly needs.
+///
+/// NB `genesis_cogmap(pool, name, telos_title)` takes the cogmap NAME first — so `name` is what lands
+/// in `kb_cogmaps.name` and what `wayfind_region_diagnostics.home_anchor_name` resolves to.
+async fn add_visible_map(pool: &PgPool, p1: Uuid, slug: &str, name: &str) -> Uuid {
+    let (cogmap, _telos) = common::genesis_cogmap(pool, name, name).await;
+    let team = common::create_team(pool, &format!("{slug}-team")).await;
+    common::add_team_member(pool, team, p1).await;
+    sqlx::query("INSERT INTO kb_team_cogmaps (team_id, cogmap_id) VALUES ($1, $2)")
+        .bind(team)
+        .bind(cogmap)
+        .execute(pool)
+        .await
+        .expect("join second cogmap to team");
+    cogmap
+}
+
+/// The diagnostics rows for a query, as the tests read them.
+async fn diagnostics(
+    pool: &PgPool,
+    principal: Uuid,
+    lens: Option<Uuid>,
+    q: &[f32],
+    regions: Option<i32>,
+) -> Vec<temper_substrate::readback::WayfindRegionDiagnosticRow> {
+    wayfind_region_diagnostics(
+        pool,
+        WayfindScopeQuery {
+            principal: ProfileId::from(principal),
+            lens_id: lens.map(LensId::from),
+            embedding: Some(q),
+            regions,
+            anchor: None, // unscoped: pool every visible anchor (T7)
+        },
+    )
+    .await
+    .expect("region diagnostics")
+}
+
+/// The region ids that cleared the top-N cut, as a set.
+fn selected(rows: &[temper_substrate::readback::WayfindRegionDiagnosticRow]) -> HashSet<Uuid> {
+    rows.iter()
+        .filter(|r| r.in_top_n)
+        .map(|r| r.region_id)
+        .collect()
+}
+
+// 1. top-N selection: 3 regions, regions=2 → only the 2 top-scoring regions clear the cut.
+//    A: salience 1.0 + cos 1.0 → score 1.05; B: salience 0.5 + cos 0.0 → 0.25; C: salience 0.0 +
+//    cos 0.0 → 0.05. Top-2 = {A,B}; C excluded. (α=0.4, β=0.6, κ=0.05 cogmap prior, min-max norm
+//    over the pool.)
+//
+//    Re-homed from `wayfind_selects_top_n_regions`, which read the same selection through
+//    `wayfind_scope_ids`' dereferenced member ids.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn wayfind_selects_top_n_regions(pool: PgPool) {
     let fx = fixture(&pool).await;
@@ -235,30 +336,13 @@ async fn wayfind_selects_top_n_regions(pool: PgPool) {
     let c = seed_region(&pool, &fx, 0.0, None, &low_cos, &["c"]).await;
     let q = query_axis0();
 
-    let scope = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(2),
-            anchor: None, // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("wayfind scope");
+    let top = selected(&diagnostics(&pool, fx.p1, None, &q, Some(2)).await);
 
+    assert!(top.contains(&a), "region A (score 1.05) in top-2: {top:?}");
+    assert!(top.contains(&b), "region B (score 0.25) in top-2: {top:?}");
     assert!(
-        scope.contains(&a[0]),
-        "region A (score 1.0) in top-2: {scope:?}"
-    );
-    assert!(
-        scope.contains(&b[0]),
-        "region B (score 0.2) in top-2: {scope:?}"
-    );
-    assert!(
-        !scope.contains(&c[0]),
-        "region C (score 0.0) excluded by top-2: {scope:?}"
+        !top.contains(&c),
+        "region C (score 0.05) excluded by top-2: {top:?}"
     );
 }
 
@@ -274,32 +358,21 @@ async fn wayfind_regions_below_one_clamps_to_one(pool: PgPool) {
     let b = seed_region(&pool, &fx, 0.5, None, &low_cos, &["b"]).await;
     let q = query_axis0();
 
-    let scope = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(-1),
-            anchor: None, // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("negative regions must clamp into range, not error");
+    let top = selected(&diagnostics(&pool, fx.p1, None, &q, Some(-1)).await);
 
     assert!(
-        scope.contains(&a[0]),
-        "clamped to top-1: region A (score 1.0) present: {scope:?}"
+        top.contains(&a),
+        "clamped to top-1: region A (score 1.05) present: {top:?}"
     );
     assert!(
-        !scope.contains(&b[0]),
-        "clamped to top-1: region B (lower score) excluded: {scope:?}"
+        !top.contains(&b),
+        "clamped to top-1: region B (lower score) excluded: {top:?}"
     );
 }
 
 // 2. THE §9 REGRESSION: region B is thin (1 member, salience 0.0) but high query-cosine; region A is
-//    large (3 members, salience 1.0) but low query-cosine. regions=1. Scores: A = 0.4·1 + 0.6·0 = 0.4;
-//    B = 0.4·0 + 0.6·1 = 0.6. B wins the single slot — relevance buys it. Margin 0.6 vs 0.4 (clear).
+//    large (3 members, salience 1.0) but low query-cosine. regions=1. Scores: A = 0.4·1 + 0.6·0 +
+//    0.05 = 0.45; B = 0.4·0 + 0.6·1 + 0.05 = 0.65. B wins the single slot — relevance buys it.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn sparse_high_cosine_region_beats_large_low_cosine(pool: PgPool) {
     let fx = fixture(&pool).await;
@@ -309,65 +382,26 @@ async fn sparse_high_cosine_region_beats_large_low_cosine(pool: PgPool) {
     let sparse = seed_region(&pool, &fx, 0.0, None, &high_cos, &["b1"]).await;
     let q = query_axis0();
 
-    let scope = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(1),
-            anchor: None, // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("wayfind scope");
+    let top = selected(&diagnostics(&pool, fx.p1, None, &q, Some(1)).await);
 
     assert!(
-        scope.contains(&sparse[0]),
-        "sparse high-cosine region wins the single slot: {scope:?}"
+        top.contains(&sparse),
+        "sparse high-cosine region wins the single slot: {top:?}"
     );
-    for id in &large {
-        assert!(
-            !scope.contains(id),
-            "large high-salience low-cosine region excluded from the single slot: {scope:?}"
-        );
-    }
-}
-
-// 3. cold-start: a region-less map in the visible set contributes its direct homed participants
-//    (the cogmap_scope_ids fallback). thin_threshold=0 ⇒ a 0-region map is "thin". regions=N is a
-//    silent no-op for it; never errors.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn region_less_map_degrades_to_direct_scope(pool: PgPool) {
-    let fx = fixture(&pool).await; // no regions seeded → the map is region-less
-    let direct = insert_homed_resource(&pool, fx.cogmap, fx.sys, "homed-direct").await;
-    let q = query_axis0();
-
-    let scope = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(3), // no-op against a region-less map; must not error
-            anchor: None,     // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("region-less map degrades, never errors");
-
     assert!(
-        scope.contains(&direct),
-        "region-less map degrades to its direct homed scope: {scope:?}"
+        !top.contains(&large),
+        "large high-salience low-cosine region excluded from the single slot: {top:?}"
     );
 }
 
-// 4. deny / per-map gating ("no view from nowhere"): a principal who is NOT a member of the fixture
-//    map's team must not see that map's region member. The funnel still resolves without error — and a
-//    legitimately-public, region-less map the principal DOES belong to (the L0 kernel `system-default`,
-//    auto-joined via `temper-system`) correctly contributes its public telos through the cold-start
-//    direct path. So the invariant under test is the per-map gate (the private member is excluded), NOT
-//    a blanket empty set: the principal sees public maps it belongs to and nothing from maps it does not.
+// 4. DENY / per-map gating ("no view from nowhere"): a principal who is NOT a member of the fixture
+//    map's team gets no candidate row from that map at all — the gate is `visible_region_anchors`
+//    inside `wayfind_region_scores`, so an unreadable map's regions never enter the competition,
+//    let alone win it. The function still resolves without error.
+//
+//    The membership half of this witness (that p2's resulting SCOPE was exactly the public L0 kernel
+//    telos) went with `wayfind_scope_ids` and is a declared loss — see the header. The p1 assertion
+//    below is what keeps this from passing because the fixture planted nothing.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn wayfind_excludes_unreadable_maps(pool: PgPool) {
     let fx = fixture(&pool).await;
@@ -375,29 +409,17 @@ async fn wayfind_excludes_unreadable_maps(pool: PgPool) {
     let private = seed_region(&pool, &fx, 1.0, None, &high_cos, &["a"]).await;
     let q = query_axis0();
 
-    let scope = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p2), // not a member of the fixture map's team
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(3),
-            anchor: None, // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("deny yields no error");
-
+    let mine = diagnostics(&pool, fx.p1, None, &q, Some(3)).await;
     assert!(
-        !scope.contains(&private[0]),
-        "a non-member of the fixture map's team never sees its region member: {scope:?}"
+        mine.iter().any(|r| r.region_id == private),
+        "precondition: a member of the map's team DOES see its region as a candidate, or the \
+         exclusion below proves nothing"
     );
-    // The L0 public-kernel telos is the only thing a fresh principal legitimately sees (region-less
-    // public map via the auto-joined root team) — never the private fixture map's resources.
-    let l0_telos: Uuid = "00000000-0000-0000-0005-000000000002".parse().unwrap();
+
+    let theirs = diagnostics(&pool, fx.p2, None, &q, Some(3)).await;
     assert!(
-        scope.iter().all(|id| *id == l0_telos),
-        "p2's scope is bounded to the public kernel; no private map leaks: {scope:?}"
+        theirs.iter().all(|r| r.home_anchor_id != fx.cogmap),
+        "a non-member of the map's team gets no candidate row from it: {theirs:?}"
     );
 }
 
@@ -430,111 +452,26 @@ async fn lens_override_recomputes_salience_from_components(pool: PgPool) {
     let q = query_axis0();
 
     // Default lens (memoized salience) → A wins.
-    let def = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(1),
-            anchor: None, // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("default-lens scope");
+    let def = selected(&diagnostics(&pool, fx.p1, None, &q, Some(1)).await);
     assert!(
-        def.contains(&a[0]),
+        def.contains(&a),
         "default lens selects high-memoized-salience region A: {def:?}"
     );
     assert!(
-        !def.contains(&b[0]),
+        !def.contains(&b),
         "region B excluded under default lens: {def:?}"
     );
 
     // Override lens (recompute from centrality) → B wins.
-    let ov = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: Some(LensId::from(override_lens)),
-            embedding: Some(&q),
-            regions: Some(1),
-            anchor: None, // unscoped: pool every visible anchor (T7)
-        },
-    )
-    .await
-    .expect("override-lens scope");
+    let ov = selected(&diagnostics(&pool, fx.p1, Some(override_lens), &q, Some(1)).await);
     assert!(
-        ov.contains(&b[0]),
+        ov.contains(&b),
         "override (s_central=1) recomputes salience from components → region B wins: {ov:?}"
     );
     assert!(
-        !ov.contains(&a[0]),
+        !ov.contains(&a),
         "region A excluded under override lens: {ov:?}"
     );
-}
-
-// ---------------------------------------------------------------------------
-// wayfind_region_diagnostics — the Stage-1 competition instrumentation (issue #585).
-//
-// These reuse the same deterministic, hand-planted regions (no materialize, no ONNX) so the reported
-// sal_norm/query_cos/region_score are exactly predictable. They prove the diagnostics report the REGION
-// stage keyed by map (not unified_search's per-hit scores), and — critically — that the diagnostics
-// stay in lockstep with `wayfind_scope_ids`' actual selection.
-// ---------------------------------------------------------------------------
-
-/// Plant a region on an ARBITRARY cogmap (not just `fx.cogmap`), reusing the fixture's lens/event/sys.
-/// Returns `(region_id, member_ids)` so a caller can map a diagnostics `region_id` back to the members
-/// it would put in scope — the join the equivalence test needs.
-async fn seed_region_on(
-    pool: &PgPool,
-    fx: &Fx,
-    cogmap: Uuid,
-    salience: f64,
-    centroid: &str,
-    member_titles: &[&str],
-) -> (Uuid, Vec<Uuid>) {
-    let region = insert_region(
-        pool,
-        RegionSeed {
-            cogmap,
-            lens: fx.lens,
-            event: fx.event,
-            salience,
-            telos_alignment: None,
-            reference_standing: None,
-            centrality: None,
-            centroid,
-            member_count: member_titles.len() as i32,
-        },
-    )
-    .await;
-    let mut ids = Vec::new();
-    for t in member_titles {
-        let rid = insert_homed_resource(pool, cogmap, fx.sys, t).await;
-        add_member(pool, region, rid).await;
-        ids.push(rid);
-    }
-    (region, ids)
-}
-
-/// Genesis a SECOND cogmap named `name` and make it visible to `p1` (a fresh team `p1` joins), with
-/// `slug` giving the team its slug. Returns its id. The fixture's own map is `fx.cogmap`; this is how a
-/// test puts two sibling maps in one wayfind pool — the setup the #585 monopoly needs.
-///
-/// NB `genesis_cogmap(pool, name, telos_title)` takes the cogmap NAME first — so `name` is what lands in
-/// `kb_cogmaps.name` and what `wayfind_region_diagnostics.home_anchor_name` resolves to.
-async fn add_visible_map(pool: &PgPool, p1: Uuid, slug: &str, name: &str) -> Uuid {
-    let (cogmap, _telos) = common::genesis_cogmap(pool, name, name).await;
-    let team = common::create_team(pool, &format!("{slug}-team")).await;
-    common::add_team_member(pool, team, p1).await;
-    sqlx::query("INSERT INTO kb_team_cogmaps (team_id, cogmap_id) VALUES ($1, $2)")
-        .bind(team)
-        .bind(cogmap)
-        .execute(pool)
-        .await
-        .expect("join second cogmap to team");
-    cogmap
 }
 
 // 6. THE #585 WITNESS (Task 2 — per-map fairness): a RELEVANT sibling map, volume-crowded by a
@@ -547,9 +484,11 @@ async fn add_visible_map(pool: &PgPool, p1: Uuid, slug: &str, name: &str) -> Uui
 //      - Under the pre-fix global `ORDER BY region_score DESC LIMIT 2`, the top-2 are {a1, a2}: both
 //        MAP_A, MAP_B shut out purely because MAP_A has more high regions. THE #585 MONOPOLY.
 //      - Under per-map round-robin, round 1 admits each map's champion by score → {a1, b1}: MAP_B's
-//        competitive champion reaches the scope. The monopoly is broken WITHOUT a tuning constant.
-//    The witness asserts both the diagnostics flag AND the real scope funnel (`wayfind_scope_ids`)
-//    surface MAP_B, and encodes the crowding (≥ regions_n of MAP_A outscore b1) that made it a monopoly.
+//        competitive champion reaches the cut. The monopoly is broken WITHOUT a tuning constant.
+//
+//    The tail that also asserted MAP_B's MEMBER entered the funnel's scope went with
+//    `wayfind_scope_ids` (header). The flag is where the fairness lives; the dereference was the
+//    wiring, and test 7 carries what remains of that guard.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn per_map_round_robin_admits_a_crowded_relevant_sibling(pool: PgPool) {
     let fx = fixture(&pool).await;
@@ -558,23 +497,14 @@ async fn per_map_round_robin_admits_a_crowded_relevant_sibling(pool: PgPool) {
     let mid = vec768(&[(0, 1.0), (1, 1.0)]); // cos ≈ 0.707: relevant, but below MAP_A's axis-0 regions
 
     // MAP_A (fx.cogmap): three relevant regions — the "volume" that monopolizes under a global LIMIT.
-    let (a1, a1m) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["a1"]).await;
-    let (a2, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.9, &hi, &["a2"]).await;
-    let (a3, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.8, &hi, &["a3"]).await;
+    let a1 = seed_region_on(&pool, &fx, fx.cogmap, 1.0, None, &hi, &["a1"]).await;
+    let a2 = seed_region_on(&pool, &fx, fx.cogmap, 0.9, None, &hi, &["a2"]).await;
+    let a3 = seed_region_on(&pool, &fx, fx.cogmap, 0.8, None, &hi, &["a3"]).await;
     // MAP_B: one relevant-but-lower champion. Global top-2 shuts it out; round-robin admits it.
-    let (b1, b1m) = seed_region_on(&pool, &fx, map_b, 1.0, &mid, &["b1"]).await;
+    let b1 = seed_region_on(&pool, &fx, map_b, 1.0, None, &mid, &["b1"]).await;
     let q = query_axis0();
 
-    let query = WayfindScopeQuery {
-        principal: ProfileId::from(fx.p1),
-        lens_id: None,
-        embedding: Some(&q),
-        regions: Some(2),
-        anchor: None, // unscoped: pool every visible anchor
-    };
-    let diag = wayfind_region_diagnostics(&pool, query.clone())
-        .await
-        .expect("region diagnostics");
+    let diag = diagnostics(&pool, fx.p1, None, &q, Some(2)).await;
 
     // Every candidate region is reported, keyed by map — the losers (a3) too.
     let row = |rid: Uuid| {
@@ -626,119 +556,139 @@ async fn per_map_round_robin_admits_a_crowded_relevant_sibling(pool: PgPool) {
         "MAP_A no longer sweeps: 1/2 slots"
     );
     assert_eq!(top_by_map(map_b), 1, "MAP_B reaches: 1/2 slots");
-
-    // And the REAL scope funnel — not just the diagnostics mirror — surfaces MAP_B's member, so its
-    // content actually reaches Stage-2 ranking. Both read the single scoring home, so they agree.
-    let scope: HashSet<Uuid> = wayfind_scope_ids(&pool, query)
-        .await
-        .expect("wayfind scope")
-        .into_iter()
-        .collect();
-    assert!(
-        scope.contains(&b1m[0]),
-        "MAP_B's member enters the wayfind scope (no longer volume-crowded out): {scope:?}"
-    );
-    assert!(
-        scope.contains(&a1m[0]),
-        "MAP_A's champion is still in scope — fairness is not a swap, both maps are reachable: {scope:?}"
-    );
 }
 
-// 7. EQUIVALENCE GUARD: the diagnostics' `in_top_n` selection must equal `wayfind_scope_ids`' actual
-//    scope. Each region gets exactly one member, so a diagnostics `region_id` maps to one scope id.
-//    In a no-cold-start fixture the only extra id `wayfind_scope_ids` returns is the public L0 kernel
-//    telos (region-less, reached via the auto-joined root team) — which the diagnostics correctly do
-//    NOT report (no candidate region to score). Subtract that one known id and the two must coincide.
-//    Since Task 2 the two functions read ONE scoring home (`wayfind_region_scores`), so this equivalence
-//    is true by construction — the test now guards the WIRING (scope_ids' member-deref of the shared
-//    winners matches diagnostics' region rows), across the same round-robin cut sizes, not two copies of
-//    a blend that could drift.
+/// Read `wayfind_region_scores` — the surviving scoring home — directly, as `(region_id, in_top_n)`
+/// for EVERY scored candidate, winners and losers alike.
+///
+/// There is no `readback` wrapper for it; `wayfind_region_diagnostics` is its only Rust surface,
+/// which is exactly why test 7 must reach past that surface to have anything to compare against.
+/// One read, so the winner-set and row-count assertions cannot disagree about which snapshot they
+/// are looking at.
+async fn scored_regions(
+    pool: &PgPool,
+    principal: Uuid,
+    q: &[f32],
+    regions: i32,
+) -> Vec<(Uuid, bool)> {
+    use sqlx::Row;
+    let parts: Vec<String> = q.iter().map(f32::to_string).collect();
+    sqlx::query(
+        "SELECT region_id, in_top_n
+           FROM wayfind_region_scores($1, NULL::uuid, $2::vector, $3, NULL::varchar, NULL::uuid)",
+    )
+    .bind(principal)
+    .bind(format!("[{}]", parts.join(",")))
+    .bind(regions)
+    .fetch_all(pool)
+    .await
+    .expect("wayfind_region_scores")
+    .iter()
+    .map(|r| (r.get::<Uuid, _>("region_id"), r.get::<bool, _>("in_top_n")))
+    .collect()
+}
+
+// 7. EQUIVALENCE GUARD, re-homed. It used to tie the diagnostics' `in_top_n` to `wayfind_scope_ids`'
+//    actually-returned scope, by mapping each winning region to its single member. That comparator is
+//    dropped, and the SELECTION it was guarding now lives entirely in `wayfind_region_scores` — so the
+//    guard is re-pointed at that function directly.
+//
+//    What it still pins: `wayfind_region_diagnostics` is a PROJECTION of `wayfind_region_scores`, not a
+//    second opinion about it. It re-states its own `ORDER BY` deliberately ("so the diagnostics' own
+//    contract does not depend on the callee's"), and a re-stated clause is exactly the place a `WHERE
+//    in_top_n` or a dropped loser row would arrive unnoticed. So: identical winner sets AND identical
+//    row counts, swept across cut sizes rather than pinned at one lucky N.
+//
+//    What it can no longer pin — and this is the loss, not a weaker version of the same thing — is the
+//    WIRING: that a winning region's members are the ids a caller receives. The dereference lives in
+//    `wayfind_scope_reach`, which is dropped whole.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn wayfind_region_diagnostics_matches_scope_ids(pool: PgPool) {
+async fn wayfind_region_diagnostics_projects_the_scoring_function_verbatim(pool: PgPool) {
     let fx = fixture(&pool).await;
     let map_b = add_visible_map(&pool, fx.p1, "wayfind-eq-b", "Wayfind Eq B").await;
 
     // Distinct multi-axis centroids give four STRICTLY distinct region_scores (cosines 1.0 / 0.894 /
-    // 0.707 / 0.447), so no tie straddles a top-N LIMIT boundary. A boundary tie would let the two
-    // functions' independent `ORDER BY region_score DESC LIMIT n` break it differently and flake this
-    // guard — the equivalence we want is of the SCORING, not of Postgres' arbitrary tiebreak.
-    // Resulting order: a1 (1.05) > b1 (0.987) > a2 (0.474) > b2 (0.318).
-    let (a1, a1m) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &vec768(&[(0, 1.0)]), &["a1"]).await;
-    let (a2, a2m) = seed_region_on(
+    // 0.707 / 0.447), so no tie straddles a top-N boundary. A boundary tie would be broken by `id` in
+    // both functions and so could not actually flake — but keeping the scores distinct means a
+    // mismatch is a real drift rather than a tiebreak artifact anyone has to reason about.
+    seed_region_on(
+        &pool,
+        &fx,
+        fx.cogmap,
+        1.0,
+        None,
+        &vec768(&[(0, 1.0)]),
+        &["a1"],
+    )
+    .await;
+    seed_region_on(
         &pool,
         &fx,
         fx.cogmap,
         0.5,
+        None,
         &vec768(&[(0, 1.0), (1, 1.0)]),
         &["a2"],
     )
     .await;
-    let (b1, b1m) = seed_region_on(
+    seed_region_on(
         &pool,
         &fx,
         map_b,
         0.8,
+        None,
         &vec768(&[(0, 1.0), (1, 0.5)]),
         &["b1"],
     )
     .await;
-    let (b2, b2m) = seed_region_on(
+    seed_region_on(
         &pool,
         &fx,
         map_b,
         0.1,
+        None,
         &vec768(&[(0, 1.0), (1, 2.0)]),
         &["b2"],
     )
     .await;
-    let member_of = |rid: Uuid| -> Uuid {
-        match rid {
-            r if r == a1 => a1m[0],
-            r if r == a2 => a2m[0],
-            r if r == b1 => b1m[0],
-            r if r == b2 => b2m[0],
-            other => panic!("unexpected region {other}"),
-        }
-    };
     let q = query_axis0();
-    let query = |regions| WayfindScopeQuery {
-        principal: ProfileId::from(fx.p1),
-        lens_id: None,
-        embedding: Some(&q),
-        regions: Some(regions),
-        anchor: None,
-    };
 
-    // Sweep a few region counts so the equivalence is pinned across cut sizes, not one lucky N.
+    // Sweep a few region counts so the projection is pinned across cut sizes, not one lucky N.
     for regions in [1, 2, 3] {
-        let diag = wayfind_region_diagnostics(&pool, query(regions))
-            .await
-            .expect("diagnostics");
-        let scope: HashSet<Uuid> = wayfind_scope_ids(&pool, query(regions))
-            .await
-            .expect("scope ids")
-            .into_iter()
-            .collect();
-
-        let expected: HashSet<Uuid> = diag
+        let diag = diagnostics(&pool, fx.p1, None, &q, Some(regions)).await;
+        let scored = scored_regions(&pool, fx.p1, &q, regions).await;
+        let winners: HashSet<Uuid> = scored
             .iter()
-            .filter(|r| r.in_top_n)
-            .map(|r| member_of(r.region_id))
+            .filter(|(_, top)| *top)
+            .map(|(id, _)| *id)
             .collect();
-
-        // `wayfind_scope_ids` also emits the public L0 kernel telos via cold-start (region-less map);
-        // the diagnostics report only scored candidate regions, so remove that one known id.
-        let l0_telos: Uuid = "00000000-0000-0000-0005-000000000002".parse().unwrap();
-        let scope_regions: HashSet<Uuid> = scope.into_iter().filter(|id| *id != l0_telos).collect();
 
         assert_eq!(
-            scope_regions, expected,
-            "regions={regions}: diagnostics in_top_n must match wayfind_scope_ids' actual scope \
-             (cold-start L0 telos excluded); a mismatch means the two functions have drifted"
+            selected(&diag),
+            winners,
+            "regions={regions}: the diagnostics' in_top_n set must be the scoring function's own; \
+             a mismatch means the wrapper has started deciding rather than reporting"
         );
         assert!(
-            !expected.is_empty(),
-            "regions={regions}: the fixture must select at least one region, else the guard is vacuous"
+            !winners.is_empty(),
+            "regions={regions}: the fixture must select a region, else the guard is vacuous"
+        );
+
+        // Every CANDIDATE is reported, not just the winners — the losers are the whole point of the
+        // instrumentation, and a `WHERE in_top_n` in the wrapper would satisfy the set equality
+        // above while silently turning the diagnostics into a winners-only view.
+        assert_eq!(
+            diag.len(),
+            scored.len(),
+            "regions={regions}: the diagnostics must report every scored candidate region, losers \
+             included — {} reported against {} scored",
+            diag.len(),
+            scored.len()
+        );
+        assert!(
+            scored.len() > winners.len(),
+            "regions={regions}: the fixture must contain a LOSER, or the row-count assertion above \
+             cannot tell a projection from a winners-only filter"
         );
     }
 }
@@ -750,22 +700,29 @@ async fn wayfind_region_diagnostics_matches_scope_ids(pool: PgPool) {
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn diagnostics_report_the_real_stage1_scores(pool: PgPool) {
     let fx = fixture(&pool).await;
-    let (a, _) = seed_region_on(&pool, &fx, fx.cogmap, 1.0, &vec768(&[(0, 1.0)]), &["a"]).await;
-    let (b, _) = seed_region_on(&pool, &fx, fx.cogmap, 0.0, &vec768(&[(1, 1.0)]), &["b"]).await;
+    let a = seed_region_on(
+        &pool,
+        &fx,
+        fx.cogmap,
+        1.0,
+        None,
+        &vec768(&[(0, 1.0)]),
+        &["a"],
+    )
+    .await;
+    let b = seed_region_on(
+        &pool,
+        &fx,
+        fx.cogmap,
+        0.0,
+        None,
+        &vec768(&[(1, 1.0)]),
+        &["b"],
+    )
+    .await;
     let q = query_axis0();
 
-    let diag = wayfind_region_diagnostics(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(1),
-            anchor: None,
-        },
-    )
-    .await
-    .expect("diagnostics");
+    let diag = diagnostics(&pool, fx.p1, None, &q, Some(1)).await;
 
     let ra = diag
         .iter()
@@ -794,241 +751,50 @@ async fn diagnostics_report_the_real_stage1_scores(pool: PgPool) {
     assert_eq!(diag.first().map(|r| r.region_id), Some(a), "winner first");
 }
 
-// ---------------------------------------------------------------------------
-// REACH LEGIBILITY (issue #585, Task 4) — `wayfind_scope_reach`.
+// 10. THE CLAMP PIN. `wayfind_region_scores`' `k` CTE carries three literals that decide the
+//     effective width — `default_n` (the width when the caller names none), the floor of 1, and
+//     `max_n` (the per-call ceiling). Nothing structural stops any of them being retuned in the SQL
+//     without anyone noticing downstream, so this pins the answer for all three at once: with more
+//     candidate regions planted than the ceiling, the number admitted IS the effective width.
 //
-// `scope_size` counts RESOURCES, so a wayfind confined to one map and one spread across many report
-// the same healthy-looking figure. These pin the signal that can tell them apart.
-// ---------------------------------------------------------------------------
-
-/// Probe helper: the reach scalars for a query, so a test reads as an assertion about reach rather
-/// than about struct plumbing.
-async fn reach_at(
-    pool: &PgPool,
-    fx: &Fx,
-    regions: Option<i32>,
-    q: &[f32],
-) -> temper_substrate::readback::WayfindScopeReach {
-    wayfind_scope_reach(
-        pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(q),
-            regions,
-            anchor: None,
-        },
-    )
-    .await
-    .expect("wayfind scope reach")
-}
-
-// 9. THE TASK-4 WITNESS: a narrow wayfind is legible AS narrow. With `regions=1` a single map wins the
-//    only region slot, so the result is single-map by construction — and `scope_size` cannot say so.
-//    `anchors_reached` against `anchors_visible` can. This fails against the pre-Task-4 surface
-//    vacuously (the fields did not exist) and, more usefully, would fail against any implementation
-//    that reported a resource count under a reach-shaped name.
+//     Re-homed from `wayfind_effective_width_tracks_the_scoring_clamp`, which compared these same
+//     admitted counts against `wayfind_scope_reach.regions_effective`. That comparator was a SECOND
+//     copy of the literals in a second function, and it is dropped; the literals it duplicated are
+//     what remains, so the test now pins them directly rather than pinning two copies to each other.
+//     One map keeps round-robin from interleaving, so admitted-count is exactly the width.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn reach_distinguishes_a_narrow_wayfind_from_a_broad_one(pool: PgPool) {
-    let fx = fixture(&pool).await;
-    let map_b = add_visible_map(&pool, fx.p1, "wayfind-reach-b", "Wayfind Reach B").await;
-    let map_c = add_visible_map(&pool, fx.p1, "wayfind-reach-c", "Wayfind Reach C").await;
-    let hi = vec768(&[(0, 1.0)]);
-    // Each map gets a region with SEVERAL members, so the resource count stays large while the number
-    // of anchors actually drawn on varies — the exact confusion `scope_size` cannot resolve.
-    seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["a1", "a2", "a3"]).await;
-    seed_region_on(&pool, &fx, map_b, 0.9, &hi, &["b1", "b2", "b3"]).await;
-    seed_region_on(&pool, &fx, map_c, 0.8, &hi, &["c1", "c2", "c3"]).await;
-    let q = query_axis0();
-
-    let narrow = reach_at(&pool, &fx, Some(1), &q).await;
-    let broad = reach_at(&pool, &fx, Some(3), &q).await;
-
-    // Both see the same anchors — visibility is a property of the principal, not of the query width.
-    assert_eq!(
-        narrow.anchors_visible, broad.anchors_visible,
-        "anchors_visible is the principal's reach ceiling and must not move with the width"
-    );
-    assert!(
-        narrow.anchors_visible >= 3,
-        "fixture invalid: need ≥3 visible anchors to have a reach to miss; got {}",
-        narrow.anchors_visible
-    );
-
-    // THE POINT: the narrow pass draws on strictly fewer anchors than the broad one...
-    assert!(
-        narrow.anchors_reached < broad.anchors_reached,
-        "a width-1 wayfind must be legible as reaching fewer anchors than a width-3 one \
-         (narrow={} broad={})",
-        narrow.anchors_reached,
-        broad.anchors_reached
-    );
-    // ...and neither is honest about it through `scope_size`, which is why this signal exists. The
-    // narrow pass still admits a substantial resource count, so a caller reading only the resource
-    // figure would see health in both.
-    assert!(
-        narrow.scope_ids.len() >= 3,
-        "the narrow pass still looks 'big' by resource count — that is the flattering read this \
-         replaces; got {}",
-        narrow.scope_ids.len()
-    );
-    // The narrow pass genuinely missed anchors it could have reached.
-    assert!(
-        narrow.anchors_reached < narrow.anchors_visible,
-        "width 1 over ≥3 visible anchors must leave some unreached (reached={} visible={})",
-        narrow.anchors_reached,
-        narrow.anchors_visible
-    );
-
-    // And the scope the reach describes IS the scope the funnel uses — one home, not two.
-    let ids: HashSet<Uuid> = wayfind_scope_ids(
-        &pool,
-        WayfindScopeQuery {
-            principal: ProfileId::from(fx.p1),
-            lens_id: None,
-            embedding: Some(&q),
-            regions: Some(1),
-            anchor: None,
-        },
-    )
-    .await
-    .expect("wayfind scope")
-    .into_iter()
-    .collect();
-    assert_eq!(
-        ids,
-        narrow.scope_ids.iter().copied().collect::<HashSet<Uuid>>(),
-        "wayfind_scope_ids is a wrapper over wayfind_scope_reach — the id sets must be identical"
-    );
-}
-
-// 10. THE CLAMP PIN. `wayfind_scope_reach` re-derives the effective width from literals that MUST
-//     track `wayfind_region_scores`' own `k`.default_n / `k`.max_n. Nothing structural ties the two,
-//     so this test does: it compares the REPORTED width against the number of regions the scoring
-//     function actually admits, with enough candidates planted that the clamp is what binds. Change
-//     `default_n` or `max_n` in one place and this goes red.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn wayfind_effective_width_tracks_the_scoring_clamp(pool: PgPool) {
+async fn the_region_width_clamp_holds_its_default_floor_and_ceiling(pool: PgPool) {
     let fx = fixture(&pool).await;
     let hi = vec768(&[(0, 1.0)]);
     // 25 candidate regions on ONE map: more than the ceiling, so at every width below it the cut —
-    // not the candidate supply — is what limits selection. One map keeps round-robin from
-    // interleaving, so admitted-count is exactly the width.
+    // not the candidate supply — is what limits selection.
     for i in 0..25 {
         let salience = 1.0 - (f64::from(i) * 0.01);
-        seed_region_on(&pool, &fx, fx.cogmap, salience, &hi, &[&format!("r{i}")]).await;
+        seed_region_on(
+            &pool,
+            &fx,
+            fx.cogmap,
+            salience,
+            None,
+            &hi,
+            &[&format!("r{i}")],
+        )
+        .await;
     }
     let q = query_axis0();
 
-    // (requested, expected effective) — the default (None), the floor, and the ceiling.
+    // (requested, expected effective) — the default (None), the floor, an ordinary width, the ceiling.
     for (requested, expected) in [(None, 3), (Some(0), 1), (Some(2), 2), (Some(999), 20)] {
-        let reach = reach_at(&pool, &fx, requested, &q).await;
-        assert_eq!(
-            reach.regions_effective, expected,
-            "reported effective width for requested={requested:?}"
-        );
-        let admitted = wayfind_region_diagnostics(
-            &pool,
-            WayfindScopeQuery {
-                principal: ProfileId::from(fx.p1),
-                lens_id: None,
-                embedding: Some(&q),
-                regions: requested,
-                anchor: None,
-            },
-        )
-        .await
-        .expect("region diagnostics")
-        .iter()
-        .filter(|r| r.in_top_n && r.home_anchor_id == fx.cogmap)
-        .count();
+        let admitted = diagnostics(&pool, fx.p1, None, &q, requested)
+            .await
+            .iter()
+            .filter(|r| r.in_top_n && r.home_anchor_id == fx.cogmap)
+            .count();
         assert_eq!(
             admitted, expected as usize,
-            "the SCORING function admitted {admitted} regions for requested={requested:?} but the \
-             reported effective width says {expected} — the clamp literals in wayfind_scope_reach \
-             have drifted from wayfind_region_scores' `k` CTE"
+            "requested={requested:?}: the scoring function admitted {admitted} regions where the \
+             `k` CTE's clamp (default_n=3, floor=1, max_n=20) says {expected} — a clamp literal has \
+             moved"
         );
     }
-}
-
-// 11. THE COLD-START ARM. An anchor with no regions contributes its directly-homed resources (§5) and
-//     is therefore REACHED — it just did not get there by winning a region slot. Counting only region
-//     winners would report the fresh, thin anchors as unreached in exactly the case the substrate went
-//     out of its way to reach them, so this pins the arm that is easiest to drop.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_region_less_anchor_reached_by_cold_start_counts_as_reached(pool: PgPool) {
-    let fx = fixture(&pool).await;
-    let thin = add_visible_map(&pool, fx.p1, "wayfind-thin", "Wayfind Thin").await;
-    let hi = vec768(&[(0, 1.0)]);
-    // The fat map has the only regions, and enough of them to take every slot at width 1.
-    seed_region_on(&pool, &fx, fx.cogmap, 1.0, &hi, &["fat1"]).await;
-    // `thin` gets a homed resource but NO region — the cold-start shape.
-    let thin_member = insert_homed_resource(&pool, thin, fx.sys, "thin-doc").await;
-    let q = query_axis0();
-
-    let reach = reach_at(&pool, &fx, Some(1), &q).await;
-    assert!(
-        reach.scope_ids.contains(&thin_member),
-        "cold-start must still admit the region-less anchor's homed resource: {:?}",
-        reach.scope_ids
-    );
-    // Reach EXCEEDS the width: one region slot, but two anchors contributed. This is why the hint may
-    // not attribute a partial reach to the width whenever `reached < visible`.
-    assert!(
-        reach.anchors_reached > reach.regions_effective,
-        "an anchor reached by cold-start does not consume a region slot, so reach can exceed the \
-         width (reached={} width={})",
-        reach.anchors_reached,
-        reach.regions_effective
-    );
-}
-
-// 12. THE COLD-START FLOOR, and why one reach number could not carry the clause. Reproduces the
-//     production shape: one map holds every live region and wins the whole width, while several
-//     region-less anchors are admitted wholesale on every query. `anchors_reached` is then high and
-//     reads as broad reach; `anchors_selected` is 1 and names the monopoly. Measured on prod
-//     2026-08-01: 6 of 10 visible anchors were region-less, so a total monopoly still reported 7 of
-//     10 reached — this test is that case, shrunk.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn selection_names_a_monopoly_that_the_cold_start_floor_hides(pool: PgPool) {
-    let fx = fixture(&pool).await;
-    let hi = vec768(&[(0, 1.0)]);
-    // The fat map holds every live region, so it wins every slot the width offers.
-    for i in 0..6 {
-        let salience = 1.0 - (f64::from(i) * 0.01);
-        seed_region_on(&pool, &fx, fx.cogmap, salience, &hi, &[&format!("fat{i}")]).await;
-    }
-    // Three region-less anchors holding content — the cold-start floor.
-    for n in ["floor-a", "floor-b", "floor-c"] {
-        let thin = add_visible_map(&pool, fx.p1, n, n).await;
-        insert_homed_resource(&pool, thin, fx.sys, &format!("{n}-doc")).await;
-    }
-    let q = query_axis0();
-
-    let reach = reach_at(&pool, &fx, Some(3), &q).await;
-
-    // THE MONOPOLY: one anchor took the entire width.
-    assert_eq!(
-        reach.anchors_selected, 1,
-        "the fat map holds every region, so it must win every slot — selected should be 1, got {}",
-        reach.anchors_selected
-    );
-    // AND THE MASK: reach is materially higher, because the region-less anchors came in regardless.
-    assert!(
-        reach.anchors_reached >= 4,
-        "the three region-less anchors plus the winner must all be 'reached' (got {})",
-        reach.anchors_reached
-    );
-    assert!(
-        reach.anchors_reached > reach.anchors_selected,
-        "this is the whole point: reach ({}) overstates competitive breadth ({}), so a caller \
-         reading reach alone would see health where there is a monopoly",
-        reach.anchors_reached,
-        reach.anchors_selected
-    );
-    // The wholesale count is recoverable, which is what lets a caller discount it.
-    assert!(
-        reach.anchors_reached - reach.anchors_selected >= 3,
-        "reached - selected must expose the unconditional admissions"
-    );
 }

@@ -6,7 +6,8 @@
 //! disagree about what the memory set *is*.
 
 use temper_client::TemperClient;
-use temper_workflow::types::resource::{ResourceDetail, ResourceListParams};
+use temper_core::types::resource_view::ResourceView;
+use temper_workflow::types::resource::ResourceListParams;
 
 use super::render::{statement_of, PrincipleSection};
 use crate::actions::runtime::client_err_to_temper;
@@ -40,7 +41,7 @@ pub(super) const MEMORY_PAGE_SIZE: i64 = 200;
 pub(super) async fn fetch_context_rows(
     client: &TemperClient,
     context_ref: &str,
-) -> Result<Vec<ResourceDetail>> {
+) -> Result<Vec<ResourceView>> {
     let mut rows = Vec::new();
     let mut offset: i64 = 0;
     loop {
@@ -95,7 +96,7 @@ pub(super) async fn fetch_principles(
 
     let mut sections = Vec::with_capacity(listed.rows.len());
     for row in listed.rows {
-        let id = row.row.id.uuid();
+        let id = row.id.uuid();
         let edges = client
             .resources()
             .edges(id)
@@ -116,7 +117,7 @@ pub(super) async fn fetch_principles(
             .and_then(|c| statement_of(&c.markdown));
         sections.push(PrincipleSection {
             id,
-            title: row.row.title,
+            title: row.title,
             statement,
             members,
         });

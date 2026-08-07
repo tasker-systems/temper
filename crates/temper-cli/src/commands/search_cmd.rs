@@ -1,6 +1,6 @@
 //! `temper search` — thin CLI wrapper over actions::search (cloud-only).
 
-use temper_core::types::api::SearchDiagnostics;
+use temper_core::types::api::{ExactHit, SearchScopeInfo, WideHit};
 
 use crate::actions::{runtime, search as search_actions};
 use crate::error::Result;
@@ -10,17 +10,29 @@ use crate::format::OutputFormat;
 ///
 /// Search previously rendered a bare top-level array, which forced every
 /// consumer to special-case it against the object every other command emits.
-/// Rows stay `serde_json::Value` because `inject_ref` has already decorated
-/// them with a `ref` key that is not on the wire type. `diagnostics` carries
-/// the scope-stage signal (issue #360) so an agent parsing stdout JSON can
-/// branch on `reason`/`scope_size` without scraping the stderr hint — an
-/// additive field (search stdout was already a `{results}` object), omitted
-/// entirely when a pre-#360 server did not report it.
+/// `diagnostics` carries the scope-stage signal (issue #360) so an agent
+/// parsing stdout JSON can branch on `reason`/`scope_size` without scraping
+/// the stderr hint — an additive field (search stdout was already a
+/// `{results}` object), omitted entirely when a pre-#360 server did not
+/// report it.
+///
+/// The arms carry their wire types directly rather than `serde_json::Value`.
+/// They held `Value` so a render-time `inject_ref` pass could decorate each row
+/// with a `ref` the wire type did not have; `ResourceView` carries its own
+/// `ref` and `context_ref`, derived server-side by `with_derived_refs`, so that
+/// pass had nothing left to add. Passing the typed hits through is what keeps
+/// the CLI's stdout identical to the API's body instead of a re-serialization
+/// that can drift from it.
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct SearchResultsResponse {
-    pub results: Vec<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostics: Option<SearchDiagnostics>,
+    /// The exact arm's hits — ordered by `fts_norm`.
+    pub exact: Vec<ExactHit>,
+    /// The wide arm's hits, likewise — ordered by `vec_norm`.
+    ///
+    /// Held in a separate key rather than concatenated. A single `results` array would put two
+    /// incommensurable quantities in one order, which is the thing this shape exists to prevent.
+    pub wide: Vec<WideHit>,
+    pub scope: SearchScopeInfo,
 }
 
 /// Run a search. `args` carries the CLI-derived query/filter/graph fields
@@ -34,49 +46,34 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
         embedding: args.embedding.clone(),
         context: args.context,
         cogmap: args.cogmap,
-        wayfind: args.wayfind,
-        lens: args.lens,
-        regions: args.regions,
         doc_type: args.doc_type,
         limit: args.limit,
-        seed_ids: args.seed_ids.clone(),
-        edge_types: args.edge_types.clone(),
-        depth: args.depth,
-        no_graph: args.no_graph,
-        seed_only: args.seed_only,
     })?;
     let response = runtime::with_client(|client| {
         Box::pin(async move { search_actions::search_api(client, params).await })
     })?;
 
-    // Surface the scope-stage hint on stderr (issue #360) so it reaches a human/agent watching the
-    // terminal without polluting the stdout JSON that a harness parses. The machine-readable
-    // diagnostics still ride the stdout envelope below.
-    if let Some(hint) = response
-        .diagnostics
-        .as_ref()
-        .and_then(|d| d.hint.as_deref())
+    // Surface each arm's hint on stderr so it reaches a human watching the terminal without
+    // polluting the stdout JSON a harness parses. Both arms can have something to say at once — a
+    // degraded wide arm beside an exact arm that matched nothing is exactly the case a single
+    // rollup hint used to flatten into one sentence.
+    for hint in [
+        response.exact.hint.as_deref(),
+        response.wide.hint.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
     {
         crate::output::warning(hint);
     }
 
-    // Identity-out: every printed search row carries its decorated `ref`
-    // (read from `resource_id` for search rows).
-    let mut results_value = serde_json::to_value(&response.results)
-        .map_err(|e| crate::error::TemperError::Api(format!("search serialize: {e}")))?;
-    if let Some(arr) = results_value.as_array_mut() {
-        for row in arr.iter_mut() {
-            crate::commands::resource::inject_ref(row);
-        }
-    }
-    let results = match results_value {
-        serde_json::Value::Array(rows) => rows,
-        other => vec![other],
-    };
+    // Identity-out: every printed search row carries its decorated `ref` — on the `resource` it
+    // wraps, filled by the server rather than injected here.
     let rendered = crate::format::render(
         &SearchResultsResponse {
-            results,
-            diagnostics: response.diagnostics,
+            exact: response.exact.hits,
+            wide: response.wide.hits,
+            scope: response.scope,
         },
         fmt,
     )?;

@@ -117,8 +117,8 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
     <table>
       <tbody>
         <tr><td><code>temper resource create --type &lt;t&gt; --title &lt;title&gt;</code></td><td>Create a resource. Add <code>--body @file.md</code> (or pipe markdown via stdin) for content; <code>--context</code>, <code>--goal</code>, <code>--mode</code>, <code>--effort</code> as needed.</td></tr>
-        <tr><td><code>temper resource list --type &lt;t&gt;</code></td><td>List resources of a type (<code>--type</code> is required). Filters: <code>--context</code>, <code>--stage</code>, <code>--goal</code>, <code>--limit</code>; <code>--meta-only</code> / <code>--fields</code> for cheaper reads.</td></tr>
-        <tr><td><code>temper resource show &lt;ref&gt;</code></td><td>Show a resource by ref. Add <code>--edges</code> for its graph edges, or <code>--meta-only</code> for frontmatter without the body.</td></tr>
+        <tr><td><code>temper resource list --type &lt;t&gt;</code></td><td>List resources of a type (<code>--type</code> is required). Filters: <code>--context</code>, <code>--stage</code>, <code>--goal</code>, <code>--limit</code>; <code>--with open-meta</code> / <code>--fields</code> for cheaper reads.</td></tr>
+        <tr><td><code>temper resource show &lt;ref&gt;</code></td><td>Show a resource by ref. Add <code>--edges</code> for its graph edges, or <code>--without body</code> for frontmatter without the body.</td></tr>
         <tr><td><code>temper resource update &lt;ref&gt; --title &lt;t&gt;</code></td><td>Update the title. (Body: <code>--body @file.md</code> or pipe markdown via stdin.)</td></tr>
         <tr><td><code>temper resource update &lt;ref&gt; --context-to &lt;ctx&gt;</code></td><td>Move the resource to a different context.</td></tr>
         <tr><td><code>temper resource update &lt;ref&gt; --stage &lt;s&gt;</code></td><td>Task stage: <code>backlog</code>, <code>in-progress</code>, <code>done</code>, <code>cancelled</code>.</td></tr>

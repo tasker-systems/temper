@@ -1,201 +1,28 @@
 //! Resource API types — shared between temper-api and temper-client.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::managed_meta::ManagedMeta;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::ResourceId;
+use temper_core::types::resource_view::ResourceView;
 
-/// Row type for resource listings — includes joined display fields
-/// and managed_meta projections from `vault_resources_browse` view.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct ResourceRow {
-    pub id: ResourceId,
-    /// Home context — `Some` for a context-homed resource, `None` when the
-    /// resource is homed in a cognitive map (Surface B). Mutually exclusive
-    /// with the `cogmap_*` fields below.
-    pub kb_context_id: Option<ContextId>,
-    pub origin_uri: String,
-    pub title: String,
-    pub originator_profile_id: ProfileId,
-    pub owner_profile_id: ProfileId,
-    pub is_active: bool,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-    // Joined display fields — `context_*` present for a context home,
-    // `cogmap_*` for a cogmap home.
-    pub context_name: Option<String>,
-    pub doc_type_name: String,
-    pub owner_handle: String,
-    /// Slug of the home context (the natural-key half of `@owner/slug`).
-    /// `None` for a cogmap-homed resource.
-    pub context_slug: Option<String>,
-    /// Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
-    /// Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
-    /// `None` for a cogmap-homed resource.
-    pub context_owner_ref: Option<String>,
-    /// Set when the resource is homed in a cognitive map (Surface B).
-    /// Mutually exclusive with the `context_*` fields.
-    pub cogmap_id: Option<Uuid>,
-    /// Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.
-    pub cogmap_name: Option<String>,
-    // Managed meta projections
-    pub stage: Option<String>,
-    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
-    pub seq: Option<i64>,
-    pub mode: Option<String>,
-    pub effort: Option<String>,
-    /// SHA-256 hash of the resource body content, from `kb_resource_manifests`.
-    /// `None` when no manifest row exists (resource created via POST without a
-    /// body trio, or the manifest join returned NULL).
-    pub body_hash: Option<String>,
-    /// Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only
-    /// by the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete`
-    /// for every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not
-    /// yet been finalized (remaining blocks not landed), which is **excluded from list and search** and
-    /// readable only by `show`.
-    ///
-    /// Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the
-    /// vectors ready?* This one asks *are the bytes all here?*
-    ///
-    /// `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
-    /// always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
-    pub ingest_state: Option<IngestState>,
-    /// What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte**
-    /// from the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries
-    /// its source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform:
-    /// CRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only
-    /// partial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.
-    ///
-    /// `Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`),
-    /// so a current server always sends it; `None` means the server predates W2 PR 3.
-    pub body_storage: Option<BodyStorage>,
-}
+/// The two body-state enums moved to [`temper_core::types::resource`] — both are fields of
+/// `ResourceView`, which temper-substrate reads back, and substrate sits *below* this crate.
+/// Re-exported here so every `temper_workflow::types::resource::{BodyStorage, IngestState}`
+/// call site resolves unchanged.
+pub use temper_core::types::resource::{BodyStorage, IngestState};
 
-/// What guarantee a resource's body carries on read — a **surfaced projection** of coverage
-/// (`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.
-/// Orthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have
-/// read back exactly, or only approximately?*
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum BodyStorage {
-    /// Every live block carries its raw source bytes; the body reads back byte-for-byte.
-    Verbatim,
-    /// The body is reconstructed from chunks (lossy) — a pre-PR-3 resource, or one with only partial
-    /// verbatim coverage.
-    Derived,
-}
-
-impl BodyStorage {
-    /// The canonical wire/DB string (matches the `ck_kb_resources_body_storage` CHECK values).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            BodyStorage::Verbatim => "verbatim",
-            BodyStorage::Derived => "derived",
-        }
-    }
-
-    /// Parse the DB/wire string. The `ck_kb_resources_body_storage` CHECK constrains the column to
-    /// these two values, so an unrecognized string is a schema/version violation, not ordinary input —
-    /// returned as `None` for the caller to handle rather than silently coerced.
-    pub fn from_wire(s: &str) -> Option<Self> {
-        match s {
-            "verbatim" => Some(BodyStorage::Verbatim),
-            "derived" => Some(BodyStorage::Derived),
-            _ => None,
-        }
-    }
-}
-
-/// A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
-/// (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
-/// The ledger is the state machine; this is its materialized current-state view, kept as a column so
-/// list/search can filter it with a cheap read instead of scanning events.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum IngestState {
-    /// A segmented ingest has begun but not been finalized — the body is incomplete. Hidden from
-    /// list/search, still resumable and readable via `show`.
-    InProgress,
-    /// The whole body is present: every atomic create, and every finalized segmented ingest.
-    Complete,
-}
-
-impl IngestState {
-    /// The canonical wire/DB string (matches the `ck_kb_resources_ingest_state` CHECK values).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            IngestState::InProgress => "in_progress",
-            IngestState::Complete => "complete",
-        }
-    }
-
-    /// Parse the DB/wire string. The `ck_kb_resources_ingest_state` CHECK constrains the column to
-    /// these two values, so an unrecognized string is a schema/version violation, not ordinary input —
-    /// returned as `None` for the caller to handle rather than silently coerced.
-    pub fn from_wire(s: &str) -> Option<Self> {
-        match s {
-            "in_progress" => Some(IngestState::InProgress),
-            "complete" => Some(IngestState::Complete),
-            _ => None,
-        }
-    }
-}
-
-impl ResourceRow {
-    /// The display name of this resource's home — its context name, or its cognitive-map
-    /// name when cogmap-homed. `None` only if neither is set (should not occur). The single
-    /// accessor for the `context_* | cogmap_*` mutual exclusion: surfaces apply their own
-    /// placeholder for the `None` case rather than re-deriving the fallback chain.
-    pub fn home_display(&self) -> Option<&str> {
-        self.context_name.as_deref().or(self.cogmap_name.as_deref())
-    }
-}
-
-/// The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.
-///
-/// `show` used to return a bare `ResourceRow`, which carries only the flat managed
-/// projections (`stage`/`seq`/`mode`/`effort`) — so the "full" view silently omitted
-/// both `managed_meta` and `open_meta`, and a script reading `open_meta` from it got
-/// `None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for
-/// the tiers.
-///
-/// The two meta fields carry serde attributes identical to
-/// [`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only`
-/// projection is a literal strict subset of this shape.
-///
-/// No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the
-/// `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The
-/// SvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is
-/// a structural superset of it, so the extra keys are simply ignored there.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-pub struct ResourceDetail {
-    #[serde(flatten)]
-    pub row: ResourceRow,
-    /// Typed managed (`temper-*`) frontmatter. `None` only if the manifest row predates
-    /// meta population.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_meta: Option<ManagedMeta>,
-    /// Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
-    /// `None` only if the manifest row predates meta population.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_meta: Option<serde_json::Value>,
-}
+// `ResourceRow` and `ResourceDetail` are GONE, and with them the two `From<ResourceView>`
+// narrowings that kept them reachable. Every read and write surface — `/api/resources`,
+// `/api/ingest`, `GET /meta`, both search arms, the MCP tools and the CLI — answers in
+// [`ResourceView`]. What held the pair up last was temper-mcp's `ResourceRow`-shaped
+// `EnrichedResource`; that shape is the view now, so nothing narrows and nothing widens.
+//
+// The four hoisted workflow columns (`stage`/`seq`/`mode`/`effort`) did not go away with the row:
+// they live in [`ManagedMeta`] under their canonical `temper-*` names, which is what made dropping
+// them lossless (`ResourceView::no_workflow_field_is_hoisted`).
 
 /// Sort field for resource listing.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -285,11 +112,20 @@ pub struct ResourceListParams {
     pub limit: Option<i64>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
-    /// When true, the list endpoint returns `ResourceMetaListResponse`
-    /// (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
-    /// `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
+    /// Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of
+    /// [`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,
+    /// `edges`). `None`/empty asks for none, which is the default list row.
+    ///
+    /// Replaces `meta_only`, which named a *response type* rather than a part: it selected a
+    /// second envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is
+    /// one response shape now, so what the caller varies is which parts of it are filled.
+    ///
+    /// A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —
+    /// the list endpoint is a GET whose params ride the query string, and serde_urlencoded does
+    /// not encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name
+    /// naming the whole valid set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meta_only: Option<bool>,
+    pub sections: Option<String>,
 }
 
 /// Aggregated doc-type facet counts for the current filter set.
@@ -303,15 +139,71 @@ pub struct ResourceFacets {
 }
 
 /// Paginated response for resource list endpoints, with doc-type facets.
+///
+/// The envelope carries its own paging state, so a caller can tell a whole set from a
+/// page of one without knowing what it asked for. `returned` and `truncated` used to be
+/// injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP
+/// and raw-HTTP callers never received them — while the shipped agent skill instructs
+/// every agent that "every list response carries `total`, `returned`, and `truncated`".
+/// Same defect class as the `ref` the CLI was likewise the only surface to emit.
+///
+/// Build through [`ResourceListResponse::new`], which derives `returned` and `truncated`
+/// from the page rather than trusting a caller to keep them consistent with `rows`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListResponse {
-    pub rows: Vec<ResourceRow>,
+    /// One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row
+    /// list and a `show` of that resource serialize identically when neither asks for the body.
+    /// There is no second list envelope: `?sections=` varies which parts of this shape are
+    /// filled, never which type comes back.
+    pub rows: Vec<ResourceView>,
+    /// The FILTERED match count — every row the filters admit, before `limit`/`offset`.
     pub total: i64,
     pub facets: ResourceFacets,
+    /// This page's row count. Always `rows.len()`; carried explicitly so the count
+    /// survives a projection that drops or summarizes the rows.
+    pub returned: i64,
+    /// Are there matching rows beyond this page? `offset + returned < total`.
+    ///
+    /// Deliberately not `total > returned`, which is true on the last page of a walk
+    /// (total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is
+    /// what tells a caller it may not conclude a resource is absent from what it sees.
+    pub truncated: bool,
+    /// The effective page size the server applied, or `None` for an uncapped page
+    /// (`--all`). An echo of what the caller asked for, not a clamp — no server-side
+    /// clamp exists.
+    pub limit: Option<i64>,
+    /// The offset this page starts at; `0` when the caller sent none.
+    pub offset: i64,
+}
+
+impl ResourceListResponse {
+    /// Assemble a page and derive its paging state from it.
+    ///
+    /// The one place `returned` and `truncated` are computed. `returned` comes from the
+    /// page itself rather than from a parameter, so it cannot disagree with `rows`.
+    #[must_use]
+    pub fn new(
+        rows: Vec<ResourceView>,
+        total: i64,
+        facets: ResourceFacets,
+        limit: Option<i64>,
+        offset: i64,
+    ) -> Self {
+        let returned = rows.len() as i64;
+        Self {
+            rows,
+            total,
+            facets,
+            returned,
+            truncated: offset + returned < total,
+            limit,
+            offset,
+        }
+    }
 }
 
 /// Request body for creating a resource.
@@ -514,72 +406,6 @@ pub struct DeleteResponse {
 }
 
 #[cfg(test)]
-mod resource_detail_tests {
-    use super::*;
-
-    fn sample_resource_row() -> ResourceRow {
-        ResourceRow {
-            id: ResourceId::from(Uuid::nil()),
-            kb_context_id: None,
-            origin_uri: String::new(),
-            title: "A Node".to_string(),
-            originator_profile_id: ProfileId::from(Uuid::nil()),
-            owner_profile_id: ProfileId::from(Uuid::nil()),
-            is_active: true,
-            created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            context_name: None,
-            doc_type_name: "concept".to_string(),
-            owner_handle: "someone".to_string(),
-            context_slug: None,
-            context_owner_ref: None,
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
-            body_hash: None,
-            ingest_state: Some(IngestState::Complete),
-            body_storage: Some(BodyStorage::Derived),
-        }
-    }
-
-    #[test]
-    fn resource_detail_flattens_row_and_carries_both_meta_tiers() {
-        let detail = ResourceDetail {
-            row: sample_resource_row(),
-            managed_meta: Some(ManagedMeta {
-                mode: Some("build".to_string()),
-                ..ManagedMeta::default()
-            }),
-            open_meta: Some(serde_json::json!({ "custom": "value" })),
-        };
-
-        let v = serde_json::to_value(&detail).expect("serialize");
-
-        // ResourceRow's fields are flattened to the top level, not nested under `row`.
-        assert!(v.get("row").is_none(), "row must be flattened: {v}");
-        assert!(v.get("id").is_some(), "flattened id: {v}");
-        assert_eq!(v["title"], "A Node");
-        assert_eq!(v["managed_meta"]["temper-mode"], "build");
-        assert_eq!(v["open_meta"]["custom"], "value");
-    }
-
-    #[test]
-    fn resource_detail_omits_absent_meta_tiers() {
-        let detail = ResourceDetail {
-            row: sample_resource_row(),
-            managed_meta: None,
-            open_meta: None,
-        };
-        let v = serde_json::to_value(&detail).expect("serialize");
-        assert!(v.get("managed_meta").is_none(), "{v}");
-        assert!(v.get("open_meta").is_none(), "{v}");
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -723,5 +549,89 @@ mod tests {
         assert!(!serialized.contains("\"context_to\""));
         assert!(!serialized.contains("\"content_block\""));
         assert!(serialized.contains("\"managed_meta\""));
+    }
+}
+
+/// The list envelope's paging state — the three quantities an agent is instructed to
+/// read (`total`, `returned`, `truncated`) and the two that say what page it is
+/// looking at (`limit`, `offset`).
+#[cfg(test)]
+mod list_paging_tests {
+    use super::*;
+    use chrono::{DateTime, Utc};
+    use temper_core::types::ids::ProfileId;
+
+    /// A page of `n` rows. Only the count matters here — `returned` is `rows.len()`
+    /// and nothing in the derivation reads a row's fields.
+    fn page_of(n: usize) -> Vec<ResourceView> {
+        let view = ResourceView {
+            id: ResourceId::from(Uuid::nil()),
+            r#ref: String::new(),
+            title: "A Node".to_string(),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: None,
+            context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "concept".to_string(),
+            owner_handle: "someone".to_string(),
+            owner_profile_id: ProfileId::from(Uuid::nil()),
+            originator_profile_id: ProfileId::from(Uuid::nil()),
+            is_active: true,
+            created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            body_hash: None,
+            ingest_state: Some(IngestState::Complete),
+            body_storage: Some(BodyStorage::Derived),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        };
+        vec![view; n]
+    }
+
+    /// The default page of a large set hides rows, and says so.
+    #[test]
+    fn truncated_is_true_when_a_page_hides_rows() {
+        let page =
+            ResourceListResponse::new(page_of(20), 100, ResourceFacets::default(), Some(20), 0);
+
+        assert_eq!(page.returned, 20, "`returned` is this page's row count");
+        assert!(
+            page.truncated,
+            "80 of 100 matching rows are beyond this page"
+        );
+    }
+
+    /// The off-by-one case: the last page of a walk shows the tail of the set, so
+    /// nothing is hidden even though `total` still exceeds `returned`. This is what
+    /// makes the derivation `offset + returned < total` rather than `total > returned`.
+    #[test]
+    fn truncated_is_false_on_the_last_page() {
+        let page =
+            ResourceListResponse::new(page_of(5), 25, ResourceFacets::default(), Some(20), 20);
+
+        assert_eq!(page.offset, 20, "the page starts where the caller asked");
+        assert!(
+            !page.truncated,
+            "rows 21-25 of 25 are the tail of the set — nothing is beyond this page"
+        );
+    }
+
+    /// `--all` sends no limit and receives the whole filtered set, so there is nothing
+    /// to warn about.
+    #[test]
+    fn all_returns_untruncated() {
+        let page = ResourceListResponse::new(page_of(7), 7, ResourceFacets::default(), None, 0);
+
+        assert_eq!(
+            page.limit, None,
+            "`--all` is an absent limit, not a large one"
+        );
+        assert_eq!(page.returned, page.total, "the whole set came back");
+        assert!(!page.truncated);
     }
 }

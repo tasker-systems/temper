@@ -14,20 +14,20 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Paginated response for the `?meta_only=true` list mode.  Mirror of [`crate::types::resource::ResourceListResponse`] with the row type swapped to [`crate::types::resource::ResourceDetail`] — the full row (title, doc_type, context, owner, the stage/seq/mode/effort projections) plus both `managed_meta` and `open_meta` tiers. This is the list analogue of what `--meta-only` gives on a single `show`: everything the default list row carries **and** both meta tiers, per item — the whole view minus each resource's body. (The default list row, [`crate::types::resource::ResourceRow`], carries neither meta tier.) Returned by `GET /api/resources?meta_only=true`. Facets and total are computed identically to the default list response — projection-independent.  No `ts_rs::TS` derive: `ResourceDetail` cannot codegen (its `#[serde(flatten)]` row is unsupported by ts-rs), so this container cannot either. The SvelteKit UI types the list endpoint as `ResourceListResponse` regardless; this shape is a structural superset, so the extra keys are simply ignored there.
-  class ResourceMetaListResponse < ApiModelBase
-    attr_accessor :facets
+  # The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they share.  There is no field anywhere in this shape that ranks one arm against the other, and no single ordered list into which they could be merged. That is the point — see decision `019fd25a-ef4c-7473-b72e-265a7d36dd65`.  Diagnostics live here in the body. They previously rode an additive `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the body cannot see.
+  class SearchResponse < ApiModelBase
+    attr_accessor :exact
 
-    attr_accessor :rows
+    attr_accessor :scope
 
-    attr_accessor :total
+    attr_accessor :wide
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'facets' => :'facets',
-        :'rows' => :'rows',
-        :'total' => :'total'
+        :'exact' => :'exact',
+        :'scope' => :'scope',
+        :'wide' => :'wide'
       }
     end
 
@@ -44,9 +44,9 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'facets' => :'ResourceFacets',
-        :'rows' => :'Array<ResourceDetail>',
-        :'total' => :'Integer'
+        :'exact' => :'ExactArm',
+        :'scope' => :'SearchScopeInfo',
+        :'wide' => :'WideArm'
       }
     end
 
@@ -60,36 +60,34 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ResourceMetaListResponse` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::SearchResponse` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ResourceMetaListResponse`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::SearchResponse`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'facets')
-        self.facets = attributes[:'facets']
+      if attributes.key?(:'exact')
+        self.exact = attributes[:'exact']
       else
-        self.facets = nil
+        self.exact = nil
       end
 
-      if attributes.key?(:'rows')
-        if (value = attributes[:'rows']).is_a?(Array)
-          self.rows = value
-        end
+      if attributes.key?(:'scope')
+        self.scope = attributes[:'scope']
       else
-        self.rows = nil
+        self.scope = nil
       end
 
-      if attributes.key?(:'total')
-        self.total = attributes[:'total']
+      if attributes.key?(:'wide')
+        self.wide = attributes[:'wide']
       else
-        self.total = nil
+        self.wide = nil
       end
     end
 
@@ -98,16 +96,16 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @facets.nil?
-        invalid_properties.push('invalid value for "facets", facets cannot be nil.')
+      if @exact.nil?
+        invalid_properties.push('invalid value for "exact", exact cannot be nil.')
       end
 
-      if @rows.nil?
-        invalid_properties.push('invalid value for "rows", rows cannot be nil.')
+      if @scope.nil?
+        invalid_properties.push('invalid value for "scope", scope cannot be nil.')
       end
 
-      if @total.nil?
-        invalid_properties.push('invalid value for "total", total cannot be nil.')
+      if @wide.nil?
+        invalid_properties.push('invalid value for "wide", wide cannot be nil.')
       end
 
       invalid_properties
@@ -117,40 +115,40 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @facets.nil?
-      return false if @rows.nil?
-      return false if @total.nil?
+      return false if @exact.nil?
+      return false if @scope.nil?
+      return false if @wide.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] facets Value to be assigned
-    def facets=(facets)
-      if facets.nil?
-        fail ArgumentError, 'facets cannot be nil'
+    # @param [Object] exact Value to be assigned
+    def exact=(exact)
+      if exact.nil?
+        fail ArgumentError, 'exact cannot be nil'
       end
 
-      @facets = facets
+      @exact = exact
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] rows Value to be assigned
-    def rows=(rows)
-      if rows.nil?
-        fail ArgumentError, 'rows cannot be nil'
+    # @param [Object] scope Value to be assigned
+    def scope=(scope)
+      if scope.nil?
+        fail ArgumentError, 'scope cannot be nil'
       end
 
-      @rows = rows
+      @scope = scope
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] total Value to be assigned
-    def total=(total)
-      if total.nil?
-        fail ArgumentError, 'total cannot be nil'
+    # @param [Object] wide Value to be assigned
+    def wide=(wide)
+      if wide.nil?
+        fail ArgumentError, 'wide cannot be nil'
       end
 
-      @total = total
+      @wide = wide
     end
 
     # Checks equality by comparing each attribute.
@@ -158,9 +156,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          facets == o.facets &&
-          rows == o.rows &&
-          total == o.total
+          exact == o.exact &&
+          scope == o.scope &&
+          wide == o.wide
     end
 
     # @see the `==` method
@@ -172,7 +170,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [facets, rows, total].hash
+      [exact, scope, wide].hash
     end
 
     # Builds the object from hash

@@ -106,7 +106,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         .expect("resource get after meta update failed");
 
     assert_eq!(
-        fetched.row.title, "Meta Test Doc",
+        fetched.title, "Meta Test Doc",
         "the meta path is Property-only and must not change identity"
     );
 }
@@ -519,10 +519,11 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
     // on `open_meta`. (managed_meta is present but the seeded `temper-title` is
     // a §7-Die key — F1 — so it is NOT carried in the meta tier; the title
     // survives on `kb_resources.title`, asserted by the cascade tests.)
-    assert!(
-        meta.managed_meta.is_some(),
-        "get_meta must return a managed_meta tier (even if empty post-§7)",
-    );
+    // `managed_meta` is not an `Option` on `ResourceView` — it is always present, which is
+    // what makes dropping the hoisted stage/mode/effort/seq columns lossless. What used to be
+    // "the tier is present" is now a property of the type, so the reachable claim is that the
+    // endpoint answers in the shape at all; the open tier below is what still needs asserting.
+    let _ = &meta.managed_meta;
     assert_eq!(
         meta.open_meta.as_ref().and_then(|v| v.get("tags")),
         seeded_open.get("tags"),

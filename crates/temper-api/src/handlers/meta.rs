@@ -9,9 +9,9 @@ use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, UpdateResource};
-use temper_workflow::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
-use temper_workflow::types::resource::ResourceRow;
+use temper_workflow::types::managed_meta::MetaUpdatePayload;
 
 #[utoipa::path(
     get,
@@ -20,7 +20,7 @@ use temper_workflow::types::resource::ResourceRow;
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Current managed/open meta for the resource", body = ResourceMetaResponse),
+        (status = 200, description = "The resource with both metadata tiers filled", body = ResourceView),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
     )
@@ -29,7 +29,7 @@ pub async fn get_meta(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
-) -> ApiResult<Json<ResourceMetaResponse>> {
+) -> ApiResult<Json<ResourceView>> {
     temper_services::backend::substrate_read::get_meta_select(
         &state.pool,
         ProfileId::from(auth.0.profile().id),
@@ -47,7 +47,7 @@ pub async fn get_meta(
     security(("bearer_auth" = [])),
     request_body = MetaUpdatePayload,
     responses(
-        (status = 200, description = "Updated resource", body = ResourceRow),
+        (status = 200, description = "Updated resource", body = ResourceView),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
@@ -59,7 +59,7 @@ pub async fn update_meta(
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<MetaUpdatePayload>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<Json<ResourceView>> {
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
@@ -83,5 +83,7 @@ pub async fn update_meta(
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
+    // The trait's `ResourceView` IS this endpoint's response — no narrowing, and the same shape
+    // `GET /api/resources/{id}/meta` above answers in.
     Ok(Json(out.value))
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_vector_candidates` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260801000010:186-189]`, while `wayfind_region_scores` rescales *the\nsame* `<=>` distance as `1 - d` into `[-1,1]` `[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
+  "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`\nrescales *the same* `<=>` distance as `1 - d` into `[-1,1]`\n`[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
   "oneOf": [
     {
       "description": "`[0,1]`, bounded by the expression's own arithmetic.",

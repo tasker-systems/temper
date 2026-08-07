@@ -290,50 +290,20 @@ pub enum Commands {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
-        /// Scope search to one or more cognitive maps (UUID or decorated ref). Repeatable —
-        /// `--cogmap A --cogmap B` searches the union of both maps. Mutually exclusive with --context.
+        /// Scope search to a cognitive map (UUID or decorated ref). Mutually exclusive with
+        /// --context. Search scopes to ONE anchor; asking several maps at once is a composition.
         #[arg(long = "cogmap")]
         cogmap: Vec<String>,
-        /// Wayfind: lens-driven region-salience search across your visible maps. Mutually exclusive with --context / --cogmap.
-        #[arg(long)]
-        wayfind: bool,
-        /// Lens ref (UUID or decorated) overriding wayfind region selection (requires --wayfind).
-        #[arg(long)]
-        lens: Option<String>,
-        /// Top-N regions to scope into for --wayfind — this also bounds how many maps you reach.
-        ///
-        /// Region selection admits at most one region per map per round, so a width of N can reach
-        /// at most N of your visible maps. The default and the ceiling are server-side; the width
-        /// actually applied comes back as `diagnostics.regions_effective`, alongside
-        /// `anchors_reached` / `anchors_visible`. This is a scope-width knob, not an output rollup —
-        /// results are resources, and no response carries a region list.
-        #[arg(long)]
-        regions: Option<i64>,
         /// Filter by document type
         #[arg(long)]
         doc_type: Option<String>,
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
-        /// Use text-only search (no local embedding needed)
+        /// Use text-only search (no local embedding needed). The wide arm has no signal to run
+        /// on without an embedding and will say so rather than returning an empty list.
         #[arg(long)]
         text_only: bool,
-        /// Explicit seed resource IDs for graph expansion (repeatable)
-        #[arg(long = "seed")]
-        seed_ids: Vec<uuid::Uuid>,
-        /// Edge type filter for graph expansion (repeatable)
-        #[arg(long = "edge-type")]
-        edge_types: Vec<String>,
-        /// Max hops for graph traversal (default 2, max 10)
-        #[arg(long)]
-        depth: Option<i32>,
-        /// Disable graph expansion (enabled by default)
-        #[arg(long)]
-        no_graph: bool,
-        /// Restrict graph expansion to your explicit --seed ids, skipping the automatic top-N seed
-        /// union (no effect unless at least one --seed is given)
-        #[arg(long = "seed-only")]
-        seed_only: bool,
     },
 
     /// Assert or mutate a relationship between resources (writes go through the cloud API)
@@ -534,18 +504,28 @@ pub enum ResourceAction {
         /// exclusive with --context.
         #[arg(long = "cogmap")]
         cogmap: Vec<String>,
-        /// Maximum results (default 20; 50 with --meta-only). The response always
-        /// carries `total` (the full match count) and `truncated`, so a capped
-        /// page is self-evident. Conflicts with --all.
+        /// Page size (default 20). A DEFAULT, not a cap: whatever you pass is honoured
+        /// unchanged, and there is no server-side clamp. The response always carries
+        /// `total` (the full match count), `returned`, and `truncated`, so a capped page
+        /// is self-evident. Conflicts with --all.
         #[arg(long, conflicts_with = "all")]
         limit: Option<usize>,
         /// Return ALL matching results (no page cap). Reach for this before
         /// asserting a set is complete or a resource is absent. Conflicts with --limit.
         #[arg(long)]
         all: bool,
-        /// Skip the first N matching results (pagination).
-        #[arg(long)]
+        /// Skip the first N matching results (pagination). Conflicts with --page,
+        /// which is the same axis counted in pages instead of rows.
+        #[arg(long, conflicts_with = "page")]
         offset: Option<usize>,
+        /// Page number, 1-indexed — `--page 1` is the first page. Resolves to
+        /// `(page - 1) * <effective limit>`, so it counts in whatever `--limit` is in
+        /// force (`--page 3 --limit 5` starts at row 10, not 40). Conflicts with
+        /// --offset (the same axis in rows) and with --all (an uncapped page has no
+        /// page number).
+        #[arg(long, conflicts_with_all = ["offset", "all"],
+              value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+        page: Option<usize>,
         /// Sort as `<field>[:asc|desc]`. Fields: updated, created, title, stage,
         /// seq, context, doctype. Direction defaults per field (time/seq → desc,
         /// text → asc). Omit for the default `updated:desc`.
@@ -564,12 +544,22 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Full per-row view minus the body: each row carries both the
-        /// managed and open meta tiers on top of the usual row fields
-        /// (`Vec<ResourceDetail>`, vs the default `Vec<ResourceRow>` which
-        /// carries neither tier). Hits GET /api/resources?meta_only=true.
-        #[arg(long)]
-        meta_only: bool,
+        /// Add a section to every row (comma-separated or repeated). `--with open-meta`
+        /// fills the open metadata tier — the same envelope and the same row type as the
+        /// default list, since asking for a section adds a part to the one shape rather
+        /// than selecting a second one. The managed tier is always present either way.
+        /// `body` is deliberately not offered here: a page of reconstructed bodies is an
+        /// unbounded payload behind a flag that reads as cheap — use `show` per row.
+        #[arg(long = "with", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::list_section_parser())]
+        with: Vec<String>,
+        /// Drop a section from every row (comma-separated or repeated). `list` asks for
+        /// none by default, so this is only meaningful against a `--with` on the same
+        /// invocation — and naming one section in both is a hard error, not a precedence
+        /// rule.
+        #[arg(long = "without", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::list_section_parser())]
+        without: Vec<String>,
         /// Subselect top-level response keys on each row (anchor key
         /// always preserved). Use jq for nested projection.
         #[arg(long, value_delimiter = ',')]
@@ -592,18 +582,26 @@ pub enum ResourceAction {
         /// Show the resource's derived_from lineage — what it derives from
         /// (ancestors) and what derives from it (descendants), access-gated.
         /// Calls GET /lineage.
-        #[arg(long, conflicts_with = "meta_only")]
+        #[arg(long)]
         lineage: bool,
         /// Show itemized per-block provenance — the sources each of the
         /// resource's content blocks was distilled from. Calls GET /provenance.
-        #[arg(long, conflicts_with = "meta_only")]
+        #[arg(long)]
         provenance: bool,
-        /// Show everything except the body: the full resource view
-        /// (title, type, context, owner, and both the managed and open
-        /// meta tiers) minus the reconstructed markdown body.
-        #[arg(long, conflicts_with = "edges")]
-        meta_only: bool,
-        /// Subselect top-level response keys (resource_id always
+        /// Add a section (comma-separated or repeated). `show` already carries `body` and
+        /// `open-meta`; `--with edges` folds this resource's graph edges into the same
+        /// document (the long form of `--edges`).
+        #[arg(long = "with", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::show_section_parser())]
+        with: Vec<String>,
+        /// Drop a section (comma-separated or repeated). `--without body` is the cheap
+        /// orientation read: everything `show` returns except the reconstructed markdown,
+        /// and it composes freely with `--with edges`. Naming one section in both `--with`
+        /// and `--without` is a hard error, not a precedence rule.
+        #[arg(long = "without", value_delimiter = ',',
+              value_parser = crate::commands::resource_sections::show_section_parser())]
+        without: Vec<String>,
+        /// Subselect top-level response keys (the anchor key `id` is always
         /// preserved). Use jq for nested projection.
         #[arg(long, value_delimiter = ',')]
         fields: Vec<String>,
@@ -1993,41 +1991,151 @@ pub enum EdgeAction {
 }
 
 #[cfg(test)]
-mod meta_only_flag_tests {
+mod section_flag_tests {
     use super::*;
     use clap::CommandFactory;
 
+    const REF: &str = "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+
     #[test]
-    fn show_accepts_meta_only_and_fields() {
+    fn show_accepts_without_body_and_fields() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
             "temper",
             "resource",
             "show",
-            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
-            "--meta-only",
+            REF,
+            "--without",
+            "body",
             "--fields",
             "managed_meta,open_meta",
         ]);
         assert!(
             m.is_ok(),
-            "show with --meta-only and --fields failed to parse: {:?}",
+            "show with --without body and --fields failed to parse: {:?}",
             m.err()
         );
     }
 
+    /// **The combination the old design forbade.** `--meta-only` carried
+    /// `conflicts_with = "edges"`, so "everything but the body, plus edges" could not be
+    /// typed at all. Nothing conflicts now, and this is the parse-level half of the witness
+    /// (`resource_sections::show_with_edges_without_body_is_accepted` is the resolution half).
     #[test]
-    fn show_meta_only_conflicts_with_edges() {
+    fn show_with_edges_without_body_parses() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
             "temper",
             "resource",
             "show",
-            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
-            "--meta-only",
+            REF,
+            "--with",
+            "edges",
+            "--without",
+            "body",
+        ]);
+        assert!(
+            m.is_ok(),
+            "--with edges --without body must parse: {:?}",
+            m.err()
+        );
+    }
+
+    /// `--edges` survives as the short spelling of `--with edges` and no longer conflicts
+    /// with dropping the body — the one conflict edge this vocabulary retired.
+    #[test]
+    fn show_edges_no_longer_conflicts_with_dropping_the_body() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "show",
+            REF,
+            "--without",
+            "body",
             "--edges",
         ]);
-        assert!(m.is_err(), "--meta-only and --edges must conflict");
+        assert!(
+            m.is_ok(),
+            "--edges beside --without body must parse: {:?}",
+            m.err()
+        );
+    }
+
+    /// `--lineage` and `--provenance` carried `conflicts_with = "meta_only"` for the same
+    /// reason `--edges` did, and lost it with the flag.
+    #[test]
+    fn show_lineage_and_provenance_compose_with_dropping_the_body() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "show",
+            REF,
+            "--without",
+            "body",
+            "--lineage",
+            "--provenance",
+        ]);
+        assert!(m.is_ok(), "no conflict edge survives: {:?}", m.err());
+    }
+
+    /// `--page` and `--offset` are the same axis in two units, so naming both is refused
+    /// rather than resolved: there is no honest precedence between "start at row 40" and
+    /// "start at page 3", and silently taking one would hand back a page the caller did not
+    /// ask for and has no way to notice.
+    #[test]
+    fn page_and_offset_together_are_rejected() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--page", "3", "--offset", "40",
+        ]);
+        assert!(m.is_err(), "--page and --offset must conflict");
+    }
+
+    /// `--all` is an uncapped page, so it has no page number to count in.
+    #[test]
+    fn page_and_all_together_are_rejected() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--page", "2", "--all",
+        ]);
+        assert!(m.is_err(), "--page and --all must conflict");
+    }
+
+    /// Pages are 1-indexed and `--page 0` is refused at parse time. That refusal is what
+    /// makes `resolve_list_offset`'s `page - 1` total.
+    #[test]
+    fn page_zero_is_rejected() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--page", "0",
+        ]);
+        assert!(m.is_err(), "--page is 1-indexed; 0 must not parse");
+
+        let cmd = Cli::command();
+        assert!(
+            cmd.try_get_matches_from([
+                "temper", "resource", "list", "--type", "task", "--page", "1",
+            ])
+            .is_ok(),
+            "--page 1 is the first page"
+        );
+    }
+
+    /// `list --with body` is refused at parse time — `list`'s value set omits it.
+    #[test]
+    fn list_never_offers_body() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper", "resource", "list", "--type", "task", "--with", "body",
+        ]);
+        let err = m.expect_err("`list --with body` must not parse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("open-meta"),
+            "the refusal names what list DOES offer: {msg}"
+        );
     }
 
     #[test]
@@ -2260,7 +2368,7 @@ mod meta_only_flag_tests {
     }
 
     #[test]
-    fn list_accepts_meta_only_and_fields() {
+    fn list_accepts_with_open_meta_and_fields() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
             "temper",
@@ -2268,13 +2376,14 @@ mod meta_only_flag_tests {
             "list",
             "--type",
             "task",
-            "--meta-only",
+            "--with",
+            "open-meta",
             "--fields",
             "managed_meta",
         ]);
         assert!(
             m.is_ok(),
-            "list with --meta-only and --fields failed: {:?}",
+            "list with --with open-meta and --fields failed: {:?}",
             m.err()
         );
     }

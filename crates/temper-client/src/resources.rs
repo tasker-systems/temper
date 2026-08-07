@@ -11,14 +11,13 @@ use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
+use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_core::types::standing::StandingShape;
 use temper_workflow::types::graph::GraphEdgeRow;
-use temper_workflow::types::managed_meta::{
-    MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
-};
+use temper_workflow::types::managed_meta::MetaUpdatePayload;
 use temper_workflow::types::resource::{
     ContentResponse, DeleteResponse, ResourceAnnotateRequest, ResourceCreateRequest,
-    ResourceDetail, ResourceListParams, ResourceListResponse, ResourceRow, ResourceUpdateRequest,
+    ResourceListParams, ResourceListResponse, ResourceUpdateRequest,
 };
 
 /// Sub-client for resource CRUD operations.
@@ -46,12 +45,15 @@ impl<'a> ResourceClient<'a> {
             .await
     }
 
-    /// List visible resources with the full per-row meta view
-    /// (`Vec<ResourceDetail>` rows — row + both meta tiers, no body). Sibling of
-    /// [`ResourceClient::list`]; forces `meta_only=true` on the wire.
-    pub async fn list_meta(&self, params: &ResourceListParams) -> Result<ResourceMetaListResponse> {
+    /// List visible resources with the open metadata tier filled on every row.
+    ///
+    /// Same endpoint, same envelope and same row type as [`ResourceClient::list`] — the only
+    /// difference is that it asks for the `open-meta` section. It used to force `meta_only=true`,
+    /// which selected a *second* response type (`ResourceMetaListResponse` over `ResourceDetail`);
+    /// there is one shape now, so this is a section request, not a projection switch.
+    pub async fn list_meta(&self, params: &ResourceListParams) -> Result<ResourceListResponse> {
         let mut params = params.clone();
-        params.meta_only = Some(true);
+        params.sections = Some(ResourceSection::OpenMeta.to_string());
         let token = self.http.resolve_token()?;
         let req = self.http.get("/api/resources").query(&params);
         self.http
@@ -61,9 +63,9 @@ impl<'a> ResourceClient<'a> {
 
     /// Get a single resource by ID, with both metadata tiers.
     ///
-    /// Returns `ResourceDetail` (a `ResourceRow` flattened, plus `managed_meta` and
-    /// `open_meta`). `list` still yields lean `ResourceRow`s.
-    pub async fn get(&self, id: Uuid) -> Result<ResourceDetail> {
+    /// The same [`ResourceView`] a `list` row is — `show` asks for the `open-meta` section, a
+    /// default `list` does not, and that is the whole difference.
+    pub async fn get(&self, id: Uuid) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}");
         let req = self.http.get(&path);
@@ -73,7 +75,7 @@ impl<'a> ResourceClient<'a> {
     }
 
     /// Create a new resource.
-    pub async fn create(&self, request: &ResourceCreateRequest) -> Result<ResourceRow> {
+    pub async fn create(&self, request: &ResourceCreateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let req = self.http.post("/api/resources").json(request);
         self.http
@@ -82,7 +84,7 @@ impl<'a> ResourceClient<'a> {
     }
 
     /// Update an existing resource.
-    pub async fn update(&self, id: Uuid, request: &ResourceUpdateRequest) -> Result<ResourceRow> {
+    pub async fn update(&self, id: Uuid, request: &ResourceUpdateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}");
         let req = self.http.patch(&path).json(request);
@@ -99,7 +101,7 @@ impl<'a> ResourceClient<'a> {
         &self,
         id: Uuid,
         request: &ResourceAnnotateRequest,
-    ) -> Result<ResourceRow> {
+    ) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}/provenance");
         let req = self.http.post(&path).json(request);
@@ -238,7 +240,7 @@ impl<'a> ResourceClient<'a> {
     /// reconstructing markdown from chunks. Used by the metadata-only
     /// sync pull path to avoid paying for server-side body reconstruction
     /// when only the meta side has drifted.
-    pub async fn get_meta(&self, id: Uuid) -> Result<ResourceMetaResponse> {
+    pub async fn get_meta(&self, id: Uuid) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}/meta");
         let req = self.http.get(&path);
@@ -253,7 +255,7 @@ impl<'a> ResourceClient<'a> {
     /// The server reconciles frontmatter-provenance edges from the new
     /// open_meta on success; errors during reconciliation are logged
     /// server-side and do not fail this call.
-    pub async fn update_meta(&self, id: Uuid, payload: &MetaUpdatePayload) -> Result<ResourceRow> {
+    pub async fn update_meta(&self, id: Uuid, payload: &MetaUpdatePayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}/meta");
         let req = self.http.put(&path).json(payload);
@@ -270,14 +272,13 @@ mod meta_list_tests {
     // Signature-level guard: confirms list_meta exists with the
     // expected types. Use a named helper (not a closure) to avoid
     // 'fn pointer lifetime' constraints; this still fails to compile
-    // if the signature drifts.
+    // if the signature drifts. It now guards the convergence too — the
+    // meta walk and the default walk return the SAME envelope type.
     fn _assert_callable<'a>(
         client: &'a ResourceClient<'a>,
         params: &'a temper_workflow::types::resource::ResourceListParams,
     ) -> impl std::future::Future<
-        Output = crate::error::Result<
-            temper_workflow::types::managed_meta::ResourceMetaListResponse,
-        >,
+        Output = crate::error::Result<temper_workflow::types::resource::ResourceListResponse>,
     > + 'a {
         client.list_meta(params)
     }

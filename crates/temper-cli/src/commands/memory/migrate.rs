@@ -697,7 +697,9 @@ mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
     use temper_core::types::ids::{ProfileId, ResourceId};
-    use temper_workflow::types::resource::{BodyStorage, IngestState, ResourceDetail, ResourceRow};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource::{BodyStorage, IngestState};
+    use temper_core::types::resource_view::ResourceView;
 
     fn d(s: &str) -> NaiveDate {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").expect("test date")
@@ -871,39 +873,36 @@ Never ship code with \"for now\".
         }
     }
 
-    /// Wrap an `open_meta` value in the `ResourceDetail` shape the server would hand back, so
+    /// Wrap an `open_meta` value in the `ResourceView` shape the server would hand back, so
     /// `emit`'s own parser can be run against what `migrate` writes.
-    fn detail_with(open_meta: serde_json::Value) -> ResourceDetail {
-        let row = ResourceRow {
+    fn detail_with(open_meta: serde_json::Value) -> ResourceView {
+        ResourceView {
             id: ResourceId::from(uuid::Uuid::now_v7()),
-            kb_context_id: None,
-            origin_uri: String::new(),
+            r#ref: String::new(),
             title: "a curated hook".to_string(),
-            originator_profile_id: ProfileId::from(uuid::Uuid::now_v7()),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: Some("working-agreements".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "memory".to_string(),
+            owner_handle: "someone".to_string(),
             owner_profile_id: ProfileId::from(uuid::Uuid::now_v7()),
+            originator_profile_id: ProfileId::from(uuid::Uuid::now_v7()),
             is_active: true,
             created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            context_name: None,
-            doc_type_name: "memory".to_string(),
-            owner_handle: "someone".to_string(),
-            context_slug: Some("working-agreements".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
             body_storage: Some(BodyStorage::Derived),
-        };
-        ResourceDetail {
-            row,
-            managed_meta: None,
+            managed_meta: ManagedMeta::default(),
             open_meta: Some(open_meta),
+            content: None,
         }
+        .with_derived_refs()
     }
 
     /// The differential guard, and the reason this is not a hand-written key assertion: `status`

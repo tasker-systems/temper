@@ -22,7 +22,7 @@ module Temper::Generated
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ResourceMetaResponse]
+    # @return [ResourceView]
     def get_meta(id, opts = {})
       data, _status_code, _headers = get_meta_with_http_info(id, opts)
       data
@@ -31,7 +31,7 @@ module Temper::Generated
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ResourceMetaResponse, Integer, Hash)>] ResourceMetaResponse data, response status code and response headers
+    # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def get_meta_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: MetaApi.get_meta ...'
@@ -63,7 +63,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ResourceMetaResponse'
+      return_type = opts[:debug_return_type] || 'ResourceView'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -89,7 +89,7 @@ module Temper::Generated
     # @param meta_update_payload [MetaUpdatePayload] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ResourceRow]
+    # @return [ResourceView]
     def update_meta(id, meta_update_payload, opts = {})
       data, _status_code, _headers = update_meta_with_http_info(id, meta_update_payload, opts)
       data
@@ -99,7 +99,7 @@ module Temper::Generated
     # @param meta_update_payload [MetaUpdatePayload] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ResourceRow, Integer, Hash)>] ResourceRow data, response status code and response headers
+    # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def update_meta_with_http_info(id, meta_update_payload, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: MetaApi.update_meta ...'
@@ -140,7 +140,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(meta_update_payload)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ResourceRow'
+      return_type = opts[:debug_return_type] || 'ResourceView'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

@@ -138,9 +138,10 @@ pub enum DoorReach {
 /// The scale of an act's ordering quantity.
 ///
 /// Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
-/// `search_vector_candidates` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`
-/// `[verified — migrations/20260801000010:186-189]`, while `wayfind_region_scores` rescales *the
-/// same* `<=>` distance as `1 - d` into `[-1,1]` `[verified — migrations/20260731000050:120]`.
+/// `search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`
+/// `[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`
+/// rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`
+/// `[verified — migrations/20260731000050:120]`.
 /// Neither column name says so, and one of the two feeds a weighted sum everyone reads as a
 /// `[0,1]` score.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,10 +166,11 @@ pub enum QuantityScale {
 /// Research [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *"Act responses never
 /// expose commensurable score fields — no bare `score: f64` shared across acts; each quantity
 /// carries its act's name and shape."* Arithmetic follows names: two fields called `score` invite
-/// `a.score + b.score` and no reviewer catches it. `unified_search` is the worked failure — it
-/// renames `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then sums them into
-/// `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is the
-/// exact expression the frame register forbids.
+/// `a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked
+/// failure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them
+/// into `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is
+/// the exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to
+/// the migration that defined the body, which stays readable in history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

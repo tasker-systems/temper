@@ -19,8 +19,15 @@ the section it implements. **Read the cited section — this plan is an index ov
 replacement for it.**
 
 **Out of scope, by design:** beat D (binding `find-exact` / `find-about-*` to phase 1's
-`search_exact` / `search_wide`), beat E (the API/MCP/CLI doors), beat F (act-declaration
-reconciliation). D and F are gated on the sibling session's phase-1 work; E is a follow-on plan.
+`search_exact` / `search_wide`) and beat E (the API/MCP/CLI doors). E is a follow-on plan; D's
+dependency has landed on this branch, but D itself stays out of scope here.
+
+**Beat F — act-declaration reconciliation — is done**, landed by phase 1's own step 5
+`[verified — 59ee9100, "Phase 1 step 5 — the declarations describe the deployed system again, and
+offset stops being ignored"]`: `find-exact`, `find-about-anywhere` and `find-about-within` are
+`BuildState::Served` with `served_by` `search_exact` / `search_wide`
+`[verified — registry.rs: the FindExact, FindAboutAnywhere and FindAboutWithin declarations each
+carry build_state: BuildState::Served]`.
 
 ---
 
@@ -39,9 +46,16 @@ reconciliation). D and F are gated on the sibling session's phase-1 work; E is a
   `[verified — crates/temper-core/tests/query_schema.rs:5]`. TypeScript: `cargo make generate-ts-types`.
   OpenAPI: `cargo make openapi`. Read the `generated-artifacts` skill before the first one.
 - **Runtime `sqlx` is an allow-listed exception, and this plan widens the allow-list.**
-  `readback/mod.rs`'s module note names exactly three runtime reads, all for a `::vector` bind, and
-  records that sixteen others were clawed back on 2026-07-30 for imitating them without a reason.
-  Task 10 amends that note. Do not add a runtime read without it.
+  `readback/mod.rs`'s module note names the runtime reads — `vector_search`, `search_wide`,
+  `wayfind_region_diagnostics` — all for one reason, a `::vector` bind the macros cannot type, and
+  records that sixteen others were clawed back on 2026-07-30 for imitating them without a reason
+  `[verified — 2026-08-07, crates/temper-substrate/src/readback/mod.rs module note]`.
+  **Count the class's members from the file, never from this plan** — the note carries that
+  instruction itself, because a restated count drifts silently as reads are added and retired. The
+  rule is what this plan depends on: the incumbent class exists for a `::vector` bind, this plan adds
+  a **second** class for dynamic composition, and the 2026-07-30 claw-back is why an exemption nobody
+  can state the ground for is not safe. Task 10 amends that note. Do not add a runtime read without
+  it.
 - **Never interpolate a caller-supplied value into SQL.** Bind it. The only identifiers the builder
   emits are stage names, and Task 9 holds them to an allowlist.
 - **Test database:** `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`,
@@ -830,9 +844,11 @@ fn a_find_about_stage_without_a_threaded_intention_refuses_rather_than_substitut
 
 #[test]
 fn an_unbuilt_act_is_refused_as_not_implemented() {
-    // `substantiate` is declared and unbuilt. A plan naming it is refused statically, never
-    // attempted.
-    let errs = validate(&plan(vec![act("ev", ActName::Substantiate, None)], vec!["ev"])).unwrap_err();
+    // `admit` is the one declared-and-unbuilt act — an ANTI-act, declared "so that promoting
+    // cold-start admission to a real act must delete an explicit refusal" (registry.rs, the
+    // `Admit` declaration).
+    // A plan naming it is refused statically, never attempted.
+    let errs = validate(&plan(vec![act("cold", ActName::Admit, None)], vec!["cold"])).unwrap_err();
     assert!(errs.iter().any(|e| e.reason == RefusalReason::NotImplemented));
 }
 
@@ -862,6 +878,11 @@ fn a_kind_changing_hop_is_expressible_so_the_region_phase_is_not_foreclosed() {
     assert_eq!(v.ordered().len(), 1);
 }
 ```
+
+> **`admit` is the only `Unbuilt` declaration** `[verified — registry.rs, the Admit declaration]`.
+> `substantiate` is `BuildState::Served` by `resource_standing_shape`
+> `[verified — registry.rs, the Substantiate declaration]` — do not reach for it as the unbuilt act,
+> or the test drives `validate` to refuse a served one.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -1049,61 +1070,98 @@ git commit -m "query: properties are queryable — open keys, two bound operator
 
 ---
 
-## Task 8: The `BuildState` gap — a fused act the caller cannot reach
+## Task 8: The `BuildState` gap — a declared act this surface cannot reach
 
 **GD-3: EXTEND.** Spec §7, *"The state between C and D, and the `BuildState` gap it lands on."*
 Authorized because `RefusalReason` is open and the honest variant does not exist.
 
-**Coordination:** the sibling's phase-1 work hits this same gap from the other side (an act whose
-mechanic exists with no door). **Whoever lands first settles it; check before implementing** whether
-phase 1 has already added a variant, and reuse it if so.
+**The gap this task is about:** `BuildState` cannot say *"the mechanic exists and no surface reaches
+it"*. Its live instance is `follow-from` and `survey`, which carry `provisionally_unexpressed()` —
+a helper returning `Fused { host: "unified_search" }` as the least-wrong of the available values and
+documenting it as such rather than believing it: *"Their mechanics are live — `search_graph_expand`
+and `wayfind_region_scores` are both still deployed — but as of phase 1 steps 2-3 **no door reaches
+either one**. … So `Fused` is now false in BOTH its clauses — there is no host, and it has no door —
+while `Unbuilt` would still be false about a function that is right there, and `Served` would still
+be false about a door that does not exist."* `[verified — registry.rs, provisionally_unexpressed and
+its two call sites, the FollowFrom and Survey declarations]`. The three `find` acts are
+`BuildState::Served` with their own SQL functions `[verified — registry.rs: the FindExact,
+FindAboutAnywhere and FindAboutWithin declarations each carry build_state: BuildState::Served]`, and
+`unified_search` is gone from the schema entirely
+`[verified — migrations/20260806000010_retire_unified_search.sql]`, so the host names nothing.
+
+> **Cite `registry.rs` by declaration, not by line.** That file is under active edit, and the older
+> `registry.rs:76` citations elsewhere in this plan have already drifted (`search_family()` has
+> moved). Grep the symbol.
+
+**Coordination:** phase 1 reached this same gap from the other side (an act whose mechanic exists with
+no door) and added **no** `BuildState` variant — deliberately, because widening it is
+*"semver-breaking on a shipped contract type"* and a variant minted there would be *"born obsolete"*
+`[verified — 59ee9100 commit body, and provisionally_unexpressed's doc comment]`. So there is
+nothing to reuse: this task adds the `RefusalReason` variant, and `BuildState` is left alone.
 
 **Files:**
 - Modify: `crates/temper-core/src/types/query/disposition.rs`, `validate.rs`
 
 **Interfaces:**
-- Produces: `RefusalReason::NotSeparablyReachable` — *the act is declared and its mechanic exists, but
-  it is fused into a host this surface cannot invoke.*
+- Produces: `RefusalReason::NotSeparablyReachable` — spec §7's own wording for the open variant:
+  *"declared, built, not reachable from this surface"* `[verified — spec §7, "Named, not solved
+  here"]`. Fusion is not the reason any act is refused here.
 
 - [ ] **Step 1: Write the failing test**
 
 ```rust
 #[test]
-fn a_fused_act_the_builder_cannot_invoke_refuses_honestly() {
-    // Between beats C and D the three `find` acts are Fused{unified_search}: the mechanic exists
-    // and the builder cannot reach into a composite to call it. `NotImplemented` is documented as
-    // "build_state is not served or fused" and is FALSE here — the distinction BuildState cannot
-    // currently draw is existence versus reachability-from-this-surface.
+fn a_served_act_this_builder_has_no_fragment_for_refuses_honestly() {
+    // Before beat D the compiler emits no fragment for `search_exact` / `search_wide`, so a plan
+    // naming `find-exact` must refuse. `NotImplemented` is documented as "build_state is not served
+    // or fused" and is FALSE here: the act is `Served` (the `FindExact` declaration in registry.rs).
+    // The distinction BuildState cannot draw is existence versus reachability-from-this-surface,
+    // and this is that distinction from the surface's side. This is the test that must go RED at
+    // beat D, when the find acts acquire fragments and the rule narrows.
     let errs = validate(&plan(vec![act("hits", ActName::FindExact, None)], vec!["hits"])).unwrap_err();
     assert!(
         errs.iter().any(|e| e.reason == RefusalReason::NotSeparablyReachable),
-        "a fused act must not be reported as unbuilt; got: {errs:?}"
+        "a served act with no fragment must not be reported as unbuilt; got: {errs:?}"
     );
 }
 
 #[test]
-fn survey_and_follow_from_are_not_refused_by_that_rule() {
-    // Their mechanics are standalone SQL functions the builder calls directly. This is the test
-    // that must go RED at beat D, when find-* become separately callable and the rule narrows.
+fn the_two_placeholder_fused_acts_are_not_refused_by_reading_their_host() {
+    // `follow-from` and `survey` declare `Fused { host: "unified_search" }` through
+    // `provisionally_unexpressed()` — a value registry.rs documents as the least-wrong of three
+    // rather than as a fact. Their `served_by` mechanics (`search_graph_expand`,
+    // `wayfind_region_scores`) are standalone functions this builder calls directly, and the host
+    // does not exist at all after phase 1's retirement. A rule keyed on the `Fused` discriminant
+    // refuses exactly the two acts beat C exists to execute; this is what makes that inversion fail
+    // loudly instead of looking like correct caution.
     assert!(validate(&plan(
         vec![act("shape", ActName::Survey, Some(caller_ids(IdKind::Cogmap)))],
         vec!["shape"],
+    )).is_ok());
+    assert!(validate(&plan(
+        vec![act("near", ActName::FollowFrom, Some(caller_ids(IdKind::Resource)))],
+        vec!["near"],
     )).is_ok());
 }
 ```
 
 - [ ] **Step 2: Run to verify the first fails**
 
-Run: `cargo nextest run -p temper-core --features mcp validate::tests::a_fused_act`
+Run: `cargo nextest run -p temper-core --features mcp validate::tests::a_served_act`
 Expected: FAIL — variant does not exist.
 
 - [ ] **Step 3: Add the variant and the rule**
 
 Add `NotSeparablyReachable` to `RefusalReason` with a doc comment stating the distinction and citing
-spec §7. In `validate`, refuse an act whose `build_state` is `Fused { .. }` **unless** its `served_by`
-function is one the builder can call directly. Maintain that set as a `const` in `validate.rs` with a
-comment naming beat D as what shrinks it — **not** as a hardcoded act list, which would drift from the
-declarations.
+spec §7. In `validate`, refuse an act whose `served_by` function is not one the builder emits a
+fragment for. Maintain that set as a `const` in `validate.rs` with a comment naming beat D as what
+grows it — **not** as a hardcoded act list, which would drift from the declarations.
+
+**Key on the callable-fragment set alone, and keep the `build_state` discriminant out of the
+condition entirely.** The only `Fused` declarations are `follow-from` and `survey`
+`[verified — registry.rs, the FollowFrom and Survey declarations]` — the two acts this beat exists to
+execute — so a rule keyed on `Fused` refuses exactly the wrong pair, and never fires on the `find`
+acts, which are `Served`.
 
 - [ ] **Step 4: Run to verify both pass**
 
@@ -1116,7 +1174,7 @@ Expected: PASS.
 UPDATE_SCHEMA=1 cargo nextest run -p temper-core --features mcp --test query_schema
 cargo make generate-ts-types && cargo make openapi && cargo make check
 git add -A
-git commit -m "query: a fused act the builder cannot invoke refuses honestly, not as unbuilt"
+git commit -m "query: a served act this surface cannot reach refuses honestly, not as unbuilt"
 ```
 
 ---
@@ -1153,12 +1211,16 @@ the security property testable in isolation.
       Text(String),
       Int(i64),
       /// Rendered through `format_pgvector` and bound as `$n::vector`, the same treatment
-      /// `unified_search` gives its embedding.
+      /// `search_wide` gives its embedding.
       Embedding(Vec<f32>),
   }
 
   pub fn compile(v: &ValidatedComposition, principal: ProfileId) -> CompiledQuery;
   ```
+
+`search_wide` is the live worked example of the `$n::vector` treatment: it binds `$2::vector` through
+`format_pgvector` `[verified — crates/temper-substrate/src/readback/mod.rs, the search_wide
+statement]`.
 
 - [ ] **Step 1: Write the failing tests** in `tests/query_plan_compile.rs`
 
@@ -1315,11 +1377,16 @@ the final select only.
 
 - [ ] **Step 5: Amend the module note**
 
-In `readback/mod.rs:26-34`, extend the exception paragraph to name **two** classes: the incumbent
-`::vector` bind (three reads, one of which phase 1 retires), and dynamic composition
-(`query_plan::compile`). State that the second class has exactly one member and that adding to it
-needs the same deliberate justification the first required. Keep the 2026-07-30 claw-back history —
-it is the reason the note works.
+In `readback/mod.rs`'s runtime-`sqlx` exception paragraph, extend it to name **two** classes: the
+incumbent `::vector` bind, and dynamic composition (`query_plan::compile`). State that the second has
+exactly one member and that adding to it needs the same deliberate justification the first required.
+Keep the 2026-07-30 claw-back history — it is the reason the note works.
+
+**This edit is additive: add the second class beside the incumbent one and change nothing else about
+the paragraph.** Read it on disk before editing rather than working from this plan's description of
+it — the note carries its own instruction that the class's members are counted from the file, never
+from prose `[verified — 2026-08-07, crates/temper-substrate/src/readback/mod.rs module note]`. Do not
+carry a number into it from here.
 
 - [ ] **Step 6: Run to verify they pass**
 

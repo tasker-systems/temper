@@ -155,7 +155,7 @@ impl Reinforcement {
 /// demoting the memory to where `status` explains it. Louder, and already decided.
 ///
 /// Absent is not malformed. Every memory in existence is in that state today.
-pub fn reinforcement_of(d: &temper_workflow::types::resource::ResourceDetail) -> Reinforcement {
+pub fn reinforcement_of(d: &temper_core::types::resource_view::ResourceView) -> Reinforcement {
     let Some(raw) = d.open_meta.as_ref().and_then(|om| om.get("reinforced")) else {
         return Reinforcement::default();
     };
@@ -207,18 +207,18 @@ pub fn reinforcement_of(d: &temper_workflow::types::resource::ResourceDetail) ->
 
 /// Parse one metadata row into an entry, or the specific defect that stops the render.
 ///
-/// `list_meta` returns `ResourceMetaListResponse { rows: Vec<ResourceDetail>, .. }`
-/// (`crates/temper-workflow/src/types/managed_meta.rs:143-147`). `ResourceDetail`
-/// is a `#[serde(flatten)]`ed `ResourceRow` plus the two meta tiers
-/// (`crates/temper-workflow/src/types/resource.rs:187-197`), so identity fields
-/// are reached through `.row`. `ResourceRow` carries no composed `context_ref` —
-/// only `context_owner_ref` + `context_slug` (`resource.rs:36-42`), which this
-/// composes into the `@owner/slug` form.
+/// `list_meta` returns the one list envelope over
+/// [`temper_core::types::resource_view::ResourceView`] rows, with the `open-meta`
+/// section asked for — so identity fields are top-level here, not reached through a `.row`
+/// (`ResourceDetail` used to flatten one in). The view derives a composed `context_ref`
+/// from `context_owner_ref` + `context_slug`, but the entry's own composition is kept below
+/// rather than read off the view: the fallback for a row missing either half is this
+/// function's, and it predates the derived field.
 pub fn parse_entry(
-    d: &temper_workflow::types::resource::ResourceDetail,
+    d: &temper_core::types::resource_view::ResourceView,
 ) -> Result<MemoryEntry, MemoryDefect> {
-    let id = d.row.id.uuid();
-    let title = d.row.title.clone();
+    let id = d.id.uuid();
+    let title = d.title.clone();
     let om = d.open_meta.clone().unwrap_or(serde_json::Value::Null);
 
     let status = open_str(&om, "status").ok_or_else(|| MemoryDefect::MissingStatus {
@@ -247,7 +247,7 @@ pub fn parse_entry(
     Ok(MemoryEntry {
         id,
         title,
-        context_ref: match (&d.row.context_owner_ref, &d.row.context_slug) {
+        context_ref: match (&d.context_owner_ref, &d.context_slug) {
             (Some(owner), Some(slug)) => format!("{owner}/{slug}"),
             _ => String::new(),
         },
@@ -658,7 +658,9 @@ mod tests {
     use chrono::{DateTime, Utc};
     use serde_json::json;
     use temper_core::types::ids::{ProfileId, ResourceId};
-    use temper_workflow::types::resource::{BodyStorage, IngestState, ResourceDetail, ResourceRow};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource::{BodyStorage, IngestState};
+    use temper_core::types::resource_view::ResourceView;
 
     fn d(s: &str) -> NaiveDate {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
@@ -711,11 +713,10 @@ mod tests {
         render_index(entries, local, &[], policy)
     }
 
-    /// Build a `ResourceDetail` wrapping a real `ResourceRow`, with `open_meta`
-    /// carrying `status`/`verified` only when the corresponding argument is
-    /// `Some` — omitting a key entirely (not setting it to null) is what a
-    /// real un-migrated memory resource looks like.
-    fn row_with(status: Option<&str>, verified: Option<&str>) -> ResourceDetail {
+    /// Build a `ResourceView` with `open_meta` carrying `status`/`verified` only when the
+    /// corresponding argument is `Some` — omitting a key entirely (not setting it to null) is
+    /// what a real un-migrated memory resource looks like.
+    fn row_with(status: Option<&str>, verified: Option<&str>) -> ResourceView {
         row_with_reinforced(status, verified, None)
     }
 
@@ -725,7 +726,7 @@ mod tests {
         status: Option<&str>,
         verified: Option<&str>,
         reinforced: Option<serde_json::Value>,
-    ) -> ResourceDetail {
+    ) -> ResourceView {
         let mut open = serde_json::Map::new();
         if let Some(s) = status {
             open.insert("status".to_string(), json!(s));
@@ -737,37 +738,33 @@ mod tests {
             open.insert("reinforced".to_string(), r);
         }
 
-        let row = ResourceRow {
+        ResourceView {
             id: ResourceId::from(Uuid::nil()),
-            kb_context_id: None,
-            origin_uri: String::new(),
+            r#ref: String::new(),
             title: "a memory".to_string(),
-            originator_profile_id: ProfileId::from(Uuid::nil()),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "memory".to_string(),
+            owner_handle: "someone".to_string(),
             owner_profile_id: ProfileId::from(Uuid::nil()),
+            originator_profile_id: ProfileId::from(Uuid::nil()),
             is_active: true,
             created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
-            context_name: None,
-            doc_type_name: "memory".to_string(),
-            owner_handle: "someone".to_string(),
-            context_slug: Some("temper".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: None,
-            seq: None,
-            mode: None,
-            effort: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
             body_storage: Some(BodyStorage::Derived),
-        };
-
-        ResourceDetail {
-            row,
-            managed_meta: None,
+            managed_meta: ManagedMeta::default(),
             open_meta: Some(serde_json::Value::Object(open)),
+            content: None,
         }
+        .with_derived_refs()
     }
 
     fn local(filename: &str, title: &str) -> LocalEntry {

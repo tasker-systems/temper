@@ -3,20 +3,18 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::{ObjectBuilder, Required, Type};
 use utoipa::{Modify, OpenApi};
 
-use crate::handlers::resources::ListResourcesResponse;
 use temper_core::types::api::{
-    EventCursorResponse, HealthResponse, ProfileUpdateRequest, SearchDiagnostics, SearchParams,
-    SearchReason, SearchResultRow, SearchScope, UnifiedSearchResultRow,
+    EventCursorResponse, ExactArm, ExactHit, HealthResponse, ProfileUpdateRequest, SearchParams,
+    SearchReason, SearchResponse, SearchResultRow, SearchScope, SearchScopeInfo, WideArm, WideHit,
 };
 use temper_core::types::context::{
     ContextRowWithCounts, ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome,
     RenameContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::error::{ErrorBody, ErrorDetail};
-use temper_workflow::types::managed_meta::ResourceMetaListResponse;
 use temper_workflow::types::resource::{
-    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceDetail, ResourceFacets,
-    ResourceListResponse, ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
+    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets, ResourceListResponse,
+    ResourceSortField, ResourceUpdateRequest, SortOrder,
 };
 
 // NOTE: no `paths(...)` list here. The set of documented paths is derived from the
@@ -28,11 +26,12 @@ use temper_workflow::types::resource::{
 #[openapi(
     components(schemas(
         HealthResponse,
-        ResourceRow,
-        ResourceDetail,
+        // `ResourceView` is the one resource shape: list rows, `show`, `create`, `update`,
+        // `annotate` and `GET /meta` all answer in it. It replaced `ResourceRow`,
+        // `ResourceDetail`, `ResourceMetaResponse`, `ResourceMetaListResponse` and the
+        // `ListResourcesResponse` `oneOf` — none of which are wire types any more.
+        temper_core::types::resource_view::ResourceView,
         ResourceListResponse,
-        ResourceMetaListResponse,
-        ListResourcesResponse,
         ResourceFacets,
         ResourceSortField,
         SortOrder,
@@ -52,12 +51,15 @@ use temper_workflow::types::resource::{
         EventCursorResponse,
         SearchParams,
         SearchResultRow,
-        UnifiedSearchResultRow,
-        SearchDiagnostics,
+        SearchResponse,
+        ExactArm,
+        ExactHit,
+        WideArm,
+        WideHit,
+        SearchScopeInfo,
         SearchScope,
         SearchReason,
         temper_workflow::types::managed_meta::MetaUpdatePayload,
-        temper_workflow::types::managed_meta::ResourceMetaResponse,
         temper_workflow::types::managed_meta::ManagedMeta,
         ErrorBody,
         ErrorDetail,

@@ -4,7 +4,7 @@
 	import { buildDrillNodeUrl, clearSelectionUrl, type SelectedElement } from '$lib/graph/atlas/nav';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import type { EventTrail } from '$lib/types/generated/element_trail';
-	import type { ResourceRow } from '$lib/types/generated/resource';
+	import type { ResourceView } from '$lib/types/generated/resource_view';
 	import { atlasNeighbors } from '$lib/graph/atlas/neighbors';
 	import { trailModel } from '$lib/graph/atlas/trail';
 	import { docTypeHue } from '$lib/graph/atlas/palette';
@@ -17,7 +17,7 @@
 		selection: SelectedElement;
 		subgraph: AtlasSubgraph | null;
 		trail: EventTrail | null;
-		resourceRow: ResourceRow | null;
+		resourceRow: ResourceView | null;
 	}
 	let { selection, subgraph, trail, resourceRow }: Props = $props();
 
@@ -114,8 +114,10 @@
 				{#if resourceRow.cogmap_name}
 					<div><span class="k">COGMAP</span><span>{resourceRow.cogmap_name}</span></div>
 				{/if}
-				{#if resourceRow.stage}
-					<div><span class="k">STAGE</span><span>{resourceRow.stage}</span></div>
+				{#if resourceRow.managed_meta['temper-stage']}
+					<div>
+						<span class="k">STAGE</span><span>{resourceRow.managed_meta['temper-stage']}</span>
+					</div>
 				{/if}
 			</section>
 		{/if}

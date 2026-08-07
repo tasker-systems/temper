@@ -75,7 +75,7 @@ async fn seed_tagged(
 
 /// `ResourceRow.slug` is `None` in the substrate (`temper-slug` is a §7-Die key, not
 /// persisted); the seed encodes the slug as the last `origin_uri` segment.
-fn slugs(rows: &[temper_workflow::types::resource::ResourceRow]) -> Vec<&str> {
+fn slugs(rows: &[temper_core::types::resource_view::ResourceView]) -> Vec<&str> {
     let mut s: Vec<&str> = rows
         .iter()
         .filter_map(|r| r.origin_uri.rsplit('/').next())

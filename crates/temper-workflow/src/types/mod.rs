@@ -7,6 +7,7 @@
 pub mod graph;
 pub mod managed_meta;
 pub mod resource;
+pub mod resource_view;
 
 pub use graph::{
     EdgeReconciliation, EdgeType, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow, ResolvedEdge,
@@ -15,6 +16,7 @@ pub use graph::{
 pub use managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceManifestRow};
 pub use resource::{
     BodyStorage, ContentChunk, ContentResponse, DeleteResponse, IngestState, ResourceCreateRequest,
-    ResourceFacets, ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
+    ResourceFacets, ResourceListParams, ResourceListResponse, ResourceSortField,
     ResourceUpdateRequest, SortOrder,
 };
+pub use resource_view::{ResourceSection, ResourceView, SectionSet};

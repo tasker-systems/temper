@@ -94,7 +94,7 @@ async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
 //
 // Local fixture helpers (duplicated per file rather than shared — established convention per
 // `citation_audits.rs`'s own header: `block_content.rs`, `invocation_envelope.rs`,
-// `search_index.rs`, `search_surface_a.rs`, and `write_path_mutations.rs` each carry their own
+// `search_index.rs`, `search_graph_expand.rs`, and `write_path_mutations.rs` each carry their own
 // copy). `kb_profiles`/`kb_contexts`/`kb_entities` are `INPUT_TABLES` (restored verbatim by
 // `replay::replay`); `kb_resources`/`kb_content_blocks`/`kb_citation_audits` are projections
 // rebuilt by walking events — so this test's resources and audit must come back from the SAME

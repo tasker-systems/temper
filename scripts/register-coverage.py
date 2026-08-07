@@ -165,7 +165,7 @@ def collect_citations(context_ref: str, goal_id: str) -> list:
     check unable to fail in one direction.
     """
     listing = run_temper(
-        ["resource", "list", "--type", "task", "--context", context_ref, "--meta-only", "--all"]
+        ["resource", "list", "--type", "task", "--context", context_ref, "--with", "open-meta", "--all"]
     )
     if listing.get("truncated"):
         raise SystemExit(

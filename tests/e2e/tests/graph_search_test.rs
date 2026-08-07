@@ -1,14 +1,13 @@
 #![cfg(feature = "test-db")]
-//! E2e coverage for Surface-A graph search through the real `/api/search` stack.
+//! E2e coverage for the edges endpoint and for anchor-scoped search through the real stack.
 //!
-//! These tests close the thin-Rust-surface gap above the SQL engine: the
-//! substrate `artifact-tests` exercise `search_graph_expand` / `unified_search`
-//! directly, but nothing drove `search_select` (substrate_read.rs) end to end
-//! with live edges. They previously relied on a frontmatter→edge
-//! auto-projection at ingest (`open_meta` `depends_on`/`extends` arrays) that
-//! was retired; edges now come from the relationship API
-//! (`POST /api/relationships`). Each test creates resources via ingest, asserts
-//! the edges explicitly, then searches.
+//! **The graph-expansion tests that gave this file its name are gone**, with the graph arm they
+//! exercised (task `019fd25e`). `/api/search` no longer expands across edges, auto-seeds, or accepts
+//! `graph_depth`/`no_graph`/`seed_ids`; following an edge is a composition on `/api/query`, where the
+//! caller says what they want followed instead of the server guessing.
+//!
+//! What survives here is what was never about the graph arm: the `/api/resources/{id}/edges` read,
+//! and the proof that an anchor scope actually bounds the corpus.
 
 mod common;
 
@@ -84,125 +83,6 @@ async fn assert_edge(
 /// Graph expansion surfaces structurally-connected docs with a non-zero
 /// `graph_score`, and `graph_expand: false` suppresses them.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
-    let app = common::setup(pool).await;
-
-    app.client
-        .profile()
-        .get()
-        .await
-        .expect("profile pre-flight");
-    app.client
-        .contexts()
-        .create("graph-e2e", None)
-        .await
-        .expect("create context");
-
-    // Ingest a 3-node chain, then wire it: A --extends--> B --depends_on--> C.
-    let resource_c = app
-        .client
-        .ingest()
-        .create(&test_payload("Data Model", "data-model", "graph-e2e"))
-        .await
-        .expect("ingest C");
-    let resource_b = app
-        .client
-        .ingest()
-        .create(&test_payload(
-            "Architecture Design",
-            "architecture-design",
-            "graph-e2e",
-        ))
-        .await
-        .expect("ingest B");
-    let resource_a = app
-        .client
-        .ingest()
-        .create(&test_payload(
-            "Deployment Config",
-            "deployment-config",
-            "graph-e2e",
-        ))
-        .await
-        .expect("ingest A");
-
-    assert_edge(&app, resource_a.id, resource_b.id, "extends").await;
-    assert_edge(&app, resource_b.id, resource_c.id, "depends_on").await;
-
-    // Search with Doc A as an explicit seed; graph expansion on.
-    let params_with_graph = SearchParams {
-        context_ref: Some("@me/graph-e2e".into()),
-        limit: Some(10),
-        seed_ids: Some(vec![resource_a.id.into()]),
-        graph_depth: Some(3),
-        ..SearchParams::default()
-    };
-
-    let results = app
-        .client
-        .search()
-        .search_with_params(&params_with_graph)
-        .await
-        .expect("graph search")
-        .results;
-
-    let b_hit = results
-        .iter()
-        .find(|r| r.resource_id == resource_b.id.0)
-        .unwrap_or_else(|| {
-            panic!(
-                "Architecture Design should surface via graph (1 hop from A). Got: {:?}",
-                results.iter().map(|r| r.resource_id).collect::<Vec<_>>()
-            )
-        });
-    assert!(
-        b_hit.graph_score > 0.0,
-        "1-hop neighbor must carry a non-zero graph_score; got {}",
-        b_hit.graph_score
-    );
-
-    let c_hit = results
-        .iter()
-        .find(|r| r.resource_id == resource_c.id.0)
-        .unwrap_or_else(|| {
-            panic!(
-                "Data Model should surface via graph (2 hops from A). Got: {:?}",
-                results.iter().map(|r| r.resource_id).collect::<Vec<_>>()
-            )
-        });
-    assert!(
-        c_hit.graph_score > 0.0,
-        "2-hop neighbor must carry a non-zero graph_score; got {}",
-        c_hit.graph_score
-    );
-
-    // With graph_expand: false, seed_ids alone (no query/embedding) produce no
-    // FTS/vector match, so the structural neighbors drop out entirely.
-    let params_no_graph = SearchParams {
-        graph_expand: false,
-        ..params_with_graph.clone()
-    };
-    let results_no_graph = app
-        .client
-        .search()
-        .search_with_params(&params_no_graph)
-        .await
-        .expect("non-graph search")
-        .results;
-    let no_graph_ids: Vec<uuid::Uuid> = results_no_graph.iter().map(|r| r.resource_id).collect();
-    assert!(
-        !no_graph_ids.contains(&resource_b.id.into()),
-        "Architecture Design should NOT appear without graph expansion"
-    );
-    assert!(
-        !no_graph_ids.contains(&resource_c.id.into()),
-        "Data Model should NOT appear without graph expansion"
-    );
-}
-
-/// The `/api/resources/{id}/edges` endpoint returns the edges asserted via the
-/// relationship API, with correct direction and peer fields on each end.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
@@ -262,83 +142,6 @@ async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
 /// `graph_expand` toggles expansion end to end: on ⇒ the neighbor surfaces,
 /// off ⇒ it does not.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn search_no_graph_flag_disables_expansion(pool: sqlx::PgPool) {
-    let app = common::setup(pool).await;
-
-    app.client
-        .profile()
-        .get()
-        .await
-        .expect("profile pre-flight");
-    app.client
-        .contexts()
-        .create("nograph-e2e", None)
-        .await
-        .expect("create context");
-
-    let resource_b = app
-        .client
-        .ingest()
-        .create(&test_payload("Leaf Node", "leaf-node", "nograph-e2e"))
-        .await
-        .expect("ingest B");
-    let resource_a = app
-        .client
-        .ingest()
-        .create(&test_payload("Root Node", "root-node", "nograph-e2e"))
-        .await
-        .expect("ingest A");
-
-    assert_edge(&app, resource_a.id, resource_b.id, "depends_on").await;
-
-    let params_graph = SearchParams {
-        context_ref: Some("@me/nograph-e2e".into()),
-        limit: Some(10),
-        seed_ids: Some(vec![resource_a.id.into()]),
-        graph_depth: Some(2),
-        ..SearchParams::default()
-    };
-    let results_graph = app
-        .client
-        .search()
-        .search_with_params(&params_graph)
-        .await
-        .expect("graph search")
-        .results;
-    let graph_ids: Vec<uuid::Uuid> = results_graph.iter().map(|r| r.resource_id).collect();
-    assert!(
-        graph_ids.contains(&resource_b.id.into()),
-        "Leaf should appear via graph expansion. Got: {graph_ids:?}"
-    );
-
-    let params_no_graph = SearchParams {
-        graph_expand: false,
-        ..params_graph.clone()
-    };
-    let results_no_graph = app
-        .client
-        .search()
-        .search_with_params(&params_no_graph)
-        .await
-        .expect("no-graph search")
-        .results;
-    let no_graph_ids: Vec<uuid::Uuid> = results_no_graph.iter().map(|r| r.resource_id).collect();
-    assert!(
-        !no_graph_ids.contains(&resource_b.id.into()),
-        "Leaf should NOT appear without graph expansion. Got: {no_graph_ids:?}"
-    );
-}
-
-/// `context_ref` scopes the candidate corpus — including graph-reached neighbors
-/// — and an unresolvable ref errors rather than silently widening.
-///
-/// This replaces the original "unknown context returns empty" criterion: the
-/// shipped `search_select` (substrate_read.rs:330) resolves `context_ref`
-/// strictly, so an unknown context yields an error, not an empty result. The
-/// load-bearing guarantee — that the filter is actually applied to graph hits
-/// (the `corpus` CTE filters `blend ∪ graph`, migration 20260626000002) — is
-/// asserted directly: a graph-reachable neighbor in another context is excluded.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn search_context_ref_scopes_and_unknown_errors(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
@@ -371,48 +174,40 @@ async fn search_context_ref_scopes_and_unknown_errors(pool: sqlx::PgPool) {
         .await
         .expect("ingest D in scope-b");
 
-    // A (scope-a) --relates_to--> D (scope-b): a real, graph-reachable edge that
-    // crosses the context boundary.
-    assert_edge(&app, resource_a.id, resource_d.id, "relates_to").await;
+    // Both documents carry the same distinctive term, so nothing but the scope can separate them.
+    let ids_of = |r: &temper_core::types::api::SearchResponse| -> Vec<uuid::Uuid> {
+        r.exact.hits.iter().map(|h| h.resource.id.uuid()).collect()
+    };
 
-    // Unscoped search from A reaches D — proves the edge exists and would surface
-    // absent a context filter.
     let unscoped = SearchParams {
+        query: Some("testing".into()),
         limit: Some(10),
-        seed_ids: Some(vec![resource_a.id.into()]),
-        graph_depth: Some(2),
         ..SearchParams::default()
     };
-    let unscoped_ids: Vec<uuid::Uuid> = app
-        .client
-        .search()
-        .search_with_params(&unscoped)
-        .await
-        .expect("unscoped search")
-        .results
-        .iter()
-        .map(|r| r.resource_id)
-        .collect();
+    let unscoped_ids = ids_of(
+        &app.client
+            .search()
+            .search_with_params(&unscoped)
+            .await
+            .expect("unscoped search"),
+    );
     assert!(
         unscoped_ids.contains(&resource_d.id.into()),
-        "Foreign Doc should be graph-reachable without a context filter. Got: {unscoped_ids:?}"
+        "Foreign Doc must be visible without a scope. Got: {unscoped_ids:?}"
     );
 
-    // Scoping to scope-a excludes D even though it is graph-reachable.
+    // Scoping to scope-a excludes D.
     let scoped = SearchParams {
         context_ref: Some("@me/scope-a".into()),
         ..unscoped.clone()
     };
-    let scoped_ids: Vec<uuid::Uuid> = app
-        .client
-        .search()
-        .search_with_params(&scoped)
-        .await
-        .expect("scoped search")
-        .results
-        .iter()
-        .map(|r| r.resource_id)
-        .collect();
+    let scoped_ids = ids_of(
+        &app.client
+            .search()
+            .search_with_params(&scoped)
+            .await
+            .expect("scoped search"),
+    );
     assert!(
         scoped_ids.contains(&resource_a.id.into()),
         "Anchor Doc (in scope-a) should surface under its own context. Got: {scoped_ids:?}"

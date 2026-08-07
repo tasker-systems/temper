@@ -6167,6 +6167,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "ts-rs",
+ "unicode-normalization",
  "utoipa",
  "uuid",
  "validator",
@@ -6386,7 +6387,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "ts-rs",
- "unicode-normalization",
  "utoipa",
  "uuid",
 ]

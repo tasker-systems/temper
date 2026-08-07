@@ -98,7 +98,7 @@ async fn open_meta_round_trips_on_create_and_update(pool: PgPool) {
     assert_eq!(open.get("is_dropping"), Some(&serde_json::json!(true)));
     // The managed sibling survives too (proves both tiers persist on one call).
     assert_eq!(
-        meta.managed_meta.and_then(|m| m.provenance),
+        meta.managed_meta.provenance,
         Some("llm-discovered".to_string())
     );
 

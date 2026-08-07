@@ -16,6 +16,7 @@ pub mod invocation;
 pub mod memory;
 pub mod pull;
 pub mod resource;
+pub mod resource_sections;
 pub mod search_cmd;
 pub mod skill;
 pub mod slack;

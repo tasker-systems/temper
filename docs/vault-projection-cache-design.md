@@ -184,7 +184,7 @@ In `show_generic` (`crates/temper-cli/src/commands/resource.rs:687`):
 > *only* read path, and the projected file is a downstream artifact, never a
 > source consulted first.
 
-The cheap-orientation flags (`--meta-only`, `--fields`, `--edges`) are likewise
+The cheap-orientation flags (`--without body`, `--fields`, `--edges`) are likewise
 served from the API, not from disk; see [`CLAUDE.md`](../CLAUDE.md) ("Cheap
 Orientation").
 

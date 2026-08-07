@@ -30,56 +30,27 @@ pub struct CliSearchArgs<'a> {
     /// Cogmap refs (UUID or decorated) for single- or multi-map scope — the corpus is the union of
     /// the maps. Empty ⇒ no cogmap scope. Mutually exclusive with `context`.
     pub cogmap: &'a [String],
-    /// Wayfind region-salience scope across the principal's visible maps. Mutually exclusive
-    /// with `context` and `cogmap`.
-    pub wayfind: bool,
-    /// Lens ref (UUID or decorated) overriding wayfind region selection. Requires `wayfind`.
-    pub lens: Option<&'a str>,
-    /// Top-N regions to scope into for wayfind (default/ceiling are server-side). Requires `wayfind`.
-    /// Also bounds anchor reach — Stage-1 admits at most one region per anchor per round — and the
-    /// width actually applied comes back as `diagnostics.regions_effective` (issue #585).
-    pub regions: Option<i64>,
     pub doc_type: Option<&'a str>,
     pub limit: Option<i64>,
-    pub seed_ids: Vec<uuid::Uuid>,
-    pub edge_types: Vec<String>,
-    pub depth: Option<i32>,
-    pub no_graph: bool,
-    /// Restrict graph expansion to the explicit `seed_ids`, skipping the auto-seed union (#357).
-    pub seed_only: bool,
 }
 
 /// Build a SearchParams from CLI arguments.
 pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
-    // Mirror the server's guard (`resolve_search_scope`): `--context` and `--cogmap` name two
+    // Mirror the server's guard (`resolve_search_anchor`): `--context` and `--cogmap` name two
     // different homes and remain mutually exclusive. Reject here rather than relying solely on the
     // server's BadRequest, so the error surfaces before any network round-trip.
-    //
-    // `--wayfind` is NO LONGER part of that exclusion (T7, spec §3.7). It now composes with either:
-    // wayfind pools regions over both anchor kinds, so `--context X --wayfind` means "wayfind within
-    // this context" and `--cogmap Y --wayfind` "wayfind within this cogmap". This client-side guard
-    // is the thing that actually gated `temper search --context @me/temper --wayfind` — the server
-    // would have accepted it, but the CLI rejected it before the round-trip.
     if args.context.is_some() && !args.cogmap.is_empty() {
         return Err(TemperError::BadRequest(
             "--context and --cogmap are mutually exclusive; specify at most one home".into(),
         ));
     }
-    // Wayfind anchors on a SINGLE home, so it composes with at most one --cogmap. A multi-map
-    // --wayfind has no single anchor to pool regions within; reject it here, before the round-trip,
-    // rather than silently dropping the extra maps server-side.
-    if args.wayfind && args.cogmap.len() > 1 {
+    // Search scopes to ONE anchor. Several maps at once is a composition, not a repeated flag.
+    if args.cogmap.len() > 1 {
         return Err(TemperError::BadRequest(
-            "--wayfind anchors on a single map; pass at most one --cogmap with --wayfind".into(),
+            "search scopes to a single anchor; pass at most one --cogmap".into(),
         ));
     }
-    // `--lens` / `--regions` only modify the wayfind funnel; they are meaningless without it.
-    if !args.wayfind && (args.lens.is_some() || args.regions.is_some()) {
-        return Err(TemperError::BadRequest(
-            "--lens and --regions require --wayfind".into(),
-        ));
-    }
-    // Parse each --cogmap ref (trailing-UUID-only) into the multi-map set. Empty ⇒ no cogmap scope.
+    // Parse the --cogmap ref (trailing-UUID-only). Empty ⇒ no cogmap scope.
     let cogmap_ids: Option<Vec<uuid::Uuid>> = if args.cogmap.is_empty() {
         None
     } else {
@@ -94,38 +65,14 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
                 .collect::<Result<Vec<_>>>()?,
         )
     };
-    let lens_id = args
-        .lens
-        .map(|r| {
-            temper_workflow::operations::parse_ref(r)
-                .map(|id| id.0)
-                .map_err(|e| TemperError::Config(format!("invalid lens ref: {e}")))
-        })
-        .transpose()?;
     Ok(SearchParams {
         query: Some(args.query.to_string()),
         embedding: args.embedding,
         context_ref: args.context.map(String::from),
         cogmap_id: None,
         cogmap_ids,
-        wayfind: args.wayfind,
-        lens_id,
-        regions: args.regions,
         doc_type: args.doc_type.map(String::from),
         limit: args.limit,
-        seed_ids: if args.seed_ids.is_empty() {
-            None
-        } else {
-            Some(args.seed_ids)
-        },
-        edge_types: if args.edge_types.is_empty() {
-            None
-        } else {
-            Some(args.edge_types)
-        },
-        graph_depth: args.depth,
-        graph_expand: !args.no_graph,
-        seed_only: args.seed_only,
         ..SearchParams::default()
     })
 }
@@ -183,338 +130,126 @@ mod tests {
     }
 
     #[test]
-    fn test_build_search_params_passes_graph_flags() {
+    fn build_search_params_carries_the_anchor_and_nothing_else() {
         let args = CliSearchArgs {
             query: "hello",
             embedding: None,
             context: Some("temper"),
             cogmap: &[],
-            wayfind: false,
-            lens: None,
-            regions: None,
             doc_type: None,
             limit: Some(5),
-            seed_ids: vec![],
-            edge_types: vec!["broader".into()],
-            depth: Some(3),
-            no_graph: false,
-            seed_only: false,
         };
         let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.query.as_deref(), Some("hello"));
         assert_eq!(params.context_ref.as_deref(), Some("temper"));
         assert_eq!(params.limit, Some(5));
-        assert_eq!(
-            params.edge_types.as_deref(),
-            Some(&["broader".to_string()][..])
-        );
-        assert_eq!(params.graph_depth, Some(3));
-        assert!(params.graph_expand);
     }
 
     #[test]
-    fn test_build_search_params_no_graph_disables_expand() {
-        let args = CliSearchArgs {
-            query: "x",
-            embedding: None,
-            context: None,
-            cogmap: &[],
-            wayfind: false,
-            lens: None,
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let params = build_search_params(args).expect("build_search_params");
-        assert!(!params.graph_expand);
-    }
-
-    #[test]
-    fn test_build_search_params_carries_seed_only() {
-        let base = |seed_only: bool| CliSearchArgs {
-            query: "x",
-            embedding: None,
-            context: None,
-            cogmap: &[],
-            wayfind: false,
-            lens: None,
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: false,
-            seed_only,
-        };
-        assert!(
-            !build_search_params(base(false))
-                .expect("build_search_params")
-                .seed_only,
-            "default: seed_only false"
-        );
-        assert!(
-            build_search_params(base(true))
-                .expect("build_search_params")
-                .seed_only,
-            "--seed-only threads into SearchParams"
-        );
-    }
-
-    #[test]
-    fn test_build_search_params_cogmap_uuid() {
-        let id = uuid::Uuid::now_v7();
-        let maps = [id.to_string()];
-        let args = CliSearchArgs {
-            query: "q",
-            embedding: None,
-            context: None,
-            cogmap: &maps,
-            wayfind: false,
-            lens: None,
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let params = build_search_params(args).expect("build_search_params");
-        // A single --cogmap lands in the plural set; the scalar stays None (the server treats a
-        // one-element set as single-map scope).
-        assert_eq!(params.cogmap_ids, Some(vec![id]));
-        assert!(params.cogmap_id.is_none());
-        assert!(params.context_ref.is_none());
-    }
-
-    #[test]
-    fn test_build_search_params_multi_cogmap_union() {
-        let a = uuid::Uuid::now_v7();
-        let b = uuid::Uuid::now_v7();
-        let maps = [a.to_string(), b.to_string()];
-        let args = CliSearchArgs {
-            query: "q",
-            embedding: None,
-            context: None,
-            cogmap: &maps,
-            wayfind: false,
-            lens: None,
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let params = build_search_params(args).expect("build_search_params");
-        assert_eq!(
-            params.cogmap_ids,
-            Some(vec![a, b]),
-            "both maps ride into the set"
-        );
-    }
-
-    #[test]
-    fn test_build_search_params_multi_cogmap_rejects_wayfind() {
-        let maps = [
-            uuid::Uuid::now_v7().to_string(),
-            uuid::Uuid::now_v7().to_string(),
+    fn build_search_params_rejects_more_than_one_anchor() {
+        let two = [
+            "a-019d1d24-2000-7379-8f26-ae4ae87bc5c6".to_string(),
+            "b-019d1d24-2000-7379-8f26-ae4ae87bc5c7".to_string(),
         ];
         let args = CliSearchArgs {
-            query: "q",
+            query: "x",
             embedding: None,
             context: None,
-            cogmap: &maps,
-            wayfind: true,
-            lens: None,
-            regions: None,
+            cogmap: &two,
             doc_type: None,
             limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
         };
-        let err = build_search_params(args).expect_err("multi-map + wayfind is rejected");
+        let err = build_search_params(args).expect_err("two anchors must be rejected");
         assert!(
-            err.to_string().contains("single map"),
-            "error should name the single-anchor requirement; got {err}"
+            err.to_string().contains("single anchor"),
+            "the error names the one-anchor rule; got {err}"
         );
     }
 
-    #[test]
-    fn test_build_search_params_context_and_cogmap_mutually_exclusive() {
-        let id = uuid::Uuid::now_v7();
-        let maps = [id.to_string()];
-        let args = CliSearchArgs {
-            query: "q",
-            embedding: None,
-            context: Some("temper"),
-            cogmap: &maps,
-            wayfind: false,
-            lens: None,
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let err = build_search_params(args).expect_err("both scopes must be rejected client-side");
-        assert!(
-            err.to_string().contains("mutually exclusive"),
-            "error should name the mutual-exclusion guard; got {err}"
-        );
-    }
+    /// A [`ResourceView`] to hang a hit on — the wrapped half, identical for both arms.
+    ///
+    /// Built as the typed struct rather than a `serde_json::json!` literal: the hits are typed now,
+    /// and a hand-written JSON stand-in is exactly the thing that used to let the CLI's rendered
+    /// shape drift from the wire shape without any test noticing.
+    fn sample_resource() -> temper_core::types::resource_view::ResourceView {
+        use chrono::{DateTime, Utc};
+        use temper_core::types::ids::{ProfileId, ResourceId};
+        use temper_core::types::managed_meta::ManagedMeta;
+        use temper_core::types::resource_view::ResourceView;
 
-    #[test]
-    fn test_build_search_params_wayfind() {
-        let lens = uuid::Uuid::now_v7();
-        let lens_str = lens.to_string();
-        let args = CliSearchArgs {
-            query: "q",
-            embedding: None,
-            context: None,
-            cogmap: &[],
-            wayfind: true,
-            lens: Some(&lens_str),
-            regions: Some(5),
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let params = build_search_params(args).expect("build_search_params");
-        assert!(params.wayfind);
-        assert_eq!(params.lens_id, Some(lens));
-        assert_eq!(params.regions, Some(5));
-        assert!(params.context_ref.is_none());
-        assert!(params.cogmap_id.is_none());
-        assert!(params.cogmap_ids.is_none());
-    }
-
-    /// T7 INVERTS this test. `--context X --wayfind` used to be rejected here, client-side, before any
-    /// round-trip — which is what actually gated `temper search --context @me/temper --wayfind`, this
-    /// task's headline acceptance criterion. Wayfind now pools regions over both anchor kinds, so the
-    /// combination means "wayfind within this context" and must build a valid `SearchParams`.
-    #[test]
-    fn test_build_search_params_wayfind_composes_with_context() {
-        let args = CliSearchArgs {
-            query: "q",
-            embedding: None,
-            context: Some("@me/temper"),
-            cogmap: &[],
-            wayfind: true,
-            lens: None,
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let params =
-            build_search_params(args).expect("--context + --wayfind must now build: T7, spec §3.7");
-        assert!(params.wayfind, "wayfind must survive onto the wire");
-        assert_eq!(
-            params.context_ref.as_deref(),
-            Some("@me/temper"),
-            "the context must ride along as the wayfind anchor, not be dropped"
-        );
-    }
-
-    #[test]
-    fn test_build_search_params_lens_requires_wayfind() {
-        let lens = uuid::Uuid::now_v7();
-        let lens_str = lens.to_string();
-        let args = CliSearchArgs {
-            query: "q",
-            embedding: None,
-            context: None,
-            cogmap: &[],
-            wayfind: false,
-            lens: Some(&lens_str),
-            regions: None,
-            doc_type: None,
-            limit: None,
-            seed_ids: vec![],
-            edge_types: vec![],
-            depth: None,
-            no_graph: true,
-            seed_only: false,
-        };
-        let err = build_search_params(args).expect_err("--lens without --wayfind must be rejected");
-        assert!(
-            err.to_string().contains("require --wayfind"),
-            "error should name the wayfind requirement; got {err}"
-        );
-    }
-
-    #[test]
-    fn render_search_results_json_is_object_with_results_key() {
-        use temper_core::types::api::UnifiedSearchResultRow;
-        let rows = [UnifiedSearchResultRow {
-            resource_id: uuid::Uuid::nil(),
-            slug: "some-slug".to_string(),
+        let epoch = DateTime::<Utc>::from_timestamp(0, 0).expect("epoch");
+        ResourceView {
+            id: ResourceId::from(uuid::Uuid::nil()),
+            r#ref: String::new(),
             title: "Some Title".to_string(),
-            kb_uri: "kb://temper/some-slug".to_string(),
-            origin_uri: "file:///some/path.md".to_string(),
-            context: None,
-            doc_type: "task".to_string(),
-            fts_score: 0.5,
-            vector_score: 0.0,
-            graph_score: 0.0,
-            combined_score: 0.5,
-            origin: "fts".to_string(),
+            origin_uri: "test://some-title".to_string(),
+            kb_context_id: None,
+            context_name: None,
             context_slug: None,
             context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "someone".to_string(),
+            owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            is_active: true,
+            created: epoch,
+            updated: epoch,
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        }
+        .with_derived_refs()
+    }
+
+    #[test]
+    fn render_search_results_json_carries_both_arms_and_no_merged_list() {
+        use temper_core::types::api::{ExactHit, SearchScope, SearchScopeInfo, WideHit};
+        let exact = vec![ExactHit {
+            resource: sample_resource(),
+            fts_norm: 0.5,
         }];
-        let rows_value: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|r| serde_json::to_value(r).expect("row to value"))
-            .collect();
+        let wide = vec![WideHit {
+            resource: sample_resource(),
+            vec_norm: 0.8,
+        }];
         let doc = crate::commands::search_cmd::SearchResultsResponse {
-            results: rows_value,
-            diagnostics: Some(temper_core::types::api::SearchDiagnostics {
-                scope: temper_core::types::api::SearchScope::Global,
-                scope_size: None,
-                anchors_visible: None,
-                anchors_reached: None,
-                anchors_selected: None,
-                regions_effective: None,
-                matched: 1,
-                reason: temper_core::types::api::SearchReason::Ok,
-                degraded: false,
-                hint: None,
-            }),
+            exact,
+            wide,
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
         };
         let out =
             crate::format::render(&doc, crate::format::OutputFormat::Json).expect("json render");
 
-        assert!(out.starts_with('{'), "json should be an object: {out}");
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("single json document");
+        assert!(parsed["exact"].is_array(), "exact must be an array: {out}");
+        assert!(parsed["wide"].is_array(), "wide must be an array: {out}");
         assert!(
-            parsed["results"].is_array(),
-            "results must be an array: {out}"
+            parsed.get("results").is_none(),
+            "there is no merged `results` list to render: {out}"
         );
-        assert!(out.contains("\"slug\""), "json: {out}");
-        assert!(out.contains("\"title\""), "json: {out}");
+        assert_eq!(parsed["exact"][0]["fts_norm"], 0.5);
+        assert_eq!(parsed["wide"][0]["vec_norm"], 0.8);
+
+        // The quantity is on the hit; the resource it wraps is the shared shape and carries the
+        // `ref` the CLI used to inject at render time.
+        assert_eq!(parsed["exact"][0]["resource"]["title"], "Some Title");
+        assert_eq!(
+            parsed["exact"][0]["resource"]["ref"],
+            "some-title-00000000-0000-0000-0000-000000000000",
+            "the server-derived `ref` rides through render untouched: {out}"
+        );
+        assert!(
+            parsed["exact"][0]["resource"].get("fts_norm").is_none(),
+            "the arm's quantity stays on the hit, never on the resource: {out}"
+        );
     }
 }

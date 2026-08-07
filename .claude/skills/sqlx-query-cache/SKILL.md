@@ -6,10 +6,17 @@ description: How compile-time-checked SQL works in this repo and which .sqlx cac
 # SQL query checking and the `.sqlx` caches
 
 Production SQL queries use `sqlx::query!()` / `sqlx::query_as!()` / `sqlx::query_scalar!()`
-macros for compile-time verification against the actual schema. Exception: the
-`unified_search` query in `search_service.rs` uses runtime `query_as` due to pgvector
-`::vector` type cast incompatibility. Trivial test-fixture lookups may use runtime
-`sqlx::query()`; substantive test queries keep macros, cached per-crate (below).
+macros for compile-time verification against the actual schema. The exception class is
+**exactly one reason** — a `$n::vector` bind the macros cannot type — and it lives in
+`crates/temper-substrate/src/readback/mod.rs`, whose module note is the authority on which
+reads are in it. **Read the members there, and count them from the file; this document
+carries no number.** Trivial test-fixture lookups may use runtime `sqlx::query()`;
+substantive test queries keep macros, cached per-crate (below).
+
+> A runtime read that cannot state the `::vector` reason is **drift, not an exception** —
+> it is absent from the `.sqlx` cache, and that cache is the record a schema/binary change
+> detector reads, so the exemption silently subtracts from a safety check. Convert it to a
+> macro rather than documenting it as an exception.
 
 - **Local dev:** Set `DATABASE_URL` — macros check against the live database. Note
   `cargo make` tasks force `SQLX_OFFLINE=true`, so `cargo make check` is the honest local

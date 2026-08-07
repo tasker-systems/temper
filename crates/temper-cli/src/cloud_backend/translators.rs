@@ -317,21 +317,6 @@ pub(crate) fn cmd_to_resource_annotate_request(
     }
 }
 
-/// Project a `ResourceRow` (returned by `temper-client` methods) into the
-/// `ResourceRow` shape required by the `Backend` trait.
-///
-/// The temper-client already returns `temper_workflow::types::resource::ResourceRow`
-/// directly — there is no separate wire `Resource` type. This function is a
-/// clone and exists as a named boundary so the `CloudBackend` impl in Task 5
-/// has a consistent translation call site matching the other translators, and
-/// so the naming in the plan aligns with the actual code structure.
-#[cfg(feature = "embed")]
-pub(crate) fn wire_resource_to_resource_row(
-    resource: &temper_workflow::types::resource::ResourceRow,
-) -> temper_workflow::types::resource::ResourceRow {
-    resource.clone()
-}
-
 #[cfg(feature = "embed")]
 #[cfg(test)]
 mod tests {
@@ -665,53 +650,6 @@ mod tests {
         assert_eq!(req.content.as_deref(), Some("# Updated\n"));
         assert!(req.content_hash.is_some());
         assert!(req.chunks_packed.is_some());
-    }
-
-    // ── Task 4 tests ─────────────────────────────────────────────────────────
-
-    use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::types::resource::ResourceRow;
-    use uuid::Uuid;
-
-    fn sample_resource_row() -> ResourceRow {
-        let nil = Uuid::nil();
-        ResourceRow {
-            id: ResourceId(nil),
-            kb_context_id: Some(ContextId(nil)),
-            origin_uri: "kb://@me/temper/task/test-task".to_string(),
-            title: "Test Task".to_string(),
-            originator_profile_id: ProfileId(nil),
-            owner_profile_id: ProfileId(nil),
-            is_active: true,
-            created: chrono::DateTime::UNIX_EPOCH,
-            updated: chrono::DateTime::UNIX_EPOCH,
-            context_name: Some("temper".to_string()),
-            doc_type_name: "task".to_string(),
-            owner_handle: "@me".to_string(),
-            context_slug: Some("temper".to_string()),
-            context_owner_ref: Some("@me".to_string()),
-            cogmap_id: None,
-            cogmap_name: None,
-            stage: Some("active".to_string()),
-            seq: None,
-            mode: None,
-            effort: None,
-            body_hash: Some("abc123".to_string()),
-            ingest_state: Some(temper_workflow::types::IngestState::Complete),
-            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
-        }
-    }
-
-    #[test]
-    fn wire_resource_to_resource_row_maps_basic_fields() {
-        let wire = sample_resource_row();
-        let row = wire_resource_to_resource_row(&wire);
-        assert_eq!(row.title, "Test Task");
-        assert_eq!(row.id, ResourceId(Uuid::nil()));
-        assert_eq!(row.context_name.as_deref(), Some("temper"));
-        assert_eq!(row.doc_type_name, "task");
-        assert_eq!(row.body_hash, Some("abc123".to_string()));
-        assert_eq!(row.owner_handle, "@me");
     }
 }
 

@@ -12,7 +12,7 @@
 //! Harness + seeding helpers are local copies of `tests/evidential_standing.rs`'s
 //! `system_actor`/`make_home`/`make_resource` (duplicated per file across this test suite by
 //! established convention — `block_content.rs`, `invocation_envelope.rs`, `search_index.rs`,
-//! `search_surface_a.rs`, and `write_path_mutations.rs` each carry their own copy).
+//! `search_graph_expand.rs`, and `write_path_mutations.rs` each carry their own copy).
 
 mod common;
 

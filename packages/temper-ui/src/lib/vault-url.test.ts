@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { ResourceRow } from './types/generated/resource';
+import type { ResourceView } from './types/generated/resource_view';
 import {
 	contextGraphHref,
 	contextHref,
+	isCogmapHomed,
 	isContextGraphLocation,
 	isContextLocation,
 	resourceHref,
@@ -11,9 +12,10 @@ import {
 
 const ID = '019f420c-cf01-7bc1-87c9-09684b0fa69e';
 
-function makeRow(partial: Partial<ResourceRow>): ResourceRow {
+function makeRow(partial: Partial<ResourceView>): ResourceView {
 	return {
 		id: ID,
+		ref: `t-${ID}`,
 		kb_context_id: '00000000-0000-0000-0003-000000000001',
 		origin_uri: '',
 		title: 'T',
@@ -27,15 +29,28 @@ function makeRow(partial: Partial<ResourceRow>): ResourceRow {
 		owner_handle: 'j-cole-taylor',
 		context_slug: 'temper',
 		context_owner_ref: '@j-cole-taylor',
+		context_ref: '@j-cole-taylor/temper',
 		cogmap_id: null,
 		cogmap_name: null,
-		stage: null,
-		seq: null,
-		mode: null,
-		effort: null,
 		body_hash: null,
 		ingest_state: 'complete',
 		body_storage: 'derived',
+		// The hoisted `stage`/`seq`/`mode`/`effort` columns are gone; every managed value
+		// lives in this always-present tier under its canonical `temper-*` name.
+		managed_meta: {
+			'temper-stage': null,
+			'temper-mode': null,
+			'temper-effort': null,
+			'temper-status': null,
+			'temper-seq': null,
+			'temper-branch': null,
+			'temper-pr': null,
+			'temper-llm-model': null,
+			'temper-llm-run': null,
+			'temper-provenance': null,
+		},
+		open_meta: null,
+		content: null,
 		...partial,
 	};
 }
@@ -96,6 +111,44 @@ describe('resourceHref', () => {
 describe('searchHref', () => {
 	it('encodes the query', () => {
 		expect(searchHref('auth flow')).toBe('/vault/search?q=auth%20flow');
+	});
+});
+
+/**
+ * Drop a key entirely, rather than setting it to null.
+ *
+ * `makeRow` cannot express this: it assigns `cogmap_id: null`, which is the shape `ResourceRow`
+ * put on the wire and NOT the one `ResourceView` does. That fixture is why the always-true
+ * comparison in HomeChip survived review — every test fed it the old shape.
+ */
+function withoutKey<K extends keyof ResourceView>(row: ResourceView, key: K): ResourceView {
+	const { [key]: _omitted, ...rest } = row;
+	return rest as ResourceView;
+}
+
+describe('isCogmapHomed', () => {
+	it('is false for a context-homed row AS THE WIRE SENDS IT — with no cogmap_id key at all', () => {
+		// The bite test. `skip_serializing_if = "Option::is_none"` omits the key, so the value is
+		// `undefined`, and `undefined !== null` is true — the previous rule classified every
+		// context-homed resource as a cogmap and rendered it as dead, unlinked text.
+		const row = withoutKey(withoutKey(makeRow({}), 'cogmap_id'), 'cogmap_name');
+		expect(row).not.toHaveProperty('cogmap_id');
+		expect(isCogmapHomed(row)).toBe(false);
+	});
+
+	it('is true for a cogmap-homed row', () => {
+		// The positive control: without it, a rule that always returned false would pass above.
+		const row = withoutKey(
+			makeRow({ cogmap_id: 'ac1d0000-0000-0000-0000-00000000c0de', cogmap_name: 'Map' }),
+			'context_name',
+		);
+		expect(isCogmapHomed(row)).toBe(true);
+	});
+
+	it('agrees with itself on an explicit null, so both wire shapes classify alike', () => {
+		// A null key reaches this from any hand-built fixture or an older serializer. Absent and
+		// null mean the same thing — "not homed here" — and must never diverge.
+		expect(isCogmapHomed(makeRow({ cogmap_id: null }))).toBe(false);
 	});
 });
 

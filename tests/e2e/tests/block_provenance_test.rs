@@ -423,7 +423,8 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
                     edges: false,
                     lineage: false,
                     provenance: true,
-                    meta_only: false,
+                    with: &[],
+                    without: &[],
                     fields: &[],
                 },
             )

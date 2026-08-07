@@ -14,7 +14,7 @@ import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atl
 import type { ContextPanorama } from '$lib/types/generated/graph_context';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
-import type { ResourceRow } from '$lib/types/generated/resource';
+import type { ResourceView } from '$lib/types/generated/resource_view';
 import type { TeamRow } from '$lib/types/generated/team';
 
 export const atlasHomePath = (): string => '/api/graph/home';
@@ -85,8 +85,8 @@ export const readTrail = (token: string, kind: ElementKind, id: string): Promise
 export const listTeams = (token: string): Promise<TeamRow[]> =>
 	apiGet<TeamRow[]>(teamsListPath(), token);
 
-export const readResourceRow = (token: string, id: string): Promise<ResourceRow> =>
-	apiGet<ResourceRow>(resourceRowPath(id), token);
+export const readResourceRow = (token: string, id: string): Promise<ResourceView> =>
+	apiGet<ResourceView>(resourceRowPath(id), token);
 
 /** Edges incident to one resource. Rows are peer-denormalized — no subgraph load. */
 export const readResourceEdges = (token: string, id: string): Promise<GraphEdgeRow[]> =>

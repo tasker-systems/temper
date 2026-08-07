@@ -1,7 +1,5 @@
 use temper_workflow::operations::sluggify;
-use temper_workflow::types::resource::{
-    ResourceListParams, ResourceRow, ResourceSortField, SortOrder,
-};
+use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
 use crate::actions::runtime;
 use crate::actions::types::TaskInfo;
@@ -97,22 +95,28 @@ pub fn load_tasks(config: &Config, context: Option<&str>) -> Result<Vec<TaskInfo
 }
 
 /// Build a [`TaskInfo`] from a full resource row plus the context the listing was
-/// scoped to. Identity `title` and the workflow projections (`stage`/`mode`/
-/// `effort`/`seq`) are top-level row columns; `slug` is title-derived (`sluggify`)
-/// for `find_task` suffix matching. `seq` is `i64` on the row and `u32` on
-/// `TaskInfo`, so negative/out-of-range values clamp to `None` (unsequenced, sorts
-/// last). `branch`/`pr` are not in the list projection today — they read as `None`
-/// here (restored by task 019f3d55).
-fn task_info_from_row(row: ResourceRow, context: &str) -> TaskInfo {
+/// scoped to. Identity `title` is a top-level column; the workflow values
+/// (`stage`/`mode`/`effort`/`seq`) are read from `managed_meta`, under their canonical
+/// `temper-*` names — they were hoisted flat onto `ResourceRow` and are not hoisted onto
+/// [`temper_core::types::resource_view::ResourceView`], which is lossless precisely because
+/// `managed_meta` is always present.
+/// `slug` is title-derived (`sluggify`) for `find_task` suffix matching. `seq` is `i64` in
+/// the managed tier and `u32` on `TaskInfo`, so negative/out-of-range values clamp to `None`
+/// (unsequenced, sorts last). `branch`/`pr` are not in the list projection today — they read
+/// as `None` here (restored by task 019f3d55).
+pub(crate) fn task_info_from_row(
+    row: temper_core::types::resource_view::ResourceView,
+    context: &str,
+) -> TaskInfo {
     TaskInfo {
         id: row.id,
         slug: sluggify(&row.title),
         title: row.title,
         context: context.to_string(),
-        stage: row.stage.unwrap_or_default(),
-        mode: row.mode,
-        effort: row.effort,
-        seq: row.seq.and_then(|s| u32::try_from(s).ok()),
+        stage: row.managed_meta.stage.unwrap_or_default(),
+        mode: row.managed_meta.mode,
+        effort: row.managed_meta.effort,
+        seq: row.managed_meta.seq.and_then(|s| u32::try_from(s).ok()),
         branch: None,
         pr: None,
     }

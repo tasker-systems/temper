@@ -1079,6 +1079,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * `GET /api/resources` — **one response type, unconditionally.**
+         * @description This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,
+         *     selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a
+         *     union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the
+         *     caller varies which *parts* of `ResourceView` are filled, never which type comes back. The
+         *     `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are
+         *     gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
+         */
         get: operations["list_resources"];
         put?: never;
         post: operations["create_resource"];
@@ -1395,6 +1404,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /**
+         * `POST /api/search`.
+         * @description The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics` beside
+         *     a body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that reason; the
+         *     body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That
+         *     also retires the header's percent-encoding scar — non-ASCII hint text was arriving at clients as
+         *     `%E2%80%94` because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded
+         *     by `every_emitted_hint_is_ascii`, since nothing is gained by relaxing it.
+         */
         post: operations["search"];
         delete?: never;
         options?: never;
@@ -2893,6 +2911,37 @@ export interface components {
             events: components["schemas"]["ElementEvent"][];
         };
         /**
+         * @description The **exact** arm and its own disposition.
+         *
+         *     The `reason` is per-arm because one shared reason has to describe both arms at once, and would
+         *     report `NoMatch` for a response whose other arm returned hits — a rollup that reads as an answer
+         *     about the question asked when it is not.
+         */
+        ExactArm: {
+            /** @description One-liner explaining a non-`Ok` reason and suggesting a next step. */
+            hint?: string | null;
+            hits: components["schemas"]["ExactHit"][];
+            reason: components["schemas"]["SearchReason"];
+        };
+        /**
+         * @description One hit from the **exact** arm: you could quote the words.
+         *
+         *     Ordered by `fts_norm` and carrying no other quantity. A second number here would be something to
+         *     rank it against, which is the category error this whole shape exists to make unrepresentable.
+         */
+        ExactHit: {
+            /**
+             * Format: float
+             * @description `ts_rank` flag 33 — `rank/(rank+1)` normalization plus log-length division — in `[0,1)`.
+             */
+            fts_norm: number;
+            /**
+             * @description The resource this hit names — the same shape `list`, `show`, `create`, `update` and
+             *     `annotate` all answer in.
+             */
+            resource: components["schemas"]["ResourceView"];
+        };
+        /**
          * @description Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.
          *
          *     A facet is stored one row per inner key (migration `20260730000010`), so `{status: open,
@@ -3061,12 +3110,12 @@ export interface components {
         IdpRevocation: "not_attempted" | "revoked" | "failed";
         /**
          * @description `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
-         *     the one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`]
+         *     the one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`]
          *     when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
          *     discriminates by which fields are present (`SegmentedBeginResponse` always carries
-         *     `correlation_id`/`blocks`, which `ResourceRow` never does).
+         *     `correlation_id`/`blocks`, which `ResourceView` never does).
          */
-        IngestCreateResponse: components["schemas"]["ResourceRow"] | components["schemas"]["SegmentedBeginResponse"];
+        IngestCreateResponse: components["schemas"]["ResourceView"] | components["schemas"]["SegmentedBeginResponse"];
         /**
          * @description The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the
          *     steward's cron pulls. `new_resources` is the counted ingest metric; `new_events` is the broader
@@ -3486,13 +3535,6 @@ export interface components {
             resource_id: string;
             title: string;
         };
-        /**
-         * @description Combined response for `GET /api/resources`.
-         *
-         *     Returned shape depends on the `meta_only` query parameter. utoipa
-         *     represents this as `oneOf<ResourceListResponse, ResourceMetaListResponse>`.
-         */
-        ListResourcesResponse: components["schemas"]["ResourceListResponse"] | components["schemas"]["ResourceMetaListResponse"];
         /**
          * @description Temper-governed **workflow + provenance** metadata for a vault resource.
          *
@@ -4140,32 +4182,6 @@ export interface components {
             title: string;
         };
         /**
-         * @description The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.
-         *
-         *     `show` used to return a bare `ResourceRow`, which carries only the flat managed
-         *     projections (`stage`/`seq`/`mode`/`effort`) — so the "full" view silently omitted
-         *     both `managed_meta` and `open_meta`, and a script reading `open_meta` from it got
-         *     `None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for
-         *     the tiers.
-         *
-         *     The two meta fields carry serde attributes identical to
-         *     [`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only`
-         *     projection is a literal strict subset of this shape.
-         *
-         *     No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the
-         *     `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The
-         *     SvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is
-         *     a structural superset of it, so the extra keys are simply ignored there.
-         */
-        ResourceDetail: components["schemas"]["ResourceRow"] & {
-            managed_meta?: null | components["schemas"]["ManagedMeta"];
-            /**
-             * @description Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
-             *     `None` only if the manifest row predates meta population.
-             */
-            open_meta?: unknown;
-        };
-        /**
          * @description One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.
          *
          *     **Deliberately not [`EdgeFacetRow`], and not an alias of it.** The two look alike and are not
@@ -4288,123 +4304,65 @@ export interface components {
              */
             resource_id: string;
         };
-        /** @description Paginated response for resource list endpoints, with doc-type facets. */
+        /**
+         * @description Paginated response for resource list endpoints, with doc-type facets.
+         *
+         *     The envelope carries its own paging state, so a caller can tell a whole set from a
+         *     page of one without knowing what it asked for. `returned` and `truncated` used to be
+         *     injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP
+         *     and raw-HTTP callers never received them — while the shipped agent skill instructs
+         *     every agent that "every list response carries `total`, `returned`, and `truncated`".
+         *     Same defect class as the `ref` the CLI was likewise the only surface to emit.
+         *
+         *     Build through [`ResourceListResponse::new`], which derives `returned` and `truncated`
+         *     from the page rather than trusting a caller to keep them consistent with `rows`.
+         */
         ResourceListResponse: {
             facets: components["schemas"]["ResourceFacets"];
-            rows: components["schemas"]["ResourceRow"][];
-            /** Format: int64 */
-            total: number;
-        };
-        /**
-         * @description Paginated response for the `?meta_only=true` list mode.
-         *
-         *     Mirror of [`crate::types::resource::ResourceListResponse`] with the row type
-         *     swapped to [`crate::types::resource::ResourceDetail`] — the full row (title,
-         *     doc_type, context, owner, the stage/seq/mode/effort projections) plus both
-         *     `managed_meta` and `open_meta` tiers. This is the list analogue of what
-         *     `--meta-only` gives on a single `show`: everything the default list row carries
-         *     **and** both meta tiers, per item — the whole view minus each resource's body.
-         *     (The default list row, [`crate::types::resource::ResourceRow`], carries neither
-         *     meta tier.) Returned by `GET /api/resources?meta_only=true`. Facets and total
-         *     are computed identically to the default list response — projection-independent.
-         *
-         *     No `ts_rs::TS` derive: `ResourceDetail` cannot codegen (its `#[serde(flatten)]`
-         *     row is unsupported by ts-rs), so this container cannot either. The SvelteKit UI
-         *     types the list endpoint as `ResourceListResponse` regardless; this shape is a
-         *     structural superset, so the extra keys are simply ignored there.
-         */
-        ResourceMetaListResponse: {
-            facets: components["schemas"]["ResourceFacets"];
-            rows: components["schemas"]["ResourceDetail"][];
-            /** Format: int64 */
-            total: number;
-        };
-        /**
-         * @description Response body for the metadata-only GET endpoint.
-         *
-         *     Returns the current managed_meta / open_meta / hashes from a
-         *     resource's manifest row without reconstructing the markdown body
-         *     from `kb_chunks`. Used by the CLI sync pull path to fetch just the
-         *     meta tier when the body side already agrees.
-         */
-        ResourceMetaResponse: {
             /**
-             * @description UUID of the resource.
+             * Format: int64
+             * @description The effective page size the server applied, or `None` for an uncapped page
+             *     (`--all`). An echo of what the caller asked for, not a clamp — no server-side
+             *     clamp exists.
+             */
+            limit?: number | null;
+            /**
+             * Format: int64
+             * @description The offset this page starts at; `0` when the caller sent none.
+             */
+            offset: number;
+            /**
+             * Format: int64
+             * @description This page's row count. Always `rows.len()`; carried explicitly so the count
+             *     survives a projection that drops or summarizes the rows.
+             */
+            returned: number;
+            /**
+             * @description One [`ResourceView`] per row — **the same shape `show` answers in**, so a single-row
+             *     list and a `show` of that resource serialize identically when neither asks for the body.
+             *     There is no second list envelope: `?sections=` varies which parts of this shape are
+             *     filled, never which type comes back.
+             */
+            rows: components["schemas"]["ResourceView"][];
+            /**
+             * Format: int64
+             * @description The FILTERED match count — every row the filters admit, before `limit`/`offset`.
+             */
+            total: number;
+            /**
+             * @description Are there matching rows beyond this page? `offset + returned < total`.
              *
-             *     Named `id` (not `resource_id`) so this response is a literal strict subset of
-             *     [`crate::types::resource::ResourceDetail`]: `--meta-only` returns the same keys the
-             *     full `show` does, and nothing else. With two different anchor names the subset
-             *     relation is unachievable.
+             *     Deliberately not `total > returned`, which is true on the last page of a walk
+             *     (total 25, offset 20, returned 5) where nothing is in fact hidden. `true` here is
+             *     what tells a caller it may not conclude a resource is absent from what it sees.
              */
-            id: components["schemas"]["ResourceId"];
-            managed_meta?: null | components["schemas"]["ManagedMeta"];
-            /**
-             * @description Open (user-defined) frontmatter fields from the manifest.
-             *     Intentionally untyped — open_meta is the free-form tier. Typed
-             *     extraction of relationship fields lives in `ResourceRelationships`
-             *     (see `temper-core::types::graph`), which parses this value on
-             *     demand and ignores anything it doesn't recognize.
-             *     `None` only if the manifest row predates meta population.
-             */
-            open_meta?: unknown;
+            truncated: boolean;
         };
         /** @description Delete a `kb_access_grants` row on a resource (the `(subject, principal)` pair). Absent ⇒ no-op. */
         ResourceRevokeBody: {
             /** Format: uuid */
             principal_id: string;
             principal_table: string;
-        };
-        /**
-         * @description Row type for resource listings — includes joined display fields
-         *     and managed_meta projections from `vault_resources_browse` view.
-         */
-        ResourceRow: {
-            /**
-             * @description SHA-256 hash of the resource body content, from `kb_resource_manifests`.
-             *     `None` when no manifest row exists (resource created via POST without a
-             *     body trio, or the manifest join returned NULL).
-             */
-            body_hash?: string | null;
-            body_storage?: null | components["schemas"]["BodyStorage"];
-            /**
-             * Format: uuid
-             * @description Set when the resource is homed in a cognitive map (Surface B).
-             *     Mutually exclusive with the `context_*` fields.
-             */
-            cogmap_id?: string | null;
-            /** @description Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`. */
-            cogmap_name?: string | null;
-            context_name?: string | null;
-            /**
-             * @description Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
-             *     Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
-             *     `None` for a cogmap-homed resource.
-             */
-            context_owner_ref?: string | null;
-            /**
-             * @description Slug of the home context (the natural-key half of `@owner/slug`).
-             *     `None` for a cogmap-homed resource.
-             */
-            context_slug?: string | null;
-            /** Format: date-time */
-            created: string;
-            doc_type_name: string;
-            effort?: string | null;
-            id: components["schemas"]["ResourceId"];
-            ingest_state?: null | components["schemas"]["IngestState"];
-            is_active: boolean;
-            kb_context_id?: null | components["schemas"]["ContextId"];
-            mode?: string | null;
-            origin_uri: string;
-            originator_profile_id: components["schemas"]["ProfileId"];
-            owner_handle: string;
-            owner_profile_id: components["schemas"]["ProfileId"];
-            /** Format: int64 */
-            seq?: number | null;
-            stage?: string | null;
-            title: string;
-            /** Format: date-time */
-            updated: string;
         };
         /**
          * @description Sort field for resource listing.
@@ -4497,6 +4455,122 @@ export interface components {
              */
             type_to?: string | null;
         };
+        /**
+         * @description Everything a resource is, except its body — one shape for every read and write
+         *     surface.
+         *
+         *     Replaces the six near-identical projections a caller used to have to tell apart
+         *     (`ResourceRow`, `ResourceDetail`, `ResourceMetaResponse`, `ResourceSummary`, the
+         *     search `HitIdentity`, and the inlined identity half of `ExactHit`/`WideHit`). A
+         *     human or agent learns this shape once and it is the shape `list`, `show`, `create`,
+         *     `update`, `annotate` and both search arms all answer in.
+         *
+         *     Three properties are load-bearing and each has its own test below:
+         *
+         *     1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`
+         *        recorded why: "With two different anchor names the subset relation is unachievable."
+         *        Here the relation is stronger than subset — it is identity.
+         *     2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on
+         *        `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and
+         *        nowhere else. Dropping them is lossless *because* of property 3.
+         *     3. **`managed_meta` is not an `Option`.** A consumer reads `view.managed_meta.stage`
+         *        without first distinguishing "no meta" from "no stage".
+         *
+         *     **No `#[serde(flatten)]` anywhere**, deliberately: ts-rs cannot codegen a flattened
+         *     field, which is why `ResourceDetail` had to drop its `TS` derive and why the identity
+         *     fields on `ExactHit`/`WideHit` were hand-inlined. This type is ts-rs-exported, so the
+         *     constraint is structural, not stylistic.
+         *
+         *     **No `FromRow` derive, deliberately.** `ref` and `context_ref` are derived rather than
+         *     selected and `content` arrives from a different read, so a `query_as` into this type
+         *     could never be complete. `ResourceRow` carried a `FromRow` derive with **zero**
+         *     `query_as` call sites anywhere in the repo — decorative, and an invitation to try
+         *     something that cannot work. Construction is by hand, as `substrate_read` already does.
+         */
+        ResourceView: {
+            /**
+             * @description SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
+             *     manifest row exists.
+             */
+            body_hash?: string | null;
+            body_storage?: null | components["schemas"]["BodyStorage"];
+            /**
+             * Format: uuid
+             * @description Set when the resource is homed in a cognitive map. Mutually exclusive with
+             *     the `context_*` fields.
+             */
+            cogmap_id?: string | null;
+            /** @description Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`. */
+            cogmap_name?: string | null;
+            /**
+             * @description The reconstructed markdown body — the `body` section.
+             *
+             *     Absent means **not requested**, never "empty body". An empty body is
+             *     `Some(String::new())`, which serializes as `""`; the two are distinguishable on
+             *     the wire and after a round-trip.
+             */
+            content?: string | null;
+            context_name?: string | null;
+            /** @description Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams. */
+            context_owner_ref?: string | null;
+            /**
+             * @description The composed home-context address, `{context_owner_ref}/{context_slug}`.
+             *
+             *     Not a column — derived by [`ResourceView::with_derived_refs`]. `None` for a
+             *     cogmap-homed resource, which has no context half; never a half-formed ref.
+             */
+            context_ref?: string | null;
+            /** @description Slug of the home context (the natural-key half of `@owner/slug`). */
+            context_slug?: string | null;
+            /** Format: date-time */
+            created: string;
+            doc_type_name: string;
+            id: components["schemas"]["ResourceId"];
+            ingest_state?: null | components["schemas"]["IngestState"];
+            is_active: boolean;
+            kb_context_id?: null | components["schemas"]["ContextId"];
+            /**
+             * @description Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.
+             *
+             *     **Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/
+             *     `effort`/`seq` columns lossless: the values did not go away, they went home. A
+             *     resource with no managed metadata carries an all-`None` `ManagedMeta`, which
+             *     serializes as `{}` — present and empty, never absent.
+             */
+            managed_meta?: components["schemas"]["ManagedMeta"];
+            /**
+             * @description Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
+             *     Absent means the `open-meta` section was not requested.
+             */
+            open_meta?: unknown;
+            /**
+             * @description Original source URL or file reference.
+             *
+             *     There is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one
+             *     whose doc comment promised a "canonical `kb://` URI ... from `kb_resource_uri`",
+             *     but `kb_resource_uri` does not exist in `migrations/` and the assembly wrote
+             *     `kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value
+             *     under a second name and a false description. It joins `origin` (the constant
+             *     `"unified"`) and `slug` (always `String::new()`) as a field this arc dropped for
+             *     never having carried what it claimed.
+             */
+            origin_uri: string;
+            originator_profile_id: components["schemas"]["ProfileId"];
+            owner_handle: string;
+            owner_profile_id: components["schemas"]["ProfileId"];
+            /**
+             * @description The decorated, self-resolving address: `sluggify(title)-<uuid>`.
+             *
+             *     Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`.
+             *     Until this task it was injected render-time by the CLI alone
+             *     (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even
+             *     though the shipped skill instructs agents to use it.
+             */
+            ref: string;
+            title: string;
+            /** Format: date-time */
+            updated: string;
+        };
         /** @description Request body for `POST /api/relationships/{edge_handle}/retype`. */
         RetypeRelationshipRequest: components["schemas"]["ActInput"] & {
             edge_kind: components["schemas"]["EdgeKind"];
@@ -4510,79 +4584,6 @@ export interface components {
         ReweightRelationshipRequest: components["schemas"]["ActInput"] & {
             /** Format: double */
             weight: number;
-        };
-        /**
-         * @description Scope-stage diagnostics accompanying every search response (issue #360). Machine-readable so
-         *     agent harnesses can branch programmatically; `hint` is the human/agent-facing one-liner the
-         *     CLI renders to stderr on a non-`Ok` reason.
-         */
-        SearchDiagnostics: {
-            /**
-             * Format: int64
-             * @description How many anchors actually contributed a resource to the scope, counting both the region-winner
-             *     arm and the cold-start arm. `Some` only for `wayfind` (issue #585).
-             *
-             *     **This number has a floor — do not read it as a fairness signal on its own.** An anchor that
-             *     holds resources but no regions is admitted wholesale by cold-start on *every* query, whatever
-             *     was asked, so it is always reached. On the production corpus that floor was measured at 6 of 10
-             *     visible anchors, which means a fully monopolized wayfind still reports 7 of 10 here. Read it
-             *     with [`anchors_selected`](Self::anchors_selected), which carries the competitive sense.
-             */
-            anchors_reached?: number | null;
-            /**
-             * Format: int64
-             * @description How many anchors won a region slot — the **competitive** subset of `anchors_reached`, and the
-             *     field that makes a monopoly visible: one anchor holding the entire region width is
-             *     `anchors_selected: 1` no matter how high `anchors_reached` climbs. `anchors_reached -
-             *     anchors_selected` is the count admitted wholesale with no query relevance at all. `Some` only
-             *     for `wayfind` (issue #585).
-             */
-            anchors_selected?: number | null;
-            /**
-             * Format: int64
-             * @description How many region anchors — cognitive maps and contexts alike — the principal could have
-             *     reached on this query, after any single-anchor scoping. The denominator for
-             *     [`anchors_reached`](Self::anchors_reached). `Some` only for `wayfind`, the sole scope that
-             *     pools across anchors (issue #585).
-             */
-            anchors_visible?: number | null;
-            /**
-             * @description True when a ranking signal degraded silently — currently: server-side query embedding
-             *     failed and the blend fell back to FTS + graph only. Results are still returned.
-             */
-            degraded: boolean;
-            /** @description One-liner explaining a non-`Ok` reason (or a degraded signal) and suggesting a next step. */
-            hint?: string | null;
-            /**
-             * Format: int64
-             * @description Number of results returned (post-ranking, post-limit).
-             */
-            matched: number;
-            /** @description Why the result set is shaped as it is. */
-            reason: components["schemas"]["SearchReason"];
-            /**
-             * Format: int64
-             * @description The region width actually applied after the server-side clamp — what `--regions`/`regions`
-             *     resolved to, including the default substituted when the caller passed nothing. Since Stage-1
-             *     admits at most one region per anchor per round, this **bounds** `anchors_reached`: a caller
-             *     seeing `anchors_reached == regions_effective < anchors_visible` is looking at a width limit,
-             *     not at an irrelevant corpus. `Some` only for `wayfind` (issue #585).
-             */
-            regions_effective?: number | null;
-            /** @description Which selector produced the corpus. */
-            scope: components["schemas"]["SearchScope"];
-            /**
-             * Format: int64
-             * @description Number of candidate resources the scope selector admitted, when it is cheaply knowable:
-             *     the resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose
-             *     corpus is not a bounded id-set at scope-resolution time.
-             *
-             *     **This is a resource count and is not a reach signal.** A wayfind drawn entirely from one map
-             *     and one drawn evenly across ten both report a figure in the hundreds — read
-             *     [`anchors_reached`](Self::anchors_reached) against
-             *     [`anchors_visible`](Self::anchors_visible) for that (issue #585).
-             */
-            scope_size?: number | null;
         };
         /** @description Request body for POST /api/search. */
         SearchParams: {
@@ -4598,32 +4599,20 @@ export interface components {
              */
             cogmap_id?: string | null;
             /**
-             * @description Multi-map scope: the corpus is the UNION of each map's homed, visible participants. Additive
-             *     beside `cogmap_id` (the sink `unified_search.p_scope_ids` was always a `uuid[]`); an older
-             *     server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.
+             * @description Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to
+             *     `cogmap_id`. Mutually exclusive with `context_ref`.
+             *
+             *     **A set larger than one is now a `400`.** Search scopes to a single anchor; asking several
+             *     maps at once is a composition, which is `/api/query`'s job. The plural is kept because
+             *     clients send it and a one-element set is still honoured.
              */
             cogmap_ids?: string[] | null;
             /** @description Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side. */
             context_ref?: string | null;
             /** @description Filter by document type. */
             doc_type?: string | null;
-            /** @description Edge type filter for graph expansion (empty = all types). */
-            edge_types?: string[] | null;
             /** @description Pre-computed 768-dim embedding vector. */
             embedding?: number[] | null;
-            /**
-             * Format: int32
-             * @description Max hops for graph traversal (default 2, max 3 — clamped for Surface A).
-             */
-            graph_depth?: number | null;
-            /** @description Whether to expand results via graph edges (default true). */
-            graph_expand?: boolean;
-            /**
-             * Format: uuid
-             * @description Optional lens override for wayfind region selection (resolved client-side, trailing-UUID).
-             *     `None` ⇒ each region's memoized salience under its own lens.
-             */
-            lens_id?: string | null;
             /**
              * Format: int64
              * @description Maximum results (default 10, max 50).
@@ -4637,35 +4626,12 @@ export interface components {
             /** @description Plain-text query for full-text search. */
             query?: string | null;
             /**
-             * Format: int64
-             * @description Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless
-             *     `wayfind`.
-             *
-             *     **Also bounds how many anchors the query can reach**: Stage-1 admits at most one region per
-             *     anchor per round, so a width of N reaches at most N maps/contexts. The width actually applied
-             *     is reported back as [`SearchDiagnostics::regions_effective`] (issue #585). This is a
-             *     scope-width knob, not an output rollup — no response carries a region list.
-             */
-            regions?: number | null;
-            /**
              * @description Postgres text-search configuration (default "english").
              *
-             *     NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates`
+             *     NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function
              *     (Beat 1 kept multilingual storage-only); this param does not affect results yet.
              */
             search_config?: string;
-            /** @description Explicit seed resource IDs for graph expansion. */
-            seed_ids?: string[] | null;
-            /**
-             * @description Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed
-             *     union (issue #357). No effect unless `seed_ids` is non-empty. Default false.
-             */
-            seed_only?: boolean;
-            /**
-             * @description Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the
-             *     principal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`.
-             */
-            wayfind?: boolean;
         };
         /**
          * @description Why a search result set is shaped as it is — the load-bearing signal for agents, which
@@ -4677,6 +4643,25 @@ export interface components {
          * @enum {string}
          */
         SearchReason: "ok" | "no_match" | "out_of_scope";
+        /**
+         * @description The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they
+         *     share.
+         *
+         *     There is no field anywhere in this shape that ranks one arm against the other, and no single
+         *     ordered list into which they could be merged. That is the point — see decision
+         *     `019fd25a-ef4c-7473-b72e-265a7d36dd65`.
+         *
+         *     Diagnostics live here in the body. They previously rode an additive
+         *     `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract
+         *     a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the
+         *     per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the
+         *     body cannot see.
+         */
+        SearchResponse: {
+            exact: components["schemas"]["ExactArm"];
+            scope: components["schemas"]["SearchScopeInfo"];
+            wide: components["schemas"]["WideArm"];
+        };
         /** @description A single search result. */
         SearchResultRow: {
             context?: string | null;
@@ -4694,13 +4679,30 @@ export interface components {
             title: string;
         };
         /**
-         * @description Which scope selector produced the search corpus. Mirrors the mutually-exclusive
-         *     `{context_ref, cogmap_id, wayfind}` triple in [`SearchParams`] (plus `Global` for the
-         *     unrestricted default). Lets an agent branch on *why* a result set is shaped as it is
-         *     (issue #360).
+         * @description Which scope selector produced the search corpus — the `{context_ref, cogmap_id}` pair in
+         *     [`SearchParams`], plus `Global` for the unrestricted default. Lets an agent branch on *why* a
+         *     result set is shaped as it is.
+         *
+         *     The `Wayfind` variant is gone with the concept. Note for anyone adding one: the temper-rb gem
+         *     **`raise`s on an enum value it does not know** (`search_scope.rb:39`), so a new variant is a
+         *     hard-fail break for an older client.
          * @enum {string}
          */
-        SearchScope: "global" | "context" | "cogmap" | "wayfind";
+        SearchScope: "global" | "context" | "cogmap";
+        /**
+         * @description What bounded the corpus — shared by both arms, because both were asked the same question of the
+         *     same scope.
+         */
+        SearchScopeInfo: {
+            /** @description Which selector produced the corpus. */
+            kind: components["schemas"]["SearchScope"];
+            /**
+             * Format: int64
+             * @description Candidate resources the scope admitted, when cheaply knowable. `None` for `global` and
+             *     `context`, whose corpus is not a bounded id-set at scope-resolution time.
+             */
+            size?: number | null;
+        };
         /**
          * @description One landed segment, as `begin`/`append`/`list-blocks` report it — the resume unit.
          *
@@ -5145,38 +5147,6 @@ export interface components {
             /** @description `true` when this call deleted a binding; `false` when none existed. */
             unbound: boolean;
         };
-        /** @description A unified search result combining FTS and vector scores. */
-        UnifiedSearchResultRow: {
-            /** Format: float */
-            combined_score: number;
-            context?: string | null;
-            /**
-             * @description Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
-             *     Together with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable
-             *     decorated context ref. `None` when not resolved.
-             */
-            context_owner_ref?: string | null;
-            /** @description Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved. */
-            context_slug?: string | null;
-            doc_type: string;
-            /** Format: float */
-            fts_score: number;
-            /**
-             * Format: float
-             * @description Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the
-             *     candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
-             */
-            graph_score: number;
-            kb_uri: string;
-            origin: string;
-            origin_uri: string;
-            /** Format: uuid */
-            resource_id: string;
-            slug: string;
-            title: string;
-            /** Format: float */
-            vector_score: number;
-        };
         /** @description Result of unsharing a context from a team. `unshared` is `false` when no share existed. */
         UnshareContextOutcome: {
             /** Format: uuid */
@@ -5201,6 +5171,38 @@ export interface components {
             subscriptions?: components["schemas"]["Subscription"][];
             /** @description Managed vault root path */
             vault_path?: string | null;
+        };
+        /** @description The **wide** arm, its disposition, and whether its signal was available at all. */
+        WideArm: {
+            /**
+             * @description True when the server had to embed the query and could not — error, panic, or budget timeout.
+             *
+             *     **This belongs to this arm and not to the response.** A failed embed leaves the exact arm
+             *     entirely unaffected and makes the wide arm *impossible*; reporting it at response level
+             *     described a blend that no longer exists. An arm that could not run says so here rather than
+             *     returning an empty list that reads like an answer.
+             */
+            degraded: boolean;
+            hint?: string | null;
+            hits: components["schemas"]["WideHit"][];
+            reason: components["schemas"]["SearchReason"];
+        };
+        /** @description One hit from the **wide** arm: you had the idea, not the words. */
+        WideHit: {
+            /**
+             * @description The resource this hit names — identical in shape to [`ExactHit::resource`] and to a list
+             *     row. Only the quantity beside it differs, because only the quantity is arm-specific.
+             */
+            resource: components["schemas"]["ResourceView"];
+            /**
+             * Format: float
+             * @description The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.
+             *
+             *     **Not the same quantity as `wayfind_region_scores.query_cos`**, which rescales the identical
+             *     operator as `1 - d` and therefore spans `[-1,1]`. Two rescales of one distance; neither
+             *     column name discloses which it is.
+             */
+            vec_norm: number;
         };
     };
     responses: never;
@@ -7009,7 +7011,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Invalid payload */
@@ -7804,11 +7806,20 @@ export interface operations {
                 limit?: number | null;
                 offset?: number | null;
                 /**
-                 * @description When true, the list endpoint returns `ResourceMetaListResponse`
-                 *     (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
-                 *     `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
+                 * @description Optional sections to fill on each returned [`ResourceView`]: a comma-separated list of
+                 *     [`temper_core::types::resource_view::ResourceSection`] names (`open-meta`, `body`,
+                 *     `edges`). `None`/empty asks for none, which is the default list row.
+                 *
+                 *     Replaces `meta_only`, which named a *response type* rather than a part: it selected a
+                 *     second envelope (`ResourceMetaListResponse`) whose rows were a different shape. There is
+                 *     one response shape now, so what the caller varies is which parts of it are filled.
+                 *
+                 *     A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids` above —
+                 *     the list endpoint is a GET whose params ride the query string, and serde_urlencoded does
+                 *     not encode sequences. Parsed by `SectionSet::parse_csv`, which refuses an unknown name
+                 *     naming the whole valid set.
                  */
-                meta_only?: boolean | null;
+                sections?: string | null;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -7819,13 +7830,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Paginated list of visible resources with facets, or meta-only rows when meta_only=true */
+            /** @description Paginated list of visible resources with facets and paging state */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ListResourcesResponse"];
+                    "application/json": components["schemas"]["ResourceListResponse"];
+                };
+            };
+            /** @description Unknown section name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Unauthorized */
@@ -7861,7 +7881,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unknown context or doc_type ID */
@@ -7923,7 +7943,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceDetail"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unauthorized */
@@ -8045,7 +8065,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline) */
@@ -8640,13 +8660,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current managed/open meta for the resource */
+            /** @description The resource with both metadata tiers filled */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceMetaResponse"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unauthorized */
@@ -8694,7 +8714,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description Unauthorized */
@@ -8795,7 +8815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRow"];
+                    "application/json": components["schemas"]["ResourceView"];
                 };
             };
             /** @description No sources, or an invalid content_block */
@@ -8896,15 +8916,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Ranked search results. Scope-stage diagnostics (issue #360) ride the additive `x-temper-search-diagnostics` response header (compact JSON of `SearchDiagnostics`); the body contract is unchanged. */
+            /** @description Two arms that are never combined: `exact` (term matching, ordered by `fts_norm`) and `wide` (embedding proximity, ordered by `vec_norm`), each with its own `reason`, plus the `scope` they share. No field ranks one arm against the other. */
             200: {
                 headers: {
-                    /** @description Compact JSON SearchDiagnostics */
-                    "x-temper-search-diagnostics"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UnifiedSearchResultRow"][];
+                    "application/json": components["schemas"]["SearchResponse"];
                 };
             };
             /** @description Invalid request */

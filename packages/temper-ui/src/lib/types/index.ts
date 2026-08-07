@@ -5,6 +5,11 @@ export * from './generated/invitation.ts';
 export * from './generated/profile.ts';
 export * from './generated/reassign.ts';
 export * from './generated/resource.ts';
+// `ResourceView` emits to its own file rather than `resource.ts`: the ts-rs generator
+// truncates a shared output file once per crate pass, and this type is temper-core's while
+// the rest of `resource.ts` is temper-workflow's. It was re-exported through `resource.ts`
+// before the split, so it is re-exported here to keep the barrel's surface unchanged.
+export * from './generated/resource_view.ts';
 export * from './generated/search.ts';
 export * from './generated/serde_json/JsonValue.ts';
 export * from './generated/team.ts';
