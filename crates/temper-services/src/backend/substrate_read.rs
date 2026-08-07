@@ -351,9 +351,17 @@ pub struct ResourceViewPage {
 /// measured**, exactly the N+1 `hit_identities` had already been written to end one section over.
 /// It is **3** now, and `list_page_open_meta_query_count_test` is what holds it there.
 ///
-/// **`body` is deliberately still per-view.** Reconstructing markdown is a per-resource read with no
-/// batched form, and `--with body` over a page is a cost a caller opts into explicitly; the open
-/// tier is not, because the MCP list surface asks for it on every call.
+/// **`body` is per-view, and that is now safe because only `show` can ask for it.** Reconstructing
+/// markdown is a per-resource read with no batched form (`readback::body` is itself 2-3 statements:
+/// `ensure_visible`, the verbatim `string_agg`, then the derived fallback), so this loop is an N+1
+/// by construction. It was reachable from `list` over raw HTTP, MCP and temper-rb — where `--all`
+/// sends no limit, making it unbounded — until `list_select` narrowed its accepted vocabulary to
+/// `ResourceSection::LIST`. The remaining caller is `show_view_select`, whose slice is one view
+/// long (MCP's `get_resource` is the live one), so "per-view" and "per-page" now coincide.
+///
+/// The arm is kept rather than moved into `show_view_select` because the section→read mapping is
+/// this function's whole job, and splitting it would give `body` a second home for the sake of a
+/// loop that runs once. What keeps it honest is the door, not the loop.
 ///
 /// `content: None` and `open_meta: None` mean **not requested**, never "empty": an empty body is
 /// `Some(String::new())` and an empty open tier is `Some({})`. Both distinctions survive the wire
@@ -469,15 +477,31 @@ pub async fn list_views_select(
 /// **The CSV is parsed here, not in the handler**, for the same reason the tag case-fold lives in
 /// `filtered_visible_page`: the HTTP surface, the MCP tools and any other caller reach this
 /// function directly, and a vocabulary parsed at one door is a vocabulary the other doors do not
-/// have. An unknown section name is a `400` naming the whole valid set
-/// (`SectionSet::parse_csv` → `ResourceSection::from_str`).
+/// have. An unknown section name is a `400` naming the whole valid set.
+///
+/// **The accepted set is `ResourceSection::LIST`, not `ResourceSection::ALL`** — `body` is refused
+/// here rather than filled. It had been fillable: `fill_sections` handles it, and the CLI's own
+/// `list_section_parser` has refused it since sections shipped, so the CLI was the *only* door
+/// enforcing a rule the server did not. MCP, raw HTTP and temper-rb could ask a page of any size
+/// (`--all` sends no limit) to reconstruct every body, at 2-3 statements per row against
+/// `readback::body`'s per-resource read — the one remaining N+1 on the read path, and unbounded.
+/// Refusing it at the door removes that reachability rather than batching it, because a page of
+/// bodies is not a thing `list` should serve at any statement count: `list` orients, `show` reads.
+/// `edges` is refused for a different reason — nothing on this door fills it (see
+/// [`ResourceSection::LIST`] for both).
+///
+/// So `fill_sections`' body arm is now reachable only from `show_view_select`, where the slice is
+/// one view long. That is asserted, not assumed —
+/// `the_list_door_refuses_body_and_names_only_what_it_accepts`.
 pub async fn list_select(
     pool: &PgPool,
     profile_id: ProfileId,
     params: ResourceListParams,
 ) -> ApiResult<ResourceListResponse> {
     let sections = match params.sections.as_deref() {
-        Some(csv) => SectionSet::parse_csv(csv).map_err(ApiError::from)?,
+        Some(csv) => {
+            SectionSet::parse_csv_accepting(csv, &ResourceSection::LIST).map_err(ApiError::from)?
+        }
         None => SectionSet::default(),
     };
     let page = list_views_select(pool, profile_id, &params, &sections).await?;

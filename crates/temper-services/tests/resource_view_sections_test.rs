@@ -285,3 +285,86 @@ async fn list_views_preserve_the_page_sort_order(pool: PgPool) {
         "the page's ORDER BY must survive the set-shaped batched readback"
     );
 }
+
+/// `list_select` refuses `sections=body` at the door, and still serves `open-meta`.
+///
+/// **This is the server-side half, and it is the half that was missing.** The CLI's
+/// `list_section_parser` has refused `body` on `list` since sections shipped, so the rule looked
+/// enforced — but `list_select` parsed against `ResourceSection::ALL` and `fill_sections` filled
+/// the body for anyone who reached it directly. MCP, raw HTTP and temper-rb all do. With `--all`
+/// sending no limit, that was a per-row 2-3 statement body reconstruction over an unbounded page:
+/// the last N+1 on the read path, reachable from every door except the one that refused it.
+///
+/// A surface-level test could not have caught this — the CLI was already correct. The witness has
+/// to sit on `list_select`, which is what every door actually calls.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn list_select_refuses_the_body_section(pool: PgPool) {
+    let (profile, created) =
+        seed_resource(&pool, "sections-nobody@example.com", "zz-sec-nobody").await;
+
+    let err = substrate_read::list_select(
+        &pool,
+        profile,
+        ResourceListParams {
+            sections: Some("body".to_string()),
+            ..ResourceListParams::default()
+        },
+    )
+    .await
+    .expect_err("the list door refuses `body`");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("open-meta"),
+        "the refusal names what this door accepts, so a caller recovers from the message \
+         alone: {msg}"
+    );
+
+    // The narrowing is to `body`, not to sections. `open-meta` must still fill — otherwise this
+    // change is a removal of the list door's one working section rather than a refusal of its
+    // unbounded one.
+    let page = substrate_read::list_select(
+        &pool,
+        profile,
+        ResourceListParams {
+            sections: Some("open-meta".to_string()),
+            ..ResourceListParams::default()
+        },
+    )
+    .await
+    .expect("`open-meta` is still served on the list door");
+    let row = page
+        .rows
+        .iter()
+        .find(|v| v.id == created.id)
+        .expect("the seeded resource is on the page");
+    assert!(
+        row.open_meta.is_some(),
+        "`open-meta` asked for means the tier is filled, not merely accepted"
+    );
+    assert!(
+        row.content.is_none(),
+        "and no body rides along on a list row"
+    );
+}
+
+/// `show_view_select` still fills the body — the door that legitimately serves it.
+///
+/// The complement. `list_select`'s narrowing is only correct if `show` is untouched: MCP's
+/// `get_resource` reads its body through exactly this call, and a change that took the section
+/// away from both doors would satisfy every assertion in the test above while breaking the read
+/// that was never the problem.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn show_view_select_still_serves_the_body_section(pool: PgPool) {
+    let (profile, created) =
+        seed_resource(&pool, "sections-showbody@example.com", "zz-sec-showbody").await;
+
+    let sections: SectionSet = [ResourceSection::Body].into_iter().collect();
+    let view = substrate_read::show_view_select(&pool, profile, created.id, &sections)
+        .await
+        .expect("show serves the body section");
+    assert!(
+        view.content.is_some(),
+        "`show --with body` must still reconstruct the body — this narrowing is per-door"
+    );
+}
