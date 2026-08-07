@@ -18,11 +18,16 @@
 -- runs that binary as its build command, so the halt surfaces as a failed build rather than a
 -- partially-migrated schema. Nothing after the halt is applied; halting is stopping, not skipping.
 --
--- Preview and production are NOT the same event. A preview build applies the PR's own migration to
--- the PR's own Neon branch — the rehearsal half (scripts/vercel-build.sh header). Production carries
--- the live binary that still calls `unified_search`. And `MIGRATE_CMD` is an overridable env var
--- whose DEFAULT carries `--additive-only` (vercel-build.sh:151), so what any given target actually
--- runs is an environment fact, not a repo fact — read the build log, not this comment.
+-- EVERY target halts, previews included. There is no per-environment exemption: `MIGRATE_CMD` in
+-- scripts/vercel-build.sh is a seam for the guard test and "is never set in a real build"
+-- (vercel-build.sh:116), so every real build runs `--additive-only`. A preview applies the PR's own
+-- migration to the PR's own Neon branch — the rehearsal half — and that rehearsal now includes
+-- rehearsing the halt.
+--
+-- The documented way through is unchanged for any target (DEPLOYING.md § 'Shape-breaking
+-- migration'): apply the migration to that target's database, then redeploy — the next run finds it
+-- already applied and continues past it. For a preview branch the "durable backup" step is moot; the
+-- branch is disposable.
 --
 -- `[decided — 2026-08-06, Pete]` The retirement rides with the code that supersedes it rather than
 -- behind a separate later change. Compare 20260709000020, which dropped a function only once the
