@@ -1042,6 +1042,13 @@ pub enum TeamAction {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,
     },
+    /// Revoke (withdraw) a pending invitation (owner/maintainer).
+    Uninvite {
+        /// Team slug (optionally `+`-prefixed) or UUID.
+        team: String,
+        /// Invitation UUID (from `temper team invitations`).
+        invitation_id: String,
+    },
     /// Show a team's detail and member roster
     Show {
         /// Team slug (optionally `+`-prefixed) or UUID

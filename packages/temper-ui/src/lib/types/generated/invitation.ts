@@ -20,7 +20,7 @@ export type CreateInvitationRequest = { invited_email: string, role: TeamRole, }
  *
  * Maps directly to the `invitation_status` Postgres enum.
  */
-export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
+export type InvitationStatus = "pending" | "accepted" | "declined" | "expired" | "revoked";
 
 /**
  * Request body for `POST /api/invitations/accept` and
@@ -70,8 +70,12 @@ export type InviteeInvitation = { id: string, team_id: string, team_slug: string
  *
  * Constraints:
  * - `role` cannot be `Owner` — ownership is only transferred, never invited
- * - One pending invite per email per team
- * - 7-day default expiry, checked at acceptance time
+ * - One *pending* invite per email per team (declined/expired/revoked history coexists)
+ * - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
+ *   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
+ *   by a dead invite
  * - Acceptance is idempotent
+ * - An owner/maintainer may `revoke` a pending invite (withdraw it) — the counterpart to the
+ *   invitee's `decline`, and a distinct terminal state from it
  */
 export type TeamInvitation = { id: string, team_id: string, invited_email: string, invited_by_profile_id: string, role: TeamRole, token: string, status: InvitationStatus, expires_at: string, created: string, };

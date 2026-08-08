@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status AS \"status: InvitationStatus\" FROM kb_team_invitations WHERE id = $1",
+  "query": "SELECT status AS \"status: InvitationStatus\"\n             FROM kb_team_invitations WHERE id = $1 AND team_id = $2",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -31,5 +32,5 @@
       false
     ]
   },
-  "hash": "9cb1fad09835a43341f567bef10dc0111db8c472e9641f023a01648e4ec3ba12"
+  "hash": "18ed1cc233a5fd69a8cbb8e46ce250b6af30cb2f3ef2b311a5dff251bc3f604a"
 }

@@ -18,6 +18,10 @@ pub enum InvitationStatus {
     Accepted,
     Declined,
     Expired,
+    /// Withdrawn by the inviting team (owner/maintainer) before the invitee acted.
+    /// Distinct from `Declined` (the invitee's own refusal) so the record never
+    /// conflates "the team took it back" with "the person said no".
+    Revoked,
 }
 
 /// A pending or resolved invitation to join a team.
@@ -37,9 +41,13 @@ pub enum InvitationStatus {
 ///
 /// Constraints:
 /// - `role` cannot be `Owner` — ownership is only transferred, never invited
-/// - One pending invite per email per team
-/// - 7-day default expiry, checked at acceptance time
+/// - One *pending* invite per email per team (declined/expired/revoked history coexists)
+/// - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
+///   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
+///   by a dead invite
 /// - Acceptance is idempotent
+/// - An owner/maintainer may `revoke` a pending invite (withdraw it) — the counterpart to the
+///   invitee's `decline`, and a distinct terminal state from it
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]

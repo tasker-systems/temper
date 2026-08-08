@@ -53,6 +53,32 @@ pub async fn create_invitation(
 
     let id = Uuid::now_v7();
     let token = mint_token();
+
+    // Expiry is enforced lazily — only `accept_invitation` ever flips a lapsed row to `expired`.
+    // So a pending row can outlive its `expires_at` indefinitely while still occupying
+    // `idx_invitations_one_pending`, which would 409 a legitimate re-invite of someone whose
+    // prior invite is dead everywhere it is *displayed* (both list paths filter on
+    // `expires_at > now()`). Sweep that lapsed-but-unswept row to `expired` first, in the same
+    // transaction as the insert, so the partial index frees up. A still-live pending row
+    // (`expires_at > now()`) is untouched and the insert correctly conflicts. Matched on the
+    // exact `(team_id, invited_email)` the unique index keys on — never a lower()-broadened set,
+    // which could expire a differently-cased invite that would not have collided.
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        r#"
+        UPDATE kb_team_invitations
+           SET status = 'expired'
+         WHERE team_id = $1
+           AND invited_email = $2
+           AND status = 'pending'
+           AND expires_at <= now()
+        "#,
+        team_id,
+        params.invited_email,
+    )
+    .execute(&mut *tx)
+    .await?;
+
     let row = sqlx::query_as!(
         TeamInvitation,
         r#"
@@ -70,7 +96,7 @@ pub async fn create_invitation(
         params.role as TeamRole,
         token,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db) if db.is_unique_violation() => {
@@ -78,6 +104,7 @@ pub async fn create_invitation(
         }
         _ => ApiError::from(e),
     })?;
+    tx.commit().await?;
 
     Ok(row)
 }
@@ -130,6 +157,9 @@ pub async fn accept_invitation(
         }
         InvitationStatus::Expired => {
             Err(ApiError::BadRequest("invitation has expired".to_string()))
+        }
+        InvitationStatus::Revoked => {
+            Err(ApiError::BadRequest("invitation was revoked".to_string()))
         }
         InvitationStatus::Pending => {
             if inv.expires_at < chrono::Utc::now() {
@@ -190,6 +220,9 @@ pub async fn decline_invitation(pool: &PgPool, _caller: ProfileId, token: &str) 
         InvitationStatus::Accepted => Err(ApiError::BadRequest(
             "invitation was already accepted".to_string(),
         )),
+        InvitationStatus::Revoked => {
+            Err(ApiError::BadRequest("invitation was revoked".to_string()))
+        }
         InvitationStatus::Pending | InvitationStatus::Expired => {
             sqlx::query!(
                 "UPDATE kb_team_invitations SET status = 'declined' WHERE token = $1",
@@ -199,6 +232,66 @@ pub async fn decline_invitation(pool: &PgPool, _caller: ProfileId, token: &str) 
             .await?;
             Ok(())
         }
+    }
+}
+
+/// Revoke (withdraw) a pending invitation — the inviting team's counterpart to the invitee's
+/// decline. Auth: owner/maintainer of the team (`can_manage`), the same gate as `create`/`list`.
+///
+/// Addressed by invitation `id` (the owner-facing handle returned by `list_invitations`), scoped
+/// to `team_id` so a maintainer of team A can never revoke an invite belonging to team B by id
+/// alone. Only a `pending` invite can be revoked: an already-`accepted` invite means the invitee
+/// is a member (remove them via the membership surface), and `declined`/`expired`/`revoked` are
+/// already terminal. The status check and the write are one statement, so no check-then-act gap.
+pub async fn revoke_invitation(
+    pool: &PgPool,
+    caller: ProfileId,
+    team_id: Uuid,
+    invitation_id: Uuid,
+) -> ApiResult<()> {
+    // Auth before writes.
+    match role_on_team(pool, team_id, caller).await? {
+        Some(role) if can_manage(role) => {}
+        _ => return Err(ApiError::Forbidden),
+    }
+
+    let revoked = sqlx::query_scalar!(
+        r#"
+        UPDATE kb_team_invitations
+           SET status = 'revoked'
+         WHERE id = $1
+           AND team_id = $2
+           AND status = 'pending'
+        RETURNING id
+        "#,
+        invitation_id,
+        team_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if revoked.is_some() {
+        return Ok(());
+    }
+
+    // Nothing was revoked — disambiguate "no such invite here" from "not in a revocable state"
+    // so the caller gets an actionable error rather than an opaque 404.
+    let current: Option<InvitationStatus> = sqlx::query_scalar!(
+        r#"SELECT status AS "status: InvitationStatus"
+             FROM kb_team_invitations WHERE id = $1 AND team_id = $2"#,
+        invitation_id,
+        team_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    match current {
+        None => Err(ApiError::NotFound(
+            "invitation not found for this team".to_string(),
+        )),
+        Some(_) => Err(ApiError::BadRequest(
+            "only a pending invitation can be revoked".to_string(),
+        )),
     }
 }
 
@@ -605,6 +698,178 @@ mod tests {
         )
         .await
         .expect("re-invite after decline");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reinvite_succeeds_after_expiry_even_when_unswept(pool: PgPool) {
+        // A lapsed invite whose status is still `pending` (nothing swept it) must not block a
+        // re-invite. `create_invitation` sweeps it to `expired` first, freeing the partial index.
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        seed_invite(&pool, team_id, "lapsed@e.com", owner, "pending", -1).await;
+
+        let fresh = create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "lapsed@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("re-invite after (unswept) expiry");
+        assert_eq!(fresh.status, InvitationStatus::Pending);
+
+        // The lapsed row was flipped to `expired`; exactly one live pending row remains.
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_team_invitations \
+             WHERE team_id=$1 AND invited_email=$2 AND status='pending'",
+        )
+        .bind(team_id)
+        .bind("lapsed@e.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            pending, 1,
+            "the old pending row must have been swept to expired"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reinvite_still_conflicts_while_a_live_pending_invite_exists(pool: PgPool) {
+        // The sweep must only touch *lapsed* rows — a still-live pending invite must still 409.
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        seed_invite(&pool, team_id, "live@e.com", owner, "pending", 7).await;
+        let err = create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "live@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Conflict(_)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn revoke_pending_then_reinvite_succeeds(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let inv = create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "gone@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap();
+
+        revoke_invitation(&pool, owner, team_id, inv.id)
+            .await
+            .expect("owner may revoke a pending invite");
+
+        let status: InvitationStatus =
+            sqlx::query_scalar(r#"SELECT status FROM kb_team_invitations WHERE id = $1"#)
+                .bind(inv.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, InvitationStatus::Revoked);
+
+        // A revoked invite is not pending, so a fresh invite for the same (team, email) is allowed.
+        create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "gone@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("re-invite after revoke");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn revoke_requires_manager(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let inv = create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "x@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap();
+        let stranger = mk_profile(&pool, "stranger").await;
+        let err = revoke_invitation(&pool, stranger, team_id, inv.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn revoke_unknown_invitation_is_not_found(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let err = revoke_invitation(&pool, owner, team_id, Uuid::now_v7())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn revoke_non_pending_is_bad_request(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        let inv = create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "acc@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap();
+        accept_invitation(&pool, invitee, &inv.token).await.unwrap();
+        let err = revoke_invitation(&pool, owner, team_id, inv.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accept_revoked_is_bad_request(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        let inv = create_invitation(
+            &pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "rev@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap();
+        revoke_invitation(&pool, owner, team_id, inv.id)
+            .await
+            .unwrap();
+        let err = accept_invitation(&pool, invitee, &inv.token)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -188,6 +188,18 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
+    /// DELETE /api/teams/{id}/invitations/{invitation_id} — revoke a pending invite
+    /// (owner/maintainer). The invitation id is the one returned by `list_invitations`.
+    pub async fn revoke_invitation(&self, team_id: Uuid, invitation_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}/invitations/{invitation_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send(&Method::DELETE, &path, req, Some(&token))
+            .await?;
+        Ok(())
+    }
+
     /// GET /api/invitations/mine — the caller's own pending invitations.
     pub async fn list_my_invitations(&self) -> Result<Vec<InviteeInvitation>> {
         let token = self.http.resolve_token()?;

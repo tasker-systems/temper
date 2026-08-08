@@ -19,9 +19,10 @@ module Temper::Generated
     ACCEPTED = "accepted".freeze
     DECLINED = "declined".freeze
     EXPIRED = "expired".freeze
+    REVOKED = "revoked".freeze
 
     def self.all_vars
-      @all_vars ||= [PENDING, ACCEPTED, DECLINED, EXPIRED].freeze
+      @all_vars ||= [PENDING, ACCEPTED, DECLINED, EXPIRED, REVOKED].freeze
     end
 
     # Builds the enum from string
