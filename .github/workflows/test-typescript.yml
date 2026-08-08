@@ -112,7 +112,7 @@ jobs:
           prefix-key: ts-integration-v1
 
       - name: Install cargo-sqlx
-        uses: taiki-e/install-action@v2.85.3
+        uses: taiki-e/install-action@v2.85.8
         with:
           tool: sqlx-cli
 
