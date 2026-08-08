@@ -4,8 +4,8 @@
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
-    validate, ActInvocation, ActName, BoundsMode, Composition, IdKind, IdSet, OutcomeDeclaration,
-    RefusalDisposition, ReturnSpec, StageInput, StageName, StageNode, ValidatedComposition,
+    validate, ActInvocation, ActName, Composition, IdKind, IdSet, OutcomeDeclaration, ReturnSpec,
+    StageInput, StageName, StageNode, StageRelation, ValidatedComposition,
 };
 use temper_substrate::readback::query_plan::{compile, QueryBind};
 use uuid::Uuid;
@@ -20,13 +20,13 @@ fn ff_root(name: &str, ids: Vec<Uuid>) -> StageNode {
         name: StageName::parse(name).unwrap(),
         act: ActName::FollowFrom,
         input: Some(StageInput::Caller {
+            relation: StageRelation::Seed,
             ids: IdSet {
                 kind: IdKind::Resource,
                 provenance: None,
                 ids,
             },
         }),
-        bounds_mode: Some(BoundsMode::Seed),
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -40,9 +40,9 @@ fn ff_from(name: &str, upstream: &str) -> StageNode {
         name: StageName::parse(name).unwrap(),
         act: ActName::FollowFrom,
         input: Some(StageInput::Upstream {
+            relation: StageRelation::Seed,
             stage: StageName::parse(upstream).unwrap(),
         }),
-        bounds_mode: Some(BoundsMode::Seed),
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -53,17 +53,15 @@ fn ff_from(name: &str, upstream: &str) -> StageNode {
 fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
     let c = Composition {
         outcome: OutcomeDeclaration {
-            description: "compile test".to_string(),
             returns: returns
                 .into_iter()
                 .map(|s| ReturnSpec {
                     stage: StageName::parse(s).unwrap(),
-                    fields: vec![],
+                    with: vec![],
                 })
                 .collect(),
         },
         intention: None,
-        on_stage_refusal: RefusalDisposition::Halt,
         meta_detail: Default::default(),
         bounds: Default::default(),
         stages,
@@ -119,6 +117,7 @@ fn plan_three_finds() -> ValidatedComposition {
                 "b",
                 ActName::FindExact,
                 Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
                     stage: StageName::parse("a").unwrap(),
                 }),
             ),
@@ -126,6 +125,7 @@ fn plan_three_finds() -> ValidatedComposition {
                 "c",
                 ActName::FindExact,
                 Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
                     stage: StageName::parse("b").unwrap(),
                 }),
             ),
@@ -247,7 +247,6 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
         name: StageName::parse(name).unwrap(),
         act,
         input,
-        bounds_mode: Some(BoundsMode::Bound),
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -259,12 +258,11 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
 fn build_with_intention(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
     let c = Composition {
         outcome: OutcomeDeclaration {
-            description: "compile test".to_string(),
             returns: returns
                 .into_iter()
                 .map(|s| ReturnSpec {
                     stage: StageName::parse(s).unwrap(),
-                    fields: vec![],
+                    with: vec![],
                 })
                 .collect(),
         },
@@ -272,7 +270,6 @@ fn build_with_intention(stages: Vec<StageNode>, returns: Vec<&str>) -> Validated
             query: "salience".to_string(),
             embedded: true,
         }),
-        on_stage_refusal: RefusalDisposition::Halt,
         meta_detail: Default::default(),
         bounds: Default::default(),
         stages,
@@ -298,6 +295,7 @@ fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstre
                 "narrowed",
                 ActName::FindAboutWithin,
                 Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
                     stage: StageName::parse("seeds").unwrap(),
                 }),
             ),
@@ -363,14 +361,24 @@ fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_core() {
     );
 }
 
-/// **A `find-about-*` stage with no embedding REFUSES.**
+/// **A `find-about-*` stage with no embedding REFUSES — as the SERVER's failure, not the caller's.**
 ///
-/// The delta-2 property: a refusal is its own state, distinct from failure and from honest-empty.
-/// Fails against a builder that binds NULL for a missing embedding — which would run a vector
-/// search on nothing and report an empty result, collapsing "I chose not to embed" and "I cannot
-/// embed" into one indistinguishable answer.
+/// The delta-2 property survives unchanged: a refusal is its own state, distinct from failure and
+/// from honest-empty. Still fails against a builder that binds NULL for a missing embedding, which
+/// would run a vector search on nothing and report an empty result that reads like an answer.
+///
+/// `[re-pointed — 2026-08-08, Pete]` What changed is WHICH refusal, and it is not cosmetic. This
+/// asserted `MissingIntention`, encoding a rule that has since been reversed: that the caller must
+/// supply the vector and the server never embeds on their behalf. The CLI can embed; the ruby gem,
+/// the TypeScript package and MCP cannot, so that rule denied `find-about-*` to every non-CLI
+/// client. The server embeds now, which means a `None` arriving here has already survived that
+/// attempt — the caller did nothing wrong, and blaming their intention would be false.
+///
+/// Re-pointing rather than deleting, for the same reason `a_served_act_this_builder_has_no_fragment_for_refuses_honestly`
+/// was re-pointed at beat D: the property still needs a witness, and deleting a test when its
+/// expected value changes retires the only thing holding the distinction.
 #[test]
-fn a_wide_find_without_an_embedding_refuses_rather_than_binding_null() {
+fn a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_callers() {
     let v = build_with_intention(
         vec![find_stage("wide", ActName::FindAboutAnywhere, None)],
         vec!["wide"],
@@ -378,13 +386,54 @@ fn a_wide_find_without_an_embedding_refuses_rather_than_binding_null() {
     let err = compile(&v, test_profile(), None)
         .expect_err("no embedding must refuse, not compile to a NULL bind");
 
-    assert_eq!(err.reason, RefusalReason::MissingIntention);
+    assert_eq!(err.reason, RefusalReason::EmbeddingUnavailable);
+    assert_ne!(
+        err.reason,
+        RefusalReason::MissingIntention,
+        "the composition threaded a question; the vector is the server's job, so reporting this \
+         as a missing intention would blame the caller for the server's failure"
+    );
     assert_eq!(err.stage.as_ref().map(|s| s.as_str()), Some("wide"));
 
     // And the same plan WITH an embedding compiles — so the refusal is about the embedding and not
     // about the plan being malformed in some other way.
     let emb = an_embedding();
     assert!(compile(&v, test_profile(), Some(&emb)).is_ok());
+}
+
+/// The other half of the pair: an absent QUESTION is still the caller's, and still refuses.
+///
+/// Written because the change above moves one refusal and it would be easy to move both. These two
+/// absences are now distinct in the type, and this is what keeps them distinct in behaviour — a
+/// composition with no intention has no words to search for, which no amount of server-side
+/// embedding can supply.
+#[test]
+fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
+    // Built without `validate` on purpose: the validator refuses this first, so routing through it
+    // would test the validator and leave the compiler's own arm unwitnessed. `compile` is public
+    // and does not require its caller to have validated on the same tick.
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("quoted").unwrap(),
+                with: vec![],
+            }],
+        },
+        intention: None,
+        meta_detail: Default::default(),
+        bounds: Default::default(),
+        stages: vec![find_stage("quoted", ActName::FindExact, None)],
+    };
+    let refusals = validate(&c).expect_err("no intention is refused statically");
+    assert!(refusals
+        .iter()
+        .any(|r| r.reason == RefusalReason::MissingIntention));
+    assert!(
+        !refusals
+            .iter()
+            .any(|r| r.reason == RefusalReason::EmbeddingUnavailable),
+        "a missing question is decided before anything embeds; got: {refusals:?}"
+    );
 }
 
 /// `follow-from` and `survey` keep the deliberately-absent placeholder.
@@ -409,6 +458,7 @@ fn the_unmodelled_acts_still_emit_the_absent_placeholder() {
 
 fn caller_set(kind: IdKind, ids: Vec<Uuid>) -> StageInput {
     StageInput::Caller {
+        relation: StageRelation::Bound,
         ids: IdSet {
             kind,
             provenance: None,
@@ -558,6 +608,7 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
                 "narrowed",
                 ActName::FindAboutWithin,
                 Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
                     stage: StageName::parse("hits").unwrap(),
                 }),
             ),

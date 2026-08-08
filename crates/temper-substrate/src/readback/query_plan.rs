@@ -17,7 +17,7 @@
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
     search_family, BoundTerm, IdKind, Intention, PlanRefusal, RefusalReason, StageInput, StageNode,
-    ValidatedComposition,
+    StageRelation, ValidatedComposition,
 };
 use uuid::Uuid;
 
@@ -90,15 +90,23 @@ const ANN_DRAW_K: i32 = 100;
 /// Compile a validated composition into one statement. `principal` is bound as `$1` and drives the
 /// single visibility relation every stage joins.
 ///
-/// `embedding` is the **caller-computed** query vector. It is a parameter rather than a field of
+/// `embedding` is the query vector. It is a parameter rather than a field of
 /// `Composition.intention` because `Intention` is a WIRE type carrying `query: String` and
 /// `embedded: bool` — the *fact* that an embedding was computed, never the vector. Putting a
 /// 768-float array in the envelope would be a contract change nobody asked for.
 ///
-/// `None` is not a silent NULL bind. A `find-about-*` stage compiled without an embedding
-/// **refuses**, because "I chose not to embed" and "I cannot embed" must stay two states rather
-/// than collapsing into one ambiguous one — the same rule delta 3 states for an empty upstream.
-/// That is why this returns a `Result`: a refusal here is a disposition, not a panic.
+/// **`None` means the vector could not be obtained, not that the caller declined to send one.**
+/// `[amended — 2026-08-08, Pete]` Embedding on the caller's behalf is this surface's job: the CLI
+/// links temper-ingest and computes vectors client-side, while the ruby gem, the TypeScript
+/// package and MCP structurally cannot, so a caller-must-embed rule would deny `find-about-*` to
+/// every non-CLI client. The executor calls `substrate_read::embed_query_if_missing` before it
+/// reaches here, exactly as `/api/search` does.
+///
+/// So a `None` at this point has already survived that attempt, and a `find-about-*` stage
+/// refuses with `EmbeddingUnavailable` — the contract's ONE runtime refusal. Still a refusal
+/// rather than a silent NULL bind: the stage holds a well-formed question it cannot answer, and
+/// searching on nothing returns a list that reads like an answer. That is why this returns a
+/// `Result`: a refusal here is a disposition, not a panic.
 pub fn compile(
     v: &ValidatedComposition,
     principal: ProfileId,
@@ -160,19 +168,33 @@ fn emit_act_body(
 ) -> Result<String, PlanRefusal> {
     let act = act_name(&inv.act);
 
-    let Narrowing {
-        bound,
-        anchor_table,
-        anchor_id,
-    } = narrowing_for(inv, binds)?;
+    let narrowing = narrowing_for(inv, binds)?;
+    let (anchor_table, anchor_id) = narrowing.anchor();
+    let (anchor_table, anchor_id) = (anchor_table.to_string(), anchor_id.to_string());
     let (limit, offset) = paging_for(inv, binds);
+
+    // The find acts narrow and never seed, so each takes the bound expression. A seed reaching one
+    // is a validator/compiler disagreement rather than a caller error — `bound_expr` says so and
+    // errors instead of quietly narrowing.
+    let bound_for_find = |inv: &temper_core::types::query::ActInvocation| {
+        narrowing
+            .bound_expr()
+            .map(str::to_string)
+            .map_err(|detail| PlanRefusal {
+                stage: Some(inv.name.clone()),
+                reason: RefusalReason::UnsupportedSeedKind,
+                detail: detail.to_string(),
+            })
+    };
 
     match fragment_for(&inv.act) {
         Some(EMIT_FIND_EXACT) => {
+            let bound = bound_for_find(inv)?;
             let q = intention.map(|i| i.query.as_str()).ok_or_else(|| {
-                refusal(
+                missing_question(
                     inv,
-                    "find-exact needs the intention's query text; the composition threaded none",
+                    "find-exact needs the intention's query text — it becomes `p_query`, and there \
+                     is nowhere else to source it. The composition threaded no intention",
                 )
             })?;
             let qi = binds.len() + 1;
@@ -194,15 +216,26 @@ fn emit_act_body(
             ))
         }
         Some(EMIT_FIND_WIDE) => {
-            // The refusal delta 2 requires: distinct from failure and from honest-empty, and never
-            // improvised into a NULL bind that would silently search on nothing.
-            let emb = embedding.ok_or_else(|| {
-                refusal(
-                    inv,
-                    "a find-about-* stage needs a query embedding; the caller supplied none, and \
-                     the server does not embed on the caller's behalf — 'I chose not to embed' and \
-                     'I cannot embed' are different states",
-                )
+            let bound = bound_for_find(inv)?;
+            // `[amended — 2026-08-08, Pete]` This used to refuse with "the server does not embed on
+            // the caller's behalf". It does embed, and it has to: the CLI links temper-ingest and
+            // computes vectors client-side, but the ruby gem, the TypeScript package and MCP carry
+            // no embedding ability at all, so refusing here would deny this act to every non-CLI
+            // client. `/api/search` already solved it with `embed_query_if_missing`.
+            //
+            // So by the time a `None` reaches this line, the caller supplied no vector AND the
+            // server's own attempt failed. That is `EmbeddingUnavailable` — the contract's one
+            // runtime refusal — not `MissingIntention`, which is about the caller omitting a
+            // QUESTION and is decided statically long before here.
+            //
+            // Still a refusal rather than a NULL bind: the stage holds a well-formed question it
+            // cannot answer, and searching on nothing would return a list that reads like an answer.
+            let emb = embedding.ok_or_else(|| PlanRefusal {
+                stage: Some(inv.name.clone()),
+                reason: RefusalReason::EmbeddingUnavailable,
+                detail: "a find-about-* stage needs a query embedding; none was supplied and the \
+                         server could not compute one"
+                    .to_string(),
             })?;
             let ei = binds.len() + 1;
             binds.push(QueryBind::Embedding(emb.to_vec()));
@@ -229,7 +262,8 @@ fn emit_act_body(
         // builder still emits the deliberately-absent placeholder rather than guessing a value.
         _ => Ok(format!(
             "  -- act: {act} (placeholder body; this builder emits no fragment for it yet)\n  \
-             SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({bound})",
+             SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({})",
+            narrowing.any_set_expr(),
         )),
     }
 }
@@ -274,51 +308,120 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
     )
 }
 
-/// How one stage narrows: an id-array bound, an anchor pair, or neither. Never both — an act is
-/// handed ONE `IdSet`, and its `kind` decides which slot that set belongs in.
-struct Narrowing {
-    bound: String,
-    anchor_table: String,
-    anchor_id: String,
+/// What one stage does with the set it was handed, and therefore which slot the set belongs in.
+///
+/// An enum rather than a struct of optional strings, because "never both" was previously prose
+/// over three sibling fields — and prose over sibling fields is what let `bounds_mode` be ignored
+/// in the first place. An act is handed ONE `IdSet`; the relation says what it is FOR and the
+/// kind says which slot serves it.
+enum StageNarrowing {
+    /// No input. `NULL::uuid[]`, never `'{}'` — the fragments read the two differently and
+    /// conflating them is exactly the substitution delta 3 forbids.
+    Unbounded,
+    /// Narrow to within this set: the `p_bound_ids uuid[]` slot.
+    Bound(String),
+    /// Grow from this set: the `p_seed_ids uuid[]` slot.
+    ///
+    /// **A different slot on a different fragment, which is the whole point of the fix.** Routing
+    /// a seed into `p_bound_ids` compiles a traversal that can only return what was already in its
+    /// own seed set — a stage that looks like it worked and can never produce a neighbour.
+    Seed(String),
+    /// A `(table, id)` anchor pair — how the fragments take a cogmap or context scope. Holds
+    /// exactly one id.
+    Anchor { table: String, id: String },
 }
 
-/// Route the stage's input to the slot its KIND belongs in.
+impl StageNarrowing {
+    /// The `p_bound_ids` expression for a fragment that only narrows.
+    ///
+    /// A [`Self::Seed`] reaching here is a compiler-level contradiction, not a caller error: the
+    /// validator refuses a seed against an act declaring `accepts_seeds: []`, and the three find
+    /// acts all declare exactly that. It returns an error rather than silently narrowing, because
+    /// silently narrowing is the defect this enum was introduced to remove — if the two ever
+    /// disagree, the loud answer is the safe one.
+    fn bound_expr(&self) -> Result<&str, &'static str> {
+        match self {
+            StageNarrowing::Bound(b) => Ok(b),
+            StageNarrowing::Unbounded | StageNarrowing::Anchor { .. } => Ok("NULL::uuid[]"),
+            StageNarrowing::Seed(_) => Err(
+                "this act narrows within a set and cannot grow from one; the validator should \
+                 have refused this stage as `unsupported_seed_kind` before compilation",
+            ),
+        }
+    }
+
+    fn anchor(&self) -> (&str, &str) {
+        match self {
+            StageNarrowing::Anchor { table, id } => (table, id),
+            _ => ("NULL", "NULL"),
+        }
+    }
+
+    /// The set expression a placeholder body echoes, whichever slot it came from.
+    fn any_set_expr(&self) -> &str {
+        match self {
+            StageNarrowing::Bound(s) | StageNarrowing::Seed(s) => s,
+            StageNarrowing::Anchor { id, .. } => id,
+            StageNarrowing::Unbounded => "NULL::uuid[]",
+        }
+    }
+}
+
+/// Route the stage's input to the slot its RELATION and KIND belong in.
 ///
-/// `IdSet.kind` was previously ignored and every set went to `p_bound_ids uuid[]`. That is a
-/// **confident empty**: `find-exact` and `find-about-within` both declare
+/// Two independent questions, and this function got one of them wrong until the relation moved
+/// onto the edge.
+///
+/// **The relation** — bound or seed — decides which of two `uuid[]` parameters the set fills.
+/// `[fixed — 2026-08-08]` This read `bounds_mode` NOWHERE. Every upstream set went to the
+/// narrowing slot unconditionally, on the strength of a comment asserting an upstream set "is
+/// always the array slot". So a seed compiled as a bound, and `follow-from` — the only seeding act
+/// — would have returned only what was already in its seed set: a traversal that looks like it
+/// worked and can never reach a neighbour. It was latent only because `follow-from` still emits
+/// the placeholder, and it would have fired the moment that fragment was bound. The relation is
+/// now a field of [`StageInput`] rather than an `Option` beside it, so there is a value to read
+/// instead of one to invent.
+///
+/// **The kind** decides array-versus-anchor. `IdSet.kind` was previously ignored too and every set
+/// went to `p_bound_ids`: `find-exact` and `find-about-within` declare
 /// `accepts_bounds: [Resource, Context, Cogmap]`, so a caller handing a Cogmap set would validate
 /// cleanly and then have cogmap uuids compared against `r.id`, returning zero rows with a 200 and
-/// no disclosure that the narrowing was nonsense. The declaration says those kinds are accepted
-/// "through the anchor pair" — so the compiler has to actually emit the anchor pair.
+/// no disclosure that the narrowing was nonsense.
 ///
-/// A `None` input is UNBOUNDED, which is `NULL::uuid[]` and never `'{}'` — the twins read the two
-/// differently and conflating them is exactly the substitution delta 3 forbids.
+/// A `None` input is UNBOUNDED, which is `NULL::uuid[]` and never `'{}'`.
 fn narrowing_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
-) -> Result<Narrowing, PlanRefusal> {
-    let unbounded = Narrowing {
-        bound: "NULL::uuid[]".to_string(),
-        anchor_table: "NULL".to_string(),
-        anchor_id: "NULL".to_string(),
+) -> Result<StageNarrowing, PlanRefusal> {
+    let Some(input) = &inv.input else {
+        return Ok(StageNarrowing::Unbounded);
     };
-    match &inv.input {
-        None => Ok(unbounded),
+    // Read once, up front. The relation is a property of the edge and is the same whether the set
+    // came from the caller or from an upstream stage — which is why it is not re-derived in each
+    // arm below.
+    let seeding = input.relation() == StageRelation::Seed;
+    let by_relation = |expr: String| {
+        if seeding {
+            StageNarrowing::Seed(expr)
+        } else {
+            StageNarrowing::Bound(expr)
+        }
+    };
+
+    match input {
         // Ids only — no quantity from the upstream stage is ever in scope here, which is what keeps
         // `no-cross-act-ranking` structural rather than policed. An upstream set is always resource
-        // ids (that is what these acts produce), so it is always the array slot.
-        Some(StageInput::Upstream { stage }) => Ok(Narrowing {
-            bound: format!("ARRAY(SELECT id FROM {})", stage.as_str()),
-            ..unbounded
-        }),
-        Some(StageInput::Caller { ids }) => match ids.kind {
+        // ids (that is what these acts produce), so it is always an array slot; WHICH array slot is
+        // the relation's business.
+        StageInput::Upstream { stage, .. } => Ok(by_relation(format!(
+            "ARRAY(SELECT id FROM {})",
+            stage.as_str()
+        ))),
+        StageInput::Caller { ids, .. } => match ids.kind {
             IdKind::Resource => {
                 let idx = binds.len() + 1;
                 binds.push(QueryBind::Uuids(ids.ids.clone()));
-                Ok(Narrowing {
-                    bound: format!("${idx}::uuid[]"),
-                    ..unbounded
-                })
+                Ok(by_relation(format!("${idx}::uuid[]")))
             }
             // The anchor slot holds exactly ONE id. Spec §9 names this as an open cardinality gap
             // — "an IdSet holds N ids; an anchor slot holds one" — and the honest response to it is
@@ -343,15 +446,14 @@ fn narrowing_for(
                 };
                 let ai = binds.len() + 1;
                 binds.push(QueryBind::Uuids(vec![*id]));
-                Ok(Narrowing {
-                    bound: "NULL::uuid[]".to_string(),
-                    anchor_table: format!("'{table}'::varchar"),
-                    anchor_id: format!("(${ai}::uuid[])[1]"),
+                Ok(StageNarrowing::Anchor {
+                    table: format!("'{table}'::varchar"),
+                    id: format!("(${ai}::uuid[])[1]"),
                 })
             }
             // A region set reaching a find act is already refused by the validator against
             // `accepts_bounds`; unbounded here rather than a second, divergent opinion about it.
-            _ => Ok(unbounded),
+            _ => Ok(StageNarrowing::Unbounded),
         },
     }
 }
@@ -382,7 +484,13 @@ fn paging_for(
     )
 }
 
-fn refusal(inv: &temper_core::types::query::ActInvocation, detail: &str) -> PlanRefusal {
+/// The composition threaded no QUESTION. Static, and the validator refuses it first — this is the
+/// compiler's own last line, kept because `compile` is public and does not require its caller to
+/// have run `validate` on the same tick.
+///
+/// Not to be confused with a failed embedding, which is `RefusalReason::EmbeddingUnavailable` and
+/// is the only refusal here that can be the SERVER's fault rather than the caller's.
+fn missing_question(inv: &temper_core::types::query::ActInvocation, detail: &str) -> PlanRefusal {
     PlanRefusal {
         stage: Some(inv.name.clone()),
         reason: RefusalReason::MissingIntention,
@@ -440,4 +548,120 @@ fn act_name(act: &temper_core::types::query::ActName) -> String {
         .ok()
         .map(|s| s.trim_matches('"').to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_core::types::query::{ActInvocation, ActName, IdSet, StageName};
+
+    fn inv(input: Option<StageInput>) -> ActInvocation {
+        ActInvocation {
+            name: StageName::parse("s").unwrap(),
+            act: ActName::FollowFrom,
+            input,
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        }
+    }
+
+    fn upstream(relation: StageRelation) -> Option<StageInput> {
+        Some(StageInput::Upstream {
+            relation,
+            stage: StageName::parse("hits").unwrap(),
+        })
+    }
+
+    fn caller(relation: StageRelation) -> Option<StageInput> {
+        Some(StageInput::Caller {
+            relation,
+            ids: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: vec![Uuid::now_v7()],
+            },
+        })
+    }
+
+    /// **The defect this fix exists for, witnessed at the function that had it.**
+    ///
+    /// `narrowing_for` read `bounds_mode` NOWHERE: every upstream set went to the narrowing slot
+    /// unconditionally. A seed therefore compiled as a bound, and `follow-from` — the only seeding
+    /// act — would have returned nothing but what was already in its own seed set: a traversal
+    /// that looks like it worked and can never reach a neighbour.
+    ///
+    /// Tested here rather than through `compile` deliberately, and the reason is a limit worth
+    /// stating: `follow-from` still emits `__temper_unbound_act`, which has one slot, so the two
+    /// relations produce IDENTICAL emitted SQL today. An end-to-end assertion would pass against
+    /// the broken code. **This is the only level at which the fix is currently observable**, and
+    /// there is no witness at the SQL level until `search_graph_expand` is bound to its
+    /// `p_seed_ids` parameter — a named remainder, not a covered case.
+    #[test]
+    fn a_seed_routes_to_the_seed_slot_and_a_bound_to_the_bound_slot() {
+        let mut binds = vec![];
+        assert!(
+            matches!(
+                narrowing_for(&inv(upstream(StageRelation::Seed)), &mut binds).unwrap(),
+                StageNarrowing::Seed(_)
+            ),
+            "an upstream set declared `seed` must not land in the narrowing slot"
+        );
+        assert!(matches!(
+            narrowing_for(&inv(upstream(StageRelation::Bound)), &mut binds).unwrap(),
+            StageNarrowing::Bound(_)
+        ));
+    }
+
+    /// The relation is read from the edge for a caller-supplied set too.
+    ///
+    /// The old code's comment justified itself with "an upstream set is always the array slot",
+    /// which quietly implied the caller case was different. It is not: the relation and the source
+    /// are independent, and reading one from the other is how they got coupled.
+    #[test]
+    fn the_relation_is_independent_of_where_the_set_came_from() {
+        let mut binds = vec![];
+        assert!(matches!(
+            narrowing_for(&inv(caller(StageRelation::Seed)), &mut binds).unwrap(),
+            StageNarrowing::Seed(_)
+        ));
+        assert!(matches!(
+            narrowing_for(&inv(caller(StageRelation::Bound)), &mut binds).unwrap(),
+            StageNarrowing::Bound(_)
+        ));
+    }
+
+    /// An act with no input is UNBOUNDED, which is `NULL::uuid[]` and never `'{}'`.
+    ///
+    /// The fragments read the two differently — NULL is unbounded, empty returns zero rows — and
+    /// conflating them turns a stage that found nothing into a global search.
+    #[test]
+    fn no_input_is_unbounded_and_that_is_not_an_empty_array() {
+        let mut binds = vec![];
+        let n = narrowing_for(&inv(None), &mut binds).unwrap();
+        assert!(matches!(n, StageNarrowing::Unbounded));
+        assert_eq!(n.bound_expr().unwrap(), "NULL::uuid[]");
+        assert_ne!(n.bound_expr().unwrap(), "'{}'");
+    }
+
+    /// A narrowing-only fragment handed a seed errors rather than silently narrowing.
+    ///
+    /// **Unreachable through `compile` today, and asserted anyway.** `ValidatedComposition` is
+    /// parse-don't-validate and the validator refuses a seed against every act declaring
+    /// `accepts_seeds: []`, which is all three find acts — so no public call path reaches this arm.
+    /// It exists because the two decisions live in different crates and could drift, and because
+    /// the failure it guards against is the silent one: narrowing when asked to reach is a
+    /// confident wrong answer, while an error is a loud one.
+    #[test]
+    fn a_narrowing_fragment_handed_a_seed_errors_rather_than_quietly_narrowing() {
+        assert!(
+            StageNarrowing::Seed("ARRAY(SELECT id FROM hits)".to_string())
+                .bound_expr()
+                .is_err()
+        );
+        assert!(StageNarrowing::Bound("$2::uuid[]".to_string())
+            .bound_expr()
+            .is_ok());
+    }
 }

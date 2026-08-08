@@ -50,51 +50,101 @@ fn canonicalize(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn check<T: schemars::JsonSchema>(name: &str) {
-    let schema = schemars::SchemaGenerator::default().into_root_schema_for::<T>();
-    let value = canonicalize(&serde_json::to_value(&schema).unwrap());
-    let rendered = serde_json::to_string_pretty(&value).unwrap() + "\n";
-    let path = format!("{DIR}/{name}.schema.json");
-    if std::env::var("UPDATE_SCHEMA").is_ok() {
-        std::fs::create_dir_all(DIR).unwrap();
-        std::fs::write(&path, &rendered).unwrap();
+/// Names checked in this run, so the orphan guard can compare the two sets.
+#[derive(Default)]
+struct Checked(Vec<String>);
+
+impl Checked {
+    fn check<T: schemars::JsonSchema>(&mut self, name: &str) {
+        self.0.push(name.to_string());
+        let schema = schemars::SchemaGenerator::default().into_root_schema_for::<T>();
+        let value = canonicalize(&serde_json::to_value(&schema).unwrap());
+        let rendered = serde_json::to_string_pretty(&value).unwrap() + "\n";
+        let path = format!("{DIR}/{name}.schema.json");
+        if std::env::var("UPDATE_SCHEMA").is_ok() {
+            std::fs::create_dir_all(DIR).unwrap();
+            std::fs::write(&path, &rendered).unwrap();
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            rendered, committed,
+            "{name} query schema drifted — re-run with UPDATE_SCHEMA=1"
+        );
     }
-    let committed = std::fs::read_to_string(&path).unwrap_or_default();
-    assert_eq!(
-        rendered, committed,
-        "{name} query schema drifted — re-run with UPDATE_SCHEMA=1"
-    );
 }
 
 #[test]
 fn query_contract_schemas_match_snapshots() {
-    check::<q::IdSet>("id_set");
-    check::<q::IdKind>("id_kind");
-    check::<q::IdProvenance>("id_provenance");
-    check::<q::Extent>("extent");
-    check::<q::BoundTerm>("bound_term");
+    let mut c = Checked::default();
+    c.check::<q::IdSet>("id_set");
+    c.check::<q::IdKind>("id_kind");
+    c.check::<q::IdProvenance>("id_provenance");
+    c.check::<q::Extent>("extent");
+    c.check::<q::BoundTerm>("bound_term");
     // EdgeKind is deliberately absent: it belongs to `types::graph`, is `sqlx::Type`-bound to the
     // DDL, and is snapshotted through `EdgeFilter` rather than as a query-owned type.
-    check::<q::EdgeFilter>("edge_filter");
-    check::<q::ResourceFilter>("resource_filter");
-    check::<q::FilterField>("filter_field");
-    check::<q::BoundsMode>("bounds_mode");
-    check::<q::MetaDetail>("meta_detail");
-    check::<q::StageDisposition>("disposition");
-    check::<q::ActRefusal>("refusal");
-    check::<q::RefusalDisposition>("refusal_disposition");
-    check::<q::ActName>("act_name");
-    check::<q::BuildState>("build_state");
-    check::<q::Door>("door");
-    check::<q::DoorReach>("door_reach");
-    check::<q::QuantityScale>("quantity_scale");
-    check::<q::ActQuantity>("act_quantity");
-    check::<q::ActDeclaration>("act_declaration");
-    check::<q::ActInvocation>("act_invocation");
-    check::<q::ActResult>("act_result");
-    check::<q::StageTrace>("stage_trace");
-    check::<q::CompositionTrace>("composition_trace");
-    check::<q::Intention>("intention");
-    check::<q::OutcomeDeclaration>("outcome_declaration");
-    check::<q::Composition>("composition");
+    c.check::<q::EdgeFilter>("edge_filter");
+    c.check::<q::ResourceFilter>("resource_filter");
+    c.check::<q::FilterField>("filter_field");
+    // `bounds_mode` is gone: the relation is `StageRelation` now, and it lives inside `StageInput`
+    // rather than beside it, so the input is snapshotted too — the nesting IS the contract change.
+    c.check::<q::StageRelation>("stage_relation");
+    c.check::<q::StageInput>("stage_input");
+    c.check::<q::MetaDetail>("meta_detail");
+    c.check::<q::StageDisposition>("disposition");
+    c.check::<q::ActRefusal>("refusal");
+    // `refusal_disposition` is gone with `Composition.on_stage_refusal` — it described a case that
+    // cannot occur. See the block where the field was, in `composition.rs`.
+    c.check::<q::ActName>("act_name");
+    c.check::<q::BuildState>("build_state");
+    c.check::<q::Door>("door");
+    c.check::<q::DoorReach>("door_reach");
+    c.check::<q::QuantityScale>("quantity_scale");
+    c.check::<q::ActQuantity>("act_quantity");
+    c.check::<q::ActDeclaration>("act_declaration");
+    c.check::<q::ActInvocation>("act_invocation");
+    c.check::<q::ActResult>("act_result");
+    c.check::<q::StageTrace>("stage_trace");
+    c.check::<q::CompositionTrace>("composition_trace");
+    c.check::<q::Intention>("intention");
+    c.check::<q::ReturnSpec>("return_spec");
+    c.check::<q::OutcomeDeclaration>("outcome_declaration");
+    c.check::<q::Composition>("composition");
+
+    no_orphaned_fixtures(&c);
+}
+
+/// Every committed fixture is claimed by a `check`.
+///
+/// `[added — 2026-08-08]` Removing a `check::<>` line leaves its snapshot on disk, where it reads
+/// as coverage and asserts nothing — the same rot as a test no job enables, one layer down. This
+/// run retired two (`bounds_mode`, `refusal_disposition`) and nothing would have noticed the files
+/// staying behind.
+///
+/// **One direction only, and the other is deliberately not asserted here.** A `check` whose
+/// fixture is absent is already caught by `check` itself: `unwrap_or_default()` compares the
+/// rendered schema against `""` and the drift assertion fires. Adding a `missing` arm below looked
+/// symmetric and was UNREACHABLE — `check` fails first without `UPDATE_SCHEMA`, and writes the
+/// file with it. Observed by bite-probing both directions rather than reasoned about: direction
+/// two failed on "schema drifted", never on the arm written for it. A dead assertion that reads as
+/// coverage is the thing this function exists to prevent, so it is gone rather than kept for
+/// symmetry.
+fn no_orphaned_fixtures(checked: &Checked) {
+    let on_disk: std::collections::BTreeSet<String> = std::fs::read_dir(DIR)
+        .expect("fixture directory exists")
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter_map(|f| f.strip_suffix(".schema.json").map(str::to_string))
+        .collect();
+    let claimed: std::collections::BTreeSet<String> = checked.0.iter().cloned().collect();
+
+    assert_eq!(
+        checked.0.len(),
+        claimed.len(),
+        "a name is checked twice; the second snapshot write silently wins over the first"
+    );
+    let orphaned: Vec<&String> = on_disk.difference(&claimed).collect();
+    assert!(
+        orphaned.is_empty(),
+        "committed fixtures nothing checks — delete them: {orphaned:?}"
+    );
 }

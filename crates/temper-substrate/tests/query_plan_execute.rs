@@ -20,8 +20,8 @@ mod common;
 
 use sqlx::Row;
 use temper_core::types::query::{
-    validate, ActInvocation, ActName, BoundsMode, Composition, Intention, OutcomeDeclaration,
-    RefusalDisposition, ReturnSpec, StageInput, StageName, StageNode, ValidatedComposition,
+    validate, ActInvocation, ActName, Composition, Intention, OutcomeDeclaration, ReturnSpec,
+    StageInput, StageName, StageNode, StageRelation, ValidatedComposition,
 };
 use temper_substrate::ids::{ContextId, EntityId, ProfileId};
 use temper_substrate::payloads::AnchorRef;
@@ -82,7 +82,6 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
             name: StageName::parse(name).unwrap(),
             act: ActName::FindExact,
             input,
-            bounds_mode: Some(BoundsMode::Bound),
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -91,17 +90,15 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
     };
     let c = Composition {
         outcome: OutcomeDeclaration {
-            description: "execute test".to_string(),
             returns: vec![ReturnSpec {
                 stage: StageName::parse("narrowed").unwrap(),
-                fields: vec![],
+                with: vec![],
             }],
         },
         intention: Some(Intention {
             query: query.to_string(),
             embedded: false,
         }),
-        on_stage_refusal: RefusalDisposition::Halt,
         meta_detail: Default::default(),
         bounds: Default::default(),
         stages: vec![
@@ -109,6 +106,7 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
             stage(
                 "narrowed",
                 Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
                     stage: StageName::parse("hits").unwrap(),
                 }),
             ),

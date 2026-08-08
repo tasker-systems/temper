@@ -6,17 +6,6 @@
         "act": {
           "$ref": "#/$defs/ActName"
         },
-        "bounds_mode": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BoundsMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "How this act consumes its `input` set. Required whenever `input` is present."
-        },
         "edge_filter": {
           "anyOf": [
             {
@@ -36,7 +25,7 @@
               "type": "null"
             }
           ],
-          "description": "Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a\nroot act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`]."
+          "description": "Where this stage's set comes from, and what this act does with it: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose\n\"required whenever `input` is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid."
         },
         "name": {
           "description": "This node's name, referenced by downstream stages and by `returns`.",
@@ -117,21 +106,6 @@
         }
       ],
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
-    },
-    "BoundsMode": {
-      "description": "How a receiving act consumes the `IdSet` it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.",
-      "oneOf": [
-        {
-          "const": "bound",
-          "description": "Narrow to within this set.",
-          "type": "string"
-        },
-        {
-          "const": "seed",
-          "description": "Grow from this set.",
-          "type": "string"
-        }
-      ]
     },
     "CombineNode": {
       "description": "A set combination over two-or-more upstream stages. Its own node kind because no act takes more\nthan one input, so modelling it as an act would lie about what an act is.",
@@ -299,7 +273,7 @@
       "type": "object"
     },
     "Intention": {
-      "description": "The question, computed once at composition start and threaded to every stage.\n\nIts ABSENCE is meaningful: a `find-about-*` stage with no intention refuses, rather than the\nserver embedding on the caller's behalf. That is what makes \"I chose not to embed\" and\n\"I cannot embed\" different states instead of one ambiguous one.",
+      "description": "The question, computed once at composition start and threaded to every stage.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`",
       "properties": {
         "embedded": {
           "description": "Whether an embedding was computed for it. Inspectable in the trace, which is what makes\nparaphrase-stability measurable from outside.",
@@ -336,12 +310,8 @@
       ]
     },
     "OutcomeDeclaration": {
-      "description": "A composition's pocket outcome register: what it is for, and which stages come back.",
+      "description": "Which stages come back, and how much of each row.",
       "properties": {
-        "description": {
-          "description": "What being served looks like. NOT optional.",
-          "type": "string"
-        },
         "returns": {
           "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
           "items": {
@@ -351,7 +321,6 @@
         }
       },
       "required": [
-        "description",
         "returns"
       ],
       "type": "object"
@@ -432,14 +401,6 @@
       ],
       "description": "What a [`PropertyPredicate`] addresses.\n\nOPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a\nclosed set here would be a claim the schema does not make. This is the OPPOSITE call from\n[`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its\nclosedness is a *fact about the database*; `owner_table` mirrors nothing."
     },
-    "RefusalDisposition": {
-      "description": "What a composition does when a stage refuses. Declared BEFORE execution; the executor never\nimprovises it.",
-      "enum": [
-        "halt",
-        "degrade_and_disclose"
-      ],
-      "type": "string"
-    },
     "ResourceFilter": {
       "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\nAn unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL\n(`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four\nfilters that accept nonsense and return one.",
       "properties": {
@@ -491,19 +452,39 @@
       },
       "type": "object"
     },
+    "ResourceSection": {
+      "description": "One addable or removable part of a [`ResourceView`].\n\nReplaces `--meta-only`, which conflated two axes because the two commands differ in\nwhat they otherwise return: on `show` it means *drop the body*\n(`temper-cli/src/cli.rs:571-575` — \"Show everything except the body\"), on `list` it\nmeans *add both meta tiers* (`:537-542` — \"each row carries both the managed and open\nmeta tiers ... on top of the usual row fields\"). Once both commands answer in one\nshape, that flag has two meanings and no coherent one.\n\nNaming the parts lets a caller add or remove each independently — including\n`show --with edges --without body`, which is **unreachable today**: `meta_only`\ncarries `conflicts_with = \"edges\"` (`temper-cli/src/cli.rs:574`), so the present\ndesign needs a rule to forbid a combination that is merely useful.\n\nThe managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is\nalways present, which is what makes dropping the hoisted workflow fields lossless.\n\nThe names are **kebab-case** (`open-meta`), not the `open_meta` of the field the\nsection fills. They are values a human or agent types after `--with`, and the CLI's\nvocabulary is kebab throughout; the `snake_case` enums in [`super::resource`]\n([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's\nrename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`\nasserts both.\n`[widened — 2026-08-08]` This carried only `Serialize`/`Deserialize` while it was reached\nexclusively through query strings and `parse_accepting`. `/api/query`'s `ReturnSpec.with` is\nthe first TYPED field of this enum on a wire contract, and a boundary type that both surfaces\nspeak is supposed to carry the generation derives — so it now does. No route references it, so\n`openapi.json` is unmoved.",
+      "oneOf": [
+        {
+          "const": "body",
+          "description": "The reconstructed markdown body — [`ResourceView::content`].",
+          "type": "string"
+        },
+        {
+          "const": "open-meta",
+          "description": "The open (user-defined) frontmatter tier — [`ResourceView::open_meta`].",
+          "type": "string"
+        },
+        {
+          "const": "edges",
+          "description": "The resource's graph edges, fetched alongside the view rather than carried on it.",
+          "type": "string"
+        }
+      ]
+    },
     "ReturnSpec": {
       "description": "One stage whose rows come back, and how much of each row.",
       "properties": {
-        "fields": {
-          "description": "Empty means the kind's default projection. Named fields subselect it.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "stage": {
           "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
           "type": "string"
+        },
+        "with": {
+          "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary.",
+          "items": {
+            "$ref": "#/$defs/ResourceSection"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -512,11 +493,14 @@
       "type": "object"
     },
     "StageInput": {
-      "description": "Where a stage's set comes from: the caller's own id set, or an upstream stage's output.\n\nThis is the field that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.",
+      "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage.",
       "oneOf": [
         {
           "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
           "properties": {
+            "as": {
+              "$ref": "#/$defs/StageRelation"
+            },
             "from": {
               "const": "caller",
               "type": "string"
@@ -527,6 +511,7 @@
           },
           "required": [
             "from",
+            "as",
             "ids"
           ],
           "type": "object"
@@ -534,6 +519,9 @@
         {
           "description": "The `produced` set of an earlier stage, named rather than copied.",
           "properties": {
+            "as": {
+              "$ref": "#/$defs/StageRelation"
+            },
             "from": {
               "const": "upstream",
               "type": "string"
@@ -545,6 +533,7 @@
           },
           "required": [
             "from",
+            "as",
             "stage"
           ],
           "type": "object"
@@ -561,6 +550,21 @@
         }
       ],
       "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes."
+    },
+    "StageRelation": {
+      "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+      "oneOf": [
+        {
+          "const": "bound",
+          "description": "Narrow to within this set.",
+          "type": "string"
+        },
+        {
+          "const": "seed",
+          "description": "Grow from this set.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -588,10 +592,6 @@
       "$ref": "#/$defs/MetaDetail",
       "default": "surviving"
     },
-    "on_stage_refusal": {
-      "$ref": "#/$defs/RefusalDisposition",
-      "description": "What happens when a stage refuses. Declared, never improvised."
-    },
     "outcome": {
       "$ref": "#/$defs/OutcomeDeclaration"
     },
@@ -605,7 +605,6 @@
   },
   "required": [
     "outcome",
-    "on_stage_refusal",
     "stages"
   ],
   "title": "Composition",

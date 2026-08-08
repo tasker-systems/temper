@@ -21,8 +21,8 @@ use super::envelope::ActInvocation;
 use super::filter::{FilterField, PropertyOp, PropertySubject};
 use super::id_set::IdKind;
 use super::registry::declaration;
-use super::scalars::BoundsMode;
-use super::stage::{StageInput, StageName};
+use super::stage::{StageInput, StageName, StageRelation};
+use crate::types::resource_view::ResourceSection;
 
 /// Declared mechanic (`served_by`) → the SQL function the compiler actually emits.
 ///
@@ -115,6 +115,16 @@ fn refusal(
         reason,
         detail: detail.into(),
     }
+}
+
+/// An act's name as the caller wrote it, for a refusal to quote back.
+///
+/// Through serde rather than a second match, so a refusal can never name an act by a spelling the
+/// wire does not accept — which would tell a caller to retry something unparseable.
+fn act_wire_name(act: &ActName) -> String {
+    serde_json::to_string(act)
+        .map(|s| s.trim_matches('"').to_string())
+        .unwrap_or_else(|_| format!("{act:?}"))
 }
 
 /// The kind an upstream node produces, walking a combinator to its first input. `None` for a
@@ -210,11 +220,17 @@ fn check_act(
         }
     }
 
-    // Input kind: a bound or a seed, consumed per `bounds_mode`.
+    // Input kind, read against the relation the EDGE declares.
+    //
+    // `[amended — 2026-08-08]` This used to read `matches!(inv.bounds_mode, Some(BoundsMode::Seed))`
+    // off the invocation. That was wrong in a way no test could see: `bounds_mode` was an `Option`
+    // whose "required whenever `input` is present" invariant lived in prose, so an input with no
+    // relation fell through to `false` and was silently checked against `accepts_bounds`. The
+    // relation now rides the input, is total, and cannot be absent.
     if let Some(input) = &inv.input {
         let (incoming, from_caller, provenance) = match input {
-            StageInput::Caller { ids } => (Some(ids.kind.clone()), true, ids.provenance),
-            StageInput::Upstream { stage } => {
+            StageInput::Caller { ids, .. } => (Some(ids.kind.clone()), true, ids.provenance),
+            StageInput::Upstream { stage, .. } => {
                 (produced_kind_of(stage.as_str(), by_name), false, None)
             }
         };
@@ -227,18 +243,30 @@ fn check_act(
                     "a region set must declare whether it is cogmap- or context-anchored",
                 ));
             }
-            let as_seed = matches!(inv.bounds_mode, Some(BoundsMode::Seed));
+            let as_seed = input.relation() == StageRelation::Seed;
             if as_seed && !decl.accepts_seeds.contains(&kind) {
+                // The negative face of putting the relation on the wire: this caller asked to
+                // REACH BEYOND the set, and this act can only narrow within one. Deriving the
+                // relation from the act would have executed the narrowing instead — a different
+                // question, answered confidently.
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::UnsupportedSeedKind,
-                    format!("act does not accept seeds of kind `{kind:?}`"),
+                    format!(
+                        "act `{}` cannot grow from a set — it does not accept seeds of kind \
+                         `{kind:?}`. Narrowing within the set instead would answer a different \
+                         question than the one asked",
+                        act_wire_name(&inv.act)
+                    ),
                 ));
             } else if !as_seed && !decl.accepts_bounds.contains(&kind) {
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::UnsupportedBoundKind,
-                    format!("act does not accept bounds of kind `{kind:?}`"),
+                    format!(
+                        "act `{}` does not accept bounds of kind `{kind:?}`",
+                        act_wire_name(&inv.act)
+                    ),
                 ));
             }
         }
@@ -323,6 +351,25 @@ fn check_act(
     }
 }
 
+/// Where to go for a section this door declines.
+///
+/// A refusal that only says no leaves the caller to guess, and both of these have a real home. The
+/// advice is part of the refusal rather than documentation because the caller is reading the
+/// refusal, not the docs.
+fn section_advice(section: ResourceSection) -> &'static str {
+    match section {
+        // `fill_sections` records that the body arm "is an N+1 by construction" and that what
+        // keeps it honest is "the door, not the loop". This is a new door and is narrow from its
+        // first line.
+        ResourceSection::Body => "Bodies are read one at a time — ask `show` for the ones you want",
+        ResourceSection::Edges => {
+            "Edge listing has its own commands; `follow-from` with an `edge_filter` walks and \
+             filters on edges without returning them"
+        }
+        ResourceSection::OpenMeta => "",
+    }
+}
+
 /// Validate a composition against `search_family()` and the plan's own topology. Returns ALL
 /// refusals, never just the first.
 pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
@@ -370,7 +417,8 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
         }
     }
 
-    // A `returns` entry must name a declared stage.
+    // A `returns` entry must name a declared stage, and may only ask for sections this door
+    // hydrates.
     for ret in &c.outcome.returns {
         if !declared.contains(ret.stage.as_str()) {
             errs.push(refusal(
@@ -378,6 +426,28 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
                 RefusalReason::Other("unknown-return-stage".to_string()),
                 format!("returns names undeclared stage `{}`", ret.stage.as_str()),
             ));
+        }
+        // Refused here rather than at deserialization, which is the whole reason `with` carries
+        // the shared `ResourceSection` vocabulary instead of a narrow query-local enum: a serde
+        // failure short-circuits before this function runs, so a caller with several problems
+        // would learn about one of them, phrased by a deserializer.
+        for section in &ret.with {
+            if !ReturnSpec::ADMITTED_SECTIONS.contains(section) {
+                errs.push(refusal(
+                    Some(&ret.stage),
+                    RefusalReason::SectionNotAvailable,
+                    format!(
+                        "`{section}` is not a section this door hydrates (it offers: {}). \
+                         {}",
+                        ReturnSpec::ADMITTED_SECTIONS
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        section_advice(*section),
+                    ),
+                ));
+            }
         }
     }
 
@@ -413,28 +483,48 @@ mod tests {
     use crate::types::query::composition::{
         CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration,
     };
-    use crate::types::query::disposition::RefusalDisposition;
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::{EdgeFilter, PropertyPredicate};
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
     use crate::types::query::scalars::BoundTerm;
     use std::collections::BTreeMap;
 
-    /// A minimal legal act node. `bounds_mode` follows the act: `follow-from` seeds, everything else
-    /// bounds — chosen so the input-kind check reads the right acceptance list.
+    /// The relation that makes a plan legal for this act: `follow-from` seeds, everything else
+    /// bounds. Chosen so the input-kind check reads the right acceptance list — a test about
+    /// topology should not fail on a relation mismatch it did not mean to introduce.
+    fn natural_relation(a: ActName) -> StageRelation {
+        if a == ActName::FollowFrom {
+            StageRelation::Seed
+        } else {
+            StageRelation::Bound
+        }
+    }
+
+    /// A minimal legal act node.
+    ///
+    /// The relation is REWRITTEN onto whatever input it is handed, rather than being a parameter
+    /// of every call site. Callers build inputs with [`caller_ids`] / [`upstream`] and get the
+    /// relation their act needs; a test that wants a DELIBERATELY wrong relation uses
+    /// [`act_with_relation`] and says so in its name.
     fn act(name: &str, a: ActName, input: Option<StageInput>) -> StageNode {
-        let bounds_mode = input.as_ref().map(|_| {
-            if a == ActName::FollowFrom {
-                BoundsMode::Seed
-            } else {
-                BoundsMode::Bound
-            }
+        let relation = natural_relation(a.clone());
+        act_with_relation(name, a, input, relation)
+    }
+
+    fn act_with_relation(
+        name: &str,
+        a: ActName,
+        input: Option<StageInput>,
+        relation: StageRelation,
+    ) -> StageNode {
+        let input = input.map(|i| match i {
+            StageInput::Caller { ids, .. } => StageInput::Caller { relation, ids },
+            StageInput::Upstream { stage, .. } => StageInput::Upstream { relation, stage },
         });
         StageNode::Act(ActInvocation {
             name: StageName::parse(name).unwrap(),
             act: a,
             input,
-            bounds_mode,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -443,26 +533,30 @@ mod tests {
     }
 
     fn plan(stages: Vec<StageNode>, returns: Vec<&str>) -> Composition {
+        plan_returning(
+            stages,
+            returns
+                .into_iter()
+                .map(|s| ReturnSpec {
+                    stage: StageName::parse(s).unwrap(),
+                    with: vec![],
+                })
+                .collect(),
+        )
+    }
+
+    fn plan_returning(stages: Vec<StageNode>, returns: Vec<ReturnSpec>) -> Composition {
         Composition {
-            outcome: OutcomeDeclaration {
-                description: "test plan".to_string(),
-                returns: returns
-                    .into_iter()
-                    .map(|s| ReturnSpec {
-                        stage: StageName::parse(s).unwrap(),
-                        fields: vec![],
-                    })
-                    .collect(),
-            },
+            outcome: OutcomeDeclaration { returns },
             intention: None,
-            on_stage_refusal: RefusalDisposition::Halt,
             meta_detail: Default::default(),
             bounds: BTreeMap::new(),
             stages,
         }
     }
 
-    /// A caller id set, with region provenance supplied so it is well-formed.
+    /// A caller id set, with region provenance supplied so it is well-formed. The relation here is
+    /// a placeholder — [`act`] overwrites it with the one the act actually accepts.
     fn caller_ids(kind: IdKind) -> StageInput {
         let provenance = if kind == IdKind::Region {
             Some(IdProvenance::Cogmap(CogmapId::new()))
@@ -470,6 +564,7 @@ mod tests {
             None
         };
         StageInput::Caller {
+            relation: StageRelation::Bound,
             ids: IdSet {
                 kind,
                 provenance,
@@ -480,6 +575,7 @@ mod tests {
 
     fn caller_ids_no_provenance(kind: IdKind) -> StageInput {
         StageInput::Caller {
+            relation: StageRelation::Bound,
             ids: IdSet {
                 kind,
                 provenance: None,
@@ -490,6 +586,7 @@ mod tests {
 
     fn upstream(name: &str) -> Option<StageInput> {
         Some(StageInput::Upstream {
+            relation: StageRelation::Bound,
             stage: StageName::parse(name).unwrap(),
         })
     }
@@ -812,6 +909,182 @@ mod tests {
                 .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
             "a served act with no fragment must not be reported as unbuilt; got: {errs:?}"
         );
+    }
+
+    // ---- The relation moved onto the edge ---------------------------------------------------
+
+    #[test]
+    fn asking_an_act_to_reach_beyond_a_set_it_can_only_narrow_within_is_refused() {
+        // The negative face of carrying the relation on the wire at all. Across the seven acts
+        // `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is fully determined
+        // by the act and could have been derived — and deriving it is precisely the mistake. A
+        // caller writing `seed` against `find-exact` asked to reach BEYOND their set; `find-exact`
+        // can only narrow within one. Derived, this would have silently executed the narrowing:
+        // their question answered as a different question, with a confident page of results.
+        let c = plan_returning(
+            vec![act_with_relation(
+                "hits",
+                ActName::FindExact,
+                Some(caller_ids(IdKind::Resource)),
+                StageRelation::Seed,
+            )],
+            vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![],
+            }],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::UnsupportedSeedKind),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn the_same_stage_with_the_relation_its_act_accepts_is_legal() {
+        // The other half of the pair. Without it the test above would also pass if `find-exact`
+        // refused every input for some unrelated reason, which would make it evidence of nothing.
+        let mut c = plan(
+            vec![act_with_relation(
+                "hits",
+                ActName::FindExact,
+                Some(caller_ids(IdKind::Resource)),
+                StageRelation::Bound,
+            )],
+            vec!["hits"],
+        );
+        c.intention = Some(Intention {
+            query: "composable fragments".to_string(),
+            embedded: true,
+        });
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
+    }
+
+    #[test]
+    fn the_relation_is_read_from_the_edge_rather_than_from_a_sibling_of_the_input() {
+        // `[amended — 2026-08-08]` This check used to read `matches!(inv.bounds_mode, Some(Seed))`
+        // off the invocation, where the relation was an `Option` whose "required whenever `input`
+        // is present" invariant lived only in prose. An input with no relation therefore fell
+        // through to `false` and was checked against `accepts_bounds` — a silent narrowing, the
+        // exact substitution the refusal above exists to prevent.
+        //
+        // That state is now unrepresentable rather than merely unreachable, which is why THIS test
+        // can only assert the positive: both relations are read, from the edge, for both input
+        // sources. The absent case is pinned where it now lives — as a deserialization failure, in
+        // `stage::tests::an_input_with_no_declared_relation_does_not_deserialize`.
+        let upstream_seed = act_with_relation(
+            "near",
+            ActName::FollowFrom,
+            upstream("hits"),
+            StageRelation::Seed,
+        );
+        let caller_bound = act_with_relation(
+            "hits",
+            ActName::FollowFrom,
+            Some(caller_ids(IdKind::Resource)),
+            StageRelation::Bound,
+        );
+        let StageNode::Act(up) = &upstream_seed else {
+            unreachable!()
+        };
+        let StageNode::Act(ca) = &caller_bound else {
+            unreachable!()
+        };
+        assert_eq!(
+            up.input.as_ref().unwrap().relation(),
+            StageRelation::Seed,
+            "an upstream edge carries its own relation"
+        );
+        assert_eq!(
+            ca.input.as_ref().unwrap().relation(),
+            StageRelation::Bound,
+            "so does a caller-supplied one"
+        );
+
+        // And `follow-from` accepts seeds, not bounds — so the second plan is refused for the
+        // relation and the first is not.
+        assert!(validate(&plan(vec![caller_bound], vec!["hits"]))
+            .unwrap_err()
+            .iter()
+            .any(|e| e.reason == RefusalReason::UnsupportedBoundKind));
+    }
+
+    // ---- Hydration sections -----------------------------------------------------------------
+
+    #[test]
+    fn a_section_this_door_does_not_hydrate_is_refused_with_somewhere_to_go() {
+        // `body` is a real word in the shared vocabulary, so it deserializes — and is refused
+        // here, which is the point of not making it a narrow query-local enum. A refusal that only
+        // said no would leave the caller guessing; this one names `show`.
+        let c = plan_returning(
+            vec![act(
+                "near",
+                ActName::FollowFrom,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![ResourceSection::Body],
+            }],
+        );
+        let errs = validate(&c).unwrap_err();
+        let hit = errs
+            .iter()
+            .find(|e| e.reason == RefusalReason::SectionNotAvailable)
+            .unwrap_or_else(|| panic!("got: {errs:?}"));
+        assert_eq!(hit.stage.as_ref().unwrap().as_str(), "near");
+        assert!(hit.detail.contains("show"), "got: {}", hit.detail);
+        assert!(
+            hit.detail.contains("open-meta"),
+            "a refusal must name what this door DOES offer; got: {}",
+            hit.detail
+        );
+    }
+
+    #[test]
+    fn a_refused_section_comes_back_alongside_every_other_refusal_not_instead_of_them() {
+        // THE reason this refusal lives at validation rather than at deserialization. Were `with`
+        // a single-member enum, `body` would fail to parse and serde would short-circuit — this
+        // caller would learn about their section and never hear about their dangling reference,
+        // in a deserializer's vocabulary rather than this contract's.
+        let c = plan_returning(
+            vec![act("near", ActName::FollowFrom, upstream("ghost"))],
+            vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![ResourceSection::Body, ResourceSection::Edges],
+            }],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert_eq!(
+            errs.iter()
+                .filter(|e| e.reason == RefusalReason::SectionNotAvailable)
+                .count(),
+            2,
+            "both refused sections, not just the first; got: {errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| e.detail.contains("undeclared stage")),
+            "and the unrelated topology refusal survives alongside them; got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn the_section_this_door_does_hydrate_passes() {
+        // The bite check for the pair above: if `ADMITTED_SECTIONS` were empty, or the containment
+        // test were inverted, every one of these tests would still be green.
+        let mut c = plan_returning(
+            vec![act("wide", ActName::FindAboutAnywhere, None)],
+            vec![ReturnSpec {
+                stage: StageName::parse("wide").unwrap(),
+                with: vec![ResourceSection::OpenMeta],
+            }],
+        );
+        c.intention = Some(Intention {
+            query: "salience".to_string(),
+            embedded: true,
+        });
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
     }
 
     #[test]

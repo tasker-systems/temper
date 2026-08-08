@@ -24,7 +24,12 @@
         },
         {
           "const": "missing_intention",
-          "description": "A required input the composition never supplied — e.g. a `find-about-*` stage with no\nthreaded intention. Explicitly NOT a silent substitution.",
+          "description": "A find stage with no threaded intention — no QUESTION, not no vector. Explicitly NOT a\nsilent substitution.\n\nThe distinction is load-bearing and easy to lose. This fires when the composition supplied\nno query text at all, which `find-exact` cannot work around: its text becomes `p_query` and\nthere is nowhere else to source it. It does **not** fire for a missing embedding — the\nserver computes one, because API callers structurally cannot, and a failed attempt is\n[`RefusalReason::EmbeddingUnavailable`] instead.",
+          "type": "string"
+        },
+        {
+          "const": "section_not_available",
+          "description": "`ReturnSpec.with` named a hydration section this door does not offer.\n\nA refusal rather than a parse error on purpose. The section vocabulary is shared with\n`show` and `list`, so `body` and `edges` are real words that deserialize cleanly — they are\nsimply not what `/api/query` hydrates, and saying so (with a pointer to the door that does)\nis worth more than a deserializer's \"unknown variant\". It also keeps the promise that every\nrefusal comes back at once: serde failures short-circuit before validation runs.",
           "type": "string"
         },
         {
@@ -45,6 +50,11 @@
         {
           "const": "not_separably_reachable",
           "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D is the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler does not emit.\n`NotImplemented` would be false about them (they are served); this variant is the honest one.\nBeat D deletes the refusal for them by giving the compiler their fragments. Fusion is not the\nreason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts\nthis surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.",
+          "type": "string"
+        },
+        {
+          "const": "embedding_unavailable",
+          "description": "**The one refusal that is not static.** A `find-about-*` stage needed a query embedding,\nthe server had to compute it because the caller could not, and the attempt failed — an\nerror, a panic, or the query-embed budget expiring.\n\nIt is a refusal rather than an empty because the stage holds a well-formed question it\ncannot answer; returning `empty` would hand back a list that reads like an answer. It is\nalso the reason every OTHER refusal here can be reported as a 400 before anything runs:\nthis is the only one that can appear mid-flight, and it is what gives a runtime refusal a\nreferent at all. `[decided — 2026-08-08, Pete]`",
           "type": "string"
         },
         {

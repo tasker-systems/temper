@@ -19,42 +19,26 @@
           "type": "string"
         }
       ]
-    },
-    "ReturnSpec": {
-      "description": "One stage whose rows come back, and how much of each row.",
-      "properties": {
-        "stage": {
-          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
-          "type": "string"
-        },
-        "with": {
-          "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary.",
-          "items": {
-            "$ref": "#/$defs/ResourceSection"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "stage"
-      ],
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Which stages come back, and how much of each row.",
+  "description": "One stage whose rows come back, and how much of each row.",
   "properties": {
-    "returns": {
-      "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
+    "stage": {
+      "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+      "type": "string"
+    },
+    "with": {
+      "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary.",
       "items": {
-        "$ref": "#/$defs/ReturnSpec"
+        "$ref": "#/$defs/ResourceSection"
       },
       "type": "array"
     }
   },
   "required": [
-    "returns"
+    "stage"
   ],
-  "title": "OutcomeDeclaration",
+  "title": "ReturnSpec",
   "type": "object"
 }

@@ -63,9 +63,23 @@ pub enum RefusalReason {
     MissingProvenance,
     /// The act is declared but not built (`build_state` is not `served` or `fused`).
     NotImplemented,
-    /// A required input the composition never supplied — e.g. a `find-about-*` stage with no
-    /// threaded intention. Explicitly NOT a silent substitution.
+    /// A find stage with no threaded intention — no QUESTION, not no vector. Explicitly NOT a
+    /// silent substitution.
+    ///
+    /// The distinction is load-bearing and easy to lose. This fires when the composition supplied
+    /// no query text at all, which `find-exact` cannot work around: its text becomes `p_query` and
+    /// there is nowhere else to source it. It does **not** fire for a missing embedding — the
+    /// server computes one, because API callers structurally cannot, and a failed attempt is
+    /// [`RefusalReason::EmbeddingUnavailable`] instead.
     MissingIntention,
+    /// `ReturnSpec.with` named a hydration section this door does not offer.
+    ///
+    /// A refusal rather than a parse error on purpose. The section vocabulary is shared with
+    /// `show` and `list`, so `body` and `edges` are real words that deserialize cleanly — they are
+    /// simply not what `/api/query` hydrates, and saying so (with a pointer to the door that does)
+    /// is worth more than a deserializer's "unknown variant". It also keeps the promise that every
+    /// refusal comes back at once: serde failures short-circuit before validation runs.
+    SectionNotAvailable,
     /// A filter value outside a closed vocabulary — an unknown `doc_type`, `stage` or `status`.
     /// Refused rather than returned as an empty page: a typo must never be reportable as an
     /// absence, which is what four filters do today.
@@ -90,6 +104,16 @@ pub enum RefusalReason {
     /// reason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts
     /// this surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.
     NotSeparablyReachable,
+    /// **The one refusal that is not static.** A `find-about-*` stage needed a query embedding,
+    /// the server had to compute it because the caller could not, and the attempt failed — an
+    /// error, a panic, or the query-embed budget expiring.
+    ///
+    /// It is a refusal rather than an empty because the stage holds a well-formed question it
+    /// cannot answer; returning `empty` would hand back a list that reads like an answer. It is
+    /// also the reason every OTHER refusal here can be reported as a 400 before anything runs:
+    /// this is the only one that can appear mid-flight, and it is what gives a runtime refusal a
+    /// referent at all. `[decided — 2026-08-08, Pete]`
+    EmbeddingUnavailable,
     /// A reason this consumer does not recognize. Never constructed by this crate — only by
     /// deserializing a producer newer than this consumer.
     #[serde(untagged)]
@@ -115,18 +139,13 @@ pub struct ActRefusal {
     pub detail: String,
 }
 
-/// What a composition does when a stage refuses. Declared BEFORE execution; the executor never
-/// improvises it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum RefusalDisposition {
-    Halt,
-    DegradeAndDisclose,
-}
+// `RefusalDisposition {halt | degrade_and_disclose}` used to live here, as
+// `Composition.on_stage_refusal`. Both are gone — see the block where the field was, in
+// `composition.rs`. The short version: it described a case that cannot occur, and the one runtime
+// refusal that CAN occur is composition-wide rather than per-stage and has two observationally
+// near-identical settings. The type comes back with the field if a later runtime refusal genuinely
+// wants a choice; re-adding an optional field is additive, shipping a required one against a case
+// with no referent is not. `[decided — 2026-08-08, Pete]`
 
 #[cfg(test)]
 mod tests {
@@ -216,14 +235,48 @@ mod tests {
     }
 
     #[test]
-    fn composition_refusal_disposition_has_two_v0_values() {
+    fn the_removed_refusal_disposition_degrades_rather_than_failing_for_an_old_producer() {
+        // `RefusalDisposition` is gone with its field. Anything that used to send `"halt"` now
+        // sends an ignored unknown field, and nothing here can raise the old values — this pins
+        // that the removal did not leave a parse hazard behind, the same way the retired
+        // `expression_not_pushdownable` reason is pinned above.
+        assert!(serde_json::from_str::<RefusalReason>("\"halt\"").is_ok());
+        assert!(!serde_json::from_str::<RefusalReason>("\"halt\"")
+            .unwrap()
+            .is_known());
+    }
+
+    #[test]
+    fn exactly_one_refusal_reason_is_runtime_and_the_rest_are_static() {
+        // The property the 400-carries-everything design rests on: if a second reason ever becomes
+        // runtime-only, `POST /api/query` can no longer promise that a composition which passes
+        // validation will not refuse mid-flight for a reason it could have named up front.
+        //
+        // Not derivable from the type — openness means the enum cannot enumerate itself — so this
+        // is a declared list, and the assertion is that the declared runtime set has exactly one
+        // member. A reader adding a runtime reason has to come here and say so.
+        const RUNTIME: [RefusalReason; 1] = [RefusalReason::EmbeddingUnavailable];
+        assert_eq!(RUNTIME.len(), 1);
+        assert!(RUNTIME[0].is_known());
         assert_eq!(
-            serde_json::to_string(&RefusalDisposition::Halt).unwrap(),
-            "\"halt\""
+            serde_json::to_string(&RefusalReason::EmbeddingUnavailable).unwrap(),
+            "\"embedding_unavailable\""
+        );
+    }
+
+    #[test]
+    fn a_missing_question_and_a_failed_embedding_are_different_refusals() {
+        // The contradiction this pair was written to close. One is static and about the caller's
+        // request (no words to search for); the other is runtime and about the server's own
+        // failure to embed on their behalf. Collapsing them would either refuse every API caller
+        // who cannot precompute a vector, or report a server-side failure as a caller mistake.
+        assert_ne!(
+            RefusalReason::MissingIntention,
+            RefusalReason::EmbeddingUnavailable
         );
         assert_eq!(
-            serde_json::to_string(&RefusalDisposition::DegradeAndDisclose).unwrap(),
-            "\"degrade_and_disclose\""
+            serde_json::to_string(&RefusalReason::MissingIntention).unwrap(),
+            "\"missing_intention\""
         );
     }
 }

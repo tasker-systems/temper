@@ -3,6 +3,7 @@ import type { CogmapId } from "./CogmapId";
 import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
 import type { JsonValue } from "./serde_json/JsonValue";
+import type { ResourceSection } from "./ResourceSection";
 
 /**
  * One act, declared.
@@ -72,15 +73,17 @@ export type ActInvocation = {
  */
 name: StageName, act: ActName, 
 /**
- * Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a
- * root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
+ * Where this stage's set comes from, and what this act does with it: caller-supplied ids or
+ * an upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root
+ * act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
  * `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
+ *
+ * There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
+ * "required whenever `input` is present" invariant lived in prose, which admitted a
+ * meaningless state the validator then read as `bound`. The relation belongs to the edge, and
+ * nesting it there makes the meaningless state unrepresentable rather than merely invalid.
  */
 input: StageInput | null, 
-/**
- * How this act consumes its `input` set. Required whenever `input` is present.
- */
-bounds_mode: BoundsMode | null, 
 /**
  * Act-level bound terms. A term this act does not admit is refused STATICALLY
  * (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
@@ -197,14 +200,6 @@ bounds_dropped: bigint, };
 export type BoundTerm = "limit" | "offset" | "regions";
 
 /**
- * How a receiving act consumes the `IdSet` it was handed.
- *
- * Declared at the CONSUMING stage, never the producing one — the producer emits membership and
- * has no opinion about what the next act does with it.
- */
-export type BoundsMode = "bound" | "seed";
-
-/**
  * Where a stage's bounds came from.
  */
 export type BoundsSource = { "source": "upstream", stage: number, } | { "source": "expression" } | { "source": "caller" };
@@ -245,11 +240,7 @@ export type CombineOp = "union" | "intersect";
 /**
  * A composition, declared before execution.
  */
-export type Composition = { outcome: OutcomeDeclaration, intention: Intention | null, 
-/**
- * What happens when a stage refuses. Declared, never improvised.
- */
-on_stage_refusal: RefusalDisposition, meta_detail: MetaDetail, 
+export type Composition = { outcome: OutcomeDeclaration, intention: Intention | null, meta_detail: MetaDetail, 
 /**
  * The SECOND bound layer: over the composition's own output, distinct from the act-level
  * terms on each stage. A composition never carries a total — with each stage's output the
@@ -353,9 +344,17 @@ provenance: IdProvenance | null, ids: Array<string>, };
 /**
  * The question, computed once at composition start and threaded to every stage.
  *
- * Its ABSENCE is meaningful: a `find-about-*` stage with no intention refuses, rather than the
- * server embedding on the caller's behalf. That is what makes "I chose not to embed" and
- * "I cannot embed" different states instead of one ambiguous one.
+ * **Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no
+ * intention has no words to search for, so it comes back `MissingIntention`. That refusal is
+ * forced rather than chosen: `find-exact` sources its query *text* from here — it becomes
+ * `p_query` — and there is nowhere else to get it.
+ *
+ * An absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby
+ * gem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want
+ * of a precomputed vector would deny this surface to every non-CLI client. The server embeds when
+ * none arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as
+ * [`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the
+ * contract. `[decided — 2026-08-08, Pete]`
  */
 export type Intention = { query: string, 
 /**
@@ -385,13 +384,9 @@ export type NarrowedBy = { key: string, value: string,
 admitted: bigint | null, excluded: bigint | null, };
 
 /**
- * A composition's pocket outcome register: what it is for, and which stages come back.
+ * Which stages come back, and how much of each row.
  */
 export type OutcomeDeclaration = { 
-/**
- * What being served looks like. NOT optional.
- */
-description: string, 
 /**
  * The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:
  * inferring from out-degree zero makes returning an intermediate impossible without a dummy
@@ -440,12 +435,6 @@ export type PropertySubject = "resource" | "edge" | string;
 export type QuantityScale = { "scale": "unit_interval" } | { "scale": "other_range", bounds: string, } | { "scale": "unbounded" };
 
 /**
- * What a composition does when a stage refuses. Declared BEFORE execution; the executor never
- * improvises it.
- */
-export type RefusalDisposition = "halt" | "degrade_and_disclose";
-
-/**
  * Why an act refused. A typed variant so every door renders the same value; how a door
  * TRANSPORTS it (HTTP status, MCP error code) stays a door concern.
  *
@@ -456,7 +445,7 @@ export type RefusalDisposition = "halt" | "degrade_and_disclose";
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | string;
+export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | string;
 
 /**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
@@ -484,9 +473,19 @@ facets: Array<FacetPredicate>, stage: string | null, status: string | null, owne
  */
 export type ReturnSpec = { stage: StageName, 
 /**
- * Empty means the kind's default projection. Named fields subselect it.
+ * Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show
+ * --with` uses. Empty means the kind's default projection.
+ *
+ * Replaces `fields: Vec<String>`, which promised field-level subselection over a projection,
+ * had nothing implementing it, and duplicated a vocabulary that already works.
+ *
+ * **This door admits a subset, and the rest are REFUSED rather than unsupported** — see
+ * [`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization
+ * on purpose: `/api/query` promises every refusal in one response, and a serde failure
+ * short-circuits before validation runs, so a caller with four problems would learn about one
+ * of them in a deserializer's vocabulary.
  */
-fields: Array<string>, };
+with: Array<ResourceSection>, };
 
 /**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
@@ -494,12 +493,16 @@ fields: Array<string>, };
 export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
 
 /**
- * Where a stage's set comes from: the caller's own id set, or an upstream stage's output.
+ * Where a stage's set comes from, and WHAT IT IS FOR.
  *
- * This is the field that closes the gap. Before it, an invocation could carry only a literal
+ * This is the type that closes the gap. Before it, an invocation could carry only a literal
  * `bounds: Option<IdSet>` and had no way to name a producing stage.
+ *
+ * [`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so
+ * "an input with no declared relation" is **unrepresentable** rather than merely invalid. The
+ * relation belongs to the edge, not to the stage.
  */
-export type StageInput = { "from": "caller", ids: IdSet, } | { "from": "upstream", stage: StageName, };
+export type StageInput = { "from": "caller", as: StageRelation, ids: IdSet, } | { "from": "upstream", as: StageRelation, stage: StageName, };
 
 /**
  * A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the
@@ -527,6 +530,44 @@ export type StageNode = ActInvocation | CombineNode;
  * return, and the old required-field shape left `claims-carry-standing` nowhere to land.
  */
 export type StageOutput = { "produced": "ids", set: IdSet, };
+
+/**
+ * What the receiving act does with the set it was handed.
+ *
+ * Declared at the CONSUMING stage, never the producing one — the producer emits membership and
+ * has no opinion about what the next act does with it.
+ *
+ * ```text
+ * bound — narrow to within this set.  Output ⊆ input.
+ * seed  — grow from this set.         Output ESCAPES input.
+ * ```
+ *
+ * **A composition is not monotonically narrowing.** A pipeline may alternate:
+ * `find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`
+ * as a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is
+ * wrong for half of these.
+ *
+ * # Why this is on the wire rather than derived from the act
+ *
+ * Across all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is
+ * fully determined by the act and this field can only ever agree with the declaration or be
+ * refused. It is carried anyway, for the negative face: a caller who writes `seed` against
+ * `find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving
+ * the relation from the act would silently execute a NARROWING instead, answering a different
+ * question than the one asked. Refusing tells them what the system cannot do.
+ * `[decided — 2026-08-08, Pete]`
+ *
+ * # The third id set, which is not on this axis
+ *
+ * The visibility verdict is hard, applies to every stage, and is **never expressible here**. It
+ * is not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call
+ * fixes it as a non-parameter for exactly that reason.
+ *
+ * Replaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose
+ * "required whenever `input` is present" invariant was held by prose. That admitted a meaningless
+ * state — input present, relation absent — which the validator silently read as `bound`.
+ */
+export type StageRelation = "bound" | "seed";
 
 /**
  * One stage's mandatory disclosure. Exists whether or not the stage produced a result.

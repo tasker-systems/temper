@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use super::act::ActName;
 use super::filter::{EdgeFilter, PropertyPredicate, ResourceFilter};
-use super::scalars::{BoundTerm, BoundsMode, Extent};
+use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageInput, StageName, StageOutput};
 
 /// One act, invoked — a named node in the composition DAG.
@@ -22,14 +22,17 @@ pub struct ActInvocation {
     /// This node's name, referenced by downstream stages and by `returns`.
     pub name: StageName,
     pub act: ActName,
-    /// Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a
-    /// root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
+    /// Where this stage's set comes from, and what this act does with it: caller-supplied ids or
+    /// an upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root
+    /// act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
     /// `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
+    ///
+    /// There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
+    /// "required whenever `input` is present" invariant lived in prose, which admitted a
+    /// meaningless state the validator then read as `bound`. The relation belongs to the edge, and
+    /// nesting it there makes the meaningless state unrepresentable rather than merely invalid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<StageInput>,
-    /// How this act consumes its `input` set. Required whenever `input` is present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bounds_mode: Option<BoundsMode>,
     /// Act-level bound terms. A term this act does not admit is refused STATICALLY
     /// (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -116,7 +119,6 @@ mod tests {
             name: StageName::parse("wide").unwrap(),
             act: ActName::FindAboutAnywhere,
             input: None,
-            bounds_mode: None,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,

@@ -66,10 +66,61 @@ impl From<StageName> for String {
     }
 }
 
-/// Where a stage's set comes from: the caller's own id set, or an upstream stage's output.
+/// What the receiving act does with the set it was handed.
 ///
-/// This is the field that closes the gap. Before it, an invocation could carry only a literal
+/// Declared at the CONSUMING stage, never the producing one — the producer emits membership and
+/// has no opinion about what the next act does with it.
+///
+/// ```text
+/// bound — narrow to within this set.  Output ⊆ input.
+/// seed  — grow from this set.         Output ESCAPES input.
+/// ```
+///
+/// **A composition is not monotonically narrowing.** A pipeline may alternate:
+/// `find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`
+/// as a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is
+/// wrong for half of these.
+///
+/// # Why this is on the wire rather than derived from the act
+///
+/// Across all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is
+/// fully determined by the act and this field can only ever agree with the declaration or be
+/// refused. It is carried anyway, for the negative face: a caller who writes `seed` against
+/// `find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving
+/// the relation from the act would silently execute a NARROWING instead, answering a different
+/// question than the one asked. Refusing tells them what the system cannot do.
+/// `[decided — 2026-08-08, Pete]`
+///
+/// # The third id set, which is not on this axis
+///
+/// The visibility verdict is hard, applies to every stage, and is **never expressible here**. It
+/// is not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call
+/// fixes it as a non-parameter for exactly that reason.
+///
+/// Replaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose
+/// "required whenever `input` is present" invariant was held by prose. That admitted a meaningless
+/// state — input present, relation absent — which the validator silently read as `bound`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum StageRelation {
+    /// Narrow to within this set.
+    Bound,
+    /// Grow from this set.
+    Seed,
+}
+
+/// Where a stage's set comes from, and WHAT IT IS FOR.
+///
+/// This is the type that closes the gap. Before it, an invocation could carry only a literal
 /// `bounds: Option<IdSet>` and had no way to name a producing stage.
+///
+/// [`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so
+/// "an input with no declared relation" is **unrepresentable** rather than merely invalid. The
+/// relation belongs to the edge, not to the stage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -78,9 +129,30 @@ impl From<StageName> for String {
 #[serde(rename_all = "snake_case", tag = "from")]
 pub enum StageInput {
     /// A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.
-    Caller { ids: IdSet },
+    Caller {
+        #[serde(rename = "as")]
+        relation: StageRelation,
+        ids: IdSet,
+    },
     /// The `produced` set of an earlier stage, named rather than copied.
-    Upstream { stage: StageName },
+    Upstream {
+        #[serde(rename = "as")]
+        relation: StageRelation,
+        stage: StageName,
+    },
+}
+
+impl StageInput {
+    /// What the receiving act does with this set. Total, because every variant carries one —
+    /// callers read the relation without matching on where the set came from, which are two
+    /// independent questions.
+    pub fn relation(&self) -> StageRelation {
+        match self {
+            StageInput::Caller { relation, .. } | StageInput::Upstream { relation, .. } => {
+                *relation
+            }
+        }
+    }
 }
 
 /// What a stage produced. A tagged union with exactly ONE member today.
@@ -151,6 +223,7 @@ mod tests {
         // THE gap this whole phase exists to close: the invocation side can finally declare what
         // BoundsSource has always been able to report.
         let caller = StageInput::Caller {
+            relation: StageRelation::Bound,
             ids: IdSet {
                 kind: IdKind::Resource,
                 provenance: None,
@@ -158,6 +231,7 @@ mod tests {
             },
         };
         let upstream = StageInput::Upstream {
+            relation: StageRelation::Seed,
             stage: StageName::parse("hits").unwrap(),
         };
         assert_ne!(
@@ -170,6 +244,65 @@ mod tests {
                 v
             );
         }
+    }
+
+    #[test]
+    fn an_input_with_no_declared_relation_does_not_deserialize() {
+        // The whole reason the relation moved off the invocation and into the input. As
+        // `ActInvocation.bounds_mode: Option<BoundsMode>` the invariant "required whenever `input`
+        // is present" was held by PROSE, and the meaningless state it admitted was not inert: the
+        // validator read `matches!(bounds_mode, Some(Seed))`, so an absent relation silently
+        // classified as a BOUND and was checked against the wrong acceptance list.
+        //
+        // Now the state cannot be constructed and cannot arrive over the wire. This asserts the
+        // wire half; the type half is enforced by the compiler at every construction site.
+        assert!(
+            serde_json::from_str::<StageInput>(r#"{"from":"upstream","stage":"hits"}"#).is_err(),
+            "an upstream input must declare what the receiving act does with the set"
+        );
+        assert!(serde_json::from_str::<StageInput>(
+            r#"{"from":"caller","ids":{"kind":"resource","ids":[]}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn the_relation_is_readable_without_asking_where_the_set_came_from() {
+        // Two independent questions — what the act does with the set, and who produced it. A
+        // consumer that needs only the first should not have to match on the second, because that
+        // is how the two get accidentally coupled.
+        let up = StageInput::Upstream {
+            relation: StageRelation::Seed,
+            stage: StageName::parse("hits").unwrap(),
+        };
+        assert_eq!(up.relation(), StageRelation::Seed);
+        assert_eq!(
+            StageInput::Caller {
+                relation: StageRelation::Bound,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![],
+                },
+            }
+            .relation(),
+            StageRelation::Bound
+        );
+    }
+
+    #[test]
+    fn the_relation_rides_the_wire_as_the_edge_word_callers_write() {
+        // `as` in JSON, `relation` in Rust — `as` is a Rust keyword, and `r#as` at every match site
+        // would be a worse read than one rename attribute. The trace echoes the same word back
+        // under `relation`, so a caller sees `"as": "seed"` going out and `"relation": "seed"`
+        // coming back; both name the same edge.
+        let up = StageInput::Upstream {
+            relation: StageRelation::Seed,
+            stage: StageName::parse("hits").unwrap(),
+        };
+        let json = serde_json::to_string(&up).unwrap();
+        assert!(json.contains(r#""as":"seed""#), "got: {json}");
+        assert!(!json.contains("relation"));
     }
 
     #[test]
