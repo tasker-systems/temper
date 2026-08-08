@@ -38,6 +38,89 @@ pub struct AccessWorld {
     pub resources: Vec<AccessResourceDef>,
     #[serde(default)]
     pub edges: Vec<AccessEdgeDef>,
+    /// Generated bulk (see [`PopulationDef`]). Empty for every hand-authored access proof — those
+    /// state a topology small enough to reason about and assert exact verdicts over it. A
+    /// population is for the opposite need: a corpus large and uneven enough that a *measurement*
+    /// over it is not vacuous.
+    #[serde(default)]
+    pub populations: Vec<PopulationDef>,
+}
+
+/// A generated population of resources, declared as a distribution rather than enumerated.
+///
+/// **Why this exists.** The numbers that decide `/api/query`'s compiler — plan identity, index
+/// selection, whether an ANN top-k genuinely binds, what the visibility gate costs — are all
+/// vacuous on a five-resource fixture, and the deployment we have real measurements from is
+/// effectively a single-user vault: the gate passes 97.6% of active resources and every team arm of
+/// `resources_visible_to` is empty. Neither shape can answer the questions, and enumerating
+/// thousands of `AccessResourceDef` entries by hand is not an option either.
+///
+/// So the *topology* above stays hand-authored — the team DAG, the memberships, the grants are
+/// exactly the part worth reasoning about — and the bulk is generated from this declaration.
+///
+/// **Resources are created through the product write path**, not by direct insert:
+/// `SeedAction::ResourceCreate` fires a real `resource_created` event whose projector writes the
+/// content blocks, the chunks, the `doc_type` property and the FTS vector. What is synthetic is
+/// only the *content*: the prose is generated from the topic name, and chunk vectors are drawn
+/// around a per-topic centroid instead of being embedded by ONNX. That is a deliberate split —
+/// every measurement here depends on the distribution and cardinality of vectors, never on their
+/// semantics, and 20k real bge embeddings would cost minutes to buy nothing. Synthetic vectors are
+/// stamped with a non-model `embedded_with` marker so they can never be mistaken for real ones and
+/// so the re-embed drain treats them as stale.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PopulationDef {
+    /// Generated resources register as `<key_prefix>-<zero-padded index>`, so declarative checks
+    /// and downstream tests can name an individual member (`plat-0000`).
+    pub key_prefix: String,
+    /// How many resources, before any CLI scale multiplier.
+    pub count: u32,
+    /// Profile handles, assigned round-robin. Non-empty.
+    pub owners: Vec<String>,
+    /// Home anchors, assigned round-robin. Non-empty.
+    pub homes: Vec<HomeDef>,
+    /// `doc_type` values, assigned round-robin. Empty ⇒ no `doc_type` property is written, which
+    /// makes `p_doc_type` untestable against this population — deliberate only if intended.
+    #[serde(default)]
+    pub doc_types: Vec<String>,
+    /// Applied to every member. A grant on the ROOT team reaches every `vis(T)` by down-only
+    /// inheritance and hands everyone everything — the degenerate shape a measurement corpus
+    /// exists to escape.
+    #[serde(default)]
+    pub grants: Vec<GrantDef>,
+    /// Topic names, assigned round-robin. A topic supplies both the FTS vocabulary (the name split
+    /// on `-`) and the vector centroid, so text and vector relevance agree the way they do in a
+    /// real corpus.
+    ///
+    /// **The centroid is derived from the topic NAME, never its position**, so the same topic named
+    /// in two populations lands on the same cluster. That is what lets a query match across a
+    /// visibility boundary; keyed on position, the gate and the query would be correlated by
+    /// construction and every measurement would flatter itself.
+    pub topics: Vec<String>,
+    /// Approximate prose length per resource. The chunker decides the resulting chunk count — this
+    /// knob does not claim to.
+    #[serde(default = "default_words")]
+    pub words_per_resource: u32,
+    /// Noise magnitude as a RATIO of the (unit) centroid's, before re-normalizing — not a
+    /// per-dimension standard deviation. Larger ⇒ looser clusters. At 0 every member of a topic
+    /// shares one vector and the ANN cannot order them; well above 1 the clusters dissolve into the
+    /// uniform-random case, where 768-dimensional distances concentrate and top-k ranking becomes
+    /// arbitrary. See `population::fill_synthetic_vectors` for why it is a magnitude ratio: read as
+    /// a per-dimension sigma, 0.55 is fifteen times the signal and destroys the cluster silently.
+    #[serde(default = "default_spread")]
+    pub topic_spread: f64,
+    /// Entity name (from `world.entities`) to attribute the generated events to. Defaults to the
+    /// world's first declared entity.
+    #[serde(default)]
+    pub emitter: Option<String>,
+}
+
+fn default_words() -> u32 {
+    220
+}
+
+fn default_spread() -> f64 {
+    0.55
 }
 
 /// A team. `parents` are slugs in this same `teams` list (the down-only DAG, `kb_teams_parents`).

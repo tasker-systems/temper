@@ -1,0 +1,97 @@
+# A corpus shaped for MEASUREMENT, not for correctness assertions.
+#
+# Every other access-scenario fixture states a topology small enough to reason about by hand and
+# asserts exact gate verdicts over it. This one exists for the opposite reason: the numbers that
+# decide `/api/query`'s compiler — plan identity, index selection, whether an ANN top-k genuinely
+# binds, what a visibility gate costs — are all vacuous on a corpus of five resources, and the
+# instance we have measurements from is effectively a single-user vault where the gate passes 97.6%
+# of active resources and every team arm is EMPTY.
+#
+# So the topology below is hand-authored (that is the part worth reasoning about) and the bulk is
+# GENERATED from a declared distribution via `populations:`. Two properties are the whole point:
+#
+#   1. The team arms of `resources_visible_to` are non-empty, and reach is UNEVEN. Reads inherit
+#      DOWN the tree — `profile_reachable_teams` expands a profile's own teams UP to their
+#      ancestors — so a grant on `platform` reaches platform members only, while a grant on
+#      `engineering` reaches platform, data AND engineering. Nothing is granted to the root team:
+#      a root grant reaches every vis(T) by down-only inheritance and would hand everyone
+#      everything, which is precisely the degenerate shape this fixture exists to escape.
+#
+#   2. No principal sees everything, and no principal sees nothing-but-noise. ana ≈ 2/3, cara ≈ 1/3,
+#      nomad exactly 0. A gate that passes ~all rows cannot show what hoisting it costs.
+#
+# Topic centroids are derived from the topic NAME, not its position, so the same topic named in two
+# populations lands on the same vector cluster. That is what lets a query match ACROSS a visibility
+# boundary — without it the gate and the query would be correlated by construction and every
+# measurement would flatter itself.
+name: measurement-corpus
+world:
+  profiles:
+    - { handle: ana,      display_name: Ana,      system_access: approved }
+    - { handle: ben,      display_name: Ben,      system_access: approved }
+    - { handle: cara,     display_name: Cara,     system_access: approved }
+    - { handle: dev,      display_name: Dev,      system_access: approved }
+    - { handle: sysadmin, display_name: Sysadmin, system_access: admin }
+    - { handle: nomad,    display_name: Nomad,    system_access: none }
+  entities:
+    - { name: corpus-emitter, profile: sysadmin }
+  teams:
+    - { slug: temper-system, name: Temper System }
+    - { slug: engineering,   name: Engineering, parents: [temper-system] }
+    - { slug: research,      name: Research,    parents: [temper-system] }
+    - { slug: platform,      name: Platform,    parents: [engineering] }
+    - { slug: data,          name: Data,        parents: [engineering] }
+  memberships:
+    - { team: platform,    profile: ana,  role: member }
+    - { team: data,        profile: ben,  role: member }
+    - { team: research,    profile: cara, role: member }
+    - { team: engineering, profile: dev,  role: maintainer }
+  contexts:
+    - { name: Platform Notes,    owner_team: platform }
+    - { name: Engineering Notes, owner_team: engineering }
+    - { name: Research Notes,    owner_team: research }
+  # Deliberately NO context_shares: reach here is grant-mediated so the team-grant arm of
+  # `resources_visible_to` is the one under load. The context arm is exercised by
+  # context-share-access.yaml and is not what this corpus is measuring.
+  context_shares: []
+  cogmaps: []
+  resources: []
+  populations:
+    # Reachable by ana only (platform expands up to {platform, engineering, temper-system};
+    # a grant ON platform is reached by platform members alone).
+    - key_prefix: plat
+      count: 80
+      owners: [ana]
+      homes: [{ anchor: context, name: Platform Notes }]
+      doc_types: [note, decision, spec]
+      grants: [{ to: { anchor: team, slug: platform }, can_read: true }]
+      topics: [postgres-indexing, query-planning]
+
+    # Reachable by ana, ben AND dev — every descendant of engineering expands up through it.
+    - key_prefix: eng
+      count: 80
+      owners: [dev, ben]
+      homes: [{ anchor: context, name: Engineering Notes }]
+      doc_types: [note, task, session]
+      grants: [{ to: { anchor: team, slug: engineering }, can_read: true }]
+      topics: [query-planning, release-process]
+
+    # Reachable by cara only. Shares `postgres-indexing` with the platform population on purpose:
+    # a vector query near that centroid draws candidates from BOTH sides of a visibility boundary,
+    # which is the only way the gate's position in the plan can be shown to matter.
+    - key_prefix: res
+      count: 80
+      owners: [cara]
+      homes: [{ anchor: context, name: Research Notes }]
+      doc_types: [note, research]
+      grants: [{ to: { anchor: team, slug: research }, can_read: true }]
+      topics: [postgres-indexing, embedding-models]
+checks:
+  # Generated resources are registered under `<key_prefix>-<n>`, so the declarative checks can name
+  # them. These four pin the uneven-reach property the populations were arranged to produce; the
+  # statistical properties (cluster separation, visible fraction, ANN binding) are asserted in
+  # measurement_corpus.rs because they are not expressible as a per-resource verdict.
+  - { check: visible_to, profile: ana,   resource: plat-0000, expect: true  }
+  - { check: visible_to, profile: ben,   resource: plat-0000, expect: false }  # sibling, not ancestor
+  - { check: visible_to, profile: ben,   resource: eng-0000,  expect: true  }  # up through engineering
+  - { check: visible_to, profile: nomad, resource: eng-0000,  expect: false }

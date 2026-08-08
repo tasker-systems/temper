@@ -39,6 +39,75 @@ Verbatim from the spec and `CLAUDE.md`. Every task's requirements implicitly inc
 
 ---
 
+### Task 0: A corpus a measurement can be taken on `[added — 2026-08-08]`
+
+**GD-3: EXTEND** — new affordance on the existing access-scenario fixture model. Not in the
+original plan, and the plan was wrong to omit it: Tasks 2 and 6 are both *measurements*, and the
+session that wrote this plan recorded that "a near-empty local corpus cannot answer this" without
+filing the work that would fix it. **A measurement task with no corpus is a declared hole, not a
+step.**
+
+**Files:**
+- Modify: `crates/temper-substrate/src/scenario/access/model.rs` — `AccessWorld.populations`
+- Create: `crates/temper-substrate/src/scenario/access/population.rs`
+- Create: `crates/temper-substrate/tests/fixtures/access-scenarios/measurement-corpus.yaml`
+- Create: `crates/temper-substrate/tests/measurement_corpus.rs`
+- Modify: `crates/temper-substrate/src/main.rs` — `seed-corpus` subcommand; `Makefile.toml`
+
+**What it is.** The `AccessWorld` fixture already declares the whole visibility topology — teams +
+DAG, memberships, contexts, shares, homes, grants — and is schema-backed and loader-validated. What
+it cannot do is *scale* (every resource is hand-keyed) or produce search-path rows (grep found zero
+references to `kb_chunks` / `kb_resource_search_index` under `scenario/`). So the topology stays
+hand-authored and the bulk is generated from a declared distribution, through the **product write
+path** (`SeedAction::ResourceCreate`, whose projector writes blocks, chunks, the `doc_type` property
+and `_rebuild_resource_search_vector`). One declaration, loaded at declared size by a
+`#[sqlx::test]` and at `--scale`× by the seeder binary, so the test-sized and measurement-sized
+corpora cannot drift.
+
+**Three properties, each asserted, because a degenerate corpus is SILENT** — every downstream
+measurement reads green against a corpus that cannot answer the question:
+
+1. **Clustered vectors.** Uniform 768-dim draws concentrate: all pairwise distances collapse into a
+   narrow band and ANN ranking becomes arbitrary. Measured during the build, before the fix:
+   within-topic mean cosine distance **0.9961** against cross-topic **1.0002** — a separation of
+   0.004, i.e. none. The cause is that a unit vector's components are ~N(0, 1/768) ≈ 0.036, so
+   per-dimension noise at 0.55 is fifteen times the signal. `topic_spread` is therefore a *magnitude
+   ratio*, not a per-dimension sigma.
+2. **Uneven, partial visibility.** Nothing is granted to the root team (down-only inheritance would
+   hand everyone everything). Measured at scale 1: ana 66.5%, ben/dev/cara 33.5%, nomad ~0, with
+   81/41/41 rows arriving via the **team-grant arm** — the arm that is empty on the deployment whose
+   97.6% figure this corpus exists to replace.
+3. **Both arms reachable.** Every generated resource carries an embedded chunk and an FTS vector.
+
+**Determinism is load-bearing, not a nicety:** Task 2 compares plans captured before and after a
+refactor, and a corpus that differed between captures would make the diff measure the corpus.
+Seeded SplitMix64, no `rand` dependency.
+
+**Two things it changed outside itself, both deliberate:**
+- `loader::insert_teams` now reconciles `ON CONFLICT (slug)`. Every access fixture must declare
+  `temper-system` (the DAG parents reference it) but migration `20260625000001` already creates that
+  team — so the loader could only ever run against a schema that was reset first, i.e. never against
+  a real migrated database.
+- The grant insert was **extracted** to `loader::insert_resource_grants` rather than copied into the
+  generator. `audit-grant-sinks.sh` counts write-sites per file; a copy would have needed a baseline
+  bump, and that script's own header records why that is corrosive — absorbing a movement into the
+  baseline "teaches the next reader that the number moves for cosmetic reasons, which is how a
+  tripwire stops being read."
+
+**Sequencing consequence — Task 2 no longer needs volume cycling.** The plan's Task 2 steps 1–2 call
+for `docker-down-volumes` twice, which was only necessary because reseeding was not repeatable. With
+a committed seeder the order is: seed → capture "before" plans → apply Task 1's migration →
+re-capture. Nothing is destroyed and both captures run on a byte-identical corpus, which is a
+stronger comparison than the original procedure could give.
+
+```bash
+cargo make docker-down-volumes && cargo make docker-up
+cargo make seed-corpus 20        # ~4800 resources; scale 1 is the test-asserted size
+cargo nextest run -p temper-substrate --features artifact-tests --test measurement_corpus
+```
+
+---
+
 ### Task 1: The shared interiority — two views and one scoring function
 
 **GD-3: EXTEND** (new objects) with bodies CONFORM to existing predicates. Cites `migrations/20260806000020_search_arms_paging_and_doctype.sql:108-112,:157-158,:177-180`. Spec §3.
