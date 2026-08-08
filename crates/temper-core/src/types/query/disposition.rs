@@ -79,12 +79,6 @@ pub enum RefusalReason {
     /// generated schemas, so an inapplicable bound is a property of the plan rather than a
     /// runtime surprise.
     BoundTermNotApplicable,
-    /// A jaq expression the builder cannot compile into the single statement a composition
-    /// becomes. Refused rather than silently materialized: a silent materialization boundary
-    /// would reintroduce multi-query semantics — and with them a second database snapshot the
-    /// trace would narrate as one — invisibly (decision
-    /// `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`).
-    ExpressionNotPushdownable,
     /// A reason this consumer does not recognize. Never constructed by this crate — only by
     /// deserializing a producer newer than this consumer.
     #[serde(untagged)]
@@ -178,12 +172,28 @@ mod tests {
     fn refusal_reason_is_open_so_a_new_way_to_decline_is_additive() {
         // Design §6.1 ruled on `act` (open) and `disposition` (closed) and never on refusals; v0
         // shipped this closed by default. A closed enum would make every future reason a breaking
-        // change, and `ExpressionNotPushdownable` was already the first.
+        // change, so it is open and a known variant reports `is_known`.
         let r: RefusalReason =
             serde_json::from_str("\"quota_exhausted\"").expect("unknown reason must parse");
         assert_eq!(r, RefusalReason::Other("quota_exhausted".to_string()));
         assert!(!r.is_known());
-        assert!(RefusalReason::ExpressionNotPushdownable.is_known());
+        assert!(RefusalReason::UnsupportedBoundKind.is_known());
+    }
+
+    #[test]
+    fn the_removed_expression_reason_is_no_longer_a_known_variant() {
+        // There is no expression language (spec §9.1), so nothing can raise this. `RefusalReason`
+        // is OPEN, so removing it now costs nothing and re-adding it later is additive. Keeping a
+        // reason nothing can raise is a claim about the system with no referent.
+        let r: RefusalReason = serde_json::from_str("\"expression_not_pushdownable\"").unwrap();
+        assert_eq!(
+            r,
+            RefusalReason::Other("expression_not_pushdownable".to_string())
+        );
+        assert!(
+            !r.is_known(),
+            "an old producer's value degrades to Other, it does not fail"
+        );
     }
 
     #[test]

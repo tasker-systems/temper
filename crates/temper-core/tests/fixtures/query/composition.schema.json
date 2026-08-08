@@ -1,21 +1,10 @@
 {
   "$defs": {
     "ActInvocation": {
-      "description": "One act, invoked.",
+      "description": "One act, invoked — a named node in the composition DAG.",
       "properties": {
         "act": {
           "$ref": "#/$defs/ActName"
-        },
-        "bounds": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/IdSet"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The only value that crosses a stage boundary. Membership, never rank."
         },
         "bounds_mode": {
           "anyOf": [
@@ -26,7 +15,7 @@
               "type": "null"
             }
           ],
-          "description": "How this act consumes `bounds`. Required whenever `bounds` is present."
+          "description": "How this act consumes its `input` set. Required whenever `input` is present."
         },
         "edge_filter": {
           "anyOf": [
@@ -37,6 +26,21 @@
               "type": "null"
             }
           ]
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageInput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a\nroot act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`]."
+        },
+        "name": {
+          "description": "This node's name, referenced by downstream stages and by `returns`.",
+          "type": "string"
         },
         "resource_filter": {
           "anyOf": [
@@ -59,6 +63,7 @@
         }
       },
       "required": [
+        "name",
         "act"
       ],
       "type": "object"
@@ -120,6 +125,40 @@
           "type": "string"
         }
       ]
+    },
+    "CombineNode": {
+      "description": "A set combination over two-or-more upstream stages. Its own node kind because no act takes more\nthan one input, so modelling it as an act would lie about what an act is.",
+      "properties": {
+        "inputs": {
+          "description": "Two or more. One input is not a combination; validation refuses it (beat B).",
+          "items": {
+            "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/CombineOp"
+        }
+      },
+      "required": [
+        "name",
+        "op",
+        "inputs"
+      ],
+      "type": "object"
+    },
+    "CombineOp": {
+      "description": "A set combinator's operation. `union` and `intersect` take two-or-more inputs; no act does,\nwhich is why a combinator is its own node kind rather than an act invocation.",
+      "enum": [
+        "union",
+        "intersect"
+      ],
+      "type": "string"
     },
     "EdgeFilter": {
       "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.",
@@ -290,26 +329,23 @@
       ]
     },
     "OutcomeDeclaration": {
-      "description": "A composition's pocket outcome register: what it is for, in the act schemas' own terms.",
+      "description": "A composition's pocket outcome register: what it is for, and which stages come back.",
       "properties": {
         "description": {
           "description": "What being served looks like. NOT optional.",
           "type": "string"
         },
-        "produces": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/IdKind"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The kind the whole composition yields, when it is fixed."
+        "returns": {
+          "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
+          "items": {
+            "$ref": "#/$defs/ReturnSpec"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "description"
+        "description",
+        "returns"
       ],
       "type": "object"
     },
@@ -371,6 +407,77 @@
         }
       },
       "type": "object"
+    },
+    "ReturnSpec": {
+      "description": "One stage whose rows come back, and how much of each row.",
+      "properties": {
+        "fields": {
+          "description": "Empty means the kind's default projection. Named fields subselect it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stage": {
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "type": "object"
+    },
+    "StageInput": {
+      "description": "Where a stage's set comes from: the caller's own id set, or an upstream stage's output.\n\nThis is the field that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.",
+      "oneOf": [
+        {
+          "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
+          "properties": {
+            "from": {
+              "const": "caller",
+              "type": "string"
+            },
+            "ids": {
+              "$ref": "#/$defs/IdSet"
+            }
+          },
+          "required": [
+            "from",
+            "ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The `produced` set of an earlier stage, named rather than copied.",
+          "properties": {
+            "from": {
+              "const": "upstream",
+              "type": "string"
+            },
+            "stage": {
+              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "stage"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StageNode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActInvocation"
+        },
+        {
+          "$ref": "#/$defs/CombineNode"
+        }
+      ],
+      "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -406,9 +513,9 @@
       "$ref": "#/$defs/OutcomeDeclaration"
     },
     "stages": {
-      "description": "Ordered. Stages reference their inputs explicitly — there is no prev-else-fallback.",
+      "description": "The DAG's nodes. Each references its inputs explicitly by stage name — there is no\nprev-else-fallback, and no single execution order (a DAG has none). Beat B's topological\nsort derives the order; there is deliberately no `act_sequence` method, which would be a\nfalse claim that a DAG has one sequence.",
       "items": {
-        "$ref": "#/$defs/ActInvocation"
+        "$ref": "#/$defs/StageNode"
       },
       "type": "array"
     }

@@ -9,21 +9,25 @@ use std::collections::BTreeMap;
 
 use super::act::ActName;
 use super::filter::{EdgeFilter, ResourceFilter};
-use super::id_set::IdSet;
 use super::scalars::{BoundTerm, BoundsMode, Extent};
+use super::stage::{StageInput, StageName, StageOutput};
 
-/// One act, invoked.
+/// One act, invoked — a named node in the composition DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ActInvocation {
+    /// This node's name, referenced by downstream stages and by `returns`.
+    pub name: StageName,
     pub act: ActName,
-    /// The only value that crosses a stage boundary. Membership, never rank.
+    /// Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a
+    /// root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
+    /// `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bounds: Option<IdSet>,
-    /// How this act consumes `bounds`. Required whenever `bounds` is present.
+    pub input: Option<StageInput>,
+    /// How this act consumes its `input` set. Required whenever `input` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_mode: Option<BoundsMode>,
     /// Act-level bound terms. A term this act does not admit is refused STATICALLY
@@ -63,8 +67,9 @@ pub struct NarrowedBy {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ActResult {
     pub act: ActName,
-    /// Declared kind, so contract chaining compares kinds rather than inferring them.
-    pub produced: IdSet,
+    /// What this stage produced, as a tagged union. Declared kind, so contract chaining compares
+    /// kinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field.
+    pub produced: StageOutput,
     /// Complete / partial / indeterminate. NOT a total — see `Extent`.
     pub extent: Extent,
     /// Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
@@ -98,35 +103,39 @@ pub struct ActResult {
 mod tests {
     use super::*;
     use crate::types::query::id_set::{IdKind, IdSet};
+    use crate::types::query::stage::StageName;
     use std::collections::BTreeMap;
 
     #[test]
-    fn an_invocation_without_bounds_or_terms_omits_them() {
+    fn an_invocation_without_input_or_terms_omits_them() {
         let inv = ActInvocation {
+            name: StageName::parse("wide").unwrap(),
             act: ActName::FindAboutAnywhere,
-            bounds: None,
+            input: None,
             bounds_mode: None,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
         };
         let json = serde_json::to_string(&inv).unwrap();
-        assert!(!json.contains("bounds"));
+        assert!(!json.contains("input"));
         assert!(!json.contains("terms"));
         assert!(!json.contains("filter"));
         assert_eq!(serde_json::from_str::<ActInvocation>(&json).unwrap(), inv);
     }
 
     #[test]
-    fn a_result_declares_the_kind_it_produced() {
-        // `produced` is an IdSet, so an act's output kind is machine-checkable rather than
-        // inferred from which act ran. This is what makes contract chaining compare kinds.
+    fn a_result_still_declares_the_kind_it_produced_through_the_union() {
+        // Contract chaining compares KINDS. Wrapping the set in a tagged union must not cost that:
+        // the kind is still machine-checkable, now via `StageOutput::kind` rather than a bare field.
         let r = ActResult {
             act: ActName::Survey,
-            produced: IdSet {
-                kind: IdKind::Region,
-                provenance: None,
-                ids: vec![],
+            produced: StageOutput::Ids {
+                set: IdSet {
+                    kind: IdKind::Region,
+                    provenance: None,
+                    ids: vec![],
+                },
             },
             extent: Extent::Complete,
             total: None,
@@ -136,7 +145,7 @@ mod tests {
             bounds_honored: 0,
             bounds_dropped: 0,
         };
-        assert_eq!(r.produced.kind, IdKind::Region);
+        assert_eq!(r.produced.kind(), IdKind::Region);
         assert_eq!(
             serde_json::from_str::<ActResult>(&serde_json::to_string(&r).unwrap()).unwrap(),
             r
@@ -149,10 +158,12 @@ mod tests {
         // total would cost a second query on every stage of every chain.
         let r = ActResult {
             act: ActName::FindExact,
-            produced: IdSet {
-                kind: IdKind::Resource,
-                provenance: None,
-                ids: vec![],
+            produced: StageOutput::Ids {
+                set: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![],
+                },
             },
             extent: Extent::Partial,
             total: None,
@@ -172,10 +183,12 @@ mod tests {
     fn a_traversal_result_reports_indeterminate_rather_than_guessing() {
         let r = ActResult {
             act: ActName::Survey,
-            produced: IdSet {
-                kind: IdKind::Region,
-                provenance: None,
-                ids: vec![],
+            produced: StageOutput::Ids {
+                set: IdSet {
+                    kind: IdKind::Region,
+                    provenance: None,
+                    ids: vec![],
+                },
             },
             extent: Extent::Indeterminate {
                 reason: "region-salience traversal has no size prior to its funnel width"
@@ -199,10 +212,12 @@ mod tests {
         // meaning ("material exists") and so answered the question by labelling it.
         let invisible_but_real = ActResult {
             act: ActName::FindExact,
-            produced: IdSet {
-                kind: IdKind::Resource,
-                provenance: None,
-                ids: vec![],
+            produced: StageOutput::Ids {
+                set: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![],
+                },
             },
             extent: Extent::Complete,
             total: None,

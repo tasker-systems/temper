@@ -239,24 +239,53 @@
         }
       },
       "type": "object"
+    },
+    "StageInput": {
+      "description": "Where a stage's set comes from: the caller's own id set, or an upstream stage's output.\n\nThis is the field that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.",
+      "oneOf": [
+        {
+          "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
+          "properties": {
+            "from": {
+              "const": "caller",
+              "type": "string"
+            },
+            "ids": {
+              "$ref": "#/$defs/IdSet"
+            }
+          },
+          "required": [
+            "from",
+            "ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The `produced` set of an earlier stage, named rather than copied.",
+          "properties": {
+            "from": {
+              "const": "upstream",
+              "type": "string"
+            },
+            "stage": {
+              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "stage"
+          ],
+          "type": "object"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One act, invoked.",
+  "description": "One act, invoked — a named node in the composition DAG.",
   "properties": {
     "act": {
       "$ref": "#/$defs/ActName"
-    },
-    "bounds": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/IdSet"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "The only value that crosses a stage boundary. Membership, never rank."
     },
     "bounds_mode": {
       "anyOf": [
@@ -267,7 +296,7 @@
           "type": "null"
         }
       ],
-      "description": "How this act consumes `bounds`. Required whenever `bounds` is present."
+      "description": "How this act consumes its `input` set. Required whenever `input` is present."
     },
     "edge_filter": {
       "anyOf": [
@@ -278,6 +307,21 @@
           "type": "null"
         }
       ]
+    },
+    "input": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StageInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a\nroot act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`]."
+    },
+    "name": {
+      "description": "This node's name, referenced by downstream stages and by `returns`.",
+      "type": "string"
     },
     "resource_filter": {
       "anyOf": [
@@ -300,6 +344,7 @@
     }
   },
   "required": [
+    "name",
     "act"
   ],
   "title": "ActInvocation",

@@ -211,6 +211,27 @@
         "value"
       ],
       "type": "object"
+    },
+    "StageOutput": {
+      "description": "What a stage produced. A tagged union with exactly ONE member today.\n\nTagged from the first line so that admitting a second currency later is additive rather than\nbreaking. It is NOT a claim that a second currency is coming — spec §10 refuses one for v0 and\nstates the reason (a derived intention cannot be embedded inside a single statement). The other\nmotivation is `substantiate`: an act that *annotates* rather than *selects* has no `IdSet` to\nreturn, and the old required-field shape left `claims-carry-standing` nowhere to land.",
+      "oneOf": [
+        {
+          "properties": {
+            "produced": {
+              "const": "ids",
+              "type": "string"
+            },
+            "set": {
+              "$ref": "#/$defs/IdSet"
+            }
+          },
+          "required": [
+            "produced",
+            "set"
+          ],
+          "type": "object"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -245,8 +266,8 @@
       "type": "array"
     },
     "produced": {
-      "$ref": "#/$defs/IdSet",
-      "description": "Declared kind, so contract chaining compares kinds rather than inferring them."
+      "$ref": "#/$defs/StageOutput",
+      "description": "What this stage produced, as a tagged union. Declared kind, so contract chaining compares\nkinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field."
     },
     "terms_effective": {
       "additionalProperties": {

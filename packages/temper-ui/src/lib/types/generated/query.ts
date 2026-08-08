@@ -63,15 +63,21 @@ visibility_profile: VisibilityProfile | null,
 scoring_revision: number, };
 
 /**
- * One act, invoked.
+ * One act, invoked — a named node in the composition DAG.
  */
-export type ActInvocation = { act: ActName, 
+export type ActInvocation = { 
 /**
- * The only value that crosses a stage boundary. Membership, never rank.
+ * This node's name, referenced by downstream stages and by `returns`.
  */
-bounds: IdSet | null, 
+name: StageName, act: ActName, 
 /**
- * How this act consumes `bounds`. Required whenever `bounds` is present.
+ * Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a
+ * root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
+ * `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
+ */
+input: StageInput | null, 
+/**
+ * How this act consumes its `input` set. Required whenever `input` is present.
  */
 bounds_mode: BoundsMode | null, 
 /**
@@ -132,9 +138,10 @@ detail: string, };
  */
 export type ActResult = { act: ActName, 
 /**
- * Declared kind, so contract chaining compares kinds rather than inferring them.
+ * What this stage produced, as a tagged union. Declared kind, so contract chaining compares
+ * kinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field.
  */
-produced: IdSet, 
+produced: StageOutput, 
 /**
  * Complete / partial / indeterminate. NOT a total — see `Extent`.
  */
@@ -214,6 +221,22 @@ export type BoundsSource = { "source": "upstream", stage: number, } | { "source"
 export type BuildState = { "state": "served" } | { "state": "fused", host: string, } | { "state": "unbuilt" };
 
 /**
+ * A set combination over two-or-more upstream stages. Its own node kind because no act takes more
+ * than one input, so modelling it as an act would lie about what an act is.
+ */
+export type CombineNode = { name: StageName, op: CombineOp, 
+/**
+ * Two or more. One input is not a combination; validation refuses it (beat B).
+ */
+inputs: Array<StageName>, };
+
+/**
+ * A set combinator's operation. `union` and `intersect` take two-or-more inputs; no act does,
+ * which is why a combinator is its own node kind rather than an act invocation.
+ */
+export type CombineOp = "union" | "intersect";
+
+/**
  * A composition, declared before execution.
  */
 export type Composition = { outcome: OutcomeDeclaration, intention: Intention | null, 
@@ -228,9 +251,12 @@ on_stage_refusal: RefusalDisposition, meta_detail: MetaDetail,
  */
 bounds: { [key in BoundTerm]?: bigint }, 
 /**
- * Ordered. Stages reference their inputs explicitly — there is no prev-else-fallback.
+ * The DAG's nodes. Each references its inputs explicitly by stage name — there is no
+ * prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological
+ * sort derives the order; there is deliberately no `act_sequence` method, which would be a
+ * false claim that a DAG has one sequence.
  */
-stages: Array<ActInvocation>, };
+stages: Array<StageNode>, };
 
 /**
  * The whole composition's disclosure: an ordered per-stage record array.
@@ -353,7 +379,7 @@ export type NarrowedBy = { key: string, value: string,
 admitted: bigint | null, excluded: bigint | null, };
 
 /**
- * A composition's pocket outcome register: what it is for, in the act schemas' own terms.
+ * A composition's pocket outcome register: what it is for, and which stages come back.
  */
 export type OutcomeDeclaration = { 
 /**
@@ -361,9 +387,13 @@ export type OutcomeDeclaration = {
  */
 description: string, 
 /**
- * The kind the whole composition yields, when it is fixed.
+ * The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:
+ * inferring from out-degree zero makes returning an intermediate impossible without a dummy
+ * consumer, and means adding a downstream stage silently stops returning what you used to get
+ * back. The composition's produced kind(s) are DERIVED from these, replacing the old single
+ * `produces` field which could only ever be right for a one-arm plan.
  */
-produces: IdKind | null, };
+returns: Array<ReturnSpec>, };
 
 /**
  * The scale of an act's ordering quantity.
@@ -395,7 +425,7 @@ export type RefusalDisposition = "halt" | "degrade_and_disclose";
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "expression_not_pushdownable" | string;
+export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | string;
 
 /**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
@@ -419,9 +449,53 @@ tags: Array<string>,
 facets: Array<FacetPredicate>, stage: string | null, status: string | null, owner: string | null, title_contains: string | null, };
 
 /**
+ * One stage whose rows come back, and how much of each row.
+ */
+export type ReturnSpec = { stage: StageName, 
+/**
+ * Empty means the kind's default projection. Named fields subselect it.
+ */
+fields: Array<string>, };
+
+/**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
  */
 export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
+
+/**
+ * Where a stage's set comes from: the caller's own id set, or an upstream stage's output.
+ *
+ * This is the field that closes the gap. Before it, an invocation could carry only a literal
+ * `bounds: Option<IdSet>` and had no way to name a producing stage.
+ */
+export type StageInput = { "from": "caller", ids: IdSet, } | { "from": "upstream", stage: StageName, };
+
+/**
+ * A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the
+ * name is a safe SQL identifier.
+ *
+ * The compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the
+ * whole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no
+ * `new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,
+ * then up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).
+ */
+export type StageName = string;
+
+/**
+ * A node in the composition DAG: an act invocation, or a set combination over other nodes.
+ */
+export type StageNode = ActInvocation | CombineNode;
+
+/**
+ * What a stage produced. A tagged union with exactly ONE member today.
+ *
+ * Tagged from the first line so that admitting a second currency later is additive rather than
+ * breaking. It is NOT a claim that a second currency is coming — spec §10 refuses one for v0 and
+ * states the reason (a derived intention cannot be embedded inside a single statement). The other
+ * motivation is `substantiate`: an act that *annotates* rather than *selects* has no `IdSet` to
+ * return, and the old required-field shape left `claims-carry-standing` nowhere to land.
+ */
+export type StageOutput = { "produced": "ids", set: IdSet, };
 
 /**
  * One stage's mandatory disclosure. Exists whether or not the stage produced a result.
