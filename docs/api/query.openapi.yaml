@@ -287,10 +287,22 @@ components:
         intention:
           description: |
             The question, computed once at composition start and threaded to
-            every stage. Its ABSENCE is meaningful: a `find-about-*` stage with
-            no intention REFUSES, rather than the server embedding on the
-            caller's behalf. That is what makes "I chose not to embed" and
-            "I cannot embed" two states instead of one.
+            every stage.
+
+            ITS ABSENCE REFUSES, AND THAT IS ABOUT THE QUESTION, NOT THE VECTOR.
+            A find stage with no intention has no words to search for, so it
+            comes back `missing_intention`. This is forced rather than chosen:
+            `find-exact` sources its query TEXT from here and has nowhere else
+            to get it.
+
+            An absent EMBEDDING is a different absence and does not refuse —
+            the server computes one. See `Intention.embedded`.
+
+            `[decided — 2026-08-08, Pete]` This block previously said a
+            `find-about-*` stage with no intention refuses "rather than the
+            server embedding on the caller's behalf", which contradicted
+            `Intention.embedded` two schemas below. That sentence was leftover
+            transcription from the merged types and is superseded here.
           $ref: '#/components/schemas/Intention'
         meta_detail:
           $ref: '#/components/schemas/MetaDetail'
@@ -367,12 +379,34 @@ components:
             commands, and `follow-from` + `EdgeFilter` walk and filter on edges
             without returning them.
 
-            A single-member enum today. It is an ARRAY so a section added later
-            is additive.
+            ── WHY THE ENUM IS WIDE AND THE REFUSAL IS AT VALIDATION ────────────
+
+            `[decided during build — 2026-08-08]` This was drafted as a
+            single-member wire enum (`enum: [open-meta]`), which would make
+            `body` fail to DESERIALIZE. Built the other way, and the reason is
+            this document's own two rules:
+
+              * `POST /api/query` promises "ALL refusals come back, never just
+                the first". A serde failure is not a `PlanRefusal` — it short-
+                circuits before validation runs, so a caller who wrote `body`
+                AND has three other problems learns about one of them, in a
+                deserializer's vocabulary rather than this contract's.
+
+              * A refusal is supposed to tell a caller what the system cannot
+                do. That is the whole argument for `StageRelation` being on the
+                wire rather than derived. "unknown variant `body`" says the
+                field is malformed; `section_not_available` says this door does
+                not hydrate bodies and points at `show`.
+
+            So the type is `ResourceSection` — the SAME Rust enum `show` and
+            `list` use, not a query-local copy — and this door names its own
+            admitted subset, exactly as `ResourceSection::LIST` already does for
+            `list`. Sections outside the subset are refused at validation.
+            Adding one later is a const change, not a second vocabulary.
           type: array
           items:
             type: string
-            enum: [open-meta]
+            enum: [body, open-meta, edges]
           default: []
 
     Intention:
@@ -399,6 +433,14 @@ components:
             `--text-only`); or the server tried and could not, which is disclosed
             rather than returned as an empty list that reads like an answer.
             `/api/query` inherits that. `[decided — 2026-08-08, Pete]`
+
+            THE REASON IS STRUCTURAL, NOT A CONVENIENCE. The CLI can embed —
+            it links temper-ingest and computes chunks client-side. API callers
+            CANNOT: the ruby gem, the TypeScript package, and MCP as it expands
+            carry no native embedding ability. Refusing a vector search because
+            the caller could not precompute a vector would deny this surface to
+            every non-CLI client. So the server embeds when no vector arrives,
+            and only a FAILED embed refuses — as `embedding_unavailable`.
           type: boolean
         # THERE IS NO `degraded` FLAG HERE, deliberately. `/api/search` needs one
         # because its arms are fixed and an arm that cannot run must say so
@@ -1280,7 +1322,9 @@ components:
         - unsupported_seed_kind      # this act does not grow from that kind of id
         - missing_provenance         # a region set arrived without the anchor it requires
         - not_implemented            # the act is declared but has no mechanic
-        - missing_intention          # a find-about-* stage with no question threaded to it
+        - missing_intention          # a find stage with no QUESTION threaded to it. Not about the
+                                     # vector — the server embeds. See `Composition.intention`.
+        - section_not_available      # `with` named a hydration section this door does not offer
         - unknown_filter_value       # a typo must never come back as an honest empty
         - filter_not_applicable      # a filter slot this act does not admit
         - bound_term_not_applicable  # e.g. `limit` to `survey`, which bounds a funnel not rows
