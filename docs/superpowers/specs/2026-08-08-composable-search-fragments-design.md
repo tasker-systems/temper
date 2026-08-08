@@ -259,6 +259,27 @@ Neon behind Vercel does not guarantee); unchanged here.
 **Caching the gate.** Deferred with its precondition named `[decided — 2026-08-07, Pete]`. No part
 of this design may assume a cache.
 
+**A cron-refreshed materialized view of the whole visibility relation** — one point-in-time
+`(profile, resource)` relation per principal covering every reach route (ownership, team and team
+DAG with role, cogmap-bound intersections, explicit grants), so compositions run against it and
+visibility hoists out entirely. **Considered 2026-08-08 and not taken**, on three grounds — and note
+that it attacks the right root: it does not solve compute-once, it *dissolves* it, since an indexed
+lookup makes N gate calls cheap and would remove §5's core, §6's tripwire, the `uuid[]` currency and
+`/api/search`'s array path together.
+
+1. **Sizing.** The relation is principals × visible-resources — a tenant with 500 profiles each
+   seeing 20k of 50k resources is ~10M rows, rebuilt every tick whether or not anyone queries;
+   `REFRESH … CONCURRENTLY` needs a unique index and costs more.
+2. **It is not local to `/api/query`.** `resources_visible_to` serves `list`, `show`, `get_meta` and
+   both search arms. Either the entire read surface inherits the staleness, or the schema carries
+   **two visibility predicates** — the drift hazard this design exists to remove.
+3. **The revocation window is a disclosure window.** A stale ranking is wrong; a stale
+   *authorization* predicate is a leak. A cron refresh is precisely the *eventual* invalidation the
+   2026-08-07 deferral rules out (*"synchronous with membership/grant writes, never eventual"*).
+
+Recorded rather than dismissed: (1) and (3) are properties of materializing the **whole** relation,
+not of materializing at all, which is what §9's narrowing turns on.
+
 ## 9. Open, and who owns it
 
 - **The hoist rule** — *materialize `vis` iff at least one stage is unbounded* — remains unadopted
@@ -266,6 +287,23 @@ of this design may assume a cache.
   push-bounds-into-the-gate are **complementary, not competing**. Compute-once dominates for
   unbounded stages; a bounds-accepting gate dominates for bounded ones (PR #659's measured 13× on
   `show`). How many stages are unbounded is what decides, and that is corpus-dependent.
+- **Materializing `profile_reachable_teams` alone — OPEN, and the promising narrowing of §8's
+  refusal.** It targets exactly what §2.3 measured: the `Recursive Union` planned once per call site.
+  It inverts both of §8's structural objections — size becomes profiles × **teams** (thousands, not
+  millions), and its invalidation surface is small and **fully enumerable** (team create/delete,
+  membership add/remove, parent-edge change), so it can be refreshed **synchronously in the
+  membership write's own transaction** — satisfying the 2026-08-07 precondition rather than deferring
+  it. The grant and homes arms stay live, so ownership and explicit-sharing revocation remain
+  instant; only team-derived reach is memoized, and team membership is administrative and infrequent.
+  PR #660 (`20260807000010`) removed the double expansion; this would remove the remainder.
+
+  **The one figure that decides it is unmeasured: what share of gate cost the closure actually is.**
+  If 10%, this buys little; if 70%, it changes this design. Owned by
+  [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b), which names arm contribution as *"the biggest
+  single unknown"* — the arm empty in community is the one enterprise runs on. **Nothing in this
+  design may assume the narrowing lands**, and if it does land, §5 and §6 become unnecessary rather
+  than wrong.
+
 - **`survey` has two fragment arguments with no declared slot** — `p_lens uuid` and `p_emb vector`.
   Query and embedding reach a stage via `Composition.intention`; nothing carries a lens. Beat C task
   10's binding of `wayfind_region_scores` must answer this; this design does not.
