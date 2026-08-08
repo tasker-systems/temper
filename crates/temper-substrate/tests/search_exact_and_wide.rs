@@ -2219,14 +2219,22 @@ async fn every_ann_drawing_function_pins_ef_search_at_or_above_its_k(pool: sqlx:
 
     // Vacuity guard with a named member. The derived set is what gives COVERAGE of a function added
     // later; naming one known member is what stops the test passing because the derivation silently
-    // stopped matching anything. Note the expected count is ONE, not two: after the delegation
-    // `search_wide` no longer contains an ANN body at all — one body per arm is exactly why.
+    // stopped matching anything.
+    //
+    // **The named member is whichever function currently HOLDS the ANN body, and it moves whenever a
+    // migration pushes that body one level deeper.** It has moved twice: `search_wide` ->
+    // `query_find_wide` when the twins took the body (20260808000030), and `query_find_wide` ->
+    // `__temper_ungated_find_wide` when the gated-wrapper split took it again (20260808000040). Both
+    // times the count stayed ONE, which is what one-body-per-arm means — a delegating wrapper
+    // contains no ANN body to draw with. Updating this name is the required edit; adding a second
+    // name because the first "used to be right" would assert that two functions draw, which is the
+    // condition this whole arc exists to prevent.
     let names: Vec<String> = rows.iter().map(|r| r.get::<String, _>("proname")).collect();
     assert!(
-        names.iter().any(|n| n == "query_find_wide"),
-        "the derivation must find query_find_wide, which demonstrably draws ANN candidates; it \
-         found {names:?} — if that list is empty the predicate stopped matching and every \
-         assertion below is vacuous"
+        names.iter().any(|n| n == "__temper_ungated_find_wide"),
+        "the derivation must find __temper_ungated_find_wide, which demonstrably draws ANN \
+         candidates; it found {names:?} — if that list is empty the predicate stopped matching and \
+         every assertion below is vacuous"
     );
 
     let asked_for: i64 = 100;
@@ -2252,4 +2260,278 @@ async fn every_ann_drawing_function_pins_ef_search_at_or_above_its_k(pool: sqlx:
              the ANN cannot return the k rows requested and admission truncates silently"
         );
     }
+}
+
+// ── The gated wrapper / ungated core split (plan Task 7, spec §5) ────────────────────────────────
+//
+// A composition pays ONE visibility computation instead of one per stage, because the gate moves out
+// of the arm body and into a wrapper: `search_exact` -> `query_find_exact` -> `__temper_ungated_-
+// find_exact`. The core is handed the verdict as `p_visible_ids uuid[]` and applies no gate of its
+// own. Task 6 measured that array path at ~2.6% against the incumbent join — inside noise — which is
+// what cleared `/api/search` to route through it too.
+//
+// THE CORE IS A DELIBERATELY UNSAFE FUNCTION. These witnesses pin that, rather than pinning that it
+// is safe: a later edit that "helpfully" re-adds a gate inside the core would make the split
+// pointless while every behavioural test stayed green, so the hazard needs a witness of its own.
+
+/// Rows from `__temper_ungated_find_exact`. `visible` of `None` is a SQL NULL visible set.
+async fn ungated_exact(
+    pool: &sqlx::PgPool,
+    visible: Option<Vec<Uuid>>,
+    q: &str,
+    anchor: Option<(&str, Uuid)>,
+    reader: Option<ProfileId>,
+) -> Vec<Uuid> {
+    use sqlx::Row;
+    let (table, id) = match anchor {
+        Some((t, i)) => (Some(t), Some(i)),
+        None => (None, None),
+    };
+    sqlx::query(
+        "SELECT resource_id FROM __temper_ungated_find_exact($1, $2, NULL, $3, $4, $5, NULL, NULL, 0)",
+    )
+    .bind(visible)
+    .bind(q)
+    .bind(table)
+    .bind(id)
+    .bind(reader.map(|p| p.uuid()))
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<Uuid, _>("resource_id"))
+    .collect()
+}
+
+/// Rows from `__temper_ungated_find_wide`. `visible` of `None` is a SQL NULL visible set.
+async fn ungated_wide(
+    pool: &sqlx::PgPool,
+    visible: Option<Vec<Uuid>>,
+    emb: &[f32],
+    k: i32,
+    anchor: Option<(&str, Uuid)>,
+    reader: Option<ProfileId>,
+) -> Vec<Uuid> {
+    use sqlx::Row;
+    let (table, id) = match anchor {
+        Some((t, i)) => (Some(t), Some(i)),
+        None => (None, None),
+    };
+    sqlx::query(
+        "SELECT resource_id FROM __temper_ungated_find_wide($1, $2::vector, $3, NULL, $4, $5, $6, \
+         NULL, NULL, 0)",
+    )
+    .bind(visible)
+    .bind(vlit(emb))
+    .bind(k)
+    .bind(table)
+    .bind(id)
+    .bind(reader.map(|p| p.uuid()))
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<Uuid, _>("resource_id"))
+    .collect()
+}
+
+/// The core returns a row its own wrapper withholds — which is what "ungated" MEANS.
+///
+/// Asserted in both directions against ONE resource and ONE principal, so neither half can pass for
+/// an unrelated reason: the stranger cannot see the resource through `query_find_exact`, and the
+/// core hands it over when told the set is visible. A core that quietly kept a
+/// `resources_visible_to(...)` join would fail the second assertion; a wrapper that stopped gating
+/// would fail the first.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ungated_exact_core_returns_a_row_its_wrapper_withholds(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ungated-exact").await;
+
+    let hidden = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Gyrfalcon",
+        "The gyrfalcon winters on the tundra.",
+    )
+    .await;
+
+    let stranger = ProfileId::from(common::insert_profile(&pool, "ungated-stranger").await);
+
+    let through_wrapper = find_exact(&pool, stranger, "gyrfalcon", None).await;
+    assert!(
+        through_wrapper.is_empty(),
+        "the gated wrapper must withhold a resource the principal has no path to; got \
+         {through_wrapper:?}"
+    );
+
+    let through_core = ungated_exact(&pool, Some(vec![hidden]), "gyrfalcon", None, None).await;
+    assert_eq!(
+        through_core,
+        vec![hidden],
+        "the core applies NO gate — it returns whatever its caller asserts is visible. If this is \
+         empty, a visibility join has been re-added inside the core and the split buys nothing"
+    );
+}
+
+/// The wide core, same claim. A separate function with a separate body needs its own witness.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ungated_wide_core_returns_a_row_its_wrapper_withholds(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ungated-wide").await;
+
+    let hidden = mk_embedded(
+        &pool,
+        AnchorRef::context(home),
+        owner,
+        emitter,
+        "Gyrfalcon",
+        unit(0),
+    )
+    .await;
+
+    let stranger = ProfileId::from(common::insert_profile(&pool, "ungated-stranger-w").await);
+
+    let through_wrapper = find_wide(&pool, stranger, &unit(0), 10, None).await;
+    assert!(
+        through_wrapper.is_empty(),
+        "the gated wrapper must withhold; got {through_wrapper:?}"
+    );
+
+    let through_core = ungated_wide(&pool, Some(vec![hidden]), &unit(0), 10, None, None).await;
+    assert_eq!(
+        through_core,
+        vec![hidden],
+        "the wide core applies NO gate — it returns whatever its caller asserts is visible"
+    );
+}
+
+/// **The two `uuid[]` parameters have OPPOSITE NULL semantics, and both directions are load-bearing.**
+///
+/// `p_visible_ids` NULL means NOTHING is visible — fail-closed, because a caller that forgot to
+/// compute the set must get zero rows rather than the corpus. `p_bound_ids` NULL means UNBOUNDED —
+/// the twins' existing contract, where only `'{}'` narrows to nothing.
+///
+/// Written as one test over one fixture because the trap is the CONTRAST: two same-typed parameters
+/// sitting three positions apart that a reader will assume agree. `unnest(NULL::uuid[])` yields zero
+/// rows, which is what makes the fail-closed half true structurally rather than by a written guard —
+/// but structural truth that nobody asserts is one refactor away from being neither.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_null_visible_set_admits_nothing_though_a_null_bound_set_is_unbounded(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "null-currencies").await;
+
+    let kestrel = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Kestrel",
+        "The kestrel hovers over the verge.",
+    )
+    .await;
+
+    // p_bound_ids is NULL in both calls (the helper binds it so), so the ONLY difference is the
+    // visible set. Unbounded-and-visible returns the row; unbounded-and-NULL-visible returns none.
+    let visible = ungated_exact(&pool, Some(vec![kestrel]), "kestrel", None, None).await;
+    assert_eq!(
+        visible,
+        vec![kestrel],
+        "precondition: with a visible set and NULL bounds the core returns the match, or the \
+         contrast below proves nothing"
+    );
+
+    let no_set = ungated_exact(&pool, None, "kestrel", None, None).await;
+    assert!(
+        no_set.is_empty(),
+        "a NULL visible set must admit NOTHING — it is a caller that computed no verdict, not a \
+         caller that asked for everything. Got {no_set:?}"
+    );
+
+    let no_set_wide = ungated_wide(&pool, None, &unit(0), 10, None, None).await;
+    assert!(
+        no_set_wide.is_empty(),
+        "the wide core must fail closed on a NULL visible set too; got {no_set_wide:?}"
+    );
+}
+
+/// **Anchor readability survives the split, because the visible-id set cannot express it.**
+///
+/// Two different authorization questions travel through these functions. *Which resources may this
+/// principal see* is a row set, and hoisting it is the entire point of the split. *May this
+/// principal use this cogmap as a scope* is one boolean per call, is not a property of any row, and
+/// therefore cannot ride in `p_visible_ids` at all.
+///
+/// So the core keeps that check and takes `p_anchor_reader` for it. Without this test the split
+/// would silently drop it: every row returned would still be one the caller asserted visible, so no
+/// resource leaks — what leaks is MEMBERSHIP of a map the principal cannot read, which is exactly
+/// what `an_unreadable_cogmap_anchor_scopes_nothing_in_either_arm` pins at the wrapper level and
+/// nothing would have pinned here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ungated_cores_still_refuse_an_unreadable_cogmap_anchor(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    // Genesis with no team join: readable by nobody, including the owner of its contents.
+    let (cogmap, _telos) = common::genesis_cogmap(&pool, "Sealed Map", "Know the birds").await;
+
+    let homed = mk_at(
+        &pool,
+        AnchorRef::cogmap(CogmapId::from(cogmap)),
+        owner,
+        emitter,
+        "Sealed",
+        "The gyrfalcon is distilled here.",
+    )
+    .await;
+    let homed_wide = mk_embedded(
+        &pool,
+        AnchorRef::cogmap(CogmapId::from(cogmap)),
+        owner,
+        emitter,
+        "Sealed Wide",
+        unit(0),
+    )
+    .await;
+
+    // Precondition: unanchored, the core hands both rows over. Anything withheld below is withheld
+    // by anchor readability alone and not because the fixture never had rows to give.
+    let unanchored = ungated_exact(&pool, Some(vec![homed]), "gyrfalcon", None, None).await;
+    assert_eq!(
+        unanchored,
+        vec![homed],
+        "precondition: the core returns the row when no anchor is in play"
+    );
+
+    let scoped = ungated_exact(
+        &pool,
+        Some(vec![homed]),
+        "gyrfalcon",
+        Some(("kb_cogmaps", cogmap)),
+        Some(owner),
+    )
+    .await;
+    assert!(
+        scoped.is_empty(),
+        "the exact core must scope to nothing through a cogmap its reader cannot read; got {scoped:?}"
+    );
+
+    let scoped_wide = ungated_wide(
+        &pool,
+        Some(vec![homed_wide]),
+        &unit(0),
+        10,
+        Some(("kb_cogmaps", cogmap)),
+        Some(owner),
+    )
+    .await;
+    assert!(
+        scoped_wide.is_empty(),
+        "the wide core must refuse the same anchor; got {scoped_wide:?}"
+    );
 }
