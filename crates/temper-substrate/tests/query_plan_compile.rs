@@ -143,10 +143,35 @@ fn the_only_identifiers_emitted_are_validated_stage_names() {
 fn the_visibility_relation_is_materialized_once_no_matter_how_many_stages() {
     // Decision 019fcd13: one query time, one visibility computation. A per-stage recomputation is
     // the thing the single statement exists to collapse.
+    //
+    // ⚠️ `[NOT YET TRUE — 2026-08-08]` READ THIS BEFORE TRUSTING THE GREEN TICK. What this asserts
+    // is that the CTE is *emitted* once. It is NOT evidence that visibility is *computed* once, and
+    // since beat D it is not: every act body calls a twin that gates internally
+    // (`resources_visible_to(p_principal)` inside `query_find_exact` / `query_find_wide`), so
+    // nothing joins `vis` and an N-stage composition pays N full gates — including N recursive team
+    // closures, since the planner does not dedupe gate calls across call sites (measured; a STABLE
+    // function permits caching within a scan, not common-subexpression elimination).
+    //
+    // The CTE is therefore currently DEAD, and worse than dead: `MATERIALIZED` means it is computed
+    // and then used by nobody. Spec §5's gated-wrapper / ungated-core split (plan Tasks 7-9,
+    // unblocked by Task 6's measurement) is what makes the property real, at which point this test
+    // should assert that every act body takes its ids FROM `vis` rather than counting the text.
+    //
+    // Kept rather than deleted because emitting it once is still a precondition, and because a
+    // removed test leaves no marker where an unmet obligation used to be.
     let one = compile(&plan_one_stage(), test_profile(), None).expect("compiles");
     let three = compile(&plan_three_stages(), test_profile(), None).expect("compiles");
     assert_eq!(one.sql.matches("vis AS MATERIALIZED").count(), 1);
     assert_eq!(three.sql.matches("vis AS MATERIALIZED").count(), 1);
+
+    // The honest half, asserted so the gap above is a fact in the suite rather than only a comment:
+    // no act body consumes `vis` yet. When Tasks 7-9 land this flips, and its failure is the
+    // reminder to rewrite the assertions above.
+    assert!(
+        !three.sql.contains("FROM vis"),
+        "no stage consumes `vis` yet — if one now does, the Tasks 7-9 split has landed and this \
+         test must be rewritten to assert the real compute-once property"
+    );
 }
 
 #[test]
@@ -179,7 +204,7 @@ fn stages_are_emitted_in_dependency_order() {
 
 // ─── Beat D: the find acts emit real fragments ──────────────────────────────────────────────────
 
-use temper_core::types::query::{Intention, RefusalReason};
+use temper_core::types::query::{BoundTerm, Intention, RefusalReason};
 
 fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode {
     StageNode::Act(ActInvocation {
@@ -336,5 +361,118 @@ fn the_unmodelled_acts_still_emit_the_absent_placeholder() {
     assert!(
         !c.sql.contains("query_find_"),
         "and must not be given a find twin, which is not its mechanic"
+    );
+}
+
+// ─── Post-review fixes ──────────────────────────────────────────────────────────────────────────
+
+fn caller_set(kind: IdKind, ids: Vec<Uuid>) -> StageInput {
+    StageInput::Caller {
+        ids: IdSet {
+            kind,
+            provenance: None,
+            ids,
+        },
+    }
+}
+
+/// A Context/Cogmap bound goes to the ANCHOR PAIR, never into `p_bound_ids uuid[]`.
+///
+/// Routing it to the array is a **confident empty**: `find-exact` declares
+/// `accepts_bounds: [Resource, Context, Cogmap]`, so the plan validates, and then cogmap uuids get
+/// compared against `r.id` — zero rows, 200 OK, and nothing saying the narrowing was nonsense.
+#[test]
+fn a_cogmap_bound_is_emitted_as_the_anchor_pair_not_as_a_resource_id_array() {
+    let cogmap = Uuid::now_v7();
+    let v = build_with_intention(
+        vec![find_stage(
+            "hits",
+            ActName::FindExact,
+            Some(caller_set(IdKind::Cogmap, vec![cogmap])),
+        )],
+        vec!["hits"],
+    );
+    let c = compile(&v, test_profile(), None).expect("compiles");
+
+    assert!(
+        c.sql.contains("'kb_cogmaps'::varchar"),
+        "a cogmap bound must reach the anchor-table slot; got:\n{}",
+        c.sql
+    );
+    // The array slot must be explicitly unbounded — NOT the cogmap id, and NOT '{}' (which would
+    // mean bounded-to-nothing and return zero rows for a different, equally silent reason).
+    assert!(
+        c.sql.contains("NULL::uuid[]"),
+        "the resource-id array must be unbounded when the narrowing is an anchor; got:\n{}",
+        c.sql
+    );
+    assert!(
+        !c.sql.contains(&cogmap.to_string()),
+        "the anchor id must be bound, never interpolated"
+    );
+}
+
+/// An anchor slot holds ONE id; an `IdSet` holds N. Two is a refusal, never a silent first-wins.
+///
+/// Spec §9 names this cardinality gap. Anchoring on `ids[0]` would answer a different question than
+/// the one asked while looking like a successful narrowing — the failure mode this whole arc is
+/// against.
+#[test]
+fn a_multi_id_anchor_bound_refuses_rather_than_anchoring_on_the_first() {
+    let v = build_with_intention(
+        vec![find_stage(
+            "hits",
+            ActName::FindExact,
+            Some(caller_set(
+                IdKind::Context,
+                vec![Uuid::now_v7(), Uuid::now_v7()],
+            )),
+        )],
+        vec!["hits"],
+    );
+    let err = compile(&v, test_profile(), None).expect_err("two anchor ids must refuse");
+    assert_eq!(err.reason, RefusalReason::UnsupportedBoundKind);
+    assert_eq!(err.stage.as_ref().map(|s| s.as_str()), Some("hits"));
+}
+
+/// Declared paging terms are BOUND, not dropped.
+///
+/// Emitting literal `NULL`/`0` means a plan declaring `limit: 10` compiles to the entire match set —
+/// the wide-then-hydrate cost `20260806000020` measured at 1,883 rows for a request asking for ten,
+/// and it leaves the declared `bound_ceilings` unenforced. Worse in a chain, where an unlimited
+/// upstream feeds every id into a bounded downstream stage.
+#[test]
+fn declared_limit_and_offset_reach_the_fragment_as_binds() {
+    let mut node = find_stage("hits", ActName::FindExact, None);
+    if let StageNode::Act(inv) = &mut node {
+        inv.terms.insert(BoundTerm::Limit, 10);
+        inv.terms.insert(BoundTerm::Offset, 20);
+    }
+    let v = build_with_intention(vec![node], vec!["hits"]);
+    let c = compile(&v, test_profile(), None).expect("compiles");
+
+    let ints: Vec<i64> = c
+        .binds
+        .iter()
+        .filter_map(|b| match b {
+            QueryBind::Int(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        ints.contains(&10) && ints.contains(&20),
+        "the declared limit and offset must be bound; got {:?}",
+        c.binds
+    );
+    // And a stage that declares neither still says "unbounded" rather than "zero rows".
+    let bare = build_with_intention(
+        vec![find_stage("plain", ActName::FindExact, None)],
+        vec!["plain"],
+    );
+    let cb = compile(&bare, test_profile(), None).expect("compiles");
+    assert!(
+        cb.sql.contains("NULL, 0)"),
+        "an undeclared limit is NULL (unbounded) and offset is 0; got:\n{}",
+        cb.sql
     );
 }

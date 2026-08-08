@@ -83,8 +83,13 @@ pub async fn load_scaled(pool: &PgPool, world: &AccessWorld, scale: u32) -> Resu
     )
     .await?;
 
-    // Generated bulk, after the hand-declared resources so a population can never shadow a named
-    // referent, and before edges so a future population-homed edge has endpoints to resolve.
+    // Generated bulk, before edges so a future population-homed edge has endpoints to resolve.
+    //
+    // Running AFTER the hand-declared resources is what makes shadowing POSSIBLE, not what prevents
+    // it — both write into one `resources` map, so a generated `<prefix>-0000` colliding with an
+    // `AccessResourceDef.key` would overwrite the named referent and every later `check:` would
+    // silently resolve to the generated row. `generate` refuses on collision rather than relying on
+    // ordering.
     super::population::generate(
         &mut tx,
         world,

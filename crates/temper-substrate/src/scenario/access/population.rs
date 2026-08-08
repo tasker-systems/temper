@@ -146,6 +146,20 @@ async fn generate_one(
     if pop.topics.is_empty() {
         bail!("population '{}' declares no topics", pop.key_prefix);
     }
+    // A topic supplies the FTS vocabulary by splitting its name on '-', so a name that is empty or
+    // all separators yields no terms and `% terms.len()` divides by zero. Named here beside the
+    // other degenerate cases rather than reaching `prose_for` as a panic.
+    if let Some(bad) = pop
+        .topics
+        .iter()
+        .find(|t| t.split('-').all(|part| part.is_empty()))
+    {
+        bail!(
+            "population '{}' declares topic {bad:?}, which yields no terms — a topic name supplies \
+             the FTS vocabulary by splitting on '-'",
+            pop.key_prefix
+        );
+    }
 
     // Emitter: named, or the world's sole/first entity.
     let emitter_name = match &pop.emitter {
@@ -264,7 +278,16 @@ async fn generate_one(
         )
         .await?;
 
-        resources.insert(key, rid_uuid);
+        // Refuse rather than overwrite. Populations load AFTER the hand-declared resources and
+        // share one map, so a collision would replace a named referent and every `check:` naming it
+        // would silently resolve to a generated row instead.
+        if let Some(prior) = resources.insert(key.clone(), rid_uuid) {
+            bail!(
+                "population '{}' generated key {key:?}, which already names resource {prior} — a \
+                 generated key must never shadow a hand-declared one",
+                pop.key_prefix
+            );
+        }
     }
     Ok(())
 }

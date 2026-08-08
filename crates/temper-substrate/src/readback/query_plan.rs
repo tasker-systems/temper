@@ -14,7 +14,7 @@
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
-    search_family, Intention, PlanRefusal, RefusalReason, StageInput, StageNode,
+    search_family, BoundTerm, IdKind, Intention, PlanRefusal, RefusalReason, StageInput, StageNode,
     ValidatedComposition,
 };
 use uuid::Uuid;
@@ -81,9 +81,17 @@ pub fn compile(
     let mut cte_names: Vec<(String, String)> = Vec::new();
     let mut ctes: Vec<String> = Vec::new();
 
-    // The visibility relation, materialized ONCE — decision 019fcd13: one query time, one
+    // The visibility relation, materialized once — decision 019fcd13: one query time, one
     // visibility computation, no per-stage recomputation. `MATERIALIZED` is an optimization fence,
     // not merely "compute once" — see the task notes on the hoist strategy.
+    //
+    // ⚠️ `[NOT YET CONSUMED — 2026-08-08]` No act body joins this. Every emitted fragment gates
+    // INTERNALLY (`resources_visible_to(p_principal)` inside the twins), so an N-stage composition
+    // still pays N full gates and this CTE is computed for nobody. The intent above is the design;
+    // spec §5's gated-wrapper / ungated-core split (plan Tasks 7-9) is what will make it true.
+    // Left emitted rather than removed because removing it would erase the marker for an unmet
+    // obligation, and because Tasks 7-9 are unblocked — Task 6 measured the array path at ~2.6%,
+    // inside noise, so the split is going ahead rather than being reconsidered.
     ctes.push("vis AS MATERIALIZED (\n  SELECT id FROM resources_visible_to($1)\n)".to_string());
 
     let intention = v.composition().intention.as_ref();
@@ -118,22 +126,12 @@ fn emit_act_body(
 ) -> Result<String, PlanRefusal> {
     let act = act_name(&inv.act);
 
-    // The bound set, in the composition's one currency: ids. A `None` input is UNBOUNDED, which is
-    // `NULL::uuid[]` and never `'{}'` — the twins read the two differently and conflating them is
-    // exactly the substitution delta 3 forbids.
-    let bound = match &inv.input {
-        Some(StageInput::Caller { ids }) => {
-            let idx = binds.len() + 1;
-            binds.push(QueryBind::Uuids(ids.ids.clone()));
-            format!("${idx}::uuid[]")
-        }
-        // Ids only — no quantity from the upstream stage is ever in scope here, which is what keeps
-        // `no-cross-act-ranking` structural rather than policed.
-        Some(StageInput::Upstream { stage }) => {
-            format!("ARRAY(SELECT id FROM {})", stage.as_str())
-        }
-        None => "NULL::uuid[]".to_string(),
-    };
+    let Narrowing {
+        bound,
+        anchor_table,
+        anchor_id,
+    } = narrowing_for(inv, binds)?;
+    let (limit, offset) = paging_for(inv, binds);
 
     match fragment_for(&inv.act) {
         Some(EMIT_FIND_EXACT) => {
@@ -149,7 +147,8 @@ fn emit_act_body(
                 "  -- act: {act} -> {EMIT_FIND_EXACT}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  fts_norm::double precision AS quantity\n    \
-                 FROM {EMIT_FIND_EXACT}($1, ${qi}, {bound}, NULL, NULL, NULL, NULL, 0)"
+                 FROM {EMIT_FIND_EXACT}($1, ${qi}, {bound}, {anchor_table}, {anchor_id}, \
+                 NULL, {limit}, {offset})"
             ))
         }
         Some(EMIT_FIND_WIDE) => {
@@ -172,7 +171,7 @@ fn emit_act_body(
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  vec_norm::double precision AS quantity\n    \
                  FROM {EMIT_FIND_WIDE}($1, ${ei}::vector, ${ki}::int, {bound}, \
-                 NULL, NULL, NULL, NULL, 0)"
+                 {anchor_table}, {anchor_id}, NULL, {limit}, {offset})"
             ))
         }
         // `follow-from` and `survey` reach here: their mechanics are declared reachable, but their
@@ -183,6 +182,114 @@ fn emit_act_body(
              SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({bound})",
         )),
     }
+}
+
+/// How one stage narrows: an id-array bound, an anchor pair, or neither. Never both — an act is
+/// handed ONE `IdSet`, and its `kind` decides which slot that set belongs in.
+struct Narrowing {
+    bound: String,
+    anchor_table: String,
+    anchor_id: String,
+}
+
+/// Route the stage's input to the slot its KIND belongs in.
+///
+/// `IdSet.kind` was previously ignored and every set went to `p_bound_ids uuid[]`. That is a
+/// **confident empty**: `find-exact` and `find-about-within` both declare
+/// `accepts_bounds: [Resource, Context, Cogmap]`, so a caller handing a Cogmap set would validate
+/// cleanly and then have cogmap uuids compared against `r.id`, returning zero rows with a 200 and
+/// no disclosure that the narrowing was nonsense. The declaration says those kinds are accepted
+/// "through the anchor pair" — so the compiler has to actually emit the anchor pair.
+///
+/// A `None` input is UNBOUNDED, which is `NULL::uuid[]` and never `'{}'` — the twins read the two
+/// differently and conflating them is exactly the substitution delta 3 forbids.
+fn narrowing_for(
+    inv: &temper_core::types::query::ActInvocation,
+    binds: &mut Vec<QueryBind>,
+) -> Result<Narrowing, PlanRefusal> {
+    let unbounded = Narrowing {
+        bound: "NULL::uuid[]".to_string(),
+        anchor_table: "NULL".to_string(),
+        anchor_id: "NULL".to_string(),
+    };
+    match &inv.input {
+        None => Ok(unbounded),
+        // Ids only — no quantity from the upstream stage is ever in scope here, which is what keeps
+        // `no-cross-act-ranking` structural rather than policed. An upstream set is always resource
+        // ids (that is what these acts produce), so it is always the array slot.
+        Some(StageInput::Upstream { stage }) => Ok(Narrowing {
+            bound: format!("ARRAY(SELECT id FROM {})", stage.as_str()),
+            ..unbounded
+        }),
+        Some(StageInput::Caller { ids }) => match ids.kind {
+            IdKind::Resource => {
+                let idx = binds.len() + 1;
+                binds.push(QueryBind::Uuids(ids.ids.clone()));
+                Ok(Narrowing {
+                    bound: format!("${idx}::uuid[]"),
+                    ..unbounded
+                })
+            }
+            // The anchor slot holds exactly ONE id. Spec §9 names this as an open cardinality gap
+            // — "an IdSet holds N ids; an anchor slot holds one" — and the honest response to it is
+            // a refusal, never silently anchoring on the first element, which would answer a
+            // different question than the one asked and look like a successful narrowing.
+            IdKind::Context | IdKind::Cogmap => {
+                let table = match ids.kind {
+                    IdKind::Cogmap => "kb_cogmaps",
+                    _ => "kb_contexts",
+                };
+                let [id] = ids.ids.as_slice() else {
+                    return Err(PlanRefusal {
+                        stage: Some(inv.name.clone()),
+                        reason: RefusalReason::UnsupportedBoundKind,
+                        detail: format!(
+                            "a {table} bound is served by the anchor pair, which holds exactly one \
+                             id; this stage supplied {}. Anchoring on one of them would answer a \
+                             different question than the one asked",
+                            ids.ids.len()
+                        ),
+                    });
+                };
+                let ai = binds.len() + 1;
+                binds.push(QueryBind::Uuids(vec![*id]));
+                Ok(Narrowing {
+                    bound: "NULL::uuid[]".to_string(),
+                    anchor_table: format!("'{table}'::varchar"),
+                    anchor_id: format!("(${ai}::uuid[])[1]"),
+                })
+            }
+            // A region set reaching a find act is already refused by the validator against
+            // `accepts_bounds`; unbounded here rather than a second, divergent opinion about it.
+            _ => Ok(unbounded),
+        },
+    }
+}
+
+/// The declared paging terms, bound.
+///
+/// Previously emitted as literal `NULL` / `0`, i.e. UNBOUNDED — so a plan declaring `limit: 10`
+/// compiled to the entire match set. That is the wide-then-hydrate cost `20260806000020` measured
+/// at 1,883 rows for a request asking for ten, and it also left the declared
+/// `bound_ceilings: Limit => 50` unenforced. Worse in a chain, where an unlimited upstream feeds
+/// `ARRAY(SELECT id FROM …)` into a bounded stage and drives its exhaustive branch over everything.
+fn paging_for(
+    inv: &temper_core::types::query::ActInvocation,
+    binds: &mut Vec<QueryBind>,
+) -> (String, String) {
+    let mut bind_term = |t: BoundTerm, absent: &str| match inv.terms.get(&t) {
+        Some(v) => {
+            let idx = binds.len() + 1;
+            binds.push(QueryBind::Int(*v));
+            format!("${idx}::int")
+        }
+        None => absent.to_string(),
+    };
+    // NULL limit is the twins' own "unbounded"; offset defaults to 0, matching their signature.
+    (
+        bind_term(BoundTerm::Limit, "NULL"),
+        bind_term(BoundTerm::Offset, "0"),
+    )
 }
 
 fn refusal(inv: &temper_core::types::query::ActInvocation, detail: &str) -> PlanRefusal {

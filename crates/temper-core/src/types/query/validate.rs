@@ -263,17 +263,27 @@ fn check_act(
         ));
     }
 
-    // A find-about-* stage refuses without a threaded intention rather than embedding on the
-    // caller's behalf — "I chose not to embed" and "I cannot embed" stay distinct.
+    // Every find act refuses without a threaded intention. For `find-about-*` the reason is that
+    // the server does not embed on the caller's behalf — "I chose not to embed" and "I cannot
+    // embed" stay distinct. `find-exact` needs the intention for a different reason: its query TEXT
+    // is `query_find_exact`'s `p_query`, and there is nowhere else to get it.
+    //
+    // `[widened at beat D — 2026-08-08]` `FindExact` was missing here, which was invisible while
+    // the find acts were `NotSeparablyReachable` and became a real defect the moment the compiler
+    // could emit them: `validate` returned Ok and `compile` returned Err(MissingIntention) for the
+    // same plan. That is precisely the validator/emitter disagreement `CALLABLE_FRAGMENTS` was
+    // reshaped into a shared map to make impossible, reappearing on a different axis — the map
+    // makes the two agree about WHICH ACTS are reachable, and nothing was making them agree about
+    // WHAT EACH ACT REQUIRES.
     if matches!(
         inv.act,
-        ActName::FindAboutAnywhere | ActName::FindAboutWithin
+        ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
     ) && c.intention.is_none()
     {
         errs.push(refusal(
             Some(name),
             RefusalReason::MissingIntention,
-            "a find-about-* stage requires a threaded intention",
+            "a find act requires a threaded intention",
         ));
     }
 
