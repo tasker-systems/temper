@@ -24,17 +24,44 @@ use super::registry::declaration;
 use super::scalars::BoundsMode;
 use super::stage::{StageInput, StageName};
 
-/// The SQL fragment functions the compiler (beat C) emits a CTE for. An act whose `served_by` is
-/// not in this set is declared and built but not reachable from THIS surface yet — refused as
-/// [`RefusalReason::NotSeparablyReachable`], never as `NotImplemented`.
+/// Declared mechanic (`served_by`) → the SQL function the compiler actually emits.
 ///
-/// **Beat D grows this set** to include `search_exact` / `search_wide`, at which point the three
-/// `find` acts become reachable and the reachability refusal stops firing for them. It is keyed on
-/// the fragment set ALONE, never on `build_state`: the two `Fused` declarations (`follow-from`,
-/// `survey`) are exactly the acts this surface CAN reach, so a rule keyed on the `Fused`
-/// discriminant would refuse the wrong pair. This is a set of served-by functions on purpose, not a
-/// hardcoded act list, which would drift from the declarations.
-const CALLABLE_FRAGMENTS: &[&str] = &["search_graph_expand", "wayfind_region_scores"];
+/// An act whose `served_by` is absent here is declared and built but not reachable from THIS
+/// surface — refused as [`RefusalReason::NotSeparablyReachable`], never as `NotImplemented`.
+///
+/// A MAP rather than a set since beat D, and the two names differ for the find acts on purpose:
+/// `served_by` must keep naming what `/api/search` calls, because that is the mechanic the
+/// declaration describes, while `/api/query` emits the composable twin that accepts
+/// `p_bound_ids uuid[]`. After `20260808000030` those are the same body — `search_exact` IS
+/// `query_find_exact` at NULL bounds — but they are not the same signature, and the declaration
+/// describes the door, not the compiler.
+///
+/// Membership is what decides `NotSeparablyReachable`. It is keyed on served-by names and NEVER on
+/// `build_state`: the two `Fused` declarations (`follow-from`, `survey`) are among the reachable
+/// ones, so a rule keyed on that discriminant would refuse the wrong acts.
+///
+/// `follow-from` and `survey` map to the deliberately-absent placeholder. That is honest rather
+/// than sloppy: their mechanics exist and are reachable *in principle*, but their fragments take
+/// arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), so the builder emits a function that
+/// does not exist and Postgres errors loudly instead of a guessed value returning plausible rows.
+/// Keeping them here — rather than dropping them, which would make them refuse statically —
+/// preserves the beat-C behaviour their tests pin.
+const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
+    ("search_exact", "query_find_exact"),
+    ("search_wide", "query_find_wide"),
+    ("search_graph_expand", "__temper_unbound_act"),
+    ("wayfind_region_scores", "__temper_unbound_act"),
+];
+
+/// The fragment the compiler emits for a declared mechanic, or `None` if this surface cannot reach
+/// it. The compiler reads this so the reachability rule and the emission cannot disagree — two
+/// lists would drift, and the drift would be a stage that validates and then compiles to nothing.
+pub fn emitted_fragment_for(served_by: &str) -> Option<&'static str> {
+    CALLABLE_FRAGMENTS
+        .iter()
+        .find(|(mechanic, _)| *mechanic == served_by)
+        .map(|(_, fragment)| *fragment)
+}
 
 /// One reason a plan is not executable. Static — no database was consulted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +192,7 @@ fn check_act(
         )),
         BuildState::Served | BuildState::Fused { .. } => {
             let served = decl.served_by.as_deref().unwrap_or_default();
-            if !CALLABLE_FRAGMENTS.contains(&served) {
+            if emitted_fragment_for(served).is_none() {
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::NotSeparablyReachable,
@@ -628,9 +655,16 @@ mod tests {
 
     #[test]
     fn a_find_about_stage_without_a_threaded_intention_refuses_rather_than_substituting() {
-        // "I chose not to embed" and "I cannot embed" stay distinguishable. `find-about-anywhere` is
-        // also `NotSeparablyReachable` until beat D, so this test pins the MissingIntention refusal
-        // SPECIFICALLY — present without an intention, gone with one — rather than full legality.
+        // "I chose not to embed" and "I cannot embed" stay distinguishable.
+        //
+        // `[strengthened at beat D — 2026-08-08]` This used to pin the MissingIntention refusal
+        // SPECIFICALLY — present without an intention, gone with one — rather than full legality,
+        // because `find-about-anywhere` was ALSO `NotSeparablyReachable` and so could never be
+        // legal whatever the intention said. With `search_wide` mapped to `query_find_wide` that
+        // second refusal is gone, and the assertion can be what it always wanted to be: an
+        // intention makes this plan VALID, not merely less refused. Asserting `is_ok()` is strictly
+        // stronger than asserting one reason's absence, which would also hold if the plan were
+        // refused for three other reasons.
         let mut c = plan(
             vec![act("wide", ActName::FindAboutAnywhere, None)],
             vec!["wide"],
@@ -645,12 +679,10 @@ mod tests {
             query: "salience".to_string(),
             embedded: true,
         });
-        let errs = validate(&c).unwrap_err();
         assert!(
-            !errs
-                .iter()
-                .any(|e| e.reason == RefusalReason::MissingIntention),
-            "an intention removes the MissingIntention refusal; got: {errs:?}"
+            validate(&c).is_ok(),
+            "with an intention threaded and its mechanic reachable, the plan is legal; got: {:?}",
+            validate(&c).err()
         );
     }
 
@@ -740,12 +772,20 @@ mod tests {
 
     #[test]
     fn a_served_act_this_builder_has_no_fragment_for_refuses_honestly() {
-        // Before beat D the compiler emits no fragment for `search_exact` / `search_wide`, so a plan
-        // naming `find-exact` must refuse. `NotImplemented` would be FALSE here (the act is
-        // `Served`); the honest refusal is the existence-vs-reachability distinction `BuildState`
-        // cannot draw. This test must go RED at beat D, when the find acts acquire fragments.
+        // `[amended at beat D — 2026-08-08]` The subject was `find-exact`, and this test's own
+        // comment predicted it would "go RED at beat D, when the find acts acquire fragments". It
+        // did: `search_exact` now maps to `query_find_exact`, so `find-exact` is reachable and no
+        // longer refuses.
+        //
+        // The PROPERTY is unchanged and still needs a subject, so it moves to `substantiate` —
+        // `Served`, with a real mechanic (`resource_standing_shape`), for which this builder emits
+        // no fragment. `NotImplemented` would be FALSE about it (it is served); the honest refusal
+        // is the existence-vs-reachability distinction `BuildState` cannot draw.
+        //
+        // Re-pointing rather than deleting is the point: had this test simply been removed when it
+        // went red, beat D would have retired the only witness that the two refusals stay distinct.
         let errs = validate(&plan(
-            vec![act("hits", ActName::FindExact, None)],
+            vec![act("hits", ActName::Substantiate, None)],
             vec!["hits"],
         ))
         .unwrap_err();

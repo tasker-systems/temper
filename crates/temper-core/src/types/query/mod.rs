@@ -36,4 +36,4 @@ pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
 pub use stage::{StageInput, StageName, StageOutput};
 pub use trace::{BoundsSource, CompositionTrace, MetaTruncated, StageTrace};
-pub use validate::{validate, PlanRefusal, ValidatedComposition};
+pub use validate::{emitted_fragment_for, validate, PlanRefusal, ValidatedComposition};
