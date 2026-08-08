@@ -287,15 +287,33 @@ not of materializing at all, which is what §9's narrowing turns on.
   push-bounds-into-the-gate are **complementary, not competing**. Compute-once dominates for
   unbounded stages; a bounds-accepting gate dominates for bounded ones (PR #659's measured 13× on
   `show`). How many stages are unbounded is what decides, and that is corpus-dependent.
-- **Materializing `profile_reachable_teams` alone — OPEN, and the promising narrowing of §8's
+- **Precomputing `profile_reachable_teams` alone — OPEN, and the promising narrowing of §8's
   refusal.** It targets exactly what §2.3 measured: the `Recursive Union` planned once per call site.
   It inverts both of §8's structural objections — size becomes profiles × **teams** (thousands, not
   millions), and its invalidation surface is small and **fully enumerable** (team create/delete,
-  membership add/remove, parent-edge change), so it can be refreshed **synchronously in the
-  membership write's own transaction** — satisfying the 2026-08-07 precondition rather than deferring
-  it. The grant and homes arms stay live, so ownership and explicit-sharing revocation remain
-  instant; only team-derived reach is memoized, and team membership is administrative and infrequent.
-  PR #660 (`20260807000010`) removed the double expansion; this would remove the remainder.
+  membership add/remove, parent-edge change). The grant and homes arms stay live, so ownership and
+  explicit-sharing revocation remain instant; only team-derived reach is memoized, and team
+  membership is administrative and infrequent. PR #660 (`20260807000010`) removed the double
+  expansion; this would remove the remainder.
+
+  **A MATERIALIZED VIEW is the wrong mechanism for it, and the reason is a hard PostgreSQL
+  constraint** `[corrected — 2026-08-08]`. What makes this narrowing satisfy the 2026-08-07
+  precondition rather than defer it is **synchronous** invalidation, and a matview cannot provide it:
+  `REFRESH MATERIALIZED VIEW CONCURRENTLY` **cannot run inside a transaction block**, so it is
+  unreachable from a trigger; and plain `REFRESH` takes an **ACCESS EXCLUSIVE** lock, which — since
+  every gate call would read the matview — blocks every read in the system for its duration. A
+  cron-refreshed matview is therefore just §8's eventual invalidation at a smaller size, carrying the
+  same leak.
+
+  **The mechanism that does work is an ordinary table maintained incrementally by triggers** — a
+  closure table on `(profile_id, team_id)`. A membership write updates only the affected rows: no
+  rebuild, no exclusive lock, fully transactional, so the gate is never stale even momentarily.
+
+  **It is additive and changes no wire shape.** `profile_reachable_teams(uuid)` keeps its signature
+  and becomes a delegating read, so every caller is untouched and the correctness surface is one
+  function body — provable by asserting the table equals the recursive walk over a nontrivial team
+  DAG. Precedent for the exact shape: `20260807000010`, declared `additive` for *"one new function
+  plus CREATE OR REPLACE on two existing ones at unchanged signatures, no DROP."*
 
   **The one figure that decides it is unmeasured: what share of gate cost the closure actually is.**
   If 10%, this buys little; if 70%, it changes this design. Owned by
