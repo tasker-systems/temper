@@ -102,6 +102,38 @@ fn plan_one_stage() -> ValidatedComposition {
     build(vec![ff_root("hits", vec![Uuid::now_v7()])], vec!["hits"])
 }
 
+/// One `find-exact` stage — an act that reaches a real fragment, which the compute-once property
+/// needs: a `follow-from` stage still emits the placeholder and consults no visibility relation at
+/// all, so a plan built from those could satisfy the assertion while proving nothing.
+fn plan_one_find() -> ValidatedComposition {
+    build_with_intention(vec![find_stage("a", ActName::FindExact, None)], vec!["a"])
+}
+
+/// Three chained `find-exact` stages. `find-exact` throughout rather than a `find-about-*` mix so
+/// the plan compiles with no embedding; the property under test is about the gate, not the arm.
+fn plan_three_finds() -> ValidatedComposition {
+    build_with_intention(
+        vec![
+            find_stage("a", ActName::FindExact, None),
+            find_stage(
+                "b",
+                ActName::FindExact,
+                Some(StageInput::Upstream {
+                    stage: StageName::parse("a").unwrap(),
+                }),
+            ),
+            find_stage(
+                "c",
+                ActName::FindExact,
+                Some(StageInput::Upstream {
+                    stage: StageName::parse("b").unwrap(),
+                }),
+            ),
+        ],
+        vec!["c"],
+    )
+}
+
 fn plan_three_stages() -> ValidatedComposition {
     build(
         vec![
@@ -140,37 +172,46 @@ fn the_only_identifiers_emitted_are_validated_stage_names() {
 }
 
 #[test]
-fn the_visibility_relation_is_materialized_once_no_matter_how_many_stages() {
+fn the_visibility_relation_is_computed_once_no_matter_how_many_stages() {
     // Decision 019fcd13: one query time, one visibility computation. A per-stage recomputation is
     // the thing the single statement exists to collapse.
     //
-    // ⚠️ `[NOT YET TRUE — 2026-08-08]` READ THIS BEFORE TRUSTING THE GREEN TICK. What this asserts
-    // is that the CTE is *emitted* once. It is NOT evidence that visibility is *computed* once, and
-    // since beat D it is not: every act body calls a twin that gates internally
-    // (`resources_visible_to(p_principal)` inside `query_find_exact` / `query_find_wide`), so
-    // nothing joins `vis` and an N-stage composition pays N full gates — including N recursive team
-    // closures, since the planner does not dedupe gate calls across call sites (measured; a STABLE
-    // function permits caching within a scan, not common-subexpression elimination).
+    // **This assertion used to be vacuous and said so.** Its predecessor counted the CTE's TEXT,
+    // which proved only that the compiler emitted it once — while every act body called a twin that
+    // gated internally, so nothing read the CTE and an N-stage composition paid N full gates,
+    // including N recursive team closures (the planner does not dedupe gate calls across call
+    // sites: a STABLE function permits caching within a scan, not common-subexpression
+    // elimination). It carried a companion assertion that no stage consumed `vis` yet, whose
+    // failure was the agreed signal to write this.
     //
-    // The CTE is therefore currently DEAD, and worse than dead: `MATERIALIZED` means it is computed
-    // and then used by nobody. Spec §5's gated-wrapper / ungated-core split (plan Tasks 7-9,
-    // unblocked by Task 6's measurement) is what makes the property real, at which point this test
-    // should assert that every act body takes its ids FROM `vis` rather than counting the text.
-    //
-    // Kept rather than deleted because emitting it once is still a precondition, and because a
-    // removed test leaves no marker where an unmet obligation used to be.
-    let one = compile(&plan_one_stage(), test_profile(), None).expect("compiles");
-    let three = compile(&plan_three_stages(), test_profile(), None).expect("compiles");
-    assert_eq!(one.sql.matches("vis AS MATERIALIZED").count(), 1);
-    assert_eq!(three.sql.matches("vis AS MATERIALIZED").count(), 1);
+    // The real property is countable without a database and is asserted here: `resources_visible_to`
+    // appears EXACTLY ONCE in the emitted statement, at any stage count. The ungated cores
+    // (`20260808000040`) do not call it, so any second occurrence means a stage went back to gating
+    // for itself.
+    let one = compile(&plan_one_find(), test_profile(), None).expect("compiles");
+    let three = compile(&plan_three_finds(), test_profile(), None).expect("compiles");
 
-    // The honest half, asserted so the gap above is a fact in the suite rather than only a comment:
-    // no act body consumes `vis` yet. When Tasks 7-9 land this flips, and its failure is the
-    // reminder to rewrite the assertions above.
-    assert!(
-        !three.sql.contains("FROM vis"),
-        "no stage consumes `vis` yet — if one now does, the Tasks 7-9 split has landed and this \
-         test must be rewritten to assert the real compute-once property"
+    assert_eq!(
+        one.sql.matches("resources_visible_to(").count(),
+        1,
+        "got:\n{}",
+        one.sql
+    );
+    assert_eq!(
+        three.sql.matches("resources_visible_to(").count(),
+        1,
+        "three stages must still evaluate the gate once; got:\n{}",
+        three.sql
+    );
+    assert_eq!(three.sql.matches("__temper_vis AS MATERIALIZED").count(), 1);
+
+    // And it is READ — the half whose absence made the old test vacuous. Emitting a relation nobody
+    // consumes is worse than not emitting it, because `MATERIALIZED` computes it anyway.
+    assert_eq!(
+        three.sql.matches("FROM __temper_vis").count(),
+        3,
+        "every act stage must take its verdict from the hoisted relation; got:\n{}",
+        three.sql
     );
 }
 
@@ -254,7 +295,7 @@ fn an_embedding() -> Vec<f32> {
 /// Fails against a builder that still emits `__temper_unbound_act`, and against one that emits
 /// `search_wide` — which has no `p_bound_ids` and so cannot express this at all.
 #[test]
-fn a_find_about_within_stage_compiles_to_the_composable_twin_bounded_by_its_upstream() {
+fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstream() {
     let v = build_with_intention(
         vec![
             ff_root("seeds", vec![Uuid::now_v7()]),
@@ -272,8 +313,9 @@ fn a_find_about_within_stage_compiles_to_the_composable_twin_bounded_by_its_upst
     let c = compile(&v, test_profile(), Some(&emb)).expect("compiles");
 
     assert!(
-        c.sql.contains("query_find_wide("),
-        "the wide find act must target the composable twin; got:\n{}",
+        c.sql.contains("__temper_ungated_find_wide("),
+        "the wide find act must target the ungated core — the twin gates internally, which is what \
+         the hoisted relation exists to stop; got:\n{}",
         c.sql
     );
     assert!(
@@ -294,14 +336,18 @@ fn a_find_about_within_stage_compiles_to_the_composable_twin_bounded_by_its_upst
 
 /// The exact arm likewise, and its query text is BOUND rather than interpolated.
 #[test]
-fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_twin() {
+fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_core() {
     let v = build_with_intention(
         vec![find_stage("hits", ActName::FindExact, None)],
         vec!["hits"],
     );
     let c = compile(&v, test_profile(), None).expect("find-exact needs no embedding");
 
-    assert!(c.sql.contains("query_find_exact("), "got:\n{}", c.sql);
+    assert!(
+        c.sql.contains("__temper_ungated_find_exact("),
+        "got:\n{}",
+        c.sql
+    );
     assert!(
         !c.sql.contains("salience"),
         "the query text must be a positional bind, never interpolated into the SQL"
@@ -474,5 +520,113 @@ fn declared_limit_and_offset_reach_the_fragment_as_binds() {
         cb.sql.contains("NULL, 0)"),
         "an undeclared limit is NULL (unbounded) and offset is 0; got:\n{}",
         cb.sql
+    );
+}
+
+// ─── Task 8: one emitter, so there is no wrong set to pass ───────────────────────────────────────
+
+/// The argument list of every ungated-core CALL in a compiled statement, `(` first.
+///
+/// The name also appears in each act's `-- act: … -> …` comment, and a naive scan counts those too —
+/// then finds the `(` belonging to the call on the NEXT line and reports a duplicate that passes
+/// every assertion. So a call is required to have its `(` adjacent to the name: no whitespace
+/// between them.
+fn ungated_core_calls(sql: &str) -> Vec<String> {
+    sql.match_indices("__temper_ungated_")
+        .filter_map(|(i, _)| {
+            let rest = &sql[i..];
+            let open = rest.find('(')?;
+            rest[..open]
+                .chars()
+                .all(|c| !c.is_whitespace())
+                .then(|| rest[open..].to_string())
+        })
+        .collect()
+}
+
+/// **Every ungated-core call takes its ids from the hoisted relation and from nothing else.**
+///
+/// This is the failure the CI tripwire cannot see. That script pins *where* a core is called; the
+/// realistic bug is not a rogue call site but an approved one passing `stage_2` where it should pass
+/// the visible set — CI green, RBAC bypassed, and every row still looking plausible. Closed
+/// structurally instead: one emitter, with the id source not a parameter of it.
+///
+/// Asserted over a composition where a find stage IS narrowed by an upstream stage, because that is
+/// the shape in which the two arrays are both in scope and confusable. The upstream ids must appear
+/// as the BOUND and never as the visible set.
+#[test]
+fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_else() {
+    let v = build_with_intention(
+        vec![
+            find_stage("hits", ActName::FindExact, None),
+            find_stage(
+                "narrowed",
+                ActName::FindAboutWithin,
+                Some(StageInput::Upstream {
+                    stage: StageName::parse("hits").unwrap(),
+                }),
+            ),
+        ],
+        vec!["narrowed"],
+    );
+    let emb = an_embedding();
+    let c = compile(&v, test_profile(), Some(&emb)).expect("compiles");
+
+    let calls = ungated_core_calls(&c.sql);
+    assert_eq!(
+        calls.len(),
+        2,
+        "both find stages must reach an ungated core; got {calls:?} in:\n{}",
+        c.sql
+    );
+
+    // The literal is written out rather than imported so that changing the emitter's id source has
+    // to change this test too — an assertion that reads the same constant the code emits would
+    // agree with any value, including the wrong one.
+    let expected = "((SELECT ids FROM __temper_vis),";
+    for call in &calls {
+        assert!(
+            call.starts_with(expected),
+            "an ungated core was handed something other than the hoisted visible set as its first \
+             argument. Expected to start `{expected}`, got `{}`",
+            &call[..call.len().min(90)]
+        );
+    }
+
+    // The upstream ids are in scope in the same statement, which is exactly why the assertion above
+    // has teeth: they reach the call as the BOUND, in a different slot.
+    assert!(
+        c.sql.contains("ARRAY(SELECT id FROM hits)"),
+        "the upstream stage's ids must still narrow the downstream stage; got:\n{}",
+        c.sql
+    );
+    assert!(
+        !c.sql
+            .contains("__temper_ungated_find_wide(ARRAY(SELECT id FROM hits)"),
+        "the upstream set must never land in the visible-set slot"
+    );
+}
+
+/// The hoisted relation cannot be shadowed by a stage, and that is a property of the NAME.
+///
+/// `__temper_vis` now carries the RBAC verdict for every stage in the statement, so a caller-chosen
+/// stage name colliding with it would be an authorization question decided by a naming accident.
+/// `StageName::parse` requires the first character to be an ASCII lowercase letter, so no stage can
+/// ever be called `__temper_vis` — the collision is impossible by construction rather than rejected
+/// by a check that someone has to remember to write.
+#[test]
+fn no_stage_can_be_named_after_the_hoisted_visibility_relation() {
+    assert!(
+        StageName::parse("__temper_vis").is_none(),
+        "a stage able to take the hoisted relation's name could shadow the verdict every core call \
+         reads"
+    );
+    // And the compiler really does use that unreachable name, so the guarantee above is about the
+    // identifier actually emitted rather than about a name nothing uses.
+    let c = compile(&plan_one_stage(), test_profile(), None).expect("compiles");
+    assert!(
+        c.sql.contains("__temper_vis AS MATERIALIZED"),
+        "got:\n{}",
+        c.sql
     );
 }

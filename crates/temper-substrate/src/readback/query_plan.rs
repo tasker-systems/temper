@@ -6,10 +6,12 @@
 //! only identifiers the builder ever emits are stage names, each already proven a safe SQL
 //! identifier by [`temper_core::types::query::StageName`]'s parse-only constructor (beat A).
 //!
-//! **Beat C, Task 9 — skeleton only.** The per-act CTE bodies are PLACEHOLDERS that reference a
-//! function (`__temper_unbound_act`) which does not exist in the schema, so a compiled statement
-//! from this task cannot silently return wrong rows if executed — Postgres errors loudly. Task 10
-//! replaces the placeholders with real calls to `search_graph_expand` / `wayfind_region_scores`.
+//! The three `find` acts emit real fragments. `follow-from` and `survey` still emit a PLACEHOLDER
+//! referencing a function (`__temper_unbound_act`) that does not exist in the schema, so a compiled
+//! statement containing one cannot silently return wrong rows if executed — Postgres errors loudly.
+//! Their fragments take arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), which is what
+//! binding them waits on.
+//!
 //! There is deliberately no executor here yet; nothing runs a [`CompiledQuery`].
 
 use temper_core::types::ids::ProfileId;
@@ -50,13 +52,38 @@ pub enum QueryBind {
 /// a silently-empty or silently-wrong result.
 const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 
-/// The composable twins this builder emits for the find acts. Named here as constants so the match
-/// in `emit_act_body` cannot drift from what `CALLABLE_FRAGMENTS` maps to.
-const EMIT_FIND_EXACT: &str = "query_find_exact";
-const EMIT_FIND_WIDE: &str = "query_find_wide";
+/// The ungated cores this builder emits for the find acts. Named here as constants so the match in
+/// `emit_act_body` cannot drift from what `CALLABLE_FRAGMENTS` maps to.
+///
+/// These apply NO visibility gate — they are handed the verdict. That is the entire point: the
+/// gated twins each compute `resources_visible_to` internally, and the planner does not dedupe those
+/// across call sites, so an N-stage composition would pay N recursive team closures. Nothing here
+/// may call them without going through [`emit_ungated_core_call`].
+const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
+const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 
-/// The ANN candidate width handed to `query_find_wide`. Carried over from `/api/search`'s own draw
-/// and matched by that function's `hnsw.ef_search` pin (200 >= 100) — a k above the pin would make
+/// The hoisted visibility relation. **Deliberately unreachable as a stage name**: `StageName::parse`
+/// requires an ASCII lowercase first character, so no caller-chosen stage can ever shadow it. This
+/// identifier now carries the RBAC verdict every stage reads, and a collision with it would make
+/// authorization turn on a naming accident — closed by construction rather than by a check.
+const VIS_CTE: &str = "__temper_vis";
+
+/// The visible-id set, as the cores take it. One row, one `uuid[]`, built once for the whole
+/// statement — `ARRAY(SELECT id FROM …)` per stage would compute the gate once but rebuild the array
+/// N times.
+///
+/// `array_agg` over zero rows yields NULL rather than `'{}'`, and that is the correct answer here:
+/// the cores read a NULL `p_visible_ids` as admitting nothing, so a principal who sees nothing gets
+/// nothing. Fail-closed, and the same value either spelling would produce through `unnest`.
+const VISIBLE_IDS: &str = "(SELECT ids FROM __temper_vis)";
+
+/// The principal, always `$1` — `compile` pushes it first, before any per-stage bind. The cores read
+/// it ONLY for cogmap-anchor readability, which is one boolean per call and a property of no row, so
+/// it cannot ride in `VISIBLE_IDS`. It is not a visibility gate.
+const PRINCIPAL_BIND: &str = "$1";
+
+/// The ANN candidate width handed to the wide core. Carried over from `/api/search`'s own draw and
+/// matched by that function's `hnsw.ef_search` pin (200 >= 100) — a k above the pin would make
 /// `LIMIT p_k` unreachable and truncate the draw silently.
 const ANN_DRAW_K: i32 = 100;
 
@@ -81,18 +108,25 @@ pub fn compile(
     let mut cte_names: Vec<(String, String)> = Vec::new();
     let mut ctes: Vec<String> = Vec::new();
 
-    // The visibility relation, materialized once — decision 019fcd13: one query time, one
-    // visibility computation, no per-stage recomputation. `MATERIALIZED` is an optimization fence,
-    // not merely "compute once" — see the task notes on the hoist strategy.
+    // The visibility relation, computed once — decision 019fcd13: one query time, one visibility
+    // computation, no per-stage recomputation. `MATERIALIZED` is an optimization fence, not merely
+    // "compute once".
     //
-    // ⚠️ `[NOT YET CONSUMED — 2026-08-08]` No act body joins this. Every emitted fragment gates
-    // INTERNALLY (`resources_visible_to(p_principal)` inside the twins), so an N-stage composition
-    // still pays N full gates and this CTE is computed for nobody. The intent above is the design;
-    // spec §5's gated-wrapper / ungated-core split (plan Tasks 7-9) is what will make it true.
-    // Left emitted rather than removed because removing it would erase the marker for an unmet
-    // obligation, and because Tasks 7-9 are unblocked — Task 6 measured the array path at ~2.6%,
-    // inside noise, so the split is going ahead rather than being reconsidered.
-    ctes.push("vis AS MATERIALIZED (\n  SELECT id FROM resources_visible_to($1)\n)".to_string());
+    // `[CONSUMED — 2026-08-08]` Every act stage now reads this and nothing else for its verdict, via
+    // `emit_ungated_core_call`. It was emitted-and-unread from PR #663 until the ungated cores
+    // landed (`20260808000040`); the property the whole hoist exists for is that
+    // `resources_visible_to` appears exactly ONCE in the emitted statement no matter how many stages
+    // there are, which is what `the_visibility_relation_is_computed_once_no_matter_how_many_stages`
+    // asserts.
+    //
+    // Aggregated to a single `uuid[]` because a CTE cannot be passed to a function — the value is
+    // how one verdict reaches N stages. `resource_id` is `resources_visible_to`'s only column; the
+    // previous `SELECT id FROM …` here named a column that function does not return, which nothing
+    // caught because nothing read the CTE.
+    ctes.push(format!(
+        "{VIS_CTE} AS MATERIALIZED (\n  SELECT array_agg(resource_id) AS ids FROM \
+         resources_visible_to({PRINCIPAL_BIND})\n)"
+    ));
 
     let intention = v.composition().intention.as_ref();
     for node in v.ordered() {
@@ -143,12 +177,20 @@ fn emit_act_body(
             })?;
             let qi = binds.len() + 1;
             binds.push(QueryBind::Text(q.to_string()));
+            let call = emit_ungated_core_call(&CoreCall {
+                core: EMIT_FIND_EXACT,
+                intent_args: format!("${qi}"),
+                bound: &bound,
+                anchor_table: &anchor_table,
+                anchor_id: &anchor_id,
+                limit: &limit,
+                offset: &offset,
+            });
             Ok(format!(
                 "  -- act: {act} -> {EMIT_FIND_EXACT}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  fts_norm::double precision AS quantity\n    \
-                 FROM {EMIT_FIND_EXACT}($1, ${qi}, {bound}, {anchor_table}, {anchor_id}, \
-                 NULL, {limit}, {offset})"
+                 FROM {call}"
             ))
         }
         Some(EMIT_FIND_WIDE) => {
@@ -166,12 +208,20 @@ fn emit_act_body(
             binds.push(QueryBind::Embedding(emb.to_vec()));
             let ki = binds.len() + 1;
             binds.push(QueryBind::Int(i64::from(ANN_DRAW_K)));
+            let call = emit_ungated_core_call(&CoreCall {
+                core: EMIT_FIND_WIDE,
+                intent_args: format!("${ei}::vector, ${ki}::int"),
+                bound: &bound,
+                anchor_table: &anchor_table,
+                anchor_id: &anchor_id,
+                limit: &limit,
+                offset: &offset,
+            });
             Ok(format!(
                 "  -- act: {act} -> {EMIT_FIND_WIDE}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  vec_norm::double precision AS quantity\n    \
-                 FROM {EMIT_FIND_WIDE}($1, ${ei}::vector, ${ki}::int, {bound}, \
-                 {anchor_table}, {anchor_id}, NULL, {limit}, {offset})"
+                 FROM {call}"
             ))
         }
         // `follow-from` and `survey` reach here: their mechanics are declared reachable, but their
@@ -182,6 +232,46 @@ fn emit_act_body(
              SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({bound})",
         )),
     }
+}
+
+/// Everything an ungated-core call needs that is NOT an authorization input.
+///
+/// Note what is absent: there is no field for the visible-id set and none for the anchor reader.
+/// That absence is the design — see [`emit_ungated_core_call`].
+struct CoreCall<'a> {
+    core: &'a str,
+    /// The arm-specific arguments between the visible set and the narrowing slots: the bound query
+    /// text for the exact arm, the embedding and draw width for the wide one.
+    intent_args: String,
+    bound: &'a str,
+    anchor_table: &'a str,
+    anchor_id: &'a str,
+    limit: &'a str,
+    offset: &'a str,
+}
+
+/// **The one place an ungated core is called, and the only place its authorization inputs are
+/// supplied.**
+///
+/// `VISIBLE_IDS` and `PRINCIPAL_BIND` are fixed inside this function and are not parameters of
+/// [`CoreCall`], so a caller cannot hand a core the wrong set. That is deliberate and structural.
+/// The CI tripwire (`audit-ungated-fragments.sh`) can pin *where* a core is called but never *what
+/// is passed*, and the realistic bug is not a rogue call site — it is an approved one passing an
+/// upstream stage's ids where the visible set belongs. CI green, RBAC bypassed, every returned row
+/// still plausible. There is no wrong set to pass because there is no argument for it.
+///
+/// The two arrays are genuinely confusable: a narrowed stage has both in scope, both are `uuid[]`,
+/// and they sit adjacent in the signature. `p_visible_ids` is an authorization verdict whose NULL
+/// admits nothing; `p_bound_ids` is a scope whose NULL is unbounded.
+///
+/// `NULL` in the `p_doc_type` slot: the typed doc-type filter is not yet routed from
+/// `ActInvocation.resource_filter` into the fragment. Passing NULL is "no doc-type narrowing", which
+/// is what a plan that declares none means.
+fn emit_ungated_core_call(c: &CoreCall) -> String {
+    format!(
+        "{}({VISIBLE_IDS}, {}, {}, {}, {}, {PRINCIPAL_BIND}, NULL, {}, {})",
+        c.core, c.intent_args, c.bound, c.anchor_table, c.anchor_id, c.limit, c.offset
+    )
 }
 
 /// How one stage narrows: an id-array bound, an anchor pair, or neither. Never both — an act is

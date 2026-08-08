@@ -31,10 +31,18 @@ use super::stage::{StageInput, StageName};
 ///
 /// A MAP rather than a set since beat D, and the two names differ for the find acts on purpose:
 /// `served_by` must keep naming what `/api/search` calls, because that is the mechanic the
-/// declaration describes, while `/api/query` emits the composable twin that accepts
-/// `p_bound_ids uuid[]`. After `20260808000030` those are the same body — `search_exact` IS
-/// `query_find_exact` at NULL bounds — but they are not the same signature, and the declaration
-/// describes the door, not the compiler.
+/// declaration describes, while `/api/query` emits the fragment that accepts `p_bound_ids uuid[]`.
+/// They remain ONE BODY — `search_exact` delegates to `query_find_exact`, which delegates to
+/// `__temper_ungated_find_exact` — but they are three signatures, and the declaration describes the
+/// door rather than the compiler.
+///
+/// The emitted names are the UNGATED cores (`20260808000040`), not the gated twins. `/api/query`
+/// hoists the visibility relation into one CTE and hands it to every stage, which is only possible
+/// against a fragment that does not gate internally; the twins remain what `/api/search` reaches.
+/// A caller of this map must therefore already hold an RBAC verdict — in this crate the map only
+/// decides reachability, and the sole emitter of these names is
+/// `temper_substrate::readback::query_plan::emit_ungated_core_call`, which supplies that verdict
+/// itself rather than taking it as an argument.
 ///
 /// Membership is what decides `NotSeparablyReachable`. It is keyed on served-by names and NEVER on
 /// `build_state`: the two `Fused` declarations (`follow-from`, `survey`) are among the reachable
@@ -47,8 +55,8 @@ use super::stage::{StageInput, StageName};
 /// Keeping them here — rather than dropping them, which would make them refuse statically —
 /// preserves the beat-C behaviour their tests pin.
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
-    ("search_exact", "query_find_exact"),
-    ("search_wide", "query_find_wide"),
+    ("search_exact", "__temper_ungated_find_exact"),
+    ("search_wide", "__temper_ungated_find_wide"),
     ("search_graph_expand", "__temper_unbound_act"),
     ("wayfind_region_scores", "__temper_unbound_act"),
 ];
