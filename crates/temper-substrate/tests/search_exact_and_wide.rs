@@ -921,6 +921,68 @@ async fn hit_identities_omits_a_resource_the_principal_cannot_see(pool: sqlx::Pg
     );
 }
 
+/// The gate discriminates WITHIN a batch: a mixed set of ids comes back filtered per row.
+///
+/// `hit_identities` binds `$2` twice — once in its `WHERE` and once on the `resources_visible_to`
+/// join, where the second copy is what lets the planner push the id set into the gate's `UNION`
+/// arms instead of materializing the principal's whole visible set (13× on production, and the
+/// reason the redundant-looking predicate must not be deleted).
+///
+/// **That predicate is logically implied, so it cannot change the answer — this test is what makes
+/// "cannot" a measurement rather than an argument.** The sibling above asks a batch of one that is
+/// wholly invisible, which a gate that had fallen open would fail; this asks a batch where the
+/// principal may see *some* ids, which is the case the pushed predicate actually creates and the
+/// one a per-row mistake would show up in. A gate that returned its input unfiltered, or that
+/// dropped the visible row along with the invisible one, both pass the single-id test and fail
+/// here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_redundant_gate_predicate_does_not_change_who_can_see_what(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+
+    let owner_home = ctx(&pool, owner, "owners-private").await;
+    let theirs_only = ResourceId::from(
+        mk(
+            &pool,
+            owner_home,
+            owner,
+            emitter,
+            "Mews",
+            "Where the hawk is kept between flights.",
+        )
+        .await,
+    );
+
+    // A second principal with a home of their own, so the batch below spans both sides of the
+    // gate rather than being uniformly visible or uniformly not.
+    let stranger = ProfileId::from(common::insert_profile(&pool, "mixed-batch-stranger").await);
+    let stranger_home = ctx(&pool, stranger, "strangers-private").await;
+    let mine = ResourceId::from(
+        mk(
+            &pool,
+            stranger_home,
+            stranger,
+            emitter,
+            "Jesses",
+            "The straps by which a hawk is held.",
+        )
+        .await,
+    );
+
+    let views = temper_substrate::readback::hit_identities(&pool, stranger, &[theirs_only, mine])
+        .await
+        .unwrap();
+
+    let ids: Vec<ResourceId> = views.iter().map(|v| v.id).collect();
+    assert_eq!(
+        ids,
+        vec![mine],
+        "asked for two ids, the stranger is enriched exactly the one they own — the other is \
+         absent, not empty-shaped: {:?}",
+        views.iter().map(|v| &v.title).collect::<Vec<_>>()
+    );
+}
+
 /// LAYER 1 WITNESS — the readability conjunct on each arm, isolated from the Rust pre-check.
 ///
 /// An anchor you cannot READ scopes nothing, even when the resources homed in it are visible to you
