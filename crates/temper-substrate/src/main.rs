@@ -82,43 +82,26 @@ async fn seed_corpus(pool: &sqlx::PgPool, fixture: &str, scale: u32) -> Result<(
     bootseed::seed_system(pool).await?;
     let loaded = access::load_scaled(pool, &doc.world, scale).await?;
 
-    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_resources WHERE is_active")
-        .fetch_one(pool)
-        .await?;
-    let chunks: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_chunks WHERE is_current AND embedding IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await?;
+    let m = access::measure_corpus(pool, &loaded).await?;
     println!(
-        "\n{} resources registered, {total} live, {chunks} embedded chunks",
-        loaded.resources.len()
+        "\n{} resources registered, {} live, {} embedded chunks",
+        loaded.resources.len(),
+        m.live_resources,
+        m.embedded_chunks
     );
 
     println!("\nvisible fraction per principal (the gate's discriminating power):");
-    let mut handles: Vec<&String> = loaded.profiles.keys().collect();
-    handles.sort();
-    for handle in handles {
-        let id = loaded.profiles[handle];
-        let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM resources_visible_to($1)")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
-        let owned: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM kb_resource_homes WHERE owner_profile_id = $1",
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
-        let pct = if total > 0 {
-            100.0 * seen as f64 / total as f64
+    for (handle, seen, owned) in &m.per_principal {
+        let pct = if m.live_resources > 0 {
+            100.0 * *seen as f64 / m.live_resources as f64
         } else {
             0.0
         };
         // `via team/grant` is `seen - owned`: the arms that are EMPTY on the deployment whose
         // numbers this corpus exists to replace.
         println!(
-            "  {handle:<10} {seen:>7} / {total} ({pct:5.1}%)   owned {owned:>6}, via team/grant {:>6}",
+            "  {handle:<10} {seen:>7} / {} ({pct:5.1}%)   owned {owned:>6}, via team/grant {:>6}",
+            m.live_resources,
             seen - owned
         );
     }

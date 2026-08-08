@@ -9,5 +9,5 @@ pub mod model;
 pub mod population;
 pub mod runner;
 
-pub use loader::{load, load_scaled, LoadedAccess};
+pub use loader::{load, load_scaled, measure_corpus, CorpusMeasurement, LoadedAccess};
 pub use runner::run_access_scenario;

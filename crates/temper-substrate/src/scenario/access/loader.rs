@@ -614,3 +614,67 @@ async fn insert_edges(
     }
     Ok(())
 }
+
+/// What a seeded corpus actually looks like, read back from the database.
+///
+/// **In the library rather than the `seed-corpus` binary, and that placement is the point.**
+/// `cargo sqlx prepare --workspace` compiles lib targets only — measured: neither the plain
+/// invocation nor `--all-targets` emits a cache entry for a `query!` in a bin, so the same macro
+/// that verifies here fails an offline build there. The alternative was a per-crate cache for
+/// temper-substrate, which emits its whole dependency closure: 131 files to cover four reads, the
+/// trap `.claude/skills/sqlx-query-cache` records temper-api falling into at 255-against-11. So the
+/// reads live where the ritual reaches, and the binary prints what they return.
+///
+/// They stayed macros rather than becoming declared exceptions because none of
+/// `audit-sqlx-macro-exceptions.sh`'s four reasons fits a static `count(*)` — and that script's own
+/// rule is that no fitting reason IS the answer: it converts.
+#[derive(Debug, Clone)]
+pub struct CorpusMeasurement {
+    pub live_resources: i64,
+    pub embedded_chunks: i64,
+    /// `(handle, visible, owned)`, sorted by handle. `visible - owned` is what arrived through the
+    /// team/grant arms — the arms that are EMPTY on the deployment whose numbers this corpus exists
+    /// to replace, which is why the two are reported separately rather than as one total.
+    pub per_principal: Vec<(String, i64, i64)>,
+}
+
+/// Read back the corpus a load produced: its size, and the gate's discriminating power over it.
+pub async fn measure_corpus(pool: &PgPool, loaded: &LoadedAccess) -> Result<CorpusMeasurement> {
+    // `AS "n!"` because `count(*)` is nullable to the macro (an aggregate over an outer join can be
+    // NULL); it never is here, and the annotation says so rather than forcing an unwrap per site.
+    let live_resources: i64 =
+        sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM kb_resources WHERE is_active"#)
+            .fetch_one(pool)
+            .await?;
+    let embedded_chunks: i64 = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM kb_chunks WHERE is_current AND embedding IS NOT NULL"#
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let mut handles: Vec<&String> = loaded.profiles.keys().collect();
+    handles.sort();
+    let mut per_principal = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let id = loaded.profiles[handle];
+        let seen: i64 = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM resources_visible_to($1)"#,
+            id
+        )
+        .fetch_one(pool)
+        .await?;
+        let owned: i64 = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM kb_resource_homes WHERE owner_profile_id = $1"#,
+            id
+        )
+        .fetch_one(pool)
+        .await?;
+        per_principal.push((handle.clone(), seen, owned));
+    }
+
+    Ok(CorpusMeasurement {
+        live_resources,
+        embedded_chunks,
+        per_principal,
+    })
+}

@@ -134,16 +134,11 @@ fn plan_three_finds() -> ValidatedComposition {
     )
 }
 
-fn plan_three_stages() -> ValidatedComposition {
-    build(
-        vec![
-            ff_root("a", vec![Uuid::now_v7()]),
-            ff_from("b", "a"),
-            ff_from("c", "b"),
-        ],
-        vec!["c"],
-    )
-}
+// `plan_three_stages` (three chained `follow-from` stages) lived here and is deleted rather than
+// `#[allow(dead_code)]`d. Its only consumer was the compute-once test, which now needs
+// `plan_three_finds`: a `follow-from` stage emits the placeholder and consults no visibility
+// relation at all, so a three-stage plan built from those would satisfy the assertion while proving
+// nothing. Rust noticing it went unused is the check working.
 
 #[test]
 fn every_caller_value_is_bound_and_none_is_interpolated() {
