@@ -37,9 +37,18 @@ pub enum InvitationStatus {
 ///
 /// Constraints:
 /// - `role` cannot be `Owner` — ownership is only transferred, never invited
-/// - One pending invite per email per team
-/// - 7-day default expiry, checked at acceptance time
+/// - One *live pending* invite per email per team (declined/expired/revoked history coexists)
+/// - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
+///   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
+///   by a dead invite
 /// - Acceptance is idempotent
+/// - An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the
+///   invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable
+///   timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the
+///   wire contract for every query decoding `InvitationStatus` and force an operator cutover,
+///   whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has
+///   `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every
+///   listing, and can no longer be accepted or declined.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -54,6 +63,9 @@ pub struct TeamInvitation {
     pub status: InvitationStatus,
     pub expires_at: DateTime<Utc>,
     pub created: DateTime<Utc>,
+    /// When the inviting team withdrew this invite, or `None` if it stands. A non-null value
+    /// means revoked regardless of `status` (which stays `pending`).
+    pub revoked_at: Option<DateTime<Utc>>,
 }
 
 /// A pending invitation resolved to the *invitee's* view — the `TeamInvitation`

@@ -553,6 +553,20 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            TeamAction::Uninvite {
+                team,
+                invitation_id,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::revoke_invitation_remote(
+                        client,
+                        &team,
+                        &invitation_id,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
             TeamAction::Show { team } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
                     temper_cli::commands::team::show_remote(client, &team, output_format).await

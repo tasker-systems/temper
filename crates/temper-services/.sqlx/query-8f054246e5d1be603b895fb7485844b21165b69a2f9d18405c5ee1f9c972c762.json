@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, team_id, invited_email, invited_by_profile_id,\n               role AS \"role: TeamRole\", token,\n               status AS \"status: InvitationStatus\", expires_at, created\n          FROM kb_team_invitations\n         WHERE token = $1\n        ",
+  "query": "\n        SELECT id, team_id, invited_email, invited_by_profile_id,\n               role AS \"role: TeamRole\", token,\n               status AS \"status: InvitationStatus\", expires_at, created, revoked_at\n          FROM kb_team_invitations\n         WHERE token = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -71,6 +71,11 @@
         "ordinal": 8,
         "name": "created",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -87,8 +92,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "e45510a626b65423bf9c0b2e6240ba1d07f24adcb64d247ca841b175d11582e5"
+  "hash": "8f054246e5d1be603b895fb7485844b21165b69a2f9d18405c5ee1f9c972c762"
 }

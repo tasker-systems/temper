@@ -47,8 +47,34 @@ pub(crate) async fn load_conn(
     .fetch_optional(&mut *conn)
     .await?;
 
-    // A row whose value this binary does not recognize is NOT `None` — that would silently
-    // downgrade "unknown state" to "no standing" and lose the distinction the refusal needs.
+    interpret_standing(raw, profile_id)
+}
+
+/// Connection-taking twin of [`load_conn`] that takes a **row lock** (`FOR UPDATE`) on the
+/// standing row. [`apply`] uses this so that two concurrent transitions on the same subject
+/// serialize behind the lock instead of both reading the same `current`, both judging a legal
+/// transition against it, and the second clobbering the first — the check-then-act gap the whole
+/// admission design exists to remove. When there is no row yet the lock takes nothing; the only
+/// act legal from absence is `Provision`, whose committer upserts with `ON CONFLICT`, so a racing
+/// pair still converges rather than corrupting.
+async fn load_locked(
+    conn: &mut sqlx::PgConnection,
+    profile_id: ProfileId,
+) -> ApiResult<Option<Standing>> {
+    let raw: Option<String> = sqlx::query_scalar!(
+        "SELECT state FROM kb_principal_standing WHERE profile_id = $1 FOR UPDATE",
+        *profile_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    interpret_standing(raw, profile_id)
+}
+
+/// Turn a raw `state` column into a `Standing`. A value this binary does not recognize is NOT
+/// `None` — that would silently downgrade "unknown state" to "no standing" and lose the
+/// distinction the refusal needs.
+fn interpret_standing(raw: Option<String>, profile_id: ProfileId) -> ApiResult<Option<Standing>> {
     match raw {
         None => Ok(None),
         Some(r) => Standing::parse(&r).map(Some).ok_or_else(|| {
@@ -79,17 +105,35 @@ pub async fn admit(pool: &PgPool, profile_id: ProfileId) -> Result<AdmittedPrinc
 
 /// Decide, then commit. **The order is not negotiable** — auth before writes, and it is also what
 /// keeps the SQL committer free of a second transition table.
+///
+/// The read, the decision, the commit, and the governance demotion all run in **one transaction**,
+/// and the read takes a `FOR UPDATE` row lock. This closes two check-then-act gaps that the
+/// per-connection version carried:
+///   1. Two concurrent transitions on one subject could each read the same `current`, each judge a
+///      legal transition, and the second silently clobber the first. The row lock serializes them,
+///      so the loser re-reads the winner's committed state and its transition is re-judged against
+///      reality.
+///   2. The "admin implies approved" invariant (§9) was a *second* statement after the standing
+///      write on the pool; if the standing `Revoke` committed but the governance demotion then
+///      failed, a principal could be left `revoked` yet still an admin (`is_system_admin` reads
+///      governance alone). Sharing one transaction makes the pair atomic — both land or neither.
 pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Standing> {
-    let current = load(pool, params.subject).await?;
+    let mut tx = pool.begin().await?;
+
+    // Lock the subject's standing row for the life of the transaction, then read it. A concurrent
+    // `apply` on the same subject blocks here until we commit.
+    let current = load_locked(&mut tx, params.subject).await?;
+    // (`&mut tx` deref-coerces to `&mut PgConnection` — the loader takes a bare connection so
+    // both the pooled and transactional callers share one body.)
 
     // `Reactivate` is THE ONLY data-dependent target in the machine (spec §6), so it is the only
     // act that needs a read before the decision. Treat a second such act as a design smell until
-    // argued for.
+    // argued for. Read it on the same connection so it sees our locked, consistent view.
     let act = match params.act {
         Act::Reactivate { prior: None } => {
             let prior: Option<String> =
                 sqlx::query_scalar!("SELECT principal_prior_standing($1)", *params.subject)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             Act::Reactivate {
                 prior: prior.as_deref().and_then(Standing::parse),
@@ -104,7 +148,8 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
     // caller and the test both need, so the reason rides `BadRequest`/`Conflict`. The one contract
     // we must preserve NOW is the 409 the DB unique index used to give a duplicate join request
     // (D12 makes `requested` standing the duplicate guard, so the index no longer fires) — the
-    // deployed CLI's "you already have a pending request" branch keys on it.
+    // deployed CLI's "you already have a pending request" branch keys on it. A refusal drops `tx`
+    // unmoved, so nothing is written.
     let resulting = transition(current, &act, params.authority).map_err(refusal_to_api_error)?;
 
     let reason = match &act {
@@ -120,7 +165,7 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
         params.actor.map(|a| *a),
         reason,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     // The committer echoes back what it wrote. A disagreement means the SQL grew an opinion.
@@ -132,8 +177,7 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
     // these two terminals — `principal_governance_set(_, false, _)` is a no-op on the common case of
     // a principal that was never an admin. Task 14 routes machine-credential revocation through this
     // same `apply`, so the hook also fires when a machine is credential-revoked from `Approved`: a
-    // harmless no-op there too. Task 17 will fold the two writes into one transaction with the typed
-    // refusal; today `apply` is already non-transactional, so this follows the standing write.
+    // harmless no-op there too. In the SAME transaction as the standing write, so the two are atomic.
     if matches!(resulting, Standing::Revoked | Standing::Deactivated) {
         sqlx::query_scalar!(
             "SELECT principal_governance_set($1, false, $2, $3)",
@@ -141,9 +185,11 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
             params.actor.map(|a| *a),
             Some(format!("demoted by {}", act_name(&act))),
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     }
+
+    tx.commit().await?;
 
     Ok(resulting)
 }

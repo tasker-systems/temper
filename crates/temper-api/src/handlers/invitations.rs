@@ -62,6 +62,38 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    delete,
+    operation_id = "revoke_team_invitation",
+    path = "/api/teams/{id}/invitations/{invitation_id}",
+    tag = "Invitations",
+    params(
+        ("id" = Uuid, Path, description = "Team ID"),
+        ("invitation_id" = Uuid, Path, description = "Invitation ID (from the team invitations list)"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Invitation revoked"),
+        (status = 400, description = "Only a pending invitation can be revoked"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 404, description = "Invitation not found for this team"),
+    )
+)]
+pub async fn revoke(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, invitation_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<StatusCode> {
+    invitation_service::revoke_invitation(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        team_id,
+        invitation_id,
+    )
+    .await
+    .map(|()| StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
     get,
     operation_id = "list_team_invitations",
     path = "/api/teams/{id}/invitations",

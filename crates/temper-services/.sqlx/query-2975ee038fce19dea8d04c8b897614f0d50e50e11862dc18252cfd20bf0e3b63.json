@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status AS \"status: InvitationStatus\" FROM kb_team_invitations WHERE token = $1",
+  "query": "SELECT status AS \"status: InvitationStatus\", revoked_at\n             FROM kb_team_invitations WHERE token = $1",
   "describe": {
     "columns": [
       {
@@ -19,6 +19,11 @@
             }
           }
         }
+      },
+      {
+        "ordinal": 1,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -27,8 +32,9 @@
       ]
     },
     "nullable": [
-      false
+      false,
+      true
     ]
   },
-  "hash": "f55ad4a3e33f0cad3f9e03e5b2c3b73e1d5bb859ccc23a0608b934717b60f006"
+  "hash": "2975ee038fce19dea8d04c8b897614f0d50e50e11862dc18252cfd20bf0e3b63"
 }

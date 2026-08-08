@@ -109,6 +109,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::teams::add_member))
         .routes(routes!(handlers::invitations::create))
         .routes(routes!(handlers::invitations::list))
+        .routes(routes!(handlers::invitations::revoke))
         .routes(routes!(handlers::reassign::reassign_team))
         .routes(routes!(
             handlers::teams::detail,

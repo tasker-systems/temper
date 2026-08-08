@@ -73,6 +73,26 @@ pub async fn decline_invitation(
     Ok(())
 }
 
+/// Revoke (withdraw) a pending invitation by its id (owner/maintainer).
+/// The invitation id is shown by `temper team invitations`.
+pub async fn revoke_invitation_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    invitation_id: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let invitation_id = uuid::Uuid::parse_str(invitation_id.trim())
+        .map_err(|e| TemperError::Api(format!("invalid invitation id '{invitation_id}': {e}")))?;
+    client
+        .teams()
+        .revoke_invitation(team_id, invitation_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    output::success("Invitation revoked.");
+    Ok(())
+}
+
 /// List pending invitations for a team (owner/maintainer).
 pub async fn list_invitations_remote(
     client: &temper_client::TemperClient,

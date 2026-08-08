@@ -1572,6 +1572,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/teams/{id}/invitations/{invitation_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revoke_team_invitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{id}/invite": {
         parameters: {
             query?: never;
@@ -5016,9 +5035,18 @@ export interface components {
          *
          *     Constraints:
          *     - `role` cannot be `Owner` — ownership is only transferred, never invited
-         *     - One pending invite per email per team
-         *     - 7-day default expiry, checked at acceptance time
+         *     - One *live pending* invite per email per team (declined/expired/revoked history coexists)
+         *     - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
+         *       row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
+         *       by a dead invite
          *     - Acceptance is idempotent
+         *     - An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the
+         *       invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable
+         *       timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the
+         *       wire contract for every query decoding `InvitationStatus` and force an operator cutover,
+         *       whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has
+         *       `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every
+         *       listing, and can no longer be accepted or declined.
          */
         TeamInvitation: {
             /** Format: date-time */
@@ -5030,6 +5058,12 @@ export interface components {
             /** Format: uuid */
             invited_by_profile_id: string;
             invited_email: string;
+            /**
+             * Format: date-time
+             * @description When the inviting team withdrew this invite, or `None` if it stands. A non-null value
+             *     means revoked regardless of `status` (which stays `pending`).
+             */
+            revoked_at?: string | null;
             role: components["schemas"]["TeamRole"];
             status: components["schemas"]["InvitationStatus"];
             /** Format: uuid */
@@ -9319,6 +9353,53 @@ export interface operations {
             };
             /** @description Forbidden (caller is not owner/maintainer) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revoke_team_invitation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Team ID */
+                id: string;
+                /** @description Invitation ID (from the team invitations list) */
+                invitation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invitation revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Only a pending invitation can be revoked */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden (caller is not owner/maintainer) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invitation not found for this team */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

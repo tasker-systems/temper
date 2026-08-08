@@ -6573,6 +6573,70 @@
         ]
       }
     },
+    "/api/teams/{id}/invitations/{invitation_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Invitations"
+        ],
+        "operationId": "revoke_team_invitation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "description": "Invitation ID (from the team invitations list)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Invitation revoked"
+          },
+          "400": {
+            "description": "Only a pending invitation can be revoked"
+          },
+          "403": {
+            "description": "Forbidden (caller is not owner/maintainer)"
+          },
+          "404": {
+            "description": "Invitation not found for this team"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/teams/{id}/invite": {
       "parameters": [
         {
@@ -12468,7 +12532,7 @@
       },
       "TeamInvitation": {
         "type": "object",
-        "description": "A pending or resolved invitation to join a team.\n\n**The flow is not link-based, and never has been.** `invited_email` is a\n*correlator*, matched at sign-in — nothing mails a token-bearing URL, and no\nUI route redeems one. The invitee authenticates, reads their own pending\ninvitations from `GET /api/invitations/mine` (which returns `token`, since it\nis legitimately theirs), and redeems it through `POST /api/invitations/accept`\nwith the token in the **request body**. CLI: `temper team invite`,\n`temper team join`, `temper team request-join`.\n\nThis comment previously described the link-based flow as the primary one. It\nwas aspirational, it was load-bearing in the wrong direction — it is what made\na reviewer believe retiring the old token-in-path route had to account for\ninvitation URLs sitting in inboxes — and there are none.\n\nConstraints:\n- `role` cannot be `Owner` — ownership is only transferred, never invited\n- One pending invite per email per team\n- 7-day default expiry, checked at acceptance time\n- Acceptance is idempotent",
+        "description": "A pending or resolved invitation to join a team.\n\n**The flow is not link-based, and never has been.** `invited_email` is a\n*correlator*, matched at sign-in — nothing mails a token-bearing URL, and no\nUI route redeems one. The invitee authenticates, reads their own pending\ninvitations from `GET /api/invitations/mine` (which returns `token`, since it\nis legitimately theirs), and redeems it through `POST /api/invitations/accept`\nwith the token in the **request body**. CLI: `temper team invite`,\n`temper team join`, `temper team request-join`.\n\nThis comment previously described the link-based flow as the primary one. It\nwas aspirational, it was load-bearing in the wrong direction — it is what made\na reviewer believe retiring the old token-in-path route had to account for\ninvitation URLs sitting in inboxes — and there are none.\n\nConstraints:\n- `role` cannot be `Owner` — ownership is only transferred, never invited\n- One *live pending* invite per email per team (declined/expired/revoked history coexists)\n- 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending\n  row is swept to `expired` when the same email is re-invited, so re-invite is never blocked\n  by a dead invite\n- Acceptance is idempotent\n- An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the\n  invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable\n  timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the\n  wire contract for every query decoding `InvitationStatus` and force an operator cutover,\n  whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has\n  `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every\n  listing, and can no longer be accepted or declined.",
         "required": [
           "id",
           "team_id",
@@ -12499,6 +12563,14 @@
           },
           "invited_email": {
             "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the inviting team withdrew this invite, or `None` if it stands. A non-null value\nmeans revoked regardless of `status` (which stays `pending`)."
           },
           "role": {
             "$ref": "#/components/schemas/TeamRole"
