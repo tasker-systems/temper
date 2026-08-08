@@ -83,6 +83,66 @@ pub enum FilterField {
     Edge,
 }
 
+/// What a [`PropertyPredicate`] addresses.
+///
+/// OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a
+/// closed set here would be a claim the schema does not make. This is the OPPOSITE call from
+/// [`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its
+/// closedness is a *fact about the database*; `owner_table` mirrors nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PropertySubject {
+    Resource,
+    /// Empty in this deployment's data and NOT empty in others — the polymorphic owner is design
+    /// intent, not accident. Spec §12.
+    Edge,
+    /// An unrecognized subject — e.g. `content_block`, which is addressable but deliberately not a
+    /// queryable subject (spec §12). Validation renders it as `UnknownFilterValue`.
+    #[serde(untagged)]
+    Other(String),
+}
+
+/// A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
+/// operator takes a fragment of a query language; both bind their values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case", tag = "op")]
+pub enum PropertyOp {
+    /// The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb
+    /// operator, because `jsonb_path_ops` does not index key-existence and the btree already
+    /// answers it.
+    HasKey,
+    /// `property_value @> $v` for any listed value. OR within the predicate, matching the
+    /// established within-field OR of `doc_type` and `EdgeFilter.labels`.
+    ///
+    /// The caller supplies the JSON shape they mean. Containment does not coerce:
+    /// `'["x"]'::jsonb @> '"x"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.
+    Contains { values: Vec<serde_json::Value> },
+}
+
+/// A property predicate: what it addresses, which key, and how.
+///
+/// The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
+/// a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
+/// subject" has two answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct PropertyPredicate {
+    pub subject: PropertySubject,
+    pub key: String,
+    pub op: PropertyOp,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +225,61 @@ mod tests {
             serde_json::to_string(&FilterField::Edge).unwrap(),
             "\"edge\""
         );
+    }
+
+    #[test]
+    fn a_property_subject_is_open_because_owner_table_is_a_varchar() {
+        // The opposite call from EdgeKind, and principled rather than inconsistent: EdgeKind mirrors
+        // a DDL enum so closedness is a FACT; owner_table mirrors nothing, so closedness would be a
+        // claim the schema does not make.
+        assert_eq!(
+            serde_json::to_string(&PropertySubject::Edge).unwrap(),
+            "\"edge\""
+        );
+        let unknown: PropertySubject =
+            serde_json::from_str("\"block\"").expect("open, so it parses");
+        assert_eq!(unknown, PropertySubject::Other("block".to_string()));
+    }
+
+    #[test]
+    fn has_key_and_contains_are_the_whole_v1_vocabulary() {
+        // No operator takes a fragment of a query language. Both bind.
+        let hk = PropertyPredicate {
+            subject: PropertySubject::Resource,
+            key: "keywords".to_string(),
+            op: PropertyOp::HasKey,
+        };
+        let ct = PropertyPredicate {
+            subject: PropertySubject::Edge,
+            key: "confidence".to_string(),
+            op: PropertyOp::Contains {
+                values: vec![serde_json::json!("high")],
+            },
+        };
+        for p in [hk, ct] {
+            assert_eq!(
+                serde_json::from_str::<PropertyPredicate>(&serde_json::to_string(&p).unwrap())
+                    .unwrap(),
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn contains_carries_a_list_so_one_predicate_spans_a_type_unstable_key() {
+        // Measured: `derived_from` is an array on 112 resources and a string on 21. Containment does
+        // not coerce, so a single-shape predicate silently answers for one population and not the
+        // other. The list is what lets a caller ask for both.
+        let p = PropertyPredicate {
+            subject: PropertySubject::Resource,
+            key: "derived_from".to_string(),
+            op: PropertyOp::Contains {
+                values: vec![serde_json::json!("abc"), serde_json::json!(["abc"])],
+            },
+        };
+        let PropertyOp::Contains { values } = &p.op else {
+            panic!("wrong op")
+        };
+        assert_eq!(values.len(), 2);
     }
 }

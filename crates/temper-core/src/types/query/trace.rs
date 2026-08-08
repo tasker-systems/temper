@@ -17,15 +17,16 @@ use super::scalars::MetaDetail;
 pub enum BoundsSource {
     /// Verbatim from an earlier stage's `produced` set.
     Upstream { stage: u32 },
-    /// Produced by a **compiled predicate** rather than verbatim from an upstream act's output —
-    /// the caller sub-selected, so the bounds no longer equal any act's produced set.
+    /// **Reserved and currently unreachable.** No compiled plan emits this — there is no
+    /// expression language (spec §9.1), so no caller-supplied expression ever sub-selects a stage's
+    /// bounds. Beat C adds a test asserting no compiled plan ever produces it.
     ///
-    /// A composition compiles to ONE SQL statement, so this is a pushed-down predicate inside
-    /// that statement, NOT a jaq expression evaluated on returned rows between two round-trips.
-    /// v0 first documented it the latter way, which encoded a chained request-response model that
-    /// decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1` replaced. An expression the builder cannot
-    /// push down is refused (`RefusalReason::ExpressionNotPushdownable`), never quietly
-    /// materialized into a second query.
+    /// It is KEPT rather than removed because [`BoundsSource`] is a *closed* tagged enum: deleting
+    /// a variant now would make re-adding it a breaking change, whereas an unreachable-but-declared
+    /// variant costs nothing. The paired removal on the refusal side went the other way — a jaq
+    /// `ExpressionNotPushdownable` reason was *removed*, because `RefusalReason` is OPEN, so keeping
+    /// an unraisable reason there would be a claim with no referent. The two are treated differently
+    /// on the real distinction between an open and a closed vocabulary (spec §9.1).
     Expression,
     /// Supplied directly by the caller.
     Caller,

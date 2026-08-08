@@ -11,7 +11,9 @@ pub mod filter;
 pub mod id_set;
 pub mod registry;
 pub mod scalars;
+pub mod stage;
 pub mod trace;
+pub mod validate;
 
 // `EdgeKind` is deliberately NOT re-exported here. It is not query's type — `crate::types` already
 // re-exports it from `graph` — and a second public path to one type invites exactly the ambiguity
@@ -20,11 +22,18 @@ pub use act::{
     ActDeclaration, ActName, ActQuantity, BuildState, Door, DoorReach, QuantityScale,
     VisibilityProfile,
 };
-pub use composition::{Composition, Intention, OutcomeDeclaration};
+pub use composition::{
+    CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
+};
 pub use disposition::{ActRefusal, RefusalDisposition, RefusalReason, StageDisposition};
 pub use envelope::{ActInvocation, ActResult, NarrowedBy};
-pub use filter::{EdgeFilter, FacetPredicate, FilterField, ResourceFilter};
+pub use filter::{
+    EdgeFilter, FacetPredicate, FilterField, PropertyOp, PropertyPredicate, PropertySubject,
+    ResourceFilter,
+};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
+pub use stage::{StageInput, StageName, StageOutput};
 pub use trace::{BoundsSource, CompositionTrace, MetaTruncated, StageTrace};
+pub use validate::{validate, PlanRefusal, ValidatedComposition};

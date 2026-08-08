@@ -1,45 +1,44 @@
 {
   "$defs": {
-    "IdKind": {
-      "anyOf": [
-        {
-          "enum": [
-            "resource",
-            "region",
-            "cogmap",
-            "context"
-          ],
-          "type": "string"
+    "ReturnSpec": {
+      "description": "One stage whose rows come back, and how much of each row.",
+      "properties": {
+        "fields": {
+          "description": "Empty means the kind's default projection. Named fields subselect it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        {
-          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+        "stage": {
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
           "type": "string"
         }
+      },
+      "required": [
+        "stage"
       ],
-      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A composition's pocket outcome register: what it is for, in the act schemas' own terms.",
+  "description": "A composition's pocket outcome register: what it is for, and which stages come back.",
   "properties": {
     "description": {
       "description": "What being served looks like. NOT optional.",
       "type": "string"
     },
-    "produces": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/IdKind"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "The kind the whole composition yields, when it is fixed."
+    "returns": {
+      "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
+      "items": {
+        "$ref": "#/$defs/ReturnSpec"
+      },
+      "type": "array"
     }
   },
   "required": [
-    "description"
+    "description",
+    "returns"
   ],
   "title": "OutcomeDeclaration",
   "type": "object"
