@@ -13,8 +13,16 @@
 -- `declare_migration` below only records the class; it never references the new value.
 ALTER TYPE invitation_status ADD VALUE IF NOT EXISTS 'revoked';
 
+-- Shape-breaking, NOT additive — and the reason is the wire contract, not the schema.
+-- Adding a value to invitation_status changes what every query decoding that column can
+-- return. The running binary decodes by the frozen type {pending,accepted,declined,expired};
+-- a rolling old binary that reads a row written as 'revoked' fails to decode it. That is a
+-- caller this change does not update (DEPLOYING.md § "A function's return type is a wire
+-- contract with the binary"), so it must ride the operator-run cutover, not auto-deploy.
+-- sqlx-schema-crosscheck flags exactly this: the wire cache moved for the invitation_status
+-- queries, so the migration carrying the move must own the shape-breaking classification.
 SELECT declare_migration(
     20260808000010,
-    'additive',
-    'Adds enum value invitation_status.revoked — owner-side withdrawal of a pending team invite, distinct from declined. Additive: a new enum value, no edit to the birth type, no existing caller reads it (only the new revoke path writes it).'
+    'shape-breaking',
+    'Adds enum value invitation_status.revoked — owner-side withdrawal of a pending team invite, distinct from declined. Shape-breaking: the enum is a wire contract, so every query decoding invitation_status now returns a value the pre-deploy binary cannot decode; requires the cutover runbook (deploy the value-aware binary before any row is written revoked), not auto-deploy.'
 );
