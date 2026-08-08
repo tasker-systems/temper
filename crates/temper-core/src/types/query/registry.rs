@@ -112,10 +112,22 @@ pub fn search_family() -> Vec<ActDeclaration> {
             asker_holds: "I can quote the exact words".to_string(),
             served_by: Some("search_exact".to_string()),
             build_state: BuildState::Served,
-            // The exact arm carries no top-k, so nothing can be crowded out of it and where the
-            // bound is applied cannot change WHICH resources come back — only how many rows the
-            // scan touches.
-            accepts_bounds: vec![IdKind::Resource],
+            // Where the bound is applied cannot change WHICH resources come back — only how many
+            // rows the scan touches.
+            //
+            // The reason is NOT the one this comment used to give. It read "the exact arm carries
+            // no top-k, so nothing can be crowded out of it", which was true of `20260805000020`
+            // and became FALSE the moment `20260806000020` put `LIMIT p_limit OFFSET p_offset`
+            // inside the arm. What makes the position immaterial today is that
+            // `query_find_exact` applies the bound BENEATH that ORDER BY/LIMIT
+            // (`20260808000030`) — a property of where the conjunct sits, not an absence of
+            // truncation. A stale rationale is worse than none: it invites the next reader to
+            // conclude that adding a bound above the LIMIT would be safe.
+            //
+            // All three kinds are now true. `Resource` became honest with `p_bound_ids uuid[]`
+            // (before the twins it named the one kind the fragment could NOT take); `Context` and
+            // `Cogmap` were always accepted, through the anchor pair, and were simply omitted.
+            accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
             accepts_filters: vec![FilterField::Resource],
