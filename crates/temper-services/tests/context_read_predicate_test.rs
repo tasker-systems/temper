@@ -744,3 +744,176 @@ async fn the_write_floor_does_not_touch_live_resources(pool: PgPool) -> sqlx::Re
 
     Ok(())
 }
+
+// =================================================================================================
+// The two entry points to the context read-set agree (migration 20260807000010).
+// =================================================================================================
+
+/// `contexts_readable_by(profile)` and `contexts_readable_by_teams(profile, teams)` return the same
+/// set — across every arm, over the nested hierarchy.
+///
+/// Migration `20260807000010` moved the four-arm body into the two-argument form so
+/// `resources_visible_to` — which already holds the expanded team closure — stops paying for a
+/// second full recursive expansion inside the wrapper. The wrapper is now the only thing that
+/// expands it.
+///
+/// **The risk that justifies this test is not the refactor; it is that this is an AUTHORIZATION
+/// predicate with two entry points.** Two bodies can drift and a drift here is a leak or a lockout,
+/// so the invariant to hold is not "the new one works" but "they are the same set". The fixture is
+/// the enclosure hierarchy rather than a flat team, because the arm that changed is the one that
+/// walks it — the community corpus this was found on has three teams at depth one and a
+/// team-anchored grant arm returning zero rows, and would have passed almost anything.
+///
+/// The sibling `security-it-ops` context is present throughout and must be in NEITHER set, and the
+/// contexts up Dana's chain must be in BOTH — an agreement test over two empty sets, or two
+/// identically over-broad ones, would pass while being worthless.
+///
+/// **What this test does NOT hold, established by bite-check rather than assumed.** Neutering an
+/// arm inside the two-argument body leaves the two forms *agreeing* — the wrapper delegates, so
+/// both lose it together — and this test passes. It was `the_pre_existing_read_branches_all_survive`
+/// that caught that probe. So the division is: **that** test holds arm coverage, **this** one holds
+/// that the two entry points cannot drift apart. Neither is sufficient alone, and reading this one
+/// as "the context read-set is correct" would be a mistake. The probe it does catch is a wrapper
+/// that expands the closure differently from its caller — swapping `profile_reachable_teams` for
+/// `profile_effective_teams` in the wrapper fails it on three contexts.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn contexts_readable_by_teams_agrees_with_the_profile_form(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    // Arm 2 — owned by teams up the whole chain, plus the sibling that must stay invisible.
+    let squad = team_context(&pool, o.squad_two, "squad-two-ctx").await?;
+    let group = team_context(&pool, o.payroll_group, "payroll-ctx").await?;
+    let eng = team_context(&pool, o.engineering, "engineering-ctx").await?;
+    let epd = team_context(&pool, o.epd, "epd-ctx").await?;
+    let sibling = team_context(&pool, o.security_it_ops, "security-ctx").await?;
+
+    let both: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT context_id FROM contexts_readable_by($1)
+         INTERSECT
+         SELECT context_id FROM contexts_readable_by_teams(
+             $1, coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}'::uuid[]))",
+    )
+    .bind(o.dana)
+    .fetch_all(&pool)
+    .await?;
+
+    let disagreement: Vec<Uuid> = sqlx::query_scalar(
+        "(SELECT context_id FROM contexts_readable_by($1)
+          EXCEPT
+          SELECT context_id FROM contexts_readable_by_teams(
+              $1, coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}'::uuid[])))
+         UNION ALL
+         (SELECT context_id FROM contexts_readable_by_teams(
+              $1, coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}'::uuid[]))
+          EXCEPT
+          SELECT context_id FROM contexts_readable_by($1))",
+    )
+    .bind(o.dana)
+    .fetch_all(&pool)
+    .await?;
+
+    assert!(
+        disagreement.is_empty(),
+        "the two entry points must return the SAME set; they differ on {disagreement:?}"
+    );
+
+    // Precondition: the agreement above is over a populated set, not two empty ones.
+    for (label, ctx) in [
+        ("her own squad's context", squad),
+        ("her product group's context", group),
+        ("engineering's context", eng),
+        ("EPD's context", epd),
+    ] {
+        assert!(
+            both.contains(&ctx),
+            "precondition: {label} is readable, so the agreement is not vacuous"
+        );
+    }
+    assert!(
+        !both.contains(&sibling),
+        "precondition: the sibling domain's context is in NEITHER set — two identically \
+         over-broad sets would agree just as well as two correct ones"
+    );
+
+    // And the outsider, who belongs to nothing, agrees at zero team-derived rows — the arm where a
+    // NULL/empty team array could have fallen open instead of closed.
+    let outsider_rows: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT context_id FROM contexts_readable_by_teams(
+             $1, coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}'::uuid[]))",
+    )
+    .bind(o.outsider)
+    .fetch_all(&pool)
+    .await?;
+    for ctx in [squad, group, eng, epd, sibling] {
+        assert!(
+            !outsider_rows.contains(&ctx),
+            "an empty team closure must reach NOTHING through the team arms — falls closed, \
+             never open"
+        );
+    }
+
+    Ok(())
+}
+
+/// `resources_visible_to` still admits a resource reachable only through the enclosure chain.
+///
+/// The context arm is the one migration `20260807000010` rewired, and it is the arm that carries
+/// team-derived access. This asserts the outcome that arm exists for: a resource Dana neither owns
+/// nor was granted, homed in a context owned by a team four levels above her, is visible — and the
+/// sibling domain's equivalent is not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resources_visible_to_still_reaches_up_the_enclosure_chain(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    let epd_ctx = team_context(&pool, o.epd, "epd-ctx").await?;
+    let sibling_ctx = team_context(&pool, o.security_it_ops, "security-ctx").await?;
+
+    let reachable = resource_in_context(&pool, epd_ctx, o.outsider, "epd-doc").await?;
+    let sideways = resource_in_context(&pool, sibling_ctx, o.outsider, "security-doc").await?;
+
+    let visible: Vec<Uuid> = sqlx::query_scalar("SELECT resource_id FROM resources_visible_to($1)")
+        .bind(o.dana)
+        .fetch_all(&pool)
+        .await?;
+
+    assert!(
+        visible.contains(&reachable),
+        "a resource homed in an ancestor team's context is visible — this is the arm the migration \
+         rewired, and it is owned by someone else and granted to nobody"
+    );
+    assert!(
+        !visible.contains(&sideways),
+        "and the sibling domain's resource is still not: read inherits UP, never sideways"
+    );
+
+    Ok(())
+}
+
+/// Home a resource in `ctx`, owned by `owner`. Enough of a row for the read predicates; no blocks.
+async fn resource_in_context(
+    pool: &PgPool,
+    ctx: Uuid,
+    owner: Uuid,
+    slug: &str,
+) -> sqlx::Result<Uuid> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (id, title, origin_uri, is_active) \
+         VALUES (uuid_generate_v7(), $1, '', true) RETURNING id",
+    )
+    .bind(slug)
+    .fetch_one(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO kb_resource_homes (id, resource_id, anchor_table, anchor_id, \
+                                        owner_profile_id, originator_profile_id) \
+         VALUES (uuid_generate_v7(), $1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(id)
+    .bind(ctx)
+    .bind(owner)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
