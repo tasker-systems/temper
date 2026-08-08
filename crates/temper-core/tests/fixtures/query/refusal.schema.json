@@ -43,6 +43,11 @@
           "type": "string"
         },
         {
+          "const": "not_separably_reachable",
+          "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D is the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler does not emit.\n`NotImplemented` would be false about them (they are served); this variant is the honest one.\nBeat D deletes the refusal for them by giving the compiler their fragments. Fusion is not the\nreason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts\nthis surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.",
+          "type": "string"
+        },
+        {
           "description": "A reason this consumer does not recognize. Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.",
           "type": "string"
         }

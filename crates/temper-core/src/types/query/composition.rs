@@ -175,6 +175,7 @@ mod tests {
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
+            properties: vec![],
         })
     }
 
@@ -273,6 +274,7 @@ mod tests {
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
+            properties: vec![],
             act: ActName::FollowFrom,
         });
         assert_eq!(seeded.upstream_names().len(), 1);
@@ -284,6 +286,7 @@ mod tests {
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
+            properties: vec![],
             act: ActName::FindExact,
         });
         assert!(rooted.upstream_names().is_empty());

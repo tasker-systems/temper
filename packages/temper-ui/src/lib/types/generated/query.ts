@@ -2,6 +2,7 @@
 import type { CogmapId } from "./CogmapId";
 import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
+import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
  * One act, declared.
@@ -89,7 +90,12 @@ terms: { [key in BoundTerm]?: bigint },
  * Narrowing by what a thing IS. At most one slot applies per act; supplying the other is
  * `RefusalReason::FilterNotApplicable`.
  */
-resource_filter: ResourceFilter | null, edge_filter: EdgeFilter | null, };
+resource_filter: ResourceFilter | null, edge_filter: EdgeFilter | null, 
+/**
+ * Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An
+ * unknown subject or an empty key/value is refused statically (spec §12).
+ */
+properties: Array<PropertyPredicate>, };
 
 /**
  * The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
@@ -396,6 +402,31 @@ description: string,
 returns: Array<ReturnSpec>, };
 
 /**
+ * A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
+ * operator takes a fragment of a query language; both bind their values.
+ */
+export type PropertyOp = { "op": "has_key" } | { "op": "contains", values: Array<JsonValue>, };
+
+/**
+ * A property predicate: what it addresses, which key, and how.
+ *
+ * The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
+ * a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
+ * subject" has two answers.
+ */
+export type PropertyPredicate = { subject: PropertySubject, key: string, op: PropertyOp, };
+
+/**
+ * What a [`PropertyPredicate`] addresses.
+ *
+ * OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a
+ * closed set here would be a claim the schema does not make. This is the OPPOSITE call from
+ * [`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its
+ * closedness is a *fact about the database*; `owner_table` mirrors nothing.
+ */
+export type PropertySubject = "resource" | "edge" | string;
+
+/**
  * The scale of an act's ordering quantity.
  *
  * Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
@@ -425,7 +456,7 @@ export type RefusalDisposition = "halt" | "degrade_and_disclose";
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | string;
+export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | string;
 
 /**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.

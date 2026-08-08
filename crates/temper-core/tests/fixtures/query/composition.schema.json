@@ -42,6 +42,13 @@
           "description": "This node's name, referenced by downstream stages and by `returns`.",
           "type": "string"
         },
+        "properties": {
+          "description": "Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An\nunknown subject or an empty key/value is refused statically (spec §12).",
+          "items": {
+            "$ref": "#/$defs/PropertyPredicate"
+          },
+          "type": "array"
+        },
         "resource_filter": {
           "anyOf": [
             {
@@ -348,6 +355,82 @@
         "returns"
       ],
       "type": "object"
+    },
+    "PropertyOp": {
+      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither\noperator takes a fragment of a query language; both bind their values.",
+      "oneOf": [
+        {
+          "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+          "properties": {
+            "op": {
+              "const": "has_key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\nThe caller supplies the JSON shape they mean. Containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.",
+          "properties": {
+            "op": {
+              "const": "contains",
+              "type": "string"
+            },
+            "values": {
+              "items": true,
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "values"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PropertyPredicate": {
+      "description": "A property predicate: what it addresses, which key, and how.\n\nThe subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:\na `follow-from` stage walks edges and produces resources, so \"the properties of this stage's\nsubject\" has two answers.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/PropertyOp"
+        },
+        "subject": {
+          "$ref": "#/$defs/PropertySubject"
+        }
+      },
+      "required": [
+        "subject",
+        "key",
+        "op"
+      ],
+      "type": "object"
+    },
+    "PropertySubject": {
+      "anyOf": [
+        {
+          "enum": [
+            "resource"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "edge",
+          "description": "Empty in this deployment's data and NOT empty in others — the polymorphic owner is design\nintent, not accident. Spec §12.",
+          "type": "string"
+        },
+        {
+          "description": "An unrecognized subject — e.g. `content_block`, which is addressable but deliberately not a\nqueryable subject (spec §12). Validation renders it as `UnknownFilterValue`.",
+          "type": "string"
+        }
+      ],
+      "description": "What a [`PropertyPredicate`] addresses.\n\nOPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a\nclosed set here would be a claim the schema does not make. This is the OPPOSITE call from\n[`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its\nclosedness is a *fact about the database*; `owner_table` mirrors nothing."
     },
     "RefusalDisposition": {
       "description": "What a composition does when a stage refuses. Declared BEFORE execution; the executor never\nimprovises it.",

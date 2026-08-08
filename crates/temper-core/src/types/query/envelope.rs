@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::act::ActName;
-use super::filter::{EdgeFilter, ResourceFilter};
+use super::filter::{EdgeFilter, PropertyPredicate, ResourceFilter};
 use super::scalars::{BoundTerm, BoundsMode, Extent};
 use super::stage::{StageInput, StageName, StageOutput};
 
@@ -40,6 +40,10 @@ pub struct ActInvocation {
     pub resource_filter: Option<ResourceFilter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_filter: Option<EdgeFilter>,
+    /// Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An
+    /// unknown subject or an empty key/value is refused statically (spec §12).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<PropertyPredicate>,
 }
 
 /// One act-specific threshold, and what applying it did.
@@ -116,6 +120,7 @@ mod tests {
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
+            properties: vec![],
         };
         let json = serde_json::to_string(&inv).unwrap();
         assert!(!json.contains("input"));

@@ -79,6 +79,17 @@ pub enum RefusalReason {
     /// generated schemas, so an inapplicable bound is a property of the plan rather than a
     /// runtime surprise.
     BoundTermNotApplicable,
+    /// The act is declared and built, but its mechanic is not reachable from THIS surface — the
+    /// compiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the
+    /// distinction `BuildState` cannot draw: existence versus reachability-from-this-surface.
+    ///
+    /// The live instance before beat D is the three `find` acts: `BuildState::Served` with their
+    /// own SQL functions (`search_exact` / `search_wide`), which the beat-C compiler does not emit.
+    /// `NotImplemented` would be false about them (they are served); this variant is the honest one.
+    /// Beat D deletes the refusal for them by giving the compiler their fragments. Fusion is not the
+    /// reason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts
+    /// this surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.
+    NotSeparablyReachable,
     /// A reason this consumer does not recognize. Never constructed by this crate — only by
     /// deserializing a producer newer than this consumer.
     #[serde(untagged)]
