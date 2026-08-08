@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status AS \"status: InvitationStatus\"\n             FROM kb_team_invitations WHERE id = $1 AND team_id = $2",
+  "query": "SELECT status AS \"status: InvitationStatus\", revoked_at\n             FROM kb_team_invitations WHERE token = $1",
   "describe": {
     "columns": [
       {
@@ -14,23 +14,27 @@
                 "pending",
                 "accepted",
                 "declined",
-                "expired",
-                "revoked"
+                "expired"
               ]
             }
           }
         }
+      },
+      {
+        "ordinal": 1,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
-      false
+      false,
+      true
     ]
   },
-  "hash": "18ed1cc233a5fd69a8cbb8e46ce250b6af30cb2f3ef2b311a5dff251bc3f604a"
+  "hash": "2975ee038fce19dea8d04c8b897614f0d50e50e11862dc18252cfd20bf0e3b63"
 }

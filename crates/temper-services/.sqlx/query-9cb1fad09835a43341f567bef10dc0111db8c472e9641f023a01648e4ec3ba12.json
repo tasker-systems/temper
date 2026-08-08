@@ -14,8 +14,7 @@
                 "pending",
                 "accepted",
                 "declined",
-                "expired",
-                "revoked"
+                "expired"
               ]
             }
           }

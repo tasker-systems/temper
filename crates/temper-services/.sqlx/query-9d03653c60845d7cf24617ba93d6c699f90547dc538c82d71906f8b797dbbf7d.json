@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, team_id, invited_email, invited_by_profile_id,\n               role AS \"role: TeamRole\", token,\n               status AS \"status: InvitationStatus\", expires_at, created\n          FROM kb_team_invitations\n         WHERE team_id = $1 AND status = 'pending' AND expires_at > now()\n         ORDER BY created DESC\n        ",
+  "query": "\n        SELECT id, team_id, invited_email, invited_by_profile_id,\n               role AS \"role: TeamRole\", token,\n               status AS \"status: InvitationStatus\", expires_at, created, revoked_at\n          FROM kb_team_invitations\n         WHERE team_id = $1 AND status = 'pending' AND expires_at > now()\n           AND revoked_at IS NULL\n         ORDER BY created DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -56,8 +56,7 @@
                 "pending",
                 "accepted",
                 "declined",
-                "expired",
-                "revoked"
+                "expired"
               ]
             }
           }
@@ -71,6 +70,11 @@
       {
         "ordinal": 8,
         "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "revoked_at",
         "type_info": "Timestamptz"
       }
     ],
@@ -88,8 +92,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "e0dd1ab63a6b7611b65ce31983c71449922630b5182e3632529199612237d8eb"
+  "hash": "9d03653c60845d7cf24617ba93d6c699f90547dc538c82d71906f8b797dbbf7d"
 }

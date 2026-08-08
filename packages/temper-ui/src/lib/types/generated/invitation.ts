@@ -20,7 +20,7 @@ export type CreateInvitationRequest = { invited_email: string, role: TeamRole, }
  *
  * Maps directly to the `invitation_status` Postgres enum.
  */
-export type InvitationStatus = "pending" | "accepted" | "declined" | "expired" | "revoked";
+export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
 
 /**
  * Request body for `POST /api/invitations/accept` and
@@ -70,12 +70,22 @@ export type InviteeInvitation = { id: string, team_id: string, team_slug: string
  *
  * Constraints:
  * - `role` cannot be `Owner` — ownership is only transferred, never invited
- * - One *pending* invite per email per team (declined/expired/revoked history coexists)
+ * - One *live pending* invite per email per team (declined/expired/revoked history coexists)
  * - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
  *   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
  *   by a dead invite
  * - Acceptance is idempotent
- * - An owner/maintainer may `revoke` a pending invite (withdraw it) — the counterpart to the
- *   invitee's `decline`, and a distinct terminal state from it
+ * - An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the
+ *   invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable
+ *   timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the
+ *   wire contract for every query decoding `InvitationStatus` and force an operator cutover,
+ *   whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has
+ *   `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every
+ *   listing, and can no longer be accepted or declined.
  */
-export type TeamInvitation = { id: string, team_id: string, invited_email: string, invited_by_profile_id: string, role: TeamRole, token: string, status: InvitationStatus, expires_at: string, created: string, };
+export type TeamInvitation = { id: string, team_id: string, invited_email: string, invited_by_profile_id: string, role: TeamRole, token: string, status: InvitationStatus, expires_at: string, created: string, 
+/**
+ * When the inviting team withdrew this invite, or `None` if it stands. A non-null value
+ * means revoked regardless of `status` (which stays `pending`).
+ */
+revoked_at: string | null, };

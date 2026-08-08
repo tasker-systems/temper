@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A pending or resolved invitation to join a team.  **The flow is not link-based, and never has been.** `invited_email` is a *correlator*, matched at sign-in — nothing mails a token-bearing URL, and no UI route redeems one. The invitee authenticates, reads their own pending invitations from `GET /api/invitations/mine` (which returns `token`, since it is legitimately theirs), and redeems it through `POST /api/invitations/accept` with the token in the **request body**. CLI: `temper team invite`, `temper team join`, `temper team request-join`.  This comment previously described the link-based flow as the primary one. It was aspirational, it was load-bearing in the wrong direction — it is what made a reviewer believe retiring the old token-in-path route had to account for invitation URLs sitting in inboxes — and there are none.  Constraints: - `role` cannot be `Owner` — ownership is only transferred, never invited - One *pending* invite per email per team (declined/expired/revoked history coexists) - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked   by a dead invite - Acceptance is idempotent - An owner/maintainer may `revoke` a pending invite (withdraw it) — the counterpart to the   invitee's `decline`, and a distinct terminal state from it
+  # A pending or resolved invitation to join a team.  **The flow is not link-based, and never has been.** `invited_email` is a *correlator*, matched at sign-in — nothing mails a token-bearing URL, and no UI route redeems one. The invitee authenticates, reads their own pending invitations from `GET /api/invitations/mine` (which returns `token`, since it is legitimately theirs), and redeems it through `POST /api/invitations/accept` with the token in the **request body**. CLI: `temper team invite`, `temper team join`, `temper team request-join`.  This comment previously described the link-based flow as the primary one. It was aspirational, it was load-bearing in the wrong direction — it is what made a reviewer believe retiring the old token-in-path route had to account for invitation URLs sitting in inboxes — and there are none.  Constraints: - `role` cannot be `Owner` — ownership is only transferred, never invited - One *live pending* invite per email per team (declined/expired/revoked history coexists) - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked   by a dead invite - Acceptance is idempotent - An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the   invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable   timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the   wire contract for every query decoding `InvitationStatus` and force an operator cutover,   whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has   `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every   listing, and can no longer be accepted or declined.
   class TeamInvitation < ApiModelBase
     attr_accessor :created
 
@@ -25,6 +25,9 @@ module Temper::Generated
     attr_accessor :invited_by_profile_id
 
     attr_accessor :invited_email
+
+    # When the inviting team withdrew this invite, or `None` if it stands. A non-null value means revoked regardless of `status` (which stays `pending`).
+    attr_accessor :revoked_at
 
     attr_accessor :role
 
@@ -64,6 +67,7 @@ module Temper::Generated
         :'id' => :'id',
         :'invited_by_profile_id' => :'invited_by_profile_id',
         :'invited_email' => :'invited_email',
+        :'revoked_at' => :'revoked_at',
         :'role' => :'role',
         :'status' => :'status',
         :'team_id' => :'team_id',
@@ -89,6 +93,7 @@ module Temper::Generated
         :'id' => :'String',
         :'invited_by_profile_id' => :'String',
         :'invited_email' => :'String',
+        :'revoked_at' => :'Time',
         :'role' => :'TeamRole',
         :'status' => :'InvitationStatus',
         :'team_id' => :'String',
@@ -99,6 +104,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'revoked_at',
       ])
     end
 
@@ -146,6 +152,10 @@ module Temper::Generated
         self.invited_email = attributes[:'invited_email']
       else
         self.invited_email = nil
+      end
+
+      if attributes.key?(:'revoked_at')
+        self.revoked_at = attributes[:'revoked_at']
       end
 
       if attributes.key?(:'role')
@@ -333,6 +343,7 @@ module Temper::Generated
           id == o.id &&
           invited_by_profile_id == o.invited_by_profile_id &&
           invited_email == o.invited_email &&
+          revoked_at == o.revoked_at &&
           role == o.role &&
           status == o.status &&
           team_id == o.team_id &&
@@ -348,7 +359,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [created, expires_at, id, invited_by_profile_id, invited_email, role, status, team_id, token].hash
+      [created, expires_at, id, invited_by_profile_id, invited_email, revoked_at, role, status, team_id, token].hash
     end
 
     # Builds the object from hash
