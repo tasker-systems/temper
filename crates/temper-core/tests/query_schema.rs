@@ -93,6 +93,7 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::MetaDetail>("meta_detail");
     c.check::<q::StageDisposition>("disposition");
     c.check::<q::ActRefusal>("refusal");
+    c.check::<q::PlanRefusal>("plan_refusal");
     // `refusal_disposition` is gone with `Composition.on_stage_refusal` — it described a case that
     // cannot occur. See the block where the field was, in `composition.rs`.
     c.check::<q::ActName>("act_name");
@@ -101,6 +102,7 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::DoorReach>("door_reach");
     c.check::<q::QuantityScale>("quantity_scale");
     c.check::<q::ActQuantity>("act_quantity");
+    c.check::<q::Disclosure>("disclosure");
     c.check::<q::ActDeclaration>("act_declaration");
     c.check::<q::ActInvocation>("act_invocation");
     c.check::<q::ActResult>("act_result");

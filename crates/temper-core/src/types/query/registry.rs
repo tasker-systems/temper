@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use super::act::{
-    ActDeclaration, ActName, ActQuantity, BuildState, Door, DoorReach, QuantityScale,
+    ActDeclaration, ActName, ActQuantity, BuildState, Disclosure, Door, DoorReach, QuantityScale,
     VisibilityProfile,
 };
 use super::filter::FilterField;
@@ -133,6 +133,12 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
+            // Contribution yes, location NO. The exact arm's index is ONE tsvector per RESOURCE,
+            // built by concatenating every chunk into a single blob, so the block boundary is gone
+            // before the query is asked — `located_at` is not a field it declines to fill, it is a
+            // question its index cannot answer. Giving it an always-null `located_at` would say
+            // "no match location" where the truth is "this act can never tell you".
+            discloses: vec![Disclosure::InputContribution],
             // The CLI's `search` command has no `--offset` — the flag list runs query, context,
             // cogmap, wayfind, lens, regions, doc_type, limit, text_only, seed, edge-type, depth,
             // no_graph, seed-only and stops `[verified — crates/temper-cli/src/cli.rs:286-336]`.
@@ -165,6 +171,16 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
+            // Contribution is declared even though this act accepts NO input at all, and that is
+            // deliberate rather than sloppy: with no input the honest answer is 0 of 0, which it
+            // can report. Omitting it would claim "cannot", and "cannot" is reserved for
+            // `follow-from`, where the number is genuinely unrecoverable. The two must not blur —
+            // that blurring is the exact ambiguity this field exists to remove.
+            //
+            // Location yes: the wide arm matches at CHUNK grain and already computes which chunk
+            // was closest, then discards it collapsing to a per-resource score. Recovering it is an
+            // argmin beside an aggregate that already runs.
+            discloses: vec![Disclosure::InputContribution, Disclosure::MatchLocation],
             door_coverage: unified_doors(vec![BoundTerm::Offset]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
@@ -181,6 +197,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
+            // The same wide arm as `find-about-anywhere`, so the same two. This one actually takes
+            // a bound, which is what makes its contribution number say something.
+            discloses: vec![Disclosure::InputContribution, Disclosure::MatchLocation],
             door_coverage: unified_doors(vec![BoundTerm::Offset]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
@@ -200,6 +219,22 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![FilterField::Edge],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
+            // NEITHER — and the first is the one to read twice, because the plausible fallback is
+            // worse than the empty list.
+            //
+            // `search_graph_expand` builds a path array that knows which seed reached which node,
+            // then discards it: `SELECT node, MAX(score) FROM walk WHERE hop > 0 GROUP BY node`
+            // `[verified — migrations/20260711000030:57-60]`. Seed provenance is gone before the
+            // function returns, so the number is unrecoverable rather than merely uncomputed.
+            //
+            // That same `hop > 0` means a seed NEVER appears in its own output. So reusing the
+            // `bound` reading — how many of your ids are in the result — would report 0 of 10 on a
+            // stage that just returned forty good neighbours. Plausible, quiet, and false. Null is
+            // the honest answer until the walk carries its origin.
+            //
+            // Location: it returns nodes reached by walking, not chunks matched by a query. There
+            // is no match position for it to have.
+            discloses: vec![],
             // CORRECTED 2026-08-05 (was PrincipalRelative). `graph_score` is `MAX(score) GROUP BY
             // node` over `walk`, whose `adj` admits an edge only when BOTH endpoints are visible —
             // so a severed intermediate node changes a surviving node's score. Bite-proven: a 25%
@@ -242,6 +277,13 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::from([(BoundTerm::Regions, 20)]),
             produces: Some(IdKind::Region),
+            // NEITHER. Its input is an ANCHOR — one cogmap or context id naming a scope — not a set
+            // whose members can be said to have contributed. "1 of 1 of your ids contributed" is
+            // arithmetic, not disclosure, and would let a reader believe the anchor was filtered
+            // against when it was a scope all along.
+            //
+            // Location: it produces regions, and a region is not somewhere inside a resource.
+            discloses: vec![],
             // `--wayfind` and `--regions` are both CLI flags
             // `[verified — crates/temper-cli/src/cli.rs:298, :305]`, and `survey` does not admit
             // `Offset`, so the CLI's missing `--offset` costs this act nothing.
@@ -304,6 +346,11 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // `claims-carry-standing` clause has nowhere to land yet, since `ActResult.produced`
             // is a required `IdSet` and an annotating act has no result shape in v0.
             produces: None,
+            // Not composable, so it has no stage to disclose anything ABOUT. It annotates one
+            // resource rather than selecting a set — `accepts_bounds: []` at the input end and
+            // `produces: None` at the output end — and is served at its own door. An empty list
+            // here is the same statement its other fields already make.
+            discloses: vec![],
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,
@@ -342,6 +389,8 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::new(),
             produces: None,
+            // The anti-act. It runs nothing, so there is nothing it could disclose.
+            discloses: vec![],
             // The anti-act is absent from every door BY DECLARATION, and that is the point: no door
             // offers cold-start admission AS an act. Its one mechanized home was the `thin_anchors`
             // arm of `wayfind_scope_reach`, retired 2026-08-06 with the wayfind scope funnel, so
@@ -489,6 +538,95 @@ mod tests {
                     terms_unreachable: vec![]
                 })
             );
+        }
+    }
+
+    /// Match location is declared by exactly the acts the WIDE ARM serves — derived from
+    /// `served_by`, not restated as a list.
+    ///
+    /// The capability has a cause: the wide arm matches at chunk grain and already computes which
+    /// chunk was closest, while the exact arm's index is one tsvector per resource, so the block
+    /// boundary is gone before its query is asked. Asserting the derivation rather than the
+    /// membership means a fourth act added against `search_wide` is caught if it forgets the
+    /// declaration, and an act moved off `search_wide` is caught if it keeps one.
+    #[test]
+    fn match_location_is_declared_by_exactly_the_acts_the_wide_arm_serves() {
+        for d in search_family() {
+            let wide = d.served_by.as_deref() == Some("search_wide");
+            assert_eq!(
+                d.discloses.contains(&Disclosure::MatchLocation),
+                wide,
+                "{:?}: match-location disclosure must track the wide arm, which is what computes \
+                 a chunk-grain match at all",
+                d.name
+            );
+        }
+    }
+
+    /// Exactly two selecting acts decline input contribution, and they decline it for DIFFERENT
+    /// reasons — which is why the set is pinned rather than a count.
+    ///
+    /// `follow-from`: its walk discards path origin — `SELECT node, MAX(score) FROM walk WHERE
+    /// hop > 0 GROUP BY node` — so the number is unrecoverable rather than uncomputed. The
+    /// plausible fallback is worse than declaring "cannot": that same `hop > 0` means a seed never
+    /// appears in its own output, so the `bound` reading would print 0 of 10 on a stage that
+    /// returned forty neighbours.
+    ///
+    /// `survey`: its input is an ANCHOR, one id naming a scope, not a set whose members can be
+    /// said to have contributed.
+    ///
+    /// Everything else selecting must declare it — including `find-about-anywhere`, which accepts
+    /// no input at all and can therefore honestly answer 0 of 0. Letting that act omit the
+    /// declaration would blur "trivially none" into "cannot", which is the exact ambiguity this
+    /// field exists to remove.
+    #[test]
+    fn only_the_traversal_and_the_survey_decline_to_report_input_contribution() {
+        let cannot: Vec<ActName> = search_family()
+            .into_iter()
+            .filter(|d| {
+                d.produces.is_some() && !d.discloses.contains(&Disclosure::InputContribution)
+            })
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(
+            cannot,
+            vec![ActName::FollowFrom, ActName::Survey],
+            "only the traversal (origin discarded) and the survey (its input is an anchor, not a \
+             set) may decline this; anything else here is an act quietly dropping a number it can \
+             compute"
+        );
+    }
+
+    /// No act declares filter counts, and that is measured rather than pending.
+    ///
+    /// No deployed fragment computes admitted/excluded per filter, and counting on demand costs a
+    /// second query — the one `Extent` exists to avoid. The variant is kept because the fields it
+    /// names exist; this test is what stops it being quietly declared by an act that does not in
+    /// fact compute them.
+    #[test]
+    fn filter_counts_are_declared_by_nothing_because_no_fragment_computes_them() {
+        assert!(
+            search_family()
+                .iter()
+                .all(|d| !d.discloses.contains(&Disclosure::FilterCounts)),
+            "declaring this would promise a number that costs a second query to produce"
+        );
+    }
+
+    /// An act that produces nothing discloses nothing.
+    ///
+    /// The same invariant `visibility_profile` already holds against `orders_by`: a field about a
+    /// stage's output is a claim with no referent on an act that has no output.
+    #[test]
+    fn an_act_that_selects_nothing_declares_no_disclosure() {
+        for d in search_family() {
+            if d.produces.is_none() {
+                assert!(
+                    d.discloses.is_empty(),
+                    "{:?} produces nothing, so it has no stage whose disclosure could be described",
+                    d.name
+                );
+            }
         }
     }
 

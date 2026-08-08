@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "RefusalReason": {
+      "anyOf": [
+        {
+          "const": "unsupported_bound_kind",
+          "description": "The act does not accept bounds of the supplied `IdKind`.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_seed_kind",
+          "description": "The act does not accept seeds of the supplied `IdKind`.",
+          "type": "string"
+        },
+        {
+          "const": "missing_provenance",
+          "description": "A region set arrived without the `provenance` its kind requires.",
+          "type": "string"
+        },
+        {
+          "const": "not_implemented",
+          "description": "The act is declared but not built (`build_state` is not `served` or `fused`).",
+          "type": "string"
+        },
+        {
+          "const": "missing_intention",
+          "description": "A find stage with no threaded intention — no QUESTION, not no vector. Explicitly NOT a\nsilent substitution.\n\nThe distinction is load-bearing and easy to lose. This fires when the composition supplied\nno query text at all, which `find-exact` cannot work around: its text becomes `p_query` and\nthere is nowhere else to source it. It does **not** fire for a missing embedding — the\nserver computes one, because API callers structurally cannot, and a failed attempt is\n[`RefusalReason::EmbeddingUnavailable`] instead.",
+          "type": "string"
+        },
+        {
+          "const": "section_not_available",
+          "description": "`ReturnSpec.with` named a hydration section this door does not offer.\n\nA refusal rather than a parse error on purpose. The section vocabulary is shared with\n`show` and `list`, so `body` and `edges` are real words that deserialize cleanly — they are\nsimply not what `/api/query` hydrates, and saying so (with a pointer to the door that does)\nis worth more than a deserializer's \"unknown variant\". It also keeps the promise that every\nrefusal comes back at once: serde failures short-circuit before validation runs.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_filter_value",
+          "description": "A filter value outside a closed vocabulary — an unknown `doc_type`, `stage` or `status`.\nRefused rather than returned as an empty page: a typo must never be reportable as an\nabsence, which is what four filters do today.",
+          "type": "string"
+        },
+        {
+          "const": "filter_not_applicable",
+          "description": "A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the\nreverse). Declined, never ignored.",
+          "type": "string"
+        },
+        {
+          "const": "bound_term_not_applicable",
+          "description": "A bound term was supplied to an act for which that frame of reference does not exist —\ne.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never\nreinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the\ngenerated schemas, so an inapplicable bound is a property of the plan rather than a\nruntime surprise.",
+          "type": "string"
+        },
+        {
+          "const": "not_separably_reachable",
+          "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D is the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler does not emit.\n`NotImplemented` would be false about them (they are served); this variant is the honest one.\nBeat D deletes the refusal for them by giving the compiler their fragments. Fusion is not the\nreason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts\nthis surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.",
+          "type": "string"
+        },
+        {
+          "const": "embedding_unavailable",
+          "description": "**The one refusal that is not static.** A `find-about-*` stage needed a query embedding,\nthe server had to compute it because the caller could not, and the attempt failed — an\nerror, a panic, or the query-embed budget expiring.\n\nIt is a refusal rather than an empty because the stage holds a well-formed question it\ncannot answer; returning `empty` would hand back a list that reads like an answer. It is\nalso the reason every OTHER refusal here can be reported as a 400 before anything runs:\nthis is the only one that can appear mid-flight, and it is what gives a runtime refusal a\nreferent at all. `[decided — 2026-08-08, Pete]`",
+          "type": "string"
+        },
+        {
+          "description": "A reason this consumer does not recognize. Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One reason a plan is not executable. Static — no database was consulted.\n\n**On the wire**, in `ErrorBody.error.details.refusals`: a rejected composition answers 400 with\nALL of these at once, never just the first, because repairing a plan one refusal per round trip\nis the experience that design avoids. It carries the generation derives for that reason — it\nwent without them while nothing could return it, and a door is now being built that does.",
+  "properties": {
+    "detail": {
+      "description": "Human-readable, at the depth the asker's standing allows.",
+      "type": "string"
+    },
+    "reason": {
+      "$ref": "#/$defs/RefusalReason"
+    },
+    "stage": {
+      "description": "The stage it attaches to, when it attaches to one.\n\n`None` for a refusal about the composition as a whole — a cycle, a dangling reference, a\nduplicate name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "reason",
+    "detail"
+  ],
+  "title": "PlanRefusal",
+  "type": "object"
+}

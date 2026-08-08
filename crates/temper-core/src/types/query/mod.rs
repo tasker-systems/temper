@@ -19,7 +19,7 @@ pub mod validate;
 // re-exports it from `graph` — and a second public path to one type invites exactly the ambiguity
 // that re-using it instead of restating it was meant to remove.
 pub use act::{
-    ActDeclaration, ActName, ActQuantity, BuildState, Door, DoorReach, QuantityScale,
+    ActDeclaration, ActName, ActQuantity, BuildState, Disclosure, Door, DoorReach, QuantityScale,
     VisibilityProfile,
 };
 pub use composition::{

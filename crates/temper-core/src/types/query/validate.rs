@@ -12,6 +12,7 @@
 //! parse-don't-validate: its fields are private and this is the only constructor, so the compiler
 //! cannot be handed a plan that skipped these checks.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::act::{ActName, BuildState};
@@ -72,11 +73,25 @@ pub fn emitted_fragment_for(served_by: &str) -> Option<&'static str> {
 }
 
 /// One reason a plan is not executable. Static — no database was consulted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// **On the wire**, in `ErrorBody.error.details.refusals`: a rejected composition answers 400 with
+/// ALL of these at once, never just the first, because repairing a plan one refusal per round trip
+/// is the experience that design avoids. It carries the generation derives for that reason — it
+/// went without them while nothing could return it, and a door is now being built that does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct PlanRefusal {
     /// The stage it attaches to, when it attaches to one.
+    ///
+    /// `None` for a refusal about the composition as a whole — a cycle, a dangling reference, a
+    /// duplicate name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<StageName>,
     pub reason: RefusalReason,
+    /// Human-readable, at the depth the asker's standing allows.
     pub detail: String,
 }
 

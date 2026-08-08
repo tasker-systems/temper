@@ -36,6 +36,28 @@ accepts_filters: Array<FilterField>,
  */
 bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null, 
 /**
+ * Which optional per-stage disclosures this act's mechanic **can** produce.
+ *
+ * Three response fields are filled for some acts and null for others, and a null in any of
+ * them is otherwise ambiguous between *this act cannot* and *the answer is none* — which are
+ * opposite answers. This is what disambiguates them, and what `/api/query/validate` reads to
+ * tell a caller in advance rather than leaving them to discover it in a response.
+ *
+ * **Absence from this list is the declaration, not silence** — the same rule
+ * [`ActDeclaration::door_coverage`] follows.
+ *
+ * # It is a statement about the MECHANIC, and nothing fills these yet
+ *
+ * A value here says the serving function is *capable* of the disclosure — `follow-from`
+ * structurally cannot report input contribution because its walk discards path origin before
+ * returning. It does **not** say the response currently carries it: there is no executor, so
+ * today every one of these fields is unfilled for every act. That is a **declared hole**, not
+ * a filed task, and it is named here rather than left for a reader to infer from an empty
+ * response. The capability claim is the durable half and is verifiable against the SQL now;
+ * the filling is the executor's, and whoever writes it owes these fields.
+ */
+discloses: Array<Disclosure>, 
+/**
  * Which surfaces reach this act, and how much of it. **Every [`Door`] carries an entry** —
  * absence from a door is stated as [`DoorReach::Absent`], never by leaving the door out, so
  * "this declaration says nothing about MCP" cannot be mistaken for "MCP serves it".
@@ -261,6 +283,20 @@ stages: Array<StageNode>, };
 export type CompositionTrace = { meta_detail: MetaDetail, stages: Array<StageTrace>, };
 
 /**
+ * One optional piece of per-stage disclosure that some acts can produce and others cannot.
+ *
+ * **One class with three members, not three special cases.** Each names a response field that is
+ * filled for some acts and null for others, and in every case a null means *not declared*, never
+ * zero — which is the whole reason the class exists.
+ *
+ * CLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the
+ * reason they always do here: a consumer branches exhaustively on which disclosures an act offers,
+ * whereas it must tolerate a refusal reason it has never seen. A fourth disclosure is a breaking
+ * change, and should be.
+ */
+export type Disclosure = "input_contribution" | "match_location" | "filter_counts";
+
+/**
  * One of Temper's three surfaces. Named as doors rather than as transports because the question
  * this vocabulary answers is *can a caller standing here ask this*, not *what protocol carries it*.
  */
@@ -395,6 +431,27 @@ export type OutcomeDeclaration = {
  * `produces` field which could only ever be right for a one-arm plan.
  */
 returns: Array<ReturnSpec>, };
+
+/**
+ * One reason a plan is not executable. Static — no database was consulted.
+ *
+ * **On the wire**, in `ErrorBody.error.details.refusals`: a rejected composition answers 400 with
+ * ALL of these at once, never just the first, because repairing a plan one refusal per round trip
+ * is the experience that design avoids. It carries the generation derives for that reason — it
+ * went without them while nothing could return it, and a door is now being built that does.
+ */
+export type PlanRefusal = { 
+/**
+ * The stage it attaches to, when it attaches to one.
+ *
+ * `None` for a refusal about the composition as a whole — a cycle, a dangling reference, a
+ * duplicate name.
+ */
+stage: StageName | null, reason: RefusalReason, 
+/**
+ * Human-readable, at the depth the asker's standing allows.
+ */
+detail: string, };
 
 /**
  * A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither

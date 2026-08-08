@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with three members, not three special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A fourth disclosure is a breaking\nchange, and should be.",
+  "oneOf": [
+    {
+      "const": "input_contribution",
+      "description": "How many of the caller's ids contributed — `StageResult.input_contributed`.\n\nThe reading depends on the relation and both are honest: for a `bound`, how many of your\nids are in the output; for a `seed`, how many led to something in the output.",
+      "type": "string"
+    },
+    {
+      "const": "match_location",
+      "description": "Where in the resource the match was — `VecHit.located_at`.",
+      "type": "string"
+    },
+    {
+      "const": "filter_counts",
+      "description": "How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.\n\nDeclared by NO act today, and that is a measured absence rather than an oversight: no\ndeployed fragment computes these counts, and counting on demand costs a second query. The\nvariant exists because the fields it names exist; a closed vocabulary may carry a member\nwith no current declarer, where an open one may not.",
+      "type": "string"
+    }
+  ],
+  "title": "Disclosure"
+}
