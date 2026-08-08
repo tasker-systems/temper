@@ -7,7 +7,7 @@
 # An ungated fragment applies NO visibility gate. It is handed the RBAC verdict as
 # `p_visible_ids uuid[]` and trusts its caller absolutely. That exists because a CTE cannot be
 # passed to a function, and hoisting the gate is the only way a composition computes
-# `resources_visible_to` once rather than once per stage (migrations/20260808000040, spec §5).
+# `resources_visible_to` once rather than once per stage (migrations/20260808000030, spec §5).
 #
 # The invariant "every mechanic acts only on resources visible to the principal" is therefore no
 # longer a property of these bodies. It is held by structure and by this script — and by nothing
@@ -73,7 +73,7 @@ PREFIX='__temper_ungated_'
 # names changes only when a genuinely new ungated body appears, which is the event worth attention.
 #
 # REVIEWED 2026-08-08 (composable find fragments, plan Task 9) — the two founding members.
-#   __temper_ungated_find_exact / __temper_ungated_find_wide (migrations/20260808000040)
+#   __temper_ungated_find_exact / __temper_ungated_find_wide (migrations/20260808000030)
 #   Each is the deployed arm's body with its `resources_visible_to(p_principal)` join replaced by
 #   `JOIN unnest(p_visible_ids)`. They keep the cogmap-anchor readability check, which the id set
 #   cannot express — "may this principal use this map as a scope" is one boolean per call and a
@@ -127,7 +127,7 @@ sql_files_current() {
 # file. `scripts/measure/gate-shape-comparison.sql` also names the prefix but is not a migration and
 # is not scanned; it is a read-only measurement harness that defines and calls nothing.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
-20260808000040_ungated_find_cores.sql
+20260808000030_composable_find_family.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
@@ -175,7 +175,7 @@ for pair in "SQL functions:$SQL_CURRENT" "SQL files:$SQL_FILES_CURRENT" "Rust si
   value="${pair#*:}"
   if [[ -z "$value" ]]; then
     echo "audit-ungated-fragments: FAIL — the $label scan found NOTHING." >&2
-    echo "  The cores exist (migrations/20260808000040) and the compiler emits them, so zero means" >&2
+    echo "  The cores exist (migrations/20260808000030) and the compiler emits them, so zero means" >&2
     echo "  the scan broke rather than that the hazard is gone. MIGRATIONS_DIR=$MIGRATIONS_DIR" >&2
     echo "  CRATES_DIR=$CRATES_DIR" >&2
     fail=1
@@ -213,7 +213,7 @@ Before accepting this change, confirm for each new/changed site:
   2. EMITTER   — does the call go through the single emitter that fixes the id source, rather than
                  taking a set as an argument? (query_plan.rs::emit_ungated_core_call)
   3. RESIDUE   — nothing here is a database permission. The app connects as the owning role.
-See migrations/20260808000040_ungated_find_cores.sql and spec §6.
+See migrations/20260808000030_composable_find_family.sql and spec §6.
 MSG
 echo "If the change is reviewed and correct: UPDATE_BASELINE=1 .github/scripts/audit-ungated-fragments.sh" >&2
 exit 1

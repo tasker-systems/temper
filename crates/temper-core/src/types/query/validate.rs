@@ -36,7 +36,7 @@ use super::stage::{StageInput, StageName};
 /// `__temper_ungated_find_exact` — but they are three signatures, and the declaration describes the
 /// door rather than the compiler.
 ///
-/// The emitted names are the UNGATED cores (`20260808000040`), not the gated twins. `/api/query`
+/// The emitted names are the UNGATED cores (`20260808000030`), not the gated twins. `/api/query`
 /// hoists the visibility relation into one CTE and hands it to every stage, which is only possible
 /// against a fragment that does not gate internally; the twins remain what `/api/search` reaches.
 /// A caller of this map must therefore already hold an RBAC verdict — in this crate the map only

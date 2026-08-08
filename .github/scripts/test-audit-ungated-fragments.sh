@@ -39,7 +39,7 @@ bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
 baseline_migrations() {
     local d="$1"
     mkdir -p "$d"
-    cat > "${d}/20260808000040_ungated_find_cores.sql" <<'EOF'
+    cat > "${d}/20260808000030_composable_find_family.sql" <<'EOF'
 CREATE FUNCTION __temper_ungated_find_exact(p_visible_ids uuid[], p_query text)
 RETURNS TABLE (resource_id uuid) LANGUAGE sql STABLE AS $$
     SELECT v.resource_id FROM unnest(p_visible_ids) AS v(resource_id);
@@ -127,7 +127,7 @@ expect "SQL caller that defines no core: function scan is UNCHANGED (it cannot s
 __temper_ungated_find_wide"
 
 expect "  ...and the FILE scan catches it" "$CALLER" "SQL files" \
-"20260808000040_ungated_find_cores.sql
+"20260808000030_composable_find_family.sql
 20260901000002_sneaky_caller.sql"
 
 set +e

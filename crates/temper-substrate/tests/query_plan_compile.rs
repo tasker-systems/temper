@@ -181,7 +181,7 @@ fn the_visibility_relation_is_computed_once_no_matter_how_many_stages() {
     //
     // The real property is countable without a database and is asserted here: `resources_visible_to`
     // appears EXACTLY ONCE in the emitted statement, at any stage count. The ungated cores
-    // (`20260808000040`) do not call it, so any second occurrence means a stage went back to gating
+    // (`20260808000030`) do not call it, so any second occurrence means a stage went back to gating
     // for itself.
     let one = compile(&plan_one_find(), test_profile(), None).expect("compiles");
     let three = compile(&plan_three_finds(), test_profile(), None).expect("compiles");

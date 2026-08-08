@@ -11,7 +11,7 @@
 //! bind and run the statement by hand. What they witness is narrower and load-bearing:
 //!
 //! 1. The emitted SQL parses, plans and executes.
-//! 2. **The hoisted relation is the only thing gating it.** Since `20260808000040` every act stage
+//! 2. **The hoisted relation is the only thing gating it.** Since `20260808000030` every act stage
 //!    calls an ungated core, so if `__temper_vis` were wrong — mis-spelled column, wrong principal,
 //!    an `array_agg` that swallowed the filter — a composition would return rows its principal
 //!    cannot see and every text-level assertion would stay green.

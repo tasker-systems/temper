@@ -28,7 +28,7 @@ Verbatim from the spec and `CLAUDE.md`. Every task's requirements implicitly inc
 **Created:**
 - `migrations/20260808000020_search_arm_shared_interiority.sql` — the two views, `shrunk_best_of_n`, and both incumbents refactored onto them.
 - `migrations/20260808000030_composable_find_fragments.sql` — `query_find_exact` / `query_find_wide`; incumbents become delegating wrappers.
-- `migrations/20260808000040_ungated_find_cores.sql` — **conditional on Task 6.** The gated-wrapper / ungated-core split.
+- `migrations/20260808000030_composable_find_family.sql` — **conditional on Task 6.** The gated-wrapper / ungated-core split.
 - `.github/scripts/audit-ungated-fragments.sh` — **conditional on Task 6.** Derived-set tripwire.
 
 **Modified:**
@@ -470,28 +470,28 @@ git commit -m "Evidence: whether the ungated core's array path regresses /api/se
 **GD-3: EXTEND** — authorized by spec §5.
 
 **Files:**
-- Create: `migrations/20260808000040_ungated_find_cores.sql`
+- Create: `migrations/20260808000030_composable_find_family.sql`
 
 **Interfaces:**
 - Produces: `__temper_ungated_find_exact(p_visible_ids uuid[], …)`, `__temper_ungated_find_wide(p_visible_ids uuid[], …)`.
 
-- [ ] **Step 1: Move each twin's body into an ungated core**
+- [x] **Step 1: Move each twin's body into an ungated core**
 
 The core applies **no** visibility gate — it joins `unnest(p_visible_ids)` where the twin joined `resources_visible_to(p_principal)`. Everything else is unchanged.
 
-- [ ] **Step 2: Name for the hazard**
+- [x] **Step 2: Name for the hazard**
 
 `__temper_ungated_`, following the `__temper_unbound_act` convention (`query_plan.rs:48`). Spec §5: `_private` reads as "internal detail" and invites a caller; `__temper_ungated_` cannot be misread.
 
-- [ ] **Step 3: Make the twins gated wrappers**
+- [x] **Step 3: Make the twins gated wrappers**
 
 `query_find_exact(p_principal, …)` computes `ARRAY(SELECT resource_id FROM resources_visible_to(p_principal))` and calls the core. The full chain is then `search_exact` → `query_find_exact` → `__temper_ungated_find_exact`, so `/api/search` also routes through the core — spec §5 states this explicitly and states that the alternative forfeits one-body-per-arm.
 
-- [ ] **Step 4: Comment each core with what it does not do**
+- [x] **Step 4: Comment each core with what it does not do**
 
 A `COMMENT ON FUNCTION` stating plainly that it applies no visibility gate, that its caller must supply an RBAC verdict, and that the CI tripwire is source discipline and not a database permission.
 
-- [ ] **Step 5: Declare, apply, and run the suite**
+- [x] **Step 5: Declare, apply, and run the suite**
 
 ```bash
 cargo clean -p temper-migrate && cargo make docker-up
@@ -499,7 +499,7 @@ cargo nextest run -p temper-substrate --features artifact-tests --test search_ex
 ```
 Expected: PASS with no test edits — the public behaviour of both arms is unchanged.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 
@@ -510,21 +510,21 @@ Expected: PASS with no test edits — the public behaviour of both arms is uncha
 **Files:**
 - Modify: `crates/temper-substrate/src/readback/query_plan.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Assert that every ungated-core call in a compiled statement takes its ids from `vis` and from nothing else — over a composition with several stages, including one whose upstream is another stage.
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 ```bash
 cargo nextest run -p temper-substrate query_plan
 ```
 
-- [ ] **Step 3: Implement the single emitter**
+- [x] **Step 3: Implement the single emitter**
 
 One function emits ungated-core calls, and **the id source is not a parameter of it** — `vis` is fixed inside. Spec §6: this is the failure the tripwire cannot see (right place, wrong argument), closed structurally so there is no wrong set to pass.
 
-- [ ] **Step 4: Run the tests, then commit**
+- [x] **Step 4: Run the tests, then commit**
 
 ---
 
@@ -536,19 +536,19 @@ One function emits ungated-core calls, and **the id source is not a parameter of
 - Create: `.github/scripts/audit-ungated-fragments.sh`
 - Modify: `.github/workflows/code-quality.yml`
 
-- [ ] **Step 1: Read two existing tripwires**
+- [x] **Step 1: Read two existing tripwires**
 
 `.github/scripts/audit-grant-sinks.sh` (closest analogue) and `audit-sqlx-macro-exceptions.sh`. Follow their structure and failure output; do not invent a new format.
 
-- [ ] **Step 2: Derive the set, do not pin a list**
+- [x] **Step 2: Derive the set, do not pin a list**
 
 `rg` the `__temper_ungated_` prefix across `migrations/` and `crates/`, and assert the resulting **set** against a reviewed corpus. Spec §6 cites the repo's own lesson from `assert_every_compiled_in_doc_is_vetoed`: a hand-maintained enumeration rots, a derived set does not.
 
-- [ ] **Step 3: Verify it fails closed**
+- [x] **Step 3: Verify it fails closed**
 
 Add a call site in a scratch file and confirm the script exits non-zero naming it. A tripwire not observed failing is not a tripwire.
 
-- [ ] **Step 4: Wire it into CI and commit**
+- [x] **Step 4: Wire it into CI and commit**
 
 Add it to `code-quality.yml` beside the other audits. **Do not add an `-E` filter to any test job.**
 
@@ -556,7 +556,7 @@ Add it to `code-quality.yml` beside the other audits. **Do not add an `-E` filte
 
 ### Task 10: Regenerate, check, and close out
 
-- [ ] **Step 1: Regenerate the sqlx caches**
+- [x] **Step 1: Regenerate the sqlx caches**
 
 Read the `sqlx-query-cache` skill first — the workspace ritual does **not** cover test-target queries, and this plan added queries in both places.
 
@@ -564,14 +564,14 @@ Read the `sqlx-query-cache` skill first — the workspace ritual does **not** co
 cargo sqlx prepare --workspace -- --all-features
 ```
 
-- [ ] **Step 2: Full check**
+- [x] **Step 2: Full check**
 
 ```bash
 cargo make check
 ```
 Expected: green — fmt, clippy, docs, machete, openapi, ts-rs drift, skills drift.
 
-- [ ] **Step 3: Verify the artifact gates specifically**
+- [x] **Step 3: Verify the artifact gates specifically**
 
 ```bash
 cargo make test-schema

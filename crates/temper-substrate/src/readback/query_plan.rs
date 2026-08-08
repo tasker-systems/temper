@@ -114,7 +114,7 @@ pub fn compile(
     //
     // `[CONSUMED — 2026-08-08]` Every act stage now reads this and nothing else for its verdict, via
     // `emit_ungated_core_call`. It was emitted-and-unread from PR #663 until the ungated cores
-    // landed (`20260808000040`); the property the whole hoist exists for is that
+    // landed (`20260808000030`); the property the whole hoist exists for is that
     // `resources_visible_to` appears exactly ONCE in the emitted statement no matter how many stages
     // there are, which is what `the_visibility_relation_is_computed_once_no_matter_how_many_stages`
     // asserts.

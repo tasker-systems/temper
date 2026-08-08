@@ -2224,7 +2224,7 @@ async fn every_ann_drawing_function_pins_ef_search_at_or_above_its_k(pool: sqlx:
     // **The named member is whichever function currently HOLDS the ANN body, and it moves whenever a
     // migration pushes that body one level deeper.** It has moved twice: `search_wide` ->
     // `query_find_wide` when the twins took the body (20260808000030), and `query_find_wide` ->
-    // `__temper_ungated_find_wide` when the gated-wrapper split took it again (20260808000040). Both
+    // `__temper_ungated_find_wide` when the gated-wrapper split took it again (20260808000030). Both
     // times the count stayed ONE, which is what one-body-per-arm means — a delegating wrapper
     // contains no ANN body to draw with. Updating this name is the required edit; adding a second
     // name because the first "used to be right" would assert that two functions draw, which is the
@@ -2533,5 +2533,62 @@ async fn the_ungated_cores_still_refuse_an_unreadable_cogmap_anchor(pool: sqlx::
     assert!(
         scoped_wide.is_empty(),
         "the wide core must refuse the same anchor; got {scoped_wide:?}"
+    );
+}
+
+/// **A wide call with no embedding must not expand the visibility gate.**
+///
+/// `/api/search` runs both arms unconditionally and in parallel, so `search_wide` is called with a
+/// NULL embedding on every text-only query and on the degraded path where embedding failed
+/// (`substrate_read::search_select`; `readback::search_wide` binds NULL and comments that the arm
+/// then returns nothing). A function's arguments are evaluated before its body, so an unconditional
+/// `ARRAY(SELECT … FROM resources_visible_to(…))` in the gated wrapper would materialize the
+/// principal's whole visible set — recursive team closure included — and hand it to a body that
+/// returns zero rows anyway. Measured at ~1.2 ms before the gated/ungated split and ~4.1 ms after,
+/// ~3.9 ms of it the expansion. Task 6 cleared the array path against a query that RETURNS ROWS and
+/// never measured this one.
+///
+/// **This pins the SHAPE, not the cost, and the distinction is the point.** The wrapper carries a
+/// `SET` clause for its `ef_search` pin, which makes it ineligible for inlining, so `EXPLAIN` of a
+/// call reports one `Function Scan` line and nothing about the plan inside — the same reason
+/// `scripts/measure/capture-search-arm-plans.sh` needs `auto_explain`. A timing assertion here would
+/// be flaky. So this asserts the guard is present in the shipped body, in the same genre as the
+/// `proconfig` assertions above, and the cost measurement lives in the evidence doc.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_wide_call_with_no_embedding_does_not_expand_the_visibility_gate(pool: sqlx::PgPool) {
+    let src: String = sqlx::query_scalar(
+        "SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = 'query_find_wide'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        src.contains("CASE WHEN p_emb IS NULL"),
+        "the gated wide wrapper must skip building the visible-set array when there is no \
+         embedding; without the guard every text-only /api/search pays a full gate expansion for \
+         an arm that returns nothing. Body was:\n{src}"
+    );
+
+    // And the behaviour the guard preserves: still zero rows, reached without the work.
+    //
+    // Bound as a genuine SQL NULL rather than through `find_wide`, whose `&[f32]` cannot express
+    // one — an empty slice renders `[]`, which pgvector rejects outright ("vector must have at
+    // least 1 dimension"). NULL is what `readback::search_wide` actually sends when the caller
+    // supplied no embedding, so this is the real production shape and not a stand-in for it.
+    let none: Option<String> = None;
+    let rows: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT resource_id FROM query_find_wide($1, $2::vector, 10, NULL, NULL, NULL, NULL, \
+         NULL, 0)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(none)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        rows.is_empty(),
+        "a wide call with no embedding returns nothing; got {rows:?}"
     );
 }
