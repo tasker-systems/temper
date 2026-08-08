@@ -1886,3 +1886,370 @@ async fn wide_full(
     .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("vec_norm")))
     .collect()
 }
+
+// ─── The composable twins ───────────────────────────────────────────────────────────────────────
+//
+// `query_find_exact` / `query_find_wide` are the deployed arms with one extra parameter,
+// `p_bound_ids uuid[]` — the same currency `search_graph_expand.p_seed_ids` already speaks, and the
+// thing `/api/query` needs in order to narrow a find stage by what an upstream stage produced. The
+// incumbents delegate to them with `p_bound_ids => NULL`, so there is ONE BODY PER ARM rather than
+// two that can drift.
+
+/// Rows from `query_find_exact`, as (id, fts_norm). `bound` of `None` is unbounded (SQL NULL).
+async fn find_exact(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    q: &str,
+    bound: Option<Vec<Uuid>>,
+) -> Vec<(Uuid, f32)> {
+    use sqlx::Row;
+    sqlx::query(
+        "SELECT resource_id, fts_norm FROM query_find_exact($1, $2, $3, NULL, NULL, NULL, NULL, 0)",
+    )
+    .bind(principal.uuid())
+    .bind(q)
+    .bind(bound)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("fts_norm")))
+    .collect()
+}
+
+/// Rows from `query_find_wide`, as (id, vec_norm).
+async fn find_wide(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    emb: &[f32],
+    k: i32,
+    bound: Option<Vec<Uuid>>,
+) -> Vec<(Uuid, f32)> {
+    use sqlx::Row;
+    // Nine parameters: principal, emb, k, bound_ids, anchor_table, anchor_id, doc_type, limit,
+    // offset. Written out rather than leaning on DEFAULTs — passing eight silently bound `0` to
+    // `p_limit` instead of `p_offset`, giving `LIMIT 0`, and the empty-bound assertion then passed
+    // for entirely the wrong reason.
+    sqlx::query(
+        "SELECT resource_id, vec_norm \
+           FROM query_find_wide($1, $2::vector, $3, $4, NULL, NULL, NULL, NULL, 0)",
+    )
+    .bind(principal.uuid())
+    .bind(vlit(emb))
+    .bind(k)
+    .bind(bound)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("vec_norm")))
+    .collect()
+}
+
+/// A bound set NARROWS: only ids in it come back, and it does not invent rows.
+///
+/// Fails against a twin that accepts `p_bound_ids` and ignores it — which is the whole failure mode,
+/// since such a twin returns a superset that still contains everything the caller asked for and so
+/// passes any assertion phrased only as "the expected rows are present".
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_bound_set_narrows_both_find_arms_to_its_members(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "bounded-arms").await;
+
+    let kestrel = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Kestrel",
+        "The kestrel hovers over the verge.",
+    )
+    .await;
+    let merlin = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Merlin",
+        "The merlin hunts the kestrel's ground.",
+    )
+    .await;
+    let hobby = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Hobby",
+        "The hobby takes kestrel-sized prey.",
+    )
+    .await;
+
+    let unbounded: Vec<Uuid> = find_exact(&pool, owner, "kestrel", None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        unbounded.len(),
+        3,
+        "denominator check: all three resources must match unbounded, or narrowing to one proves \
+         nothing"
+    );
+
+    let bounded: Vec<Uuid> = find_exact(&pool, owner, "kestrel", Some(vec![merlin]))
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        bounded,
+        vec![merlin],
+        "a bound set must narrow to exactly its members; kestrel={kestrel} hobby={hobby}"
+    );
+}
+
+/// **Empty is not absent.** `'{}'` means bounded-to-nothing ⇒ zero rows; only NULL means unbounded.
+///
+/// Two assertions, deliberately not collapsed into one. An upstream stage that produced nothing must
+/// never silently become an unbounded search — "an empty upstream is a disclosed disposition, never
+/// a substitution." A twin that treats `'{}'` as "no bound supplied" (the natural implementation, if
+/// the conjunct is written `cardinality(p_bound_ids) = 0 OR ...`) fails the first assertion while
+/// passing the second, which is why both are here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_empty_bound_set_returns_nothing_while_null_is_unbounded(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "empty-vs-null").await;
+
+    mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Kestrel",
+        "The kestrel hovers over the verge.",
+    )
+    .await;
+    mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Merlin",
+        "The merlin hunts the kestrel's ground.",
+    )
+    .await;
+
+    let empty = find_exact(&pool, owner, "kestrel", Some(vec![])).await;
+    assert!(
+        empty.is_empty(),
+        "p_bound_ids = '{{}}' means bounded to NOTHING and must return zero rows, got {empty:?}"
+    );
+
+    let null = find_exact(&pool, owner, "kestrel", None).await;
+    assert_eq!(
+        null.len(),
+        2,
+        "p_bound_ids => NULL is unbounded and must return the full match set, got {null:?}"
+    );
+
+    // The same distinction on the wide arm, where getting it wrong is worse: an empty upstream
+    // silently becoming unbounded would run a global ANN draw the caller never asked for.
+    let e = unit(0);
+    let empty_wide = find_wide(&pool, owner, &e, 10, Some(vec![])).await;
+    assert!(
+        empty_wide.is_empty(),
+        "an empty bound set must not widen into a global draw, got {empty_wide:?}"
+    );
+}
+
+/// **A bound set is a SCOPE, so it selects the exhaustive branch.**
+///
+/// The load-bearing witness of this migration. `search_wide`'s unscoped branch draws a global top-k
+/// BEFORE the visibility gate and before any filter, so a bound applied to its output would filter
+/// after truncation — the wide-then-filter defect, a correctness rule rather than a tuning choice.
+/// The twin avoids it structurally by taking the branch that has no truncation to defeat.
+///
+/// Fails against a twin that adds `p_bound_ids` as a post-filter on the top-k branch: `far` sits
+/// outside a k=3 draw crowded by the near cluster, so a post-filtering implementation returns
+/// nothing while this one returns `far`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_bounded_wide_call_returns_what_a_top_k_would_have_crowded_out(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "crowded-out").await;
+    let anchor = AnchorRef {
+        table: temper_substrate::payloads::AnchorTable::Contexts,
+        id: home.uuid(),
+    };
+
+    // A dense cluster at the query vector, then one resource far from it.
+    for i in 0..8 {
+        mk_embedded(
+            &pool,
+            anchor,
+            owner,
+            emitter,
+            &format!("Near {i}"),
+            at_cos(0.99),
+        )
+        .await;
+    }
+    let far = mk_embedded(&pool, anchor, owner, emitter, "Far", at_cos(0.10)).await;
+
+    let q = unit(0);
+
+    // First establish that k genuinely binds — without this the test is vacuous, because `far`
+    // could be absent from the unbounded result for reasons other than truncation.
+    let unbounded: Vec<Uuid> = find_wide(&pool, owner, &q, 3, None)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        !unbounded.contains(&far),
+        "k=3 against an 8-strong near cluster must crowd `far` out, or the witness below proves \
+         nothing; got {unbounded:?}"
+    );
+
+    let bounded: Vec<Uuid> = find_wide(&pool, owner, &q, 3, Some(vec![far]))
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        bounded,
+        vec![far],
+        "a bound set must select the EXHAUSTIVE branch, so a resource the top-k crowded out is \
+         still reachable when the caller names it"
+    );
+}
+
+/// The incumbents are unchanged by becoming delegating wrappers.
+///
+/// `search_exact` / `search_wide` must return exactly what a directly-called twin with NULL bounds
+/// returns — that equality is what "one body per arm" MEANS, and it is the thing that silently stops
+/// being true if a later edit touches one body and not the other.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_incumbents_agree_with_their_twins_at_null_bounds(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "delegation").await;
+    let anchor = AnchorRef {
+        table: temper_substrate::payloads::AnchorTable::Contexts,
+        id: home.uuid(),
+    };
+
+    mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Kestrel",
+        "The kestrel hovers over the verge.",
+    )
+    .await;
+    mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Merlin",
+        "The merlin hunts the kestrel's ground.",
+    )
+    .await;
+    mk_embedded(&pool, anchor, owner, emitter, "Near", at_cos(0.95)).await;
+    mk_embedded(&pool, anchor, owner, emitter, "Mid", at_cos(0.50)).await;
+
+    let via_incumbent = exact(&pool, owner, "kestrel", None).await;
+    let via_twin = find_exact(&pool, owner, "kestrel", None).await;
+    assert_eq!(
+        via_incumbent, via_twin,
+        "search_exact must be query_find_exact at NULL bounds — same rows, same scores, same order"
+    );
+    assert!(
+        !via_incumbent.is_empty(),
+        "denominator: the comparison must span real rows"
+    );
+
+    let q = unit(0);
+    let wide_incumbent = wide(&pool, owner, &q, 10, None).await;
+    let wide_twin = find_wide(&pool, owner, &q, 10, None).await;
+    assert_eq!(
+        wide_incumbent, wide_twin,
+        "search_wide must be query_find_wide at NULL bounds — same rows, same scores, same order"
+    );
+    assert!(
+        !wide_incumbent.is_empty(),
+        "denominator: the comparison must span real rows"
+    );
+}
+
+/// Every function that draws ANN candidates pins `hnsw.ef_search` at or above the k it is asked for.
+///
+/// **Rederived over a SET rather than named at one function.** The incumbent test reads
+/// `WHERE proname = 'search_wide'`, which cannot see a new door: `pg_proc.proconfig` binds to a
+/// SIGNATURE, so `query_find_wide` inherits nothing from `search_wide` and would draw at the server
+/// default of 40 — below any k a caller passes — truncating silently with no error. `/api/search`
+/// stays safe because a pin on a wrapper does reach a nested call; `/api/query` calls the twin
+/// DIRECTLY, which is exactly the door the incumbent test does not watch.
+///
+/// The set is DERIVED from the catalog (function bodies containing the pgvector distance operator
+/// under an ORDER BY … LIMIT) rather than listed, so a future ANN-drawing function is covered
+/// without editing this test — a hand-maintained list would rot, which is the repo's own lesson.
+///
+/// Asserted as `pin >= k`, never `pin == 200`: a value assertion pins a number nobody may tune,
+/// while the invariant is that the candidate list is at least as large as what the caller asks for.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn every_ann_drawing_function_pins_ef_search_at_or_above_its_k(pool: sqlx::PgPool) {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT p.proname, p.proconfig
+           FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.prosrc LIKE '%<=>%'
+            AND p.prosrc LIKE '%LIMIT p_k%'
+          ORDER BY p.proname",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    // Vacuity guard with a named member. The derived set is what gives COVERAGE of a function added
+    // later; naming one known member is what stops the test passing because the derivation silently
+    // stopped matching anything. Note the expected count is ONE, not two: after the delegation
+    // `search_wide` no longer contains an ANN body at all — one body per arm is exactly why.
+    let names: Vec<String> = rows.iter().map(|r| r.get::<String, _>("proname")).collect();
+    assert!(
+        names.iter().any(|n| n == "query_find_wide"),
+        "the derivation must find query_find_wide, which demonstrably draws ANN candidates; it \
+         found {names:?} — if that list is empty the predicate stopped matching and every \
+         assertion below is vacuous"
+    );
+
+    let asked_for: i64 = 100;
+    for r in &rows {
+        let name: String = r.get("proname");
+        let cfg: Option<Vec<String>> = r.get("proconfig");
+        let pinned: i64 = cfg
+            .unwrap_or_default()
+            .iter()
+            .find_map(|e| e.strip_prefix("hnsw.ef_search=").map(str::to_owned))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name} draws ANN candidates but pins no hnsw.ef_search on itself; proconfig \
+                     binds to a signature and does not inherit, so it will draw at the server \
+                     default and truncate silently"
+                )
+            })
+            .parse()
+            .expect("ef_search pin is numeric");
+        assert!(
+            pinned >= asked_for,
+            "{name} pins hnsw.ef_search at {pinned}, below the k it is called with ({asked_for}); \
+             the ANN cannot return the k rows requested and admission truncates silently"
+        );
+    }
+}
