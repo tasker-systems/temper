@@ -66,14 +66,29 @@ pub struct NarrowedBy {
     pub excluded: Option<i64>,
 }
 
-/// One act's answer.
+/// One returned stage's answer.
+///
+/// `[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is
+/// the STAGE — it is keyed by the caller's stage name, and its numbers are about the set that
+/// stage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape
+/// also removed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct ActResult {
+pub struct StageResult {
     pub act: ActName,
+    pub disposition: super::disposition::StageDisposition,
+    /// Echoed from this act's declaration. Present iff the act orders anything.
+    ///
+    /// **Once per stage, rather than once per row.** The row keeps a literal field name so two
+    /// acts' numbers cannot be summed by accident; this carries the RANGE so a reader is not left
+    /// to assume `[0,1]`. Assuming `[0,1]` is the live mistake in this family, not a hypothetical
+    /// one: `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]` while `region_score`
+    /// spans `[-0.6, 1.0]`, and neither column name says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orders_by: Option<super::act::ActQuantity>,
     /// What this stage produced, as a tagged union. Declared kind, so contract chaining compares
     /// kinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field.
     pub produced: StageOutput,
@@ -85,12 +100,23 @@ pub struct ActResult {
     /// The APPLIED value of every admitted term, beside what was asked. Generalizes the
     /// `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
     /// for exactly one term and was never extended to `limit` or `depth`.
-    pub terms_effective: BTreeMap<BoundTerm, i64>,
+    ///
+    /// There is no separate "you were clamped" flag, deliberately: ceilings are published per act,
+    /// so the applied value is the whole story. Clamping to a ceiling nobody published would be
+    /// the bug. This covers only terms the act ADMITS — one it does not is refused outright.
+    pub terms_applied: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
-    /// How many ids this stage was handed.
-    pub bounds_in: i64,
-    /// How many of them contributed.
-    pub bounds_honored: i64,
+    /// How many ids this stage was handed. Zero for a stage with no input.
+    pub input_ids: i64,
+    /// How many of the usable ids actually contributed to what came back.
+    ///
+    /// The reading depends on the relation and both are honest: for a `bound`, how many of your
+    /// ids are in the output; for a `seed`, how many led to something in the output.
+    ///
+    /// **NULL MEANS THIS ACT CANNOT REPORT IT — never zero.** Which acts can is DECLARED in
+    /// [`super::act::ActDeclaration::discloses`], so it is knowable before the query runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_contributed: Option<i64>,
     /// How many did not — for ANY reason, deliberately conflated.
     ///
     /// Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
@@ -98,17 +124,18 @@ pub struct ActResult {
     /// id, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,
     /// whose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —
     /// *material exists* — and so disclosed exactly that. The arithmetic was always harmless
-    /// (`bounds_in - bounds_honored` is derivable either way); the leak was in the label.
+    /// (`input_ids - input_contributed` is derivable either way); the leak was in the label.
     ///
     /// The caller still learns that 28 of their 40 did not contribute, which is what
     /// `composition-is-legible` asks for. They do not learn why. Decision
     /// `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.
-    pub bounds_dropped: i64,
+    pub input_unusable: i64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::query::disposition::StageDisposition;
     use crate::types::query::id_set::{IdKind, IdSet};
     use crate::types::query::stage::StageName;
     use std::collections::BTreeMap;
@@ -135,7 +162,9 @@ mod tests {
     fn a_result_still_declares_the_kind_it_produced_through_the_union() {
         // Contract chaining compares KINDS. Wrapping the set in a tagged union must not cost that:
         // the kind is still machine-checkable, now via `StageOutput::kind` rather than a bare field.
-        let r = ActResult {
+        let r = StageResult {
+            disposition: StageDisposition::Answered,
+            orders_by: None,
             act: ActName::Survey,
             produced: StageOutput::Ids {
                 set: IdSet {
@@ -146,15 +175,15 @@ mod tests {
             },
             extent: Extent::Complete,
             total: None,
-            terms_effective: BTreeMap::from([(BoundTerm::Regions, 3)]),
+            terms_applied: BTreeMap::from([(BoundTerm::Regions, 3)]),
             narrowed_by: vec![],
-            bounds_in: 0,
-            bounds_honored: 0,
-            bounds_dropped: 0,
+            input_ids: 0,
+            input_contributed: Some(0),
+            input_unusable: 0,
         };
         assert_eq!(r.produced.kind(), IdKind::Region);
         assert_eq!(
-            serde_json::from_str::<ActResult>(&serde_json::to_string(&r).unwrap()).unwrap(),
+            serde_json::from_str::<StageResult>(&serde_json::to_string(&r).unwrap()).unwrap(),
             r
         );
     }
@@ -163,7 +192,9 @@ mod tests {
     fn a_result_can_report_partial_without_paying_for_a_total() {
         // The whole point of Extent: "there is more" is answerable with a limit+1 probe, where a
         // total would cost a second query on every stage of every chain.
-        let r = ActResult {
+        let r = StageResult {
+            disposition: StageDisposition::Answered,
+            orders_by: None,
             act: ActName::FindExact,
             produced: StageOutput::Ids {
                 set: IdSet {
@@ -174,21 +205,23 @@ mod tests {
             },
             extent: Extent::Partial,
             total: None,
-            terms_effective: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            terms_applied: BTreeMap::from([(BoundTerm::Limit, 50)]),
             narrowed_by: vec![],
-            bounds_in: 0,
-            bounds_honored: 0,
-            bounds_dropped: 0,
+            input_ids: 0,
+            input_contributed: Some(0),
+            input_unusable: 0,
         };
         assert_eq!(r.extent, Extent::Partial);
         assert!(r.total.is_none(), "a partial answer owes no total");
         // The applied ceiling is visible beside what was asked, so the clamp is not silent.
-        assert_eq!(r.terms_effective.get(&BoundTerm::Limit), Some(&50));
+        assert_eq!(r.terms_applied.get(&BoundTerm::Limit), Some(&50));
     }
 
     #[test]
     fn a_traversal_result_reports_indeterminate_rather_than_guessing() {
-        let r = ActResult {
+        let r = StageResult {
+            disposition: StageDisposition::Answered,
+            orders_by: None,
             act: ActName::Survey,
             produced: StageOutput::Ids {
                 set: IdSet {
@@ -202,11 +235,11 @@ mod tests {
                     .to_string(),
             },
             total: None,
-            terms_effective: BTreeMap::from([(BoundTerm::Regions, 3)]),
+            terms_applied: BTreeMap::from([(BoundTerm::Regions, 3)]),
             narrowed_by: vec![],
-            bounds_in: 0,
-            bounds_honored: 0,
-            bounds_dropped: 0,
+            input_ids: 0,
+            input_contributed: Some(0),
+            input_unusable: 0,
         };
         assert!(matches!(r.extent, Extent::Indeterminate { .. }));
     }
@@ -217,7 +250,9 @@ mod tests {
         // form must be IDENTICAL, or a single probe distinguishes them. This is the property the
         // field's name used to break — `bounds_withheld` inherited StageDisposition::Withheld's
         // meaning ("material exists") and so answered the question by labelling it.
-        let invisible_but_real = ActResult {
+        let invisible_but_real = StageResult {
+            disposition: StageDisposition::Answered,
+            orders_by: None,
             act: ActName::FindExact,
             produced: StageOutput::Ids {
                 set: IdSet {
@@ -228,14 +263,14 @@ mod tests {
             },
             extent: Extent::Complete,
             total: None,
-            terms_effective: BTreeMap::new(),
+            terms_applied: BTreeMap::new(),
             narrowed_by: vec![],
-            bounds_in: 1,
-            bounds_honored: 0,
-            bounds_dropped: 1,
+            input_ids: 1,
+            input_contributed: Some(0),
+            input_unusable: 1,
         };
-        let never_existed = ActResult {
-            bounds_dropped: 1,
+        let never_existed = StageResult {
+            input_unusable: 1,
             ..invisible_but_real.clone()
         };
         assert_eq!(

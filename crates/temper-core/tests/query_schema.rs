@@ -105,7 +105,9 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::Disclosure>("disclosure");
     c.check::<q::ActDeclaration>("act_declaration");
     c.check::<q::ActInvocation>("act_invocation");
-    c.check::<q::ActResult>("act_result");
+    c.check::<q::StageResult>("stage_result");
+    c.check::<q::InputSource>("input_source");
+    c.check::<q::MetaTruncated>("meta_truncated");
     c.check::<q::StageTrace>("stage_trace");
     c.check::<q::CompositionTrace>("composition_trace");
     c.check::<q::Intention>("intention");

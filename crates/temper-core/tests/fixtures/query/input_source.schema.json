@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where a stage's input set came from: an earlier stage, or the caller.\n\n`[renamed from BoundsSource — 2026-08-08]` It reports where an input came from, which is\ndirection-neutral, and the surrounding fields no longer say \"bounds\" — an input may be a bound\nor a seed, and half the compositions this surface exists for alternate between them.",
+  "oneOf": [
+    {
+      "description": "Verbatim from an earlier stage's `produced` set.\n\n**Keyed by the caller's own stage NAME, not an ordinal.** `[amended — 2026-08-08]` The\nrequest names stages throughout — `ActInvocation.name`, `StageInput.stage`,\n`ReturnSpec.stage` are all `StageName` — while this side keyed them by position, so a\ncaller who declared `\"hits\"` got disclosure back saying `2`. `composition-is-legible` is a\nclause about what the ASKER can read, and an ordinal is not their vocabulary.",
+      "properties": {
+        "source": {
+          "const": "upstream",
+          "type": "string"
+        },
+        "stage": {
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "stage"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "**Reserved and currently unreachable.** No compiled plan emits this — there is no\nexpression language (spec §9.1), so no caller-supplied expression ever sub-selects a stage's\nbounds. Beat C adds a test asserting no compiled plan ever produces it.\n\nIt is KEPT rather than removed because [`BoundsSource`] is a *closed* tagged enum: deleting\na variant now would make re-adding it a breaking change, whereas an unreachable-but-declared\nvariant costs nothing. The paired removal on the refusal side went the other way — a jaq\n`ExpressionNotPushdownable` reason was *removed*, because `RefusalReason` is OPEN, so keeping\nan unraisable reason there would be a claim with no referent. The two are treated differently\non the real distinction between an open and a closed vocabulary (spec §9.1).",
+      "properties": {
+        "source": {
+          "const": "expression",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Supplied directly by the caller.",
+      "properties": {
+        "source": {
+          "const": "caller",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "InputSource"
+}

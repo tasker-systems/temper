@@ -165,53 +165,6 @@ export type ActRefusal = { reason: RefusalReason,
 detail: string, };
 
 /**
- * One act's answer.
- */
-export type ActResult = { act: ActName, 
-/**
- * What this stage produced, as a tagged union. Declared kind, so contract chaining compares
- * kinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field.
- */
-produced: StageOutput, 
-/**
- * Complete / partial / indeterminate. NOT a total — see `Extent`.
- */
-extent: Extent, 
-/**
- * Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
- */
-total: bigint | null, 
-/**
- * The APPLIED value of every admitted term, beside what was asked. Generalizes the
- * `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
- * for exactly one term and was never extended to `limit` or `depth`.
- */
-terms_effective: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, 
-/**
- * How many ids this stage was handed.
- */
-bounds_in: bigint, 
-/**
- * How many of them contributed.
- */
-bounds_honored: bigint, 
-/**
- * How many did not — for ANY reason, deliberately conflated.
- *
- * Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
- * this field for the invisible case alone, is a **single-probe existence oracle**: pass one
- * id, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,
- * whose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —
- * *material exists* — and so disclosed exactly that. The arithmetic was always harmless
- * (`bounds_in - bounds_honored` is derivable either way); the leak was in the label.
- *
- * The caller still learns that 28 of their 40 did not contribute, which is what
- * `composition-is-legible` asks for. They do not learn why. Decision
- * `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.
- */
-bounds_dropped: bigint, };
-
-/**
  * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
  * `offset` is rows skipped, `regions` is funnel width.
  *
@@ -220,11 +173,6 @@ bounds_dropped: bigint, };
  * execution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.
  */
 export type BoundTerm = "limit" | "offset" | "regions";
-
-/**
- * Where a stage's bounds came from.
- */
-export type BoundsSource = { "source": "upstream", stage: number, } | { "source": "expression" } | { "source": "caller" };
 
 /**
  * Whether a mechanic for this act exists, and whether the act has a door of its own or only its
@@ -378,6 +326,15 @@ export type IdSet = { kind: IdKind,
 provenance: IdProvenance | null, ids: Array<string>, };
 
 /**
+ * Where a stage's input set came from: an earlier stage, or the caller.
+ *
+ * `[renamed from BoundsSource — 2026-08-08]` It reports where an input came from, which is
+ * direction-neutral, and the surrounding fields no longer say "bounds" — an input may be a bound
+ * or a seed, and half the compositions this surface exists for alternate between them.
+ */
+export type InputSource = { "source": "upstream", stage: StageName, } | { "source": "expression" } | { "source": "caller" };
+
+/**
  * The question, computed once at composition start and threaded to every stage.
  *
  * **Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no
@@ -407,7 +364,7 @@ export type MetaDetail = "surviving" | "full" | "none";
 /**
  * A per-resource meta budget that bit.
  */
-export type MetaTruncated = { stage: number, retained: bigint, dropped: bigint, };
+export type MetaTruncated = { stage: StageName, retained: bigint, dropped: bigint, };
 
 /**
  * One act-specific threshold, and what applying it did.
@@ -627,15 +584,113 @@ export type StageOutput = { "produced": "ids", set: IdSet, };
 export type StageRelation = "bound" | "seed";
 
 /**
+ * One returned stage's answer.
+ *
+ * `[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is
+ * the STAGE — it is keyed by the caller's stage name, and its numbers are about the set that
+ * stage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape
+ * also removed.
+ */
+export type StageResult = { act: ActName, disposition: StageDisposition, 
+/**
+ * Echoed from this act's declaration. Present iff the act orders anything.
+ *
+ * **Once per stage, rather than once per row.** The row keeps a literal field name so two
+ * acts' numbers cannot be summed by accident; this carries the RANGE so a reader is not left
+ * to assume `[0,1]`. Assuming `[0,1]` is the live mistake in this family, not a hypothetical
+ * one: `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]` while `region_score`
+ * spans `[-0.6, 1.0]`, and neither column name says so.
+ */
+orders_by: ActQuantity | null, 
+/**
+ * What this stage produced, as a tagged union. Declared kind, so contract chaining compares
+ * kinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field.
+ */
+produced: StageOutput, 
+/**
+ * Complete / partial / indeterminate. NOT a total — see `Extent`.
+ */
+extent: Extent, 
+/**
+ * Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+ */
+total: bigint | null, 
+/**
+ * The APPLIED value of every admitted term, beside what was asked. Generalizes the
+ * `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
+ * for exactly one term and was never extended to `limit` or `depth`.
+ *
+ * There is no separate "you were clamped" flag, deliberately: ceilings are published per act,
+ * so the applied value is the whole story. Clamping to a ceiling nobody published would be
+ * the bug. This covers only terms the act ADMITS — one it does not is refused outright.
+ */
+terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, 
+/**
+ * How many ids this stage was handed. Zero for a stage with no input.
+ */
+input_ids: bigint, 
+/**
+ * How many of the usable ids actually contributed to what came back.
+ *
+ * The reading depends on the relation and both are honest: for a `bound`, how many of your
+ * ids are in the output; for a `seed`, how many led to something in the output.
+ *
+ * **NULL MEANS THIS ACT CANNOT REPORT IT — never zero.** Which acts can is DECLARED in
+ * [`super::act::ActDeclaration::discloses`], so it is knowable before the query runs.
+ */
+input_contributed: bigint | null, 
+/**
+ * How many did not — for ANY reason, deliberately conflated.
+ *
+ * Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
+ * this field for the invisible case alone, is a **single-probe existence oracle**: pass one
+ * id, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,
+ * whose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —
+ * *material exists* — and so disclosed exactly that. The arithmetic was always harmless
+ * (`input_ids - input_contributed` is derivable either way); the leak was in the label.
+ *
+ * The caller still learns that 28 of their 40 did not contribute, which is what
+ * `composition-is-legible` asks for. They do not learn why. Decision
+ * `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.
+ */
+input_unusable: bigint, };
+
+/**
  * One stage's mandatory disclosure. Exists whether or not the stage produced a result.
  */
-export type StageTrace = { stage: number, act: ActName, disposition: StageDisposition, bounds_source: BoundsSource | null, bounds_in: bigint, bounds_honored: bigint, 
+export type StageTrace = { stage: StageName, act: ActName, disposition: StageDisposition, 
 /**
- * Conflates invisible / nonexistent / malformed on purpose — see
- * [`super::envelope::ActResult::bounds_dropped`]. Naming the invisible case alone would make
- * the trace a single-probe existence oracle.
+ * Whether this stage NARROWED or REACHED, echoed back.
+ *
+ * A reader of the trace can then tell without knowing the act vocabulary — *"did stage 3
+ * narrow or expand?"* is the question `composition-is-legible` most obviously owes an answer
+ * to, and a caller reading only the response has no other way to get it. Absent for a stage
+ * with no input.
  */
-bounds_dropped: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
+relation: StageRelation | null, input_source: InputSource | null, 
+/**
+ * How many ids this stage was handed. Zero for a stage with no input.
+ */
+input_ids: bigint, 
+/**
+ * How many of the usable ids actually contributed to what came back.
+ *
+ * **NULL MEANS THIS ACT CANNOT REPORT IT. It never means zero.** Which acts can is DECLARED —
+ * [`super::act::ActDeclaration::discloses`] — so it is knowable before running the query
+ * rather than discovered here.
+ *
+ * `follow-from` is the act that cannot: its walk discards seed provenance before returning,
+ * and the obvious fallback is worse than null, because a seed never appears in its own output
+ * and the `bound` reading would print 0 of 10 on a stage that returned forty neighbours.
+ */
+input_contributed: bigint | null, 
+/**
+ * How many of them this stage could not use at all — invisible, nonexistent, or malformed.
+ *
+ * Conflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].
+ * Naming the invisible case alone would make the trace a single-probe existence oracle.
+ */
+input_unusable: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
 
 /**
  * Where the principal constraint applies to **the fragment that produces this act's ordering** —

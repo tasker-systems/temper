@@ -43,6 +43,28 @@
       ],
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
+    "ActQuantity": {
+      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is\nthe exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to\nthe migration that defined the body, which stays readable in history.",
+      "properties": {
+        "field": {
+          "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it.",
+          "type": "string"
+        },
+        "means": {
+          "description": "What the number measures, in this act's own terms.",
+          "type": "string"
+        },
+        "scale": {
+          "$ref": "#/$defs/QuantityScale"
+        }
+      },
+      "required": [
+        "field",
+        "means",
+        "scale"
+      ],
+      "type": "object"
+    },
     "Extent": {
       "description": "Whether the caller received everything that matched.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\".",
       "oneOf": [
@@ -212,6 +234,79 @@
       ],
       "type": "object"
     },
+    "QuantityScale": {
+      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`\nrescales *the same* `<=>` distance as `1 - d` into `[-1,1]`\n`[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
+      "oneOf": [
+        {
+          "description": "`[0,1]`, bounded by the expression's own arithmetic.",
+          "properties": {
+            "scale": {
+              "const": "unit_interval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Bounded, but NOT to `[0,1]`. `bounds` states the actual range.",
+          "properties": {
+            "bounds": {
+              "type": "string"
+            },
+            "scale": {
+              "const": "other_range",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale",
+            "bounds"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Nothing in the expression or in the schema bounds it.",
+          "properties": {
+            "scale": {
+              "const": "unbounded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StageDisposition": {
+      "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
+      "oneOf": [
+        {
+          "const": "answered",
+          "description": "Rows returned.",
+          "type": "string"
+        },
+        {
+          "const": "empty",
+          "description": "Honest zero — the question was asked and nothing matched.",
+          "type": "string"
+        },
+        {
+          "const": "withheld",
+          "description": "Material exists; the asker's standing does not admit disclosure at this depth.\n\n**Only safe where existence is ALREADY licensed** — a region the asker can read containing\na node they cannot. It is a statement that something is there, so it discloses existence by\nconstruction.\n\n**Never safe for a caller-supplied id.** An id the caller named and cannot see contributes\nas an honest [`StageDisposition::Empty`], never as a withholding: the alternative is a\nsingle-probe existence oracle. Same doctrine as `CONTEXT_REFUSAL`'s byte-identical\n`NotFound` and the audit gate's denial arms — see decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "The act declined a well-formed question.",
+          "type": "string"
+        }
+      ]
+    },
     "StageOutput": {
       "description": "What a stage produced. A tagged union with exactly ONE member today.\n\nTagged from the first line so that admitting a second currency later is additive rather than\nbreaking. It is NOT a claim that a second currency is coming — spec §10 refuses one for v0 and\nstates the reason (a derived intention cannot be embedded inside a single statement). The other\nmotivation is `substantiate`: an act that *annotates* rather than *selects* has no `IdSet` to\nreturn, and the old required-field shape left `claims-carry-standing` nowhere to land.",
       "oneOf": [
@@ -235,29 +330,35 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One act's answer.",
+  "description": "One returned stage's answer.\n\n`[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is\nthe STAGE — it is keyed by the caller's stage name, and its numbers are about the set that\nstage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape\nalso removed.",
   "properties": {
     "act": {
       "$ref": "#/$defs/ActName"
     },
-    "bounds_dropped": {
-      "description": "How many did not — for ANY reason, deliberately conflated.\n\nInvisible, nonexistent and malformed are one number on purpose. Separating them, or naming\nthis field for the invisible case alone, is a **single-probe existence oracle**: pass one\nid, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,\nwhose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —\n*material exists* — and so disclosed exactly that. The arithmetic was always harmless\n(`bounds_in - bounds_honored` is derivable either way); the leak was in the label.\n\nThe caller still learns that 28 of their 40 did not contribute, which is what\n`composition-is-legible` asks for. They do not learn why. Decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
-      "format": "int64",
-      "type": "integer"
-    },
-    "bounds_honored": {
-      "description": "How many of them contributed.",
-      "format": "int64",
-      "type": "integer"
-    },
-    "bounds_in": {
-      "description": "How many ids this stage was handed.",
-      "format": "int64",
-      "type": "integer"
+    "disposition": {
+      "$ref": "#/$defs/StageDisposition"
     },
     "extent": {
       "$ref": "#/$defs/Extent",
       "description": "Complete / partial / indeterminate. NOT a total — see `Extent`."
+    },
+    "input_contributed": {
+      "description": "How many of the usable ids actually contributed to what came back.\n\nThe reading depends on the relation and both are honest: for a `bound`, how many of your\nids are in the output; for a `seed`, how many led to something in the output.\n\n**NULL MEANS THIS ACT CANNOT REPORT IT — never zero.** Which acts can is DECLARED in\n[`super::act::ActDeclaration::discloses`], so it is knowable before the query runs.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "input_ids": {
+      "description": "How many ids this stage was handed. Zero for a stage with no input.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "input_unusable": {
+      "description": "How many did not — for ANY reason, deliberately conflated.\n\nInvisible, nonexistent and malformed are one number on purpose. Separating them, or naming\nthis field for the invisible case alone, is a **single-probe existence oracle**: pass one\nid, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,\nwhose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —\n*material exists* — and so disclosed exactly that. The arithmetic was always harmless\n(`input_ids - input_contributed` is derivable either way); the leak was in the label.\n\nThe caller still learns that 28 of their 40 did not contribute, which is what\n`composition-is-legible` asks for. They do not learn why. Decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
+      "format": "int64",
+      "type": "integer"
     },
     "narrowed_by": {
       "items": {
@@ -265,16 +366,27 @@
       },
       "type": "array"
     },
+    "orders_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActQuantity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Echoed from this act's declaration. Present iff the act orders anything.\n\n**Once per stage, rather than once per row.** The row keeps a literal field name so two\nacts' numbers cannot be summed by accident; this carries the RANGE so a reader is not left\nto assume `[0,1]`. Assuming `[0,1]` is the live mistake in this family, not a hypothetical\none: `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]` while `region_score`\nspans `[-0.6, 1.0]`, and neither column name says so."
+    },
     "produced": {
       "$ref": "#/$defs/StageOutput",
       "description": "What this stage produced, as a tagged union. Declared kind, so contract chaining compares\nkinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field."
     },
-    "terms_effective": {
+    "terms_applied": {
       "additionalProperties": {
         "format": "int64",
         "type": "integer"
       },
-      "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.",
+      "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.\n\nThere is no separate \"you were clamped\" flag, deliberately: ceilings are published per act,\nso the applied value is the whole story. Clamping to a ceiling nobody published would be\nthe bug. This covers only terms the act ADMITS — one it does not is refused outright.",
       "type": "object"
     },
     "total": {
@@ -288,14 +400,14 @@
   },
   "required": [
     "act",
+    "disposition",
     "produced",
     "extent",
-    "terms_effective",
+    "terms_applied",
     "narrowed_by",
-    "bounds_in",
-    "bounds_honored",
-    "bounds_dropped"
+    "input_ids",
+    "input_unusable"
   ],
-  "title": "ActResult",
+  "title": "StageResult",
   "type": "object"
 }

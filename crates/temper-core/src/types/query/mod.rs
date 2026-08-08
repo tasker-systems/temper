@@ -26,7 +26,7 @@ pub use composition::{
     CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
 };
 pub use disposition::{ActRefusal, RefusalReason, StageDisposition};
-pub use envelope::{ActInvocation, ActResult, NarrowedBy};
+pub use envelope::{ActInvocation, NarrowedBy, StageResult};
 pub use filter::{
     EdgeFilter, FacetPredicate, FilterField, PropertyOp, PropertyPredicate, PropertySubject,
     ResourceFilter,
@@ -35,5 +35,5 @@ pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, Extent, MetaDetail};
 pub use stage::{StageInput, StageName, StageOutput, StageRelation};
-pub use trace::{BoundsSource, CompositionTrace, MetaTruncated, StageTrace};
+pub use trace::{CompositionTrace, InputSource, MetaTruncated, StageTrace};
 pub use validate::{emitted_fragment_for, validate, PlanRefusal, ValidatedComposition};

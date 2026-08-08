@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A per-resource meta budget that bit.",
+  "properties": {
+    "dropped": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "retained": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "stage": {
+      "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "stage",
+    "retained",
+    "dropped"
+  ],
+  "title": "MetaTruncated",
+  "type": "object"
+}

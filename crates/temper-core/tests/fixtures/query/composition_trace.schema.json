@@ -43,20 +43,19 @@
       ],
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
-    "BoundsSource": {
-      "description": "Where a stage's bounds came from.",
+    "InputSource": {
+      "description": "Where a stage's input set came from: an earlier stage, or the caller.\n\n`[renamed from BoundsSource — 2026-08-08]` It reports where an input came from, which is\ndirection-neutral, and the surrounding fields no longer say \"bounds\" — an input may be a bound\nor a seed, and half the compositions this surface exists for alternate between them.",
       "oneOf": [
         {
-          "description": "Verbatim from an earlier stage's `produced` set.",
+          "description": "Verbatim from an earlier stage's `produced` set.\n\n**Keyed by the caller's own stage NAME, not an ordinal.** `[amended — 2026-08-08]` The\nrequest names stages throughout — `ActInvocation.name`, `StageInput.stage`,\n`ReturnSpec.stage` are all `StageName` — while this side keyed them by position, so a\ncaller who declared `\"hits\"` got disclosure back saying `2`. `composition-is-legible` is a\nclause about what the ASKER can read, and an ordinal is not their vocabulary.",
           "properties": {
             "source": {
               "const": "upstream",
               "type": "string"
             },
             "stage": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
+              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+              "type": "string"
             }
           },
           "required": [
@@ -125,9 +124,8 @@
           "type": "integer"
         },
         "stage": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+          "type": "string"
         }
       },
       "required": [
@@ -193,37 +191,57 @@
         }
       ]
     },
+    "StageRelation": {
+      "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+      "oneOf": [
+        {
+          "const": "bound",
+          "description": "Narrow to within this set.",
+          "type": "string"
+        },
+        {
+          "const": "seed",
+          "description": "Grow from this set.",
+          "type": "string"
+        }
+      ]
+    },
     "StageTrace": {
       "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.",
       "properties": {
         "act": {
           "$ref": "#/$defs/ActName"
         },
-        "bounds_dropped": {
-          "description": "Conflates invisible / nonexistent / malformed on purpose — see\n[`super::envelope::ActResult::bounds_dropped`]. Naming the invisible case alone would make\nthe trace a single-probe existence oracle.",
+        "disposition": {
+          "$ref": "#/$defs/StageDisposition"
+        },
+        "input_contributed": {
+          "description": "How many of the usable ids actually contributed to what came back.\n\n**NULL MEANS THIS ACT CANNOT REPORT IT. It never means zero.** Which acts can is DECLARED —\n[`super::act::ActDeclaration::discloses`] — so it is knowable before running the query\nrather than discovered here.\n\n`follow-from` is the act that cannot: its walk discards seed provenance before returning,\nand the obvious fallback is worse than null, because a seed never appears in its own output\nand the `bound` reading would print 0 of 10 on a stage that returned forty neighbours.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input_ids": {
+          "description": "How many ids this stage was handed. Zero for a stage with no input.",
           "format": "int64",
           "type": "integer"
         },
-        "bounds_honored": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "bounds_in": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "bounds_source": {
+        "input_source": {
           "anyOf": [
             {
-              "$ref": "#/$defs/BoundsSource"
+              "$ref": "#/$defs/InputSource"
             },
             {
               "type": "null"
             }
           ]
         },
-        "disposition": {
-          "$ref": "#/$defs/StageDisposition"
+        "input_unusable": {
+          "description": "How many of them this stage could not use at all — invisible, nonexistent, or malformed.\n\nConflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].\nNaming the invisible case alone would make the trace a single-probe existence oracle.",
+          "format": "int64",
+          "type": "integer"
         },
         "meta_truncated": {
           "anyOf": [
@@ -241,19 +259,28 @@
           },
           "type": "array"
         },
+        "relation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageRelation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether this stage NARROWED or REACHED, echoed back.\n\nA reader of the trace can then tell without knowing the act vocabulary — *\"did stage 3\nnarrow or expand?\"* is the question `composition-is-legible` most obviously owes an answer\nto, and a caller reading only the response has no other way to get it. Absent for a stage\nwith no input."
+        },
         "stage": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+          "type": "string"
         }
       },
       "required": [
         "stage",
         "act",
         "disposition",
-        "bounds_in",
-        "bounds_honored",
-        "bounds_dropped",
+        "input_ids",
+        "input_unusable",
         "narrowed_by"
       ],
       "type": "object"

@@ -2,7 +2,7 @@
 //!
 //! One responsibility: what a node is called, what flows *into* it, and what it hands *out*. The
 //! gap this whole phase exists to close lives here — [`StageInput`] lets an invocation finally
-//! *declare* the upstream reference that [`super::trace::BoundsSource::Upstream`] could already
+//! *declare* the upstream reference that [`super::trace::InputSource::Upstream`] could already
 //! only *report*.
 
 use serde::{Deserialize, Serialize};
