@@ -1,5 +1,25 @@
 # Composable search fragments: one body per arm, a bound set is a scope, and the gate is computed once
 
+> ## `[STILL VALID, WITH ONE GAP NAMED — 2026-08-08 evening]`
+>
+> This is a SQL design and the wire contract does not supersede it. Ground the surface in
+> [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml); ground the fragments here.
+>
+> **One gap the contract surfaced that this design did not see.** §4 gives the twins `p_bound_ids`
+> and treats a bound set as a scope — correct — but `search_graph_expand` takes `p_seed_ids`, and a
+> seed is not a scope: its output *escapes* its input. The compiler never distinguishes them:
+> `narrowing_for` (`query_plan.rs`) routes every upstream set to the narrowing slot and reads
+> `bounds_mode` nowhere. A `follow-from` stage compiled that way returns only what was already in
+> the seed set — a stage that looks like it worked and can never produce a neighbour. Latent today
+> because `follow-from` still emits `__temper_unbound_act`; it fires the moment anyone binds it.
+>
+> **And a disclosure consequence with no SQL to serve it.** `search_graph_expand` collapses paths
+> (`SELECT node, MAX(score) … GROUP BY node`), discarding which seed reached which node, and its
+> `WHERE hop > 0` means a seed never appears in its own output. So the contract's
+> `input_contributed` is null for `follow-from` — honestly, rather than reporting `0` on a stage
+> that returned forty neighbours. Making it computable is the same body change as the edge-provenance
+> spike.
+
 `[design — 2026-08-08, Pete + session]`
 
 Under frame register

@@ -1,6 +1,37 @@
 # Composable Search Fragments Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> ## `[ALL TEN TASKS EXECUTED — 2026-08-08. This plan is history, not instruction.]`
+>
+> Tasks 0–10 landed on `jct/composable-search-fragments` (local, unpushed, no PR). Do not execute
+> from this plan again; read it to understand what the branch contains.
+>
+> **Two things a later reader needs, neither of which is in the task text below.**
+>
+> 1. **The wire contract is now [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml).**
+>    Task 4 bound the compiler to the twins against the *merged* type shapes, and the contract amends
+>    six of them. Task 5 made `find-exact`'s declaration true against those same shapes.
+>
+> 2. **Task 4 has a defect the contract found.** `narrowing_for` routes every upstream set to
+>    `p_bound_ids` and reads `bounds_mode` nowhere, so a `seed` compiles as a `bound`. Harmless
+>    while `follow-from` emits `__temper_unbound_act`; wrong the moment it does not.
+>
+> **What this plan did NOT resolve, and what the branch still carries** — recorded here because the
+> session that ran Tasks 7–9 stored no note:
+>
+> - The decision gate (Task 6) cleared the array path on ONE query shape and returned PROCEED. A
+>   falsifier then fired that its own evidence document did not list — a call whose body returns zero
+>   rows — costing `/api/search` ~1.2 ms → ~4.1 ms on text-only queries. It was patched with a `CASE`
+>   in `query_find_wide` rather than re-opening the gate.
+> - **That patch is asymmetric and the exact arm still has the hole.** `query_find_exact` builds the
+>   visible-set array unconditionally while its core opens `WHERE p_query IS NOT NULL AND p_query <> ''`
+>   — and `SearchParams.query` is optional, with `search_params_deserializes_embedding_only` proving a
+>   query-less search is expressible.
+> - `p_anchor_reader` appears nowhere in the spec or this plan. The "ungated" core takes a principal
+>   after all, so anchor readability is still checked per call.
+> - `p_visible_ids` NULL means *admit nothing* while `p_bound_ids` NULL means *unbounded* — two
+>   same-typed parameters on one function with opposite NULL semantics.
+> - Spec §9's trigger-maintained `profile_reachable_teams` closure table — the thing that would make
+>   Tasks 7–9 unnecessary rather than wrong — remains unmeasured and unbuilt.
 
 **Goal:** Give `/api/query` find-act fragments that can be bounded by an upstream id set, by extracting the deployed arms' shared interiority and building composable twins beside them — without changing either deployed signature.
 
