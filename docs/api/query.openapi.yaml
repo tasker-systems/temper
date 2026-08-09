@@ -35,7 +35,20 @@
 #
 # ── THE SIX QUESTIONS THIS DOCUMENT OPENED, AND HOW THEY CLOSED ──────────────
 #
-# `[decided — 2026-08-08, Pete]`
+# `[attribution corrected — 2026-08-09]` THIS BLOCK WAS MARKED
+# `[decided — 2026-08-08, Pete]` AND THAT MARKER WAS TOO BROAD. At least one item
+# below — ⟨5⟩, the `/api/query/validate` endpoint — Pete had never asked for; it
+# was the drafting session's invention, recorded in his name and inherited as
+# settled for a day before he caught it.
+#
+# The mechanism is known and recurring, not a one-off slip: an option box's
+# summary line bundles the thing actually being discussed with several chained
+# assumptions, and a single keypress gets written up as a ruling on the whole
+# bundle. So treat what follows as the SESSION's closures. Where a later choice
+# leans on one of them, confirm it rather than inherit it.
+#
+# Which of ⟨1⟩–⟨6⟩ were genuinely Pete's is not reconstructable from here, and
+# guessing would repeat the original error in the opposite direction. Not sorted.
 #
 #   ⟨1⟩ trace keys on StageName, not an ordinal. Your vocabulary, not ours.
 #   ⟨2⟩ Static refusals → 400 carrying ALL of them in `ErrorBody.error.details`.
@@ -46,8 +59,8 @@
 #       INPUT to `region_score` rather than a rival ordering.
 #   ⟨4⟩ `located_at` lands, on `VecHit` only. Exact-arm snippet is a named
 #       remainder with a cost question, not a gap.
-#   ⟨5⟩ `POST /api/query/validate` is in. It is the only thing that can state the
-#       request→response dependency OpenAPI cannot.
+#   ⟨5⟩ WITHDRAWN — see the block below. It was never Pete's, and it does not
+#       survive the question "what authenticates it".
 #   ⟨6⟩ `bounds_*` → `input_ids` / `input_unusable` / `input_contributed`, the
 #       last nullable where an act cannot compute it.
 #
@@ -218,56 +231,43 @@ paths:
             application/json:
               schema: { $ref: '../../openapi.json#/components/schemas/ErrorBody' }
 
-  /api/query/validate:
-    post:
-      operationId: validateComposition
-      summary: Check a composition and describe what it would return, without running it.
-      description: |
-        THIS IS THE ONLY THING THAT CAN STATE WHAT THE SCHEMA CANNOT.
-
-        `QueryResponse.returned` is an open map, and it has to be: its keys are
-        whatever you named your stages, and the shape under each key depends on
-        which act that stage runs. That is a dependency from the request to the
-        response, and OpenAPI has no way to express it. A reader of the schema
-        alone can only learn "some stage names, each holding one of three
-        variants."
-
-        This route closes it for YOUR composition. Every fact it needs is already
-        declared — an act's `produces` gives the output variant, its `orders_by`
-        gives the quantity's name and range, its `discloses` gives which optional
-        fields will be filled — so this computes rather than guesses.
-
-        It runs no query and touches no rows. Same auth as `/api/query`, because
-        the refusals it returns describe the acts and not your data.
-
-        Use it to check a composition once and then run it many times, or —
-        if you are an agent assembling a composition — to find out what you are
-        about to get back before you commit to parsing it.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/Composition' }
-      responses:
-        '200':
-          description: The composition is valid. Here is what it would produce.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ValidationOutcome' }
-        '400':
-          description: |
-            Invalid, with every reason at once — byte-identical to what
-            `POST /api/query` would have answered for the same body. The two must
-            never disagree; that is the point of validating against the same
-            function the run path uses.
-          content:
-            application/json:
-              schema: { $ref: '../../openapi.json#/components/schemas/ErrorBody' }
-        '401':
-          description: Unauthorized.
-          content:
-            application/json:
-              schema: { $ref: '../../openapi.json#/components/schemas/ErrorBody' }
+# ── `POST /api/query/validate` IS WITHDRAWN ──────────────────────────────────
+#
+# `[decided — 2026-08-09, Pete]` It was drafted here as a route that would state
+# the request→response dependency OpenAPI cannot express. It is not built and
+# will not be, and the reasoning is kept so it is not re-invented.
+#
+# THE TELL WAS AN AUTH QUESTION. Asked what authenticates it, nobody could say —
+# and for a pure function over a static table the honest answer is "nobody, and
+# nothing". Temper ships exactly one unauthenticated JSON endpoint, `/api/health`
+# `[verified — routes.rs, public_routes()]`; a second one would have needed a
+# reason this had none of. If you cannot say who a door is for and what it
+# protects, you do not yet know what it is.
+#
+# WHAT IT WOULD HAVE DONE, AND WHY THAT NEEDS NO SERVER:
+#
+# `validate()` is a pure function of (the caller's composition, the act
+# declarations). No rows, no principal, no database. Its checks DO exceed JSON
+# Schema — cycles, dangling stage references, duplicate names, and conformance
+# against each act's `accepts_*` — so a plain schema validator is not a
+# substitute. But nothing about it needs to run HERE. The only reason a client
+# cannot run it locally today is that the declarations are not published as data:
+# clients get the `ActDeclaration` TYPE through ts-rs and never the values.
+#
+# AND THE REPAIR LOOP IS ALREADY SERVED. `POST /api/query` returns EVERY refusal
+# at once in its 400 — which was this route's main justification. A caller who
+# submits an invalid composition already learns all of it in one round trip.
+#
+# WHAT SURVIVES: `validate()` itself, which is the server's own gate and must run
+# before execution regardless, and `ValidationOutcome`, the pure computation that
+# describes what a composition would return. Both are built and tested. What was
+# dropped is putting a URL in front of them.
+#
+# NOT REPLACED WITH ANOTHER ENDPOINT. Publishing the declarations is the obvious
+# candidate — they are a description of the deployed system by design, and would
+# let any client validate offline and predict response shapes. It is deliberately
+# NOT specified here: proposing a replacement door in the same breath as removing
+# one is how this got built the first time. It waits for a caller who needs it.
 
 components:
   schemas:
@@ -657,8 +657,20 @@ components:
     # =========================================================================
 
     Disclosure:
-      # DESIGNED. `ActDeclaration` must gain `discloses: [Disclosure]` for this
-      # contract to be honest. It does not have it today. `[decided — 2026-08-08]`
+      # BUILT — `ActDeclaration.discloses` exists now (temper-core, act.rs), with
+      # a grounded value per act.
+      #
+      # UNREFERENCED HERE, AND DELIBERATELY SO — unlike `ValidationOutcome`, which
+      # was removed for the same symptom. The difference is that this one has a
+      # home: it lives on `ActDeclaration`, which is not part of THIS route's
+      # wire. It is kept because the nulls it governs ARE on this wire —
+      # `StageResult.input_contributed`, `StageTrace.input_contributed` and
+      # `Scoring.located_at` are each null-for-some-acts, and a reader of those
+      # fields needs the vocabulary that says whether a null means "cannot" or
+      # "none". `ValidationOutcome` had no home left at all once its route went.
+      #
+      # `act.rs` is authoritative for the values; this block is here for the
+      # argument. If the two ever disagree, the Rust is right.
       description: |
         An optional piece of per-stage disclosure that SOME acts can produce and
         others cannot. Each act declares which ones it can, so a caller knows
@@ -713,9 +725,14 @@ components:
             the act named by the stage with that name. That is a dependency from
             request to response, and OpenAPI has no way to express it.
 
-            `POST /api/query/validate` is what closes it: hand it the same body
-            and it tells you exactly which keys you will get and what is under
-            each, computed from the act declarations.
+            NOTHING ON THIS SURFACE CLOSES IT TODAY, and that is stated rather
+            than papered over. A `POST /api/query/validate` route was drafted to
+            and has been withdrawn (see the block above `components:`). The facts
+            needed to compute it are all in the act declarations — `produces`
+            gives the currency, `orders_by` the quantity and its range,
+            `discloses` which optional fields will be filled — so a client that
+            HAS the declarations can derive it. Publishing them is an open
+            question, not a promise.
           type: object
           additionalProperties: { $ref: '#/components/schemas/StageResult' }
         trace:
@@ -742,60 +759,18 @@ components:
     #
     # `[intent — 2026-08-08, Pete]`
 
-    ValidationOutcome:
-      # DESIGNED. The answer `/api/query/validate` gives when a composition is legal.
-      description: |
-        What this composition would return, derived from the act declarations
-        without running anything.
-      type: object
-      required: [order, will_return]
-      properties:
-        order:
-          description: |
-            The stages in the order they will run — the topological sort, which is
-            not the order you listed them in and which a DAG does not otherwise
-            reveal.
-          type: array
-          items: { $ref: '#/components/schemas/StageName' }
-        will_return:
-          description: |
-            Exactly the keys `QueryResponse.returned` will carry, and what will be
-            under each. THIS IS THE PART THE SCHEMA CANNOT SAY FOR ITSELF.
-          type: object
-          additionalProperties:
-            type: object
-            required: [act, produced, discloses]
-            properties:
-              act: { $ref: '#/components/schemas/ActName' }
-              produced:
-                description: |
-                  Which `StageOutput` variant this stage will carry: resources,
-                  or regions. There is no `ids` — a returned stage is always
-                  hydrated.
-                type: string
-                enum: [resources, regions]
-              score_kind:
-                description: |
-                  The score kind every row of this stage will carry, typed
-                  exactly as the rows carry it.
-
-                  The envelope tags currency only, so `produced` alone does not
-                  distinguish two acts that both return resources. THIS is what
-                  completes the answer — and it is the same value a hit holds, so
-                  a caller compares it directly rather than across a translation.
-                $ref: '#/components/schemas/ScoreKind'
-              orders_by:
-                description: |
-                  The quantity its rows will be ordered by, with its range.
-                  Absent for an act that orders nothing.
-                $ref: '#/components/schemas/ActQuantity'
-              discloses:
-                description: |
-                  Which optional fields will be filled rather than null, for this
-                  act. Read it and you know in advance whether asking for
-                  `input_contributed` or `located_at` is worth doing.
-                type: array
-                items: { $ref: '#/components/schemas/Disclosure' }
+    # `ValidationOutcome` was defined here, as the answer the withdrawn
+    # `/api/query/validate` route would have given. It is REMOVED rather than
+    # kept: no path returns it, and a schema in a wire contract that no route can
+    # produce is exactly the declared-but-unreachable shape this document refuses
+    # elsewhere — it reads as coverage and asserts nothing.
+    #
+    # The Rust type survives and is snapshotted
+    # (`temper-core/tests/fixtures/query/validation_outcome.schema.json`): it is the
+    # pure computation that describes what a composition would return, which the
+    # server needs and which a client with the declarations could run itself. If
+    # the declarations are ever published, this shape comes back with a path
+    # attached to it.
 
     StageResult:
       # DESIGNED, adapting `ActResult` (envelope.rs:72-100).
