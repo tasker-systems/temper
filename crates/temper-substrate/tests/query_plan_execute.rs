@@ -432,3 +432,75 @@ async fn a_principal_who_can_see_nothing_finds_every_supplied_id_unusable(pool: 
     assert_eq!(tally.produced, 0);
     assert!(rows.hits_for("a").is_empty(), "and nothing comes back");
 }
+
+/// **A stage may be named after a SQL reserved word, and the emitted statement must still parse.**
+///
+/// `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`, `all`, `order`, `end`
+/// and every other reserved word in lower case. Emitted unquoted, each is a syntax error the caller
+/// sees as a 500 — a well-formed composition, refused by nothing, failing at the database for a
+/// reason nothing in the contract predicts. Found in review, as the incidental cause of an unrelated
+/// probe failing.
+///
+/// Quoting closes the whole class rather than one word, and it is safe precisely because the
+/// parse-only constructor already guarantees the shape: no quote, no dot, no case to fold.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "reserved").await;
+    mk(&pool, home, owner, emitter, "Kestrel", "the kestrel hovers").await;
+
+    // TWO stages, with the reserved word UPSTREAM. A single-stage plan quotes the CTE definition
+    // and nothing else, so it cannot see an unquoted REFERENCE — which is exactly what this test
+    // missed on its first pass: `narrowing_for` still emitted a bare `ARRAY(SELECT id FROM both)`
+    // and the single-stage version passed anyway.
+    for reserved in ["both", "all", "order", "end", "table"] {
+        let up = StageName::parse(reserved).unwrap();
+        let down = StageName::parse("downstream").unwrap();
+        let stage = |n: &StageName, input: Option<StageInput>| {
+            StageNode::Act(ActInvocation {
+                name: n.clone(),
+                act: ActName::FindExact,
+                input,
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+            })
+        };
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: down.clone(),
+                    with: vec![],
+                }],
+            },
+            intention: Some(Intention {
+                query: "kestrel".to_string(),
+                embedded: false,
+            }),
+            meta_detail: Default::default(),
+            bounds: Default::default(),
+            stages: vec![
+                stage(&up, None),
+                stage(
+                    &down,
+                    Some(StageInput::Upstream {
+                        relation: StageRelation::Bound,
+                        stage: up.clone(),
+                    }),
+                ),
+            ],
+        };
+        let v = validate(&c).expect("a reserved word is a legal stage name");
+        let compiled = compile(&v, owner, None).expect("compiles");
+        let rows = execute(&pool, &compiled)
+            .await
+            .unwrap_or_else(|e| panic!("stage named `{reserved}` failed to run: {e}"));
+        assert_eq!(
+            rows.hits_for("downstream").len(),
+            1,
+            "and it must return the match through the reserved-word stage, not merely parse"
+        );
+    }
+}

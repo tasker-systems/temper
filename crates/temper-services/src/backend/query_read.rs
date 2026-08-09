@@ -29,8 +29,8 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, ActName, Disclosure, Extent, NarrowedBy, PlanRefusal,
-    QueryResponse, ResourceHit, Scoring, StageDisposition, StageInput, StageNode, StageOutput,
-    StageRelation, StageResult, StageTrace, ValidatedComposition,
+    QueryResponse, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode,
+    StageOutput, StageRelation, StageResult, StageTrace, ValidatedComposition,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -113,12 +113,19 @@ fn wants_a_vector(node: &StageNode) -> bool {
 /// **A returned stage that is not `Resources` is not hydrated here**, and today that is only
 /// `survey`, whose fragment the compiler cannot yet emit — so a composition naming it fails loudly
 /// at Postgres long before this. Region hydration is a declared hole, not a silent one.
+///
+/// The open tier comes back BESIDE the views rather than merged into them, because `with` is
+/// per-arm. `[fixed — 2026-08-09]` Merging it into the shared views filled `open_meta` on every arm
+/// as soon as ANY arm asked, so an arm that asked for nothing received `Some({})` — "this resource
+/// has no open metadata" where the truth is "you did not ask". That is the exact conflation the
+/// sibling test's own doc forbids, and it passed only because that test used a single-arm
+/// composition. Found in review.
 async fn hydrate(
     pool: &PgPool,
     principal: ProfileId,
     v: &ValidatedComposition,
     rows: &QueryRows,
-) -> ApiResult<HashMap<Uuid, ResourceView>> {
+) -> ApiResult<Hydrated> {
     let mut ids: Vec<ResourceId> = Vec::new();
     for spec in v.returns() {
         for hit in rows.hits_for(spec.stage.as_str()) {
@@ -130,39 +137,50 @@ async fn hydrate(
     ids.sort();
     ids.dedup();
     if ids.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(Hydrated::default());
     }
 
-    let mut views = readback::hit_identities(pool, principal, &ids)
+    let views = readback::hit_identities(pool, principal, &ids)
         .await
         .map_err(|e| ApiError::Internal(format!("hydration failed: {e}")))?;
 
-    // `open-meta` is filled for the whole response in ONE statement if ANY returned stage asked for
-    // it. Its predecessor on the list surface ran a per-view read and a 13-row page cost 28
-    // statements, measured — the loop is the defect, not the section.
-    if v.returns()
+    // ONE statement for the whole response if ANY arm asked — the read is shared, the APPLICATION
+    // is not. Its predecessor on the list surface ran a per-view read and a 13-row page cost 28
+    // statements, measured; the loop is the defect, not the section.
+    let open_meta = if v
+        .returns()
         .iter()
         .any(|r| r.with.contains(&ResourceSection::OpenMeta))
     {
-        let mut meta = readback::meta_batch(pool, principal, &ids)
+        readback::meta_batch(pool, principal, &ids)
             .await
-            .map_err(|e| ApiError::Internal(format!("open-meta read failed: {e}")))?;
-        for view in &mut views {
-            let open = meta.remove(&view.id).map(|rb| rb.open).unwrap_or_default();
-            view.open_meta = Some(serde_json::Value::Object(open));
-        }
-    }
+            .map_err(|e| ApiError::Internal(format!("open-meta read failed: {e}")))?
+            .into_iter()
+            .map(|(id, rb)| (id.uuid(), serde_json::Value::Object(rb.open)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
 
-    Ok(views.into_iter().map(|v| (v.id.uuid(), v)).collect())
+    Ok(Hydrated {
+        views: views.into_iter().map(|v| (v.id.uuid(), v)).collect(),
+        open_meta,
+    })
+}
+
+/// What the hydrating reads returned, kept SEPARATE so each arm applies only what it asked for.
+#[derive(Default)]
+struct Hydrated {
+    views: HashMap<Uuid, ResourceView>,
+    /// Read once for the whole response; applied only to arms whose `with` names `open-meta`.
+    /// An id absent here after the read means the resource genuinely has no open properties, which
+    /// is an EMPTY tier (`{}`) rather than a missing one.
+    open_meta: HashMap<Uuid, serde_json::Value>,
 }
 
 /// Build the response from the plan, the rows and the hydrated views. **Pure** — every database
 /// question has already been asked, which is what makes the derivations below testable without one.
-fn assemble(
-    v: &ValidatedComposition,
-    rows: &QueryRows,
-    hydrated: &HashMap<Uuid, ResourceView>,
-) -> QueryResponse {
+fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> QueryResponse {
     let by_name: HashMap<&str, &StageNode> =
         v.ordered().iter().map(|n| (n.name().as_str(), n)).collect();
 
@@ -171,10 +189,7 @@ fn assemble(
         .iter()
         .filter_map(|spec| {
             let node = by_name.get(spec.stage.as_str())?;
-            Some((
-                spec.stage.clone(),
-                stage_result(node, spec.stage.as_str(), rows, hydrated),
-            ))
+            Some((spec.stage.clone(), stage_result(node, spec, rows, hydrated)))
         })
         .collect();
 
@@ -321,10 +336,12 @@ fn input_contributed(
 
 fn stage_result(
     node: &StageNode,
-    name: &str,
+    spec: &ReturnSpec,
     rows: &QueryRows,
-    hydrated: &HashMap<Uuid, ResourceView>,
+    hydrated: &Hydrated,
 ) -> StageResult {
+    let name = spec.stage.as_str();
+    let wants_open_meta = spec.with.contains(&ResourceSection::OpenMeta);
     let n = stage_numbers(node, rows);
     let act = act_of(node);
     let decl = declaration(&act);
@@ -342,9 +359,21 @@ fn stage_result(
         // An id absent from the batch stopped being visible between the two statements — a dropped
         // row, not a fault. Same convention as every other set read in this crate.
         .filter_map(|h| {
-            let view = hydrated.get(&h.id)?;
+            let mut resource = hydrated.views.get(&h.id)?.clone();
+            // Applied per ARM, not per response: absent means NOT REQUESTED and `{}` means requested
+            // and empty, and both survive the wire. An arm that asked and whose resource has no open
+            // properties still gets `{}` — the read returning no row for it is an empty tier.
+            if wants_open_meta {
+                resource.open_meta = Some(
+                    hydrated
+                        .open_meta
+                        .get(&h.id)
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
+                );
+            }
             Some(ResourceHit {
-                resource: view.clone(),
+                resource,
                 scoring: Scoring {
                     score_kind: decl.as_ref().and_then(|d| d.score_kind())?,
                     score: h.quantity.unwrap_or_default() as f32,
@@ -358,11 +387,12 @@ fn stage_result(
         })
         .collect();
 
+    let produced = produced_for(&act, hits);
     StageResult {
         act,
         disposition: n.disposition,
         orders_by: decl.as_ref().and_then(|d| d.orders_by.clone()),
-        produced: StageOutput::Resources { hits },
+        produced,
         extent: extent_of(node, rows, &terms),
         // Carried only by acts that can produce one WITHOUT a second query, and none can: the
         // fragments return a page, not a count. Absent rather than guessed from the page size.
@@ -372,6 +402,25 @@ fn stage_result(
         input_ids: n.input_ids,
         input_contributed: n.input_contributed,
         input_unusable: n.input_unusable,
+    }
+}
+
+/// The output variant the act DECLARES, so the response cannot contradict `ValidationOutcome`'s
+/// promise about it.
+///
+/// `[fixed — 2026-08-09]` This was `StageOutput::Resources` unconditionally, so a region-producing
+/// act would have answered `resources` with an empty list — the currency tag saying one thing while
+/// the declaration promised another, which is precisely what tagging by currency exists to prevent.
+/// Unreachable today because `survey` compiles to the absent placeholder and Postgres errors first,
+/// which is why review found it by reading rather than by running.
+///
+/// **Region hydration is still a hole, and this makes it a LOUD one**: a region stage answers
+/// `regions` with no rows rather than `resources` with no rows, so the emptiness is attributable to
+/// the missing hydration instead of looking like a currency mismatch.
+fn produced_for(act: &ActName, hits: Vec<ResourceHit>) -> StageOutput {
+    match declaration(act).and_then(|d| d.produces) {
+        Some(temper_core::types::query::IdKind::Region) => StageOutput::Regions { hits: vec![] },
+        _ => StageOutput::Resources { hits },
     }
 }
 
@@ -408,6 +457,18 @@ fn extent_of(
     rows: &QueryRows,
     terms: &std::collections::BTreeMap<BoundTerm, i64>,
 ) -> Extent {
+    // **A refused stage never consulted the corpus, so it cannot report completeness over it.**
+    // `[fixed — 2026-08-09]` It fell through to `complete` — no rows, no limit matched — which is
+    // the same false claim as `complete` over a truncated set, and this function's own doc already
+    // refuses that one. `disposition` disambiguates it only for a reader who checks both fields,
+    // and the whole ordering rule elsewhere in this file exists so nobody has to. Found in review.
+    if rows.refusal(node.name().as_str()).is_some() {
+        return Extent::Indeterminate {
+            reason: "the stage refused, so nothing was asked of the corpus and there is no \
+                     remainder to report"
+                .to_string(),
+        };
+    }
     if act_of(node) == ActName::Survey {
         return Extent::Indeterminate {
             reason:
@@ -546,7 +607,7 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
 
         assert_eq!(r.returned.len(), 1, "exactly what `returns` asked for");
         assert!(r.returned.contains_key(&name("narrowed")));
@@ -573,7 +634,7 @@ mod tests {
             }],
         };
 
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
 
         assert_eq!(
             r.returned[&name("wide")].disposition,
@@ -595,7 +656,7 @@ mod tests {
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
         assert_eq!(
             r.returned[&name("hits")].disposition,
             StageDisposition::Empty
@@ -627,7 +688,7 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
         assert_eq!(r.returned[&name("narrowed")].input_ids, 12);
         let traced = r
             .trace
@@ -662,7 +723,7 @@ mod tests {
             tallies: vec![tally("hits", 12, 0), tally("narrowed", 4, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
         assert_eq!(
             r.returned[&name("narrowed")].input_contributed,
             Some(4),
@@ -695,9 +756,12 @@ mod tests {
             tallies: vec![tally("near", 40, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
+        // One assertion, not two: `assert_ne!(…, Some(0))` after `assert_eq!(…, None)` cannot
+        // fail — it is implied by the line above it, and an assertion that cannot fail reads as
+        // protection that is not there. The name carries the "never zero" claim; the comment
+        // carries why it matters.
         assert_eq!(r.returned[&name("near")].input_contributed, None);
-        assert_ne!(r.returned[&name("near")].input_contributed, Some(0));
     }
 
     /// A minimal hydrated view for a given id. Only `id` is load-bearing below — the assembler
@@ -751,7 +815,10 @@ mod tests {
             tallies: vec![tally("hits", 2, 0)],
             refusals: vec![],
         };
-        let hydrated = HashMap::from([(present, view(present))]);
+        let hydrated = Hydrated {
+            views: HashMap::from([(present, view(present))]),
+            open_meta: HashMap::new(),
+        };
 
         let r = assemble(&v, &rows, &hydrated);
         match &r.returned[&name("hits")].produced {
@@ -772,6 +839,122 @@ mod tests {
         }
     }
 
+    /// **The `discloses` GATE, tested where it can actually be reached.**
+    ///
+    /// Review found both `None`-returning clauses of `input_contributed` uncovered: deleting either
+    /// left all eight tests green. The act-level one is unreachable through `assemble` — every act
+    /// that declares no `InputContribution` also accepts no bound, so the relation arm swallows it
+    /// first — so it is exercised against the function directly, the same level `narrowing_for`'s
+    /// tests use in the compiler.
+    #[test]
+    fn an_act_that_declares_no_contribution_is_gated_before_the_relation_is_consulted() {
+        // `follow-from` declares none. Hand it a BOUND anyway — a shape `validate` refuses, which is
+        // exactly why the guard cannot be reached from above and must be asserted here.
+        let node = act_node(
+            "n",
+            ActName::FollowFrom,
+            Some(StageInput::Upstream {
+                relation: StageRelation::Bound,
+                stage: name("up"),
+            }),
+        );
+        assert_eq!(
+            input_contributed(&node, Some(&StageRelation::Bound), 40),
+            None,
+            "the declaration decides before the relation does; 40 would be a plausible lie"
+        );
+    }
+
+    /// **An ANCHOR input reports null, not zero** — the clause the commit message dedicates a
+    /// decision to, and which no test reached until review said so.
+    #[test]
+    fn an_anchor_input_reports_null_because_its_ids_can_never_be_in_a_resource_output() {
+        let node = act_node(
+            "n",
+            ActName::FindAboutWithin,
+            Some(StageInput::Caller {
+                relation: StageRelation::Bound,
+                ids: IdSet {
+                    kind: IdKind::Cogmap,
+                    provenance: None,
+                    ids: vec![Uuid::now_v7()],
+                },
+            }),
+        );
+        // `find-about-within` DOES declare the disclosure, so the act-level gate passes and this is
+        // the anchor arm alone. Without it the answer would be `Some(50)` — "50 of your 1 id
+        // contributed" — which is the plausible-but-false number the decision exists to prevent.
+        assert_eq!(
+            input_contributed(&node, Some(&StageRelation::Bound), 50),
+            None
+        );
+    }
+
+    /// A resource bound on the same act DOES report, so the test above is about the anchor and not
+    /// about the act.
+    #[test]
+    fn a_resource_bound_on_the_same_act_still_reports_its_contribution() {
+        let node = act_node(
+            "n",
+            ActName::FindAboutWithin,
+            Some(StageInput::Upstream {
+                relation: StageRelation::Bound,
+                stage: name("up"),
+            }),
+        );
+        assert_eq!(
+            input_contributed(&node, Some(&StageRelation::Bound), 50),
+            Some(50)
+        );
+    }
+
+    /// **A refused stage cannot claim `complete`.** It never consulted the corpus, so it has nothing
+    /// to be complete about — the same false claim as `complete` over a truncated set.
+    #[test]
+    fn a_refused_stage_reports_an_indeterminate_extent_rather_than_complete() {
+        let v = plan(
+            vec![act_node("wide", ActName::FindAboutAnywhere, None)],
+            vec!["wide"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("wide", 0, 0)],
+            refusals: vec![PlanRefusal {
+                stage: Some(name("wide")),
+                reason: RefusalReason::EmbeddingUnavailable,
+                detail: "no vector".to_string(),
+            }],
+        };
+        let r = assemble(&v, &rows, &Hydrated::default());
+        assert!(
+            matches!(
+                r.returned[&name("wide")].extent,
+                temper_core::types::query::Extent::Indeterminate { .. }
+            ),
+            "got: {:?}",
+            r.returned[&name("wide")].extent
+        );
+    }
+
+    /// A stage that ran and matched nothing IS complete — an honest zero is a complete answer.
+    #[test]
+    fn a_stage_that_ran_and_matched_nothing_is_complete_because_it_did_consult_the_corpus() {
+        let v = plan(
+            vec![act_node("hits", ActName::FindExact, None)],
+            vec!["hits"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("hits", 0, 0)],
+            refusals: vec![],
+        };
+        let r = assemble(&v, &rows, &Hydrated::default());
+        assert!(matches!(
+            r.returned[&name("hits")].extent,
+            temper_core::types::query::Extent::Complete
+        ));
+    }
+
     #[test]
     fn a_filter_is_echoed_back_without_counts_it_never_measured() {
         let mut node = act_node("hits", ActName::FindExact, None);
@@ -787,7 +970,7 @@ mod tests {
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &HashMap::new());
+        let r = assemble(&v, &rows, &Hydrated::default());
         let n = &r.returned[&name("hits")].narrowed_by;
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].key, "doc_type");

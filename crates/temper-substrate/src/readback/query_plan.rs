@@ -92,6 +92,14 @@ const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
 const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 
+/// **Every emitted identifier is double-quoted**, here and at each CTE definition and reference.
+/// `[fixed — 2026-08-09]` `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`,
+/// `all`, `order` and every other reserved word in lower case; unquoted, each is a syntax error a
+/// caller sees as a 500 — a well-formed composition refused by nothing and failing at the database
+/// for a reason the contract does not predict. Quoting closes the class rather than one word, and it
+/// is safe precisely BECAUSE the parse-only constructor guarantees the shape: no quote, no dot, no
+/// case to fold.
+///
 /// The hoisted visibility relation. **Deliberately unreachable as a stage name**: `StageName::parse`
 /// requires an ASCII lowercase first character, so no caller-chosen stage can ever shadow it. This
 /// identifier now carries the RBAC verdict every stage reads, and a collision with it would make
@@ -203,7 +211,7 @@ pub fn compile(
                 NO_UNUSABLE.to_string(),
             ),
         };
-        ctes.push(format!("{name} AS (\n{body}\n)"));
+        ctes.push(format!("\"{name}\" AS (\n{body}\n)"));
         cte_names.push((name.to_string(), name.to_string()));
         tallies.push(StageTally {
             stage: name.to_string(),
@@ -274,6 +282,7 @@ fn emit_act_body(
     let (anchor_table, anchor_id) = narrowing.anchor();
     let (anchor_table, anchor_id) = (anchor_table.to_string(), anchor_id.to_string());
     let (limit, offset) = paging_for(inv, binds);
+    let doc_type = doc_type_for(inv, binds);
 
     // The find acts narrow and never seed, so each takes the bound expression. A seed reaching one
     // is a validator/compiler disagreement rather than a caller error — `bound_expr` says so and
@@ -303,6 +312,7 @@ fn emit_act_body(
             binds.push(QueryBind::Text(q.to_string()));
             let call = emit_ungated_core_call(&CoreCall {
                 core: EMIT_FIND_EXACT,
+                doc_type: doc_type.clone(),
                 intent_args: format!("${qi}"),
                 bound: &bound,
                 anchor_table: &anchor_table,
@@ -348,6 +358,7 @@ fn emit_act_body(
             binds.push(QueryBind::Int(i64::from(ANN_DRAW_K)));
             let call = emit_ungated_core_call(&CoreCall {
                 core: EMIT_FIND_WIDE,
+                doc_type: doc_type.clone(),
                 intent_args: format!("${ei}::vector, ${ki}::int"),
                 bound: &bound,
                 anchor_table: &anchor_table,
@@ -383,6 +394,10 @@ struct CoreCall<'a> {
     /// text for the exact arm, the embedding and draw width for the wide one.
     intent_args: String,
     bound: &'a str,
+    /// The `p_doc_type` argument — a bound `$n::text`, or `NULL` where the plan declares none. The
+    /// fragment's slot holds ONE value, which is why a multi-value doc-type filter is refused at
+    /// validation rather than silently narrowed to its first element.
+    doc_type: String,
     anchor_table: &'a str,
     anchor_id: &'a str,
     limit: &'a str,
@@ -403,13 +418,20 @@ struct CoreCall<'a> {
 /// and they sit adjacent in the signature. `p_visible_ids` is an authorization verdict whose NULL
 /// admits nothing; `p_bound_ids` is a scope whose NULL is unbounded.
 ///
-/// `NULL` in the `p_doc_type` slot: the typed doc-type filter is not yet routed from
-/// `ActInvocation.resource_filter` into the fragment. Passing NULL is "no doc-type narrowing", which
-/// is what a plan that declares none means.
+/// `c.doc_type` fills the fragment's `p_doc_type` slot — `NULL` where the plan declares none, which
+/// is what "no doc-type narrowing" means to the fragment.
+///
+/// `[fixed — 2026-08-09]` It was a hardcoded `NULL`, so a declared `doc_type` was accepted, ignored,
+/// and then ECHOED BACK in `StageResult.narrowed_by` as though it had been applied. A caller asking
+/// for sessions about X received anything about X, with the response's own disclosure telling them
+/// it had been filtered. Found in review — and it is the exact silent-substitution shape this
+/// surface exists against, made worse by the echo, because the echo is the evidence a caller would
+/// use to trust the answer. Every other narrowing slot the plan can declare is now refused at
+/// validation rather than dropped here.
 fn emit_ungated_core_call(c: &CoreCall) -> String {
     format!(
-        "{}({VISIBLE_IDS}, {}, {}, {}, {}, {PRINCIPAL_BIND}, NULL, {}, {})",
-        c.core, c.intent_args, c.bound, c.anchor_table, c.anchor_id, c.limit, c.offset
+        "{}({VISIBLE_IDS}, {}, {}, {}, {}, {PRINCIPAL_BIND}, {}, {}, {})",
+        c.core, c.intent_args, c.bound, c.anchor_table, c.anchor_id, c.doc_type, c.limit, c.offset
     )
 }
 
@@ -527,7 +549,7 @@ fn narrowing_for(
         // ids (that is what these acts produce), so it is always an array slot; WHICH array slot is
         // the relation's business.
         StageInput::Upstream { stage, .. } => Ok((
-            by_relation(format!("ARRAY(SELECT id FROM {})", stage.as_str())),
+            by_relation(format!(r#"ARRAY(SELECT id FROM "{}")"#, stage.as_str())),
             NO_UNUSABLE.to_string(),
         )),
         StageInput::Caller { ids, .. } => match ids.kind {
@@ -634,6 +656,28 @@ fn paging_for(
     )
 }
 
+/// The declared doc-type narrowing, bound — or `NULL` where the plan declares none.
+///
+/// One value, because the fragment's slot is one `text`. A plan naming more than one is refused at
+/// validation (`FilterNotApplicable`), so reaching here with several is a validator/compiler
+/// contradiction; taking the first would answer a different question and look like a narrowing.
+fn doc_type_for(
+    inv: &temper_core::types::query::ActInvocation,
+    binds: &mut Vec<QueryBind>,
+) -> String {
+    let Some([dt]) = inv
+        .resource_filter
+        .as_ref()
+        .map(|f| f.doc_type.as_slice())
+        .filter(|d| d.len() == 1)
+    else {
+        return "NULL".to_string();
+    };
+    let idx = binds.len() + 1;
+    binds.push(QueryBind::Text(dt.clone()));
+    format!("${idx}::text")
+}
+
 /// The composition threaded no QUESTION. Static, and the validator refuses it first — this is the
 /// compiler's own last line, kept because `compile` is public and does not require its caller to
 /// have run `validate` on the same tick.
@@ -669,7 +713,7 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
     let arms: Vec<String> = cn
         .inputs
         .iter()
-        .map(|s| format!("  SELECT id, kind, quantity FROM {}", s.as_str()))
+        .map(|s| format!("  SELECT id, kind, quantity FROM \"{}\"", s.as_str()))
         .collect();
     arms.join(&format!("\n  {op}\n"))
 }
@@ -703,7 +747,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
             let s = r.stage.as_str();
             format!(
                 "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, \
-                 NULL::bigint AS produced, NULL::bigint AS unusable FROM {s}"
+                 NULL::bigint AS produced, NULL::bigint AS unusable FROM \"{s}\""
             )
         })
         .collect();
@@ -713,7 +757,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         format!(
             "SELECT 'tally'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
              NULL::text AS kind, NULL::double precision AS quantity, \
-             (SELECT count(*) FROM {s})::bigint AS produced, {unusable} AS unusable"
+             (SELECT count(*) FROM \"{s}\")::bigint AS produced, {unusable} AS unusable"
         )
     }));
     if arms.is_empty() {

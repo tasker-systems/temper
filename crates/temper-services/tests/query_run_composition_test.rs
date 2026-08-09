@@ -78,6 +78,37 @@ async fn mk(
     .uuid()
 }
 
+async fn mk_typed(
+    pool: &PgPool,
+    home: ContextId,
+    owner: ProfileId,
+    emitter: EntityId,
+    title: &str,
+    body: &str,
+    doc_type: &str,
+) -> Uuid {
+    writes::create_resource(
+        pool,
+        writes::CreateParams {
+            idempotency_key: None,
+            sources: vec![],
+            title,
+            origin_uri: &format!("test://{title}"),
+            body,
+            doc_type,
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap()
+    .uuid()
+}
+
 /// One `find-exact` stage, optionally hydrating `open-meta` and optionally filtered by doc type.
 fn one_find(
     query: &str,
@@ -231,13 +262,49 @@ async fn a_resource_the_principal_cannot_see_is_not_in_the_answer(pool: PgPool) 
     );
 }
 
-/// A declared filter is echoed back so a reader can see what narrowed the stage.
+/// **A declared doc-type filter actually NARROWS, and the echo is evidence of a filter that ran.**
+///
+/// `[rewritten — 2026-08-09]` Its predecessor asserted only the echo, and picked a `doc_type` that
+/// MATCHED the sole fixture — so it could not distinguish "filtered" from "not filtered", and it
+/// passed while the compiler was dropping the filter entirely and the response was reporting it as
+/// applied. It codified the defect instead of catching it. Two doc types now, and the assertion is
+/// on which rows come back.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_declared_filter_is_echoed_into_the_stages_disclosure(pool: PgPool) {
+async fn a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_that_ran(
+    pool: PgPool,
+) {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home = ctx(&pool, owner, "filtered").await;
-    mk(&pool, home, owner, emitter, "One", "composable fragments").await;
+    let concept = mk_typed(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "A concept",
+        "composable fragments",
+        "concept",
+    )
+    .await;
+    mk_typed(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "A session",
+        "composable fragments",
+        "session",
+    )
+    .await;
+
+    let unfiltered = run_composition(&pool, owner, &one_find("composable", vec![], vec![]), None)
+        .await
+        .expect("runs");
+    assert_eq!(
+        hits(&unfiltered).len(),
+        2,
+        "precondition: both match the query, or the contrast below proves nothing"
+    );
 
     let r = run_composition(
         &pool,
@@ -248,6 +315,10 @@ async fn a_declared_filter_is_echoed_into_the_stages_disclosure(pool: PgPool) {
     .await
     .expect("runs");
 
+    let got = hits(&r);
+    assert_eq!(got.len(), 1, "the session must be excluded; got: {got:?}");
+    assert_eq!(got[0].resource.id.uuid(), concept);
+
     let narrowed = &r.returned[&StageName::parse("hits").unwrap()].narrowed_by;
     assert_eq!(narrowed.len(), 1);
     assert_eq!(narrowed[0].key, "doc_type");
@@ -255,5 +326,122 @@ async fn a_declared_filter_is_echoed_into_the_stages_disclosure(pool: PgPool) {
     assert_eq!(
         narrowed[0].admitted, None,
         "counts ride only where an act computes them for free; absent is not zero"
+    );
+}
+
+/// **A narrowing this door cannot apply is REFUSED, never silently dropped.**
+///
+/// The compiler has one filter slot. Everything else a `ResourceFilter` can carry — and every
+/// property predicate — was accepted by validation and then ignored, so a caller asking for
+/// `tags: ["x"]` received everything and was told nothing. Refusing is the contract's own rule: a
+/// narrowing is declined, never ignored.
+#[test]
+fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
+    let name = StageName::parse("hits").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: name.clone(),
+                with: vec![],
+            }],
+        },
+        intention: Some(Intention {
+            query: "composable".to_string(),
+            embedded: false,
+        }),
+        meta_detail: Default::default(),
+        bounds: Default::default(),
+        stages: vec![StageNode::Act(ActInvocation {
+            name,
+            act: ActName::FindExact,
+            input: None,
+            terms: Default::default(),
+            resource_filter: Some(ResourceFilter {
+                tags: vec!["x".to_string()],
+                ..Default::default()
+            }),
+            edge_filter: None,
+            properties: vec![],
+        })],
+    };
+    let errs = validate(&c).expect_err("an unapplied narrowing must refuse");
+    assert!(
+        errs.iter()
+            .any(|e| e.reason == temper_core::types::query::RefusalReason::FilterNotApplicable),
+        "got: {errs:?}"
+    );
+}
+
+/// **`open-meta` is per ARM.** An arm that did not ask for it must not receive it because a sibling
+/// did — absent means NOT REQUESTED, and `{}` means requested-and-empty.
+///
+/// The single-arm test above cannot see this: with one arm, "filled for the response" and "filled
+/// for the arm that asked" are the same thing. Found in review, and this is the two-arm shape that
+/// distinguishes them.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "arms").await;
+    mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Shared",
+        "composable fragments",
+    )
+    .await;
+
+    let asked = StageName::parse("asked").unwrap();
+    let silent = StageName::parse("silent").unwrap();
+    let stage = |n: &StageName| {
+        StageNode::Act(ActInvocation {
+            name: n.clone(),
+            act: ActName::FindExact,
+            input: None,
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
+    };
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![
+                ReturnSpec {
+                    stage: asked.clone(),
+                    with: vec![ResourceSection::OpenMeta],
+                },
+                ReturnSpec {
+                    stage: silent.clone(),
+                    with: vec![],
+                },
+            ],
+        },
+        intention: Some(Intention {
+            query: "composable".to_string(),
+            embedded: false,
+        }),
+        meta_detail: Default::default(),
+        bounds: Default::default(),
+        stages: vec![stage(&asked), stage(&silent)],
+    };
+    let v = validate(&c).expect("plan is valid");
+
+    let r = run_composition(&pool, owner, &v, None).await.expect("runs");
+
+    let arm = |n: &StageName| match &r.returned[n].produced {
+        StageOutput::Resources { hits } => hits[0].resource.open_meta.clone(),
+        other => panic!("expected resources, got {other:?}"),
+    };
+    assert!(
+        arm(&asked).is_some(),
+        "the arm that asked receives the tier"
+    );
+    assert_eq!(
+        arm(&silent),
+        None,
+        "the arm that did not ask must not be told this resource has no open metadata"
     );
 }

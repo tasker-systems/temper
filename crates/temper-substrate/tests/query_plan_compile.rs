@@ -161,8 +161,8 @@ fn the_only_identifiers_emitted_are_validated_stage_names() {
     // formatting arbitrary strings into identifier position.
     let v = plan_two_stages("hits", "near");
     let c = compile(&v, test_profile(), None).expect("compiles");
-    assert!(c.sql.contains("hits AS ("));
-    assert!(c.sql.contains("near AS ("));
+    assert!(c.sql.contains(r#""hits" AS ("#));
+    assert!(c.sql.contains(r#""near" AS ("#));
     assert_eq!(c.cte_names.len(), 2);
 }
 
@@ -216,13 +216,17 @@ fn a_downstream_stage_selects_ids_only_and_never_a_quantity() {
     // stage boundary, cross-act arithmetic becomes mechanically easy and nothing prevents it.
     let v = plan_two_stages("hits", "near");
     let c = compile(&v, test_profile(), None).expect("compiles");
-    let downstream = c.sql.split("near AS (").nth(1).expect("near CTE present");
+    let downstream = c
+        .sql
+        .split(r#""near" AS ("#)
+        .nth(1)
+        .expect("near CTE present");
     assert!(
-        downstream.contains("SELECT id FROM hits"),
+        downstream.contains(r#"SELECT id FROM "hits""#),
         "got: {downstream}"
     );
     assert!(
-        !downstream.contains("quantity FROM hits"),
+        !downstream.contains(r#"quantity FROM "hits""#),
         "a quantity crossed a stage boundary"
     );
 }
@@ -283,7 +287,7 @@ fn a_tally_row_carries_no_id_so_a_non_returned_stages_rows_never_leave_the_datab
         "a tally carries no id: {tally}"
     );
     assert!(
-        tally.contains("count(*) FROM hits"),
+        tally.contains(r#"count(*) FROM "hits""#),
         "and it does carry the count: {tally}"
     );
 }
@@ -331,8 +335,8 @@ fn stages_are_emitted_in_dependency_order() {
     // would not parse.
     let v = plan_two_stages_declared_backwards("hits", "near");
     let c = compile(&v, test_profile(), None).expect("compiles");
-    let hits_at = c.sql.find("hits AS (").unwrap();
-    let near_at = c.sql.find("near AS (").unwrap();
+    let hits_at = c.sql.find(r#""hits" AS ("#).unwrap();
+    let near_at = c.sql.find(r#""near" AS ("#).unwrap();
     assert!(hits_at < near_at);
 }
 
@@ -419,7 +423,7 @@ fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstre
         "it must NOT target the deployed arm, which has no p_bound_ids and cannot be bounded"
     );
     assert!(
-        c.sql.contains("ARRAY(SELECT id FROM seeds)"),
+        c.sql.contains(r#"ARRAY(SELECT id FROM "seeds")"#),
         "the bound must come from the upstream stage's ids; got:\n{}",
         c.sql
     );
@@ -579,7 +583,7 @@ fn a_stage_downstream_of_a_refusal_is_bounded_to_nothing_rather_than_unbounded()
 
     let refused = c
         .sql
-        .split("wide AS (")
+        .split(r#""wide" AS ("#)
         .nth(1)
         .expect("wide CTE")
         .to_string();
@@ -591,13 +595,13 @@ fn a_stage_downstream_of_a_refusal_is_bounded_to_nothing_rather_than_unbounded()
 
     let downstream = c
         .sql
-        .split("narrowed AS (")
+        .split(r#""narrowed" AS ("#)
         .nth(1)
         .expect("narrowed CTE")
         .to_string();
     let downstream = downstream.split("\n)").next().unwrap();
     assert!(
-        downstream.contains("ARRAY(SELECT id FROM wide)"),
+        downstream.contains(r#"ARRAY(SELECT id FROM "wide")"#),
         "the downstream stage still takes its bound from the refused stage — an EMPTY array, \
          never a NULL that would read as unbounded: {downstream}"
     );
@@ -715,18 +719,22 @@ fn a_cogmap_bound_is_emitted_as_the_anchor_pair_not_as_a_resource_id_array() {
 /// the one asked while looking like a successful narrowing — the failure mode this whole arc is
 /// against.
 ///
-/// **`[moved to the validator — 2026-08-09, Pete]` This test now asserts that the compiler never
-/// SEES the case, which is the change.** It used to build the plan, compile it, and read an `Err` —
+/// **`[moved to the validator — 2026-08-09, Pete]`** It used to build the plan, compile it, and read an `Err` —
 /// and that `Err` aborted the whole composition, so a healthy stage beside the bad one was refused
 /// for its neighbour's mistake. The cardinality is static, so it is refused at validation now and
 /// arrives in the 400 with every other refusal.
 ///
 /// Re-pointed rather than deleted, for the reason this file has re-pointed twice before: the
 /// property still needs a witness, and deleting a test when its expected value changes retires the
-/// only thing holding the distinction. What it can no longer assert is the compiler's own arm —
-/// `ValidatedComposition` is parse-don't-validate, so no test can construct one that skipped the
-/// check. That arm survives as an unreachable drift guard (same shape as `bound_expr`'s seed arm),
-/// and this is the note saying so.
+/// only thing holding the distinction.
+///
+/// **What it asserts is narrower than "the compiler never sees this", and the difference matters.**
+/// It calls `validate` and never `compile`; that the compiler is therefore unreachable is an
+/// INFERENCE from `ValidatedComposition` being parse-don't-validate, not something this test
+/// carries. No test can carry it — constructing a `ValidatedComposition` that skipped the check is
+/// impossible by design, which is also why the compiler's arm survives as an unreachable drift
+/// guard (same shape as `bound_expr`'s seed arm). An earlier version of this comment claimed the
+/// assertion outright; review caught the overclaim.
 #[test]
 fn a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it() {
     let c = Composition {
@@ -931,13 +939,13 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     // The upstream ids are in scope in the same statement, which is exactly why the assertion above
     // has teeth: they reach the call as the BOUND, in a different slot.
     assert!(
-        c.sql.contains("ARRAY(SELECT id FROM hits)"),
+        c.sql.contains(r#"ARRAY(SELECT id FROM "hits")"#),
         "the upstream stage's ids must still narrow the downstream stage; got:\n{}",
         c.sql
     );
     assert!(
         !c.sql
-            .contains("__temper_ungated_find_wide(ARRAY(SELECT id FROM hits)"),
+            .contains(r#"__temper_ungated_find_wide(ARRAY(SELECT id FROM "hits")"#),
         "the upstream set must never land in the visible-set slot"
     );
 }

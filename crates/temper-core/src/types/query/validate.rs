@@ -307,6 +307,77 @@ fn check_act(
         }
     }
 
+    // ── NARROWINGS THIS DOOR DECLARES BUT DOES NOT APPLY ────────────────────────────────────────
+    //
+    // `[added — 2026-08-09]` **Closing a silent question substitution, found in review.** Every
+    // slot below was accepted by validation and then IGNORED by the compiler: `emit_ungated_core_call`
+    // passes literal `NULL` in the fragment's one filter parameter and has no slot at all for the
+    // rest. So a caller asking for sessions about X received anything about X — their question
+    // answered as a different question, confidently, with a full page of plausible rows.
+    //
+    // Worse, the response then ECHOED the filter back in `narrowed_by` as though it had been
+    // applied, which is the evidence a caller would use to believe the answer.
+    //
+    // Refusing is the contract's own rule: a narrowing is "declined, never ignored". The reason is
+    // `FilterNotApplicable`, whose name is imperfect here — the ACT admits these; it is this DOOR
+    // that cannot apply them — so each detail says so explicitly. Whether that deserves its own
+    // reason is an open question, not a silent choice.
+    if let Some(f) = &inv.resource_filter {
+        let declared: &[(&str, bool)] = &[
+            ("tags", !f.tags.is_empty()),
+            ("facets", !f.facets.is_empty()),
+            ("stage", f.stage.is_some()),
+            ("status", f.status.is_some()),
+            ("owner", f.owner.is_some()),
+            ("title_contains", f.title_contains.is_some()),
+        ];
+        for field in declared
+            .iter()
+            .filter(|(_, present)| *present)
+            .map(|(field, _)| field)
+        {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::FilterNotApplicable,
+                format!(
+                    "this door does not apply the `{field}` narrowing — the act admits it, the \
+                     compiler has no slot for it, and ignoring it would answer a different question \
+                     than the one asked"
+                ),
+            ));
+        }
+        // The fragment's `p_doc_type` is a single `text`, not an array, so a multi-value doc-type
+        // filter is inexpressible rather than merely unimplemented. Same shape as the anchor slot:
+        // narrowing to the first of them would answer a different question and look like a
+        // successful narrowing.
+        if f.doc_type.len() > 1 {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::FilterNotApplicable,
+                format!(
+                    "this door's doc-type narrowing holds exactly one value; this stage supplied {}",
+                    f.doc_type.len()
+                ),
+            ));
+        }
+    }
+    if !inv.properties.is_empty() {
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::FilterNotApplicable,
+            "this door does not yet apply property predicates — the compiler emits no slot for \
+             them, and a predicate that narrows nothing is a silent substitution",
+        ));
+    }
+    if inv.edge_filter.is_some() {
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::FilterNotApplicable,
+            "this door does not yet apply edge filters — the only act that admits one still \
+             compiles to the absent placeholder",
+        ));
+    }
+
     // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution.
     for term in inv.terms.keys() {
         if !decl.accepts_bound_terms.contains(term) {
@@ -349,13 +420,22 @@ fn check_act(
     if matches!(
         inv.act,
         ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
-    ) && c.intention.is_none()
-    {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::MissingIntention,
-            "a find act requires a threaded intention",
-        ));
+    ) {
+        // `[widened — 2026-08-09]` An empty or whitespace-only query is the SAME omission as an
+        // absent intention, and leaving it out here sent it somewhere false: `resolve_embedding`
+        // declines to embed nothing, `compile` reads the resulting `None` as "the server tried and
+        // failed", and the caller was told `embedding_unavailable` — a server fault, for a question
+        // they never asked. The server never attempted anything. Found in review.
+        let missing = match c.intention.as_ref() {
+            None => Some("a find act requires a threaded intention"),
+            Some(i) if i.query.trim().is_empty() => Some(
+                "a find act requires a threaded intention with a question in it; this one is empty",
+            ),
+            Some(_) => None,
+        };
+        if let Some(detail) = missing {
+            errs.push(refusal(Some(name), RefusalReason::MissingIntention, detail));
+        }
     }
 
     // Property predicates: open subject vocabulary, non-empty key, non-empty `contains`.
@@ -560,6 +640,28 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
     // A `returns` entry must name a declared stage, and may only ask for sections this door
     // hydrates.
     for ret in &c.outcome.returns {
+        // **A combinator may not be RETURNED.** `[added — 2026-08-09]` Its rows come from two or
+        // more acts, so the stage has no single act, no single `orders_by`, and no single
+        // `score_kind` — and a returned stage's rows carry exactly one of each. Hydrating a union
+        // would put two acts' rows into ONE ordered list, which is the merged list
+        // `no-cross-act-ranking` exists to make unrepresentable.
+        //
+        // It was reachable and silent: `ValidationOutcome::of` SKIPS a combinator when computing
+        // `will_return` (so the promise simply omitted it), the compiler emitted a hit arm for it
+        // anyway, and the assembler dropped every row for want of a score kind — answering
+        // `disposition: answered` with an empty list and a tally saying rows existed. Found in
+        // review. Combining stays legal; asking for the combined rows back does not.
+        if matches!(by_name.get(ret.stage.as_str()), Some(StageNode::Combine(_))) {
+            errs.push(refusal(
+                Some(&ret.stage),
+                RefusalReason::Other("combinator-not-returnable".to_string()),
+                format!(
+                    "stage `{}` combines other stages, so its rows have no single act to score \
+                     them; return the stages it combines instead",
+                    ret.stage.as_str()
+                ),
+            ));
+        }
         if !declared.contains(ret.stage.as_str()) {
             errs.push(refusal(
                 Some(&ret.stage),
@@ -695,9 +797,9 @@ mod tests {
         }
     }
 
-    /// A caller id set, with region provenance supplied so it is well-formed. The relation here is
-    /// a placeholder — [`act`] overwrites it with the one the act actually accepts.
-    /// A caller-supplied bound of `kind`, carrying **one** id.
+    /// A caller-supplied bound of `kind`, carrying **one** id, with region provenance where the
+    /// kind requires it so the set is well-formed. The relation is a placeholder — [`act`]
+    /// overwrites it with the one the act actually accepts.
     ///
     /// `[was `ids: vec![]` — 2026-08-09]` The empty list made every anchor-kind fixture here an
     /// UNEXECUTABLE plan that happened to validate: the compiler's `let [id] = ids.as_slice()`
@@ -1469,19 +1571,29 @@ mod tests {
     }
 
     #[test]
-    fn a_combinator_stage_is_absent_from_the_promise_rather_than_guessed_at() {
-        // A combinator names no act, so nothing declares a response shape for it. Rather than
-        // inventing one, it is omitted — a caller sees the key they asked for missing, which is an
-        // honest "I cannot tell you" instead of a fabricated variant they would then parse for.
+    fn a_returned_combinator_is_refused_rather_than_silently_omitted_from_the_promise() {
+        // `[re-pointed — 2026-08-09]` This asserted that a combinator was ABSENT from `will_return`
+        // — "an honest 'I cannot tell you' instead of a fabricated variant" — and its own comment
+        // noted that a combinator "cannot currently be a returned stage. Whoever makes it one has
+        // to come here."
         //
-        // This also PINS a real limitation: a combinator cannot currently be a returned stage.
-        // Whoever makes it one has to come here.
+        // The omission was not enough, and review found what it left open. Nothing refused the
+        // plan: the compiler emitted a hit arm for the combinator, and the assembler dropped every
+        // row for want of a score kind — answering `disposition: answered` with an empty list
+        // beside a tally saying rows existed. A promise that silently omits a key is not a
+        // constraint; it is a gap the layers below walk straight through.
+        //
+        // The limitation is now enforced where it is decidable. A combinator's rows come from two
+        // or more acts, so the stage has no single `orders_by` and no single `score_kind`, and
+        // hydrating it would put two acts' rows into ONE ordered list — the merged list
+        // `no-cross-act-ranking` exists to make unrepresentable. Combining stays legal; asking for
+        // the combined rows back does not.
         let c = plan(
             vec![
                 act("a", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
                 act("b", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
                 StageNode::Combine(CombineNode {
-                    name: StageName::parse("both").unwrap(),
+                    name: StageName::parse("merged").unwrap(),
                     op: CombineOp::Union,
                     inputs: vec![
                         StageName::parse("a").unwrap(),
@@ -1489,19 +1601,38 @@ mod tests {
                     ],
                 }),
             ],
-            vec!["both"],
+            vec!["merged"],
         );
-        let out = ValidationOutcome::of(&validate(&c).expect("legal"));
+        let errs = validate(&c).expect_err("a combinator may not be returned");
         assert!(
-            out.will_return.is_empty(),
-            "no act, no declared shape, no promise; got: {:?}",
-            out.will_return
+            errs.iter().any(|e| e.reason
+                == RefusalReason::Other("combinator-not-returnable".to_string())
+                && e.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
+            "got: {errs:?}"
         );
-        assert_eq!(
-            out.order.len(),
-            3,
-            "but it still runs, and is still ordered"
+    }
+
+    #[test]
+    fn a_combinator_that_is_not_returned_stays_legal() {
+        // The boundary: combining is the point of having combinators. Only asking for the combined
+        // rows BACK is refused, and a composition that unions two stages and returns one of them is
+        // exactly the shape the DAG exists for.
+        let c = plan(
+            vec![
+                act("a", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("merged").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("b").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
         );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).unwrap_err());
     }
 
     #[test]
