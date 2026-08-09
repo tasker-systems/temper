@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::hits::{FtsHit, GraphHit, RegionHit, VecHit};
 use super::id_set::{IdKind, IdSet};
 
 /// A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the
@@ -155,35 +156,92 @@ impl StageInput {
     }
 }
 
-/// What a stage produced. A tagged union with exactly ONE member today.
+/// What a RETURNED stage produced, tagged by currency AND quantity.
 ///
-/// Tagged from the first line so that admitting a second currency later is additive rather than
-/// breaking. It is NOT a claim that a second currency is coming — spec §10 refuses one for v0 and
-/// states the reason (a derived intention cannot be embedded inside a single statement). The other
-/// motivation is `substantiate`: an act that *annotates* rather than *selects* has no `IdSet` to
-/// return, and the old required-field shape left `claims-carry-standing` nowhere to land.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// # There is no `ids` variant
+///
+/// `[decided — 2026-08-09, Pete]` A returned stage is always hydrated: resource hits or region
+/// hits, never a bare id set.
+///
+/// Ids remain the pipe's **internal** currency — the only value that crosses a stage boundary is
+/// membership, and an intermediate stage that merely feeds a downstream one is never hydrated at
+/// all. That is unchanged, and it is what keeps `no-cross-act-ranking` structural. What is gone is
+/// `ids` as a thing a caller can ASK to be given back.
+///
+/// Subselecting a result set is a client concern with a good answer already (`temper … | jq`), and
+/// the principled version is a known later door: GraphQL over this surface, where a caller opts
+/// into exactly the parts they want. Shipping one coarse "just ids" toggle now would occupy the
+/// space that door is for, and it would be the only variant whose shape a caller could not read off
+/// the act declarations.
+///
+/// # Why the quantity is in the tag, not just the row
+///
+/// `[decided during build — 2026-08-09]` The contract drafted this as one `resource_hits` variant
+/// holding a per-item union of the three hit types. Four flat variants instead, for two reasons:
+///
+/// * A union on the ARRAY ITEM permits a list holding an [`FtsHit`] beside a [`VecHit`], policed
+///   only by a sentence saying it must not. A stage runs ONE act and an act produces ONE quantity,
+///   so homogeneity is a property of the type here rather than of everyone remembering.
+///
+/// * It makes `/api/query/validate` self-sufficient. Told `resource_hits`, a caller still does not
+///   know whether to read `fts_norm` or `vec_norm` and must cross-reference `orders_by`. Told
+///   `vec_hits`, they know — and telling them the whole answer before they run anything is that
+///   route's entire purpose.
+///
+/// The tag is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and `orders_by`, which
+/// is what makes that possible: this union has no member an act cannot declare in advance.
+///
+/// Neither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and
+/// the quantities are floats.
+/// Tests compare the serialized form, which is the thing a client actually observes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "produced")]
 pub enum StageOutput {
-    Ids { set: IdSet },
+    /// Produced by `find-exact`.
+    FtsHits { hits: Vec<FtsHit> },
+    /// Produced by `find-about-anywhere` and `find-about-within`.
+    VecHits { hits: Vec<VecHit> },
+    /// Produced by `follow-from`.
+    GraphHits { hits: Vec<GraphHit> },
+    /// Produced by `survey`.
+    RegionHits { hits: Vec<RegionHit> },
 }
 
 impl StageOutput {
-    /// The kind this stage produced. Contract chaining compares kinds, so wrapping the set must not
-    /// cost that comparison.
+    /// The kind of thing this stage produced. Contract chaining compares kinds, so wrapping the
+    /// rows must not cost that comparison.
     pub fn kind(&self) -> IdKind {
         match self {
-            StageOutput::Ids { set } => set.kind.clone(),
+            StageOutput::FtsHits { .. }
+            | StageOutput::VecHits { .. }
+            | StageOutput::GraphHits { .. } => IdKind::Resource,
+            StageOutput::RegionHits { .. } => IdKind::Region,
+        }
+    }
+
+    /// The wire tag, which is also what `/api/query/validate` promises in advance.
+    ///
+    /// Derived through serde rather than a second match, so the value a caller is promised and the
+    /// value they receive cannot drift — two hand-written lists is the `ADMIN_EVENT_TYPES` failure.
+    pub fn produced_tag(&self) -> &'static str {
+        match self {
+            StageOutput::FtsHits { .. } => "fts_hits",
+            StageOutput::VecHits { .. } => "vec_hits",
+            StageOutput::GraphHits { .. } => "graph_hits",
+            StageOutput::RegionHits { .. } => "region_hits",
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            StageOutput::Ids { set } => set.ids.len(),
+            StageOutput::FtsHits { hits } => hits.len(),
+            StageOutput::VecHits { hits } => hits.len(),
+            StageOutput::GraphHits { hits } => hits.len(),
+            StageOutput::RegionHits { hits } => hits.len(),
         }
     }
 
@@ -318,24 +376,61 @@ mod tests {
     }
 
     #[test]
-    fn a_stage_output_is_tagged_so_a_second_currency_would_be_additive() {
-        // The one-variant union is the whole point: an untagged IdSet could not grow without a
-        // breaking change, and `substantiate` — which annotates rather than selects — has no shape
-        // to return at all under the old field type.
-        let o = StageOutput::Ids {
-            set: IdSet {
-                kind: IdKind::Region,
-                provenance: None,
-                ids: vec![],
-            },
-        };
-        let json = serde_json::to_string(&o).unwrap();
-        assert!(
-            json.contains("\"produced\""),
-            "the discriminator is present from day one"
-        );
-        assert_eq!(serde_json::from_str::<StageOutput>(&json).unwrap(), o);
-        assert_eq!(o.kind(), IdKind::Region);
+    fn a_stage_output_is_tagged_and_the_tag_carries_the_quantity_too() {
+        // Tagging from day one is what made this reshape additive rather than breaking: the union
+        // grew from one member to four without a client having to learn a new envelope.
+        //
+        // The tag names the QUANTITY, not just the currency, and that is the load-bearing half.
+        // `resource_hits` would leave a caller unable to tell whether to read `fts_norm` or
+        // `vec_norm`; `vec_hits` tells them outright, which is what lets `/api/query/validate`
+        // answer completely before anything runs.
+        let o = StageOutput::VecHits { hits: vec![] };
+        let json = serde_json::to_value(&o).unwrap();
+        assert_eq!(json["produced"], "vec_hits");
+        assert_eq!(o.kind(), IdKind::Resource);
         assert!(o.is_empty());
+    }
+
+    #[test]
+    fn two_acts_over_the_same_currency_still_land_in_different_variants() {
+        // `no-cross-act-ranking`, made structural one level further down. `find-exact` and
+        // `follow-from` both produce RESOURCES, so a single `resource_hits` variant would put
+        // `fts_norm` and `graph_score` rows in lists of the same type — and the only thing stopping
+        // someone concatenating them would be a comment. These cannot be concatenated: they are
+        // different variants holding different row types.
+        let fts = StageOutput::FtsHits { hits: vec![] };
+        let graph = StageOutput::GraphHits { hits: vec![] };
+        assert_eq!(fts.kind(), graph.kind(), "same currency");
+        assert_ne!(
+            fts.produced_tag(),
+            graph.produced_tag(),
+            "and still not the same shape"
+        );
+    }
+
+    #[test]
+    fn there_is_no_returnable_bare_id_set() {
+        // `[decided — 2026-08-09, Pete]` Ids stay the pipe's internal currency and are no longer
+        // something a caller can ask to be handed back — subselection is `jq` today and a GraphQL
+        // door later. Every variant hydrates, asserted over the whole union so a fifth variant
+        // added later has to face this rule rather than slip past it.
+        for o in [
+            StageOutput::FtsHits { hits: vec![] },
+            StageOutput::VecHits { hits: vec![] },
+            StageOutput::GraphHits { hits: vec![] },
+            StageOutput::RegionHits { hits: vec![] },
+        ] {
+            let json = serde_json::to_value(&o).unwrap();
+            assert!(
+                json.get("hits").is_some(),
+                "{} must carry rows: {json}",
+                o.produced_tag()
+            );
+            assert!(
+                json.get("set").is_none(),
+                "{} must not carry a bare id set: {json}",
+                o.produced_tag()
+            );
+        }
     }
 }

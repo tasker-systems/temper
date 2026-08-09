@@ -68,11 +68,17 @@ pub struct NarrowedBy {
 
 /// One returned stage's answer.
 ///
+/// Neither `PartialEq` nor `Eq`, unlike its neighbours here: it holds hydrated rows, and
+/// [`crate::types::resource_view::ResourceView`] derives neither while the quantities are floats.
+/// The tests below compare the SERIALIZED form instead, which is what a client actually observes
+/// and is the stronger assertion anyway — a field that fails to serialize is invisible to
+/// structural equality.
+///
 /// `[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is
 /// the STAGE — it is keyed by the caller's stage name, and its numbers are about the set that
 /// stage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape
 /// also removed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
@@ -135,10 +141,47 @@ pub struct StageResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::cognitive_maps::CogmapRegionRow;
+    use crate::types::ids::{LensId, RegionId};
     use crate::types::query::disposition::StageDisposition;
-    use crate::types::query::id_set::{IdKind, IdSet};
-    use crate::types::query::stage::StageName;
+    use crate::types::query::hits::RegionHit;
+    use crate::types::query::id_set::IdKind;
     use std::collections::BTreeMap;
+
+    fn region_hit() -> RegionHit {
+        RegionHit {
+            region: CogmapRegionRow {
+                region_id: RegionId::new(),
+                lens_id: LensId::new(),
+                // Beside `region_score` on the same row, and NOT a rival to it: salience is an
+                // INPUT to that score. Constructed here so the two-numbers-one-row case is what
+                // these tests actually serialize.
+                salience: 0.61,
+                content_cohesion: None,
+                label: Some("composable search".to_string()),
+                member_count: 4,
+            },
+            region_score: 0.42,
+        }
+    }
+
+    fn result(narrowed_by: Vec<NarrowedBy>, input_ids: i64) -> StageResult {
+        StageResult {
+            act: ActName::Survey,
+            disposition: StageDisposition::Answered,
+            orders_by: None,
+            produced: StageOutput::RegionHits {
+                hits: vec![region_hit()],
+            },
+            extent: Extent::Complete,
+            total: None,
+            terms_applied: BTreeMap::from([(BoundTerm::Regions, 3)]),
+            narrowed_by,
+            input_ids,
+            input_contributed: None,
+            input_unusable: 0,
+        }
+    }
 
     #[test]
     fn an_invocation_without_input_or_terms_omits_them() {
@@ -160,148 +203,82 @@ mod tests {
 
     #[test]
     fn a_result_still_declares_the_kind_it_produced_through_the_union() {
-        // Contract chaining compares KINDS. Wrapping the set in a tagged union must not cost that:
+        // Contract chaining compares KINDS. Wrapping the rows in a tagged union must not cost that:
         // the kind is still machine-checkable, now via `StageOutput::kind` rather than a bare field.
-        let r = StageResult {
-            disposition: StageDisposition::Answered,
-            orders_by: None,
-            act: ActName::Survey,
-            produced: StageOutput::Ids {
-                set: IdSet {
-                    kind: IdKind::Region,
-                    provenance: None,
-                    ids: vec![],
-                },
-            },
-            extent: Extent::Complete,
-            total: None,
-            terms_applied: BTreeMap::from([(BoundTerm::Regions, 3)]),
-            narrowed_by: vec![],
-            input_ids: 0,
-            input_contributed: Some(0),
-            input_unusable: 0,
-        };
+        let r = result(vec![], 0);
         assert_eq!(r.produced.kind(), IdKind::Region);
-        assert_eq!(
-            serde_json::from_str::<StageResult>(&serde_json::to_string(&r).unwrap()).unwrap(),
-            r
+        assert_eq!(r.produced.produced_tag(), "region_hits");
+        assert_eq!(r.produced.len(), 1);
+    }
+
+    #[test]
+    fn a_returned_stage_is_hydrated_and_can_no_longer_be_a_bare_id_set() {
+        // `[decided — 2026-08-09, Pete]` Ids stay the pipe's internal currency; they are no longer
+        // something a caller can ask to be handed back. Asserted on the WIRE rather than by the
+        // absence of a variant, because the variant being gone is a compile-time fact this test
+        // cannot restate — what a client observes is that every returned stage carries rows.
+        let json = serde_json::to_value(result(vec![], 0).produced).unwrap();
+        assert_eq!(json["produced"], "region_hits");
+        assert!(json.get("hits").is_some(), "a returned stage carries rows");
+        assert!(json.get("set").is_none(), "and never a bare id set: {json}");
+    }
+
+    #[test]
+    fn the_produced_tag_is_the_one_validate_promises_in_advance() {
+        // `/api/query/validate` tells a caller which variant a stage will carry before they run
+        // anything. That promise and this value must be the same string — two hand-written lists
+        // would be the ADMIN_EVENT_TYPES failure, so the tag is read off the serialized form.
+        let o = result(vec![], 0).produced;
+        let json = serde_json::to_value(&o).unwrap();
+        assert_eq!(json["produced"].as_str().unwrap(), o.produced_tag());
+    }
+
+    #[test]
+    fn the_dropped_input_count_is_reported_without_saying_why() {
+        // Invisible / nonexistent / malformed are ONE number on purpose. Splitting them, or naming
+        // a field for the invisible case alone, turns the trace into a single-probe existence
+        // oracle: pass one id, read the counter, learn whether that id exists.
+        let mut r = result(vec![], 40);
+        r.input_unusable = 28;
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""input_unusable":28"#), "got: {json}");
+        for leaky in ["invisible", "withheld", "nonexistent", "forbidden"] {
+            assert!(
+                !json.contains(leaky),
+                "`{leaky}` discloses WHY; got: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrowing_echoes_back_without_requiring_counts() {
+        // Counts ride only where the act computes them for free — requiring them would reintroduce
+        // the second query `Extent` exists to avoid. Absent is not zero.
+        let r = result(
+            vec![NarrowedBy {
+                key: "doc_type".to_string(),
+                value: "session".to_string(),
+                admitted: None,
+                excluded: None,
+            }],
+            0,
         );
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""key":"doc_type""#));
+        assert!(!json.contains("admitted"), "absent, not zero: {json}");
     }
 
     #[test]
-    fn a_result_can_report_partial_without_paying_for_a_total() {
-        // The whole point of Extent: "there is more" is answerable with a limit+1 probe, where a
-        // total would cost a second query on every stage of every chain.
-        let r = StageResult {
-            disposition: StageDisposition::Answered,
-            orders_by: None,
-            act: ActName::FindExact,
-            produced: StageOutput::Ids {
-                set: IdSet {
-                    kind: IdKind::Resource,
-                    provenance: None,
-                    ids: vec![],
-                },
-            },
-            extent: Extent::Partial,
-            total: None,
-            terms_applied: BTreeMap::from([(BoundTerm::Limit, 50)]),
-            narrowed_by: vec![],
-            input_ids: 0,
-            input_contributed: Some(0),
-            input_unusable: 0,
-        };
-        assert_eq!(r.extent, Extent::Partial);
-        assert!(r.total.is_none(), "a partial answer owes no total");
-        // The applied ceiling is visible beside what was asked, so the clamp is not silent.
-        assert_eq!(r.terms_applied.get(&BoundTerm::Limit), Some(&50));
-    }
-
-    #[test]
-    fn a_traversal_result_reports_indeterminate_rather_than_guessing() {
-        let r = StageResult {
-            disposition: StageDisposition::Answered,
-            orders_by: None,
-            act: ActName::Survey,
-            produced: StageOutput::Ids {
-                set: IdSet {
-                    kind: IdKind::Region,
-                    provenance: None,
-                    ids: vec![],
-                },
-            },
-            extent: Extent::Indeterminate {
-                reason: "region-salience traversal has no size prior to its funnel width"
-                    .to_string(),
-            },
-            total: None,
-            terms_applied: BTreeMap::from([(BoundTerm::Regions, 3)]),
-            narrowed_by: vec![],
-            input_ids: 0,
-            input_contributed: Some(0),
-            input_unusable: 0,
-        };
-        assert!(matches!(r.extent, Extent::Indeterminate { .. }));
-    }
-
-    #[test]
-    fn the_dropped_count_cannot_be_read_as_an_existence_oracle() {
-        // Two callers each name one id they cannot see: one id exists, one does not. The wire
-        // form must be IDENTICAL, or a single probe distinguishes them. This is the property the
-        // field's name used to break — `bounds_withheld` inherited StageDisposition::Withheld's
-        // meaning ("material exists") and so answered the question by labelling it.
-        let invisible_but_real = StageResult {
-            disposition: StageDisposition::Answered,
-            orders_by: None,
-            act: ActName::FindExact,
-            produced: StageOutput::Ids {
-                set: IdSet {
-                    kind: IdKind::Resource,
-                    provenance: None,
-                    ids: vec![],
-                },
-            },
-            extent: Extent::Complete,
-            total: None,
-            terms_applied: BTreeMap::new(),
-            narrowed_by: vec![],
-            input_ids: 1,
-            input_contributed: Some(0),
-            input_unusable: 1,
-        };
-        let never_existed = StageResult {
-            input_unusable: 1,
-            ..invisible_but_real.clone()
-        };
-        assert_eq!(
-            serde_json::to_string(&invisible_but_real).unwrap(),
-            serde_json::to_string(&never_existed).unwrap(),
-            "an invisible id and a nonexistent one must be indistinguishable on the wire"
-        );
-        // And no field anywhere in the rendering is named for the invisible case alone.
-        let json = serde_json::to_string(&invisible_but_real).unwrap();
-        assert!(!json.contains("withheld"), "no withheld-shaped counter");
-    }
-
-    #[test]
-    fn narrowed_by_records_what_a_threshold_excluded() {
-        let n = NarrowedBy {
-            key: "min_lexical_rank".to_string(),
-            value: "0.4".to_string(),
-            admitted: Some(12),
-            excluded: Some(88),
-        };
-        // A filter may be disclosed without paying to count what it excluded.
-        let cheap = NarrowedBy {
-            key: "doc_type".to_string(),
-            value: "task".to_string(),
-            admitted: None,
-            excluded: None,
-        };
-        assert!(!serde_json::to_string(&cheap).unwrap().contains("admitted"));
-        assert_eq!(
-            serde_json::from_str::<NarrowedBy>(&serde_json::to_string(&n).unwrap()).unwrap(),
-            n
-        );
+    fn a_result_round_trips_through_the_wire() {
+        // Structural equality is unavailable (hydrated rows, floats), so the round trip is asserted
+        // on the serialized form — which is the thing a client observes, and which also catches a
+        // field that silently fails to deserialize.
+        let r = result(vec![], 7);
+        let once = serde_json::to_string(&r).unwrap();
+        let twice = serde_json::to_string(
+            &serde_json::from_str::<StageResult>(&once).expect("round trips"),
+        )
+        .unwrap();
+        assert_eq!(once, twice);
     }
 }

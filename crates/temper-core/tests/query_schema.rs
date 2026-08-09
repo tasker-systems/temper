@@ -105,6 +105,9 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::Disclosure>("disclosure");
     c.check::<q::ActDeclaration>("act_declaration");
     c.check::<q::ActInvocation>("act_invocation");
+    // `StageOutput` is snapshotted in its own right, not only through `StageResult`: the removal of
+    // its `ids` variant is a decision, and a committed artifact is where a decision stays visible.
+    c.check::<q::StageOutput>("stage_output");
     c.check::<q::StageResult>("stage_result");
     c.check::<q::InputSource>("input_source");
     c.check::<q::MetaTruncated>("meta_truncated");

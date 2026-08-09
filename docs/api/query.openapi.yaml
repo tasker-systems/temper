@@ -768,9 +768,14 @@ components:
             properties:
               act: { $ref: '#/components/schemas/ActName' }
               produced:
-                description: Which `StageOutput` variant this stage will carry.
+                description: |
+                  Which `StageOutput` variant this stage will carry — the whole
+                  answer, including which quantity field its rows hold, so a
+                  caller can write their parser before running anything.
+
+                  There is no `ids`: a returned stage is always hydrated.
                 type: string
-                enum: [ids, resource_hits, region_hits]
+                enum: [fts_hits, vec_hits, graph_hits, region_hits]
               orders_by:
                 description: |
                   The quantity its rows will be ordered by, with its range.
@@ -878,58 +883,99 @@ components:
           format: int64
 
     StageOutput:
-      # DESIGNED. The merged `StageOutput` (stage.rs:99-101) has exactly one
-      # variant, `Ids`, and was tagged from its first line so that admitting a
-      # second currency later would be additive rather than breaking. This is
-      # that addition.
+      # DESIGNED. The merged `StageOutput` (stage.rs) had exactly one variant,
+      # `Ids`, and was tagged from its first line so that admitting another
+      # currency later would be additive rather than breaking. This is that
+      # addition — and it REMOVES `ids` at the same time. See below.
       description: |
-        What a stage produced, tagged by currency. The tag is DERIVABLE BEFORE
-        EXECUTION from the act's declared `produces` — this union has no member
-        an act cannot declare in advance, which is what makes
-        `/api/query/validate` able to tell you the variant before you run.
+        What a RETURNED stage produced, tagged by currency and quantity. The tag
+        is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and
+        `orders_by`, which is what makes `/api/query/validate` able to tell you
+        the exact variant before you run.
+
+        ── THERE IS NO `ids` VARIANT ────────────────────────────────────────────
+
+        `[decided — 2026-08-09, Pete]` A returned stage is always hydrated:
+        resource hits or region hits, never a bare id set. Asked for and
+        declined, with the alternative named rather than deferred vaguely.
+
+        Ids remain the pipe's internal currency — the only value that crosses a
+        stage boundary is membership, and an intermediate stage that merely feeds
+        a downstream one is never hydrated at all. That is unchanged and is what
+        keeps `no-cross-act-ranking` structural. What is removed is `ids` as a
+        thing you can ASK to be given back.
+
+        The reason it is not needed: subselecting a result set is a client-side
+        concern that already has a good answer, `temper … | jq`. And the
+        principled version of it is a KNOWN LATER DOOR — GraphQL over this
+        surface, where a caller opts into exactly the parts they want, recorded
+        as a deferred second door with its adapter shape rather than refused.
+        Shipping a half-measure now (one coarse "just ids" toggle) would occupy
+        the space that door is for, and would be the only variant whose shape a
+        caller could not read off the act declarations.
+
+        ── WHY THE QUANTITY IS IN THE TAG ───────────────────────────────────────
+
+        `[decided during build — 2026-08-09]` Drafted as `resource_hits` with a
+        per-item `oneOf` over the three hit types. Built as four flat variants,
+        for two reasons this document already argues elsewhere:
+
+          * A `oneOf` on the ARRAY ITEM permits a list holding an `FtsHit` beside
+            a `VecHit`. The prose beside it said "a mixed list is unrepresentable
+            here, which is the point" — but the shape permitted exactly that, and
+            policed it with a sentence. A stage runs ONE act and an act produces
+            ONE quantity, so the homogeneity is structural now.
+
+          * It makes `/api/query/validate` SELF-SUFFICIENT. Told `resource_hits`,
+            a caller still does not know whether to read `fts_norm` or
+            `vec_norm`; they would have to cross-reference `orders_by`. Told
+            `vec_hits`, they know. Telling them the whole answer is the entire
+            purpose of that route.
       oneOf:
-        - $ref: '#/components/schemas/IdsOutput'
-        - $ref: '#/components/schemas/ResourceHitsOutput'
+        - $ref: '#/components/schemas/FtsHitsOutput'
+        - $ref: '#/components/schemas/VecHitsOutput'
+        - $ref: '#/components/schemas/GraphHitsOutput'
         - $ref: '#/components/schemas/RegionHitsOutput'
       discriminator:
         propertyName: produced
         mapping:
-          ids: '#/components/schemas/IdsOutput'
-          resource_hits: '#/components/schemas/ResourceHitsOutput'
+          fts_hits: '#/components/schemas/FtsHitsOutput'
+          vec_hits: '#/components/schemas/VecHitsOutput'
+          graph_hits: '#/components/schemas/GraphHitsOutput'
           region_hits: '#/components/schemas/RegionHitsOutput'
 
-    IdsOutput:
-      description: |
-        Membership, never rank — the one value that crosses a stage boundary.
-
-        A stage that only FEEDS a downstream stage, and is not named in
-        `outcome.returns`, never needs hydrating. This is the currency the pipe
-        actually runs on, and it stays a returnable variant so a caller can ask
-        for the set itself.
-      type: object
-      required: [produced, set]
-      properties:
-        produced: { type: string, enum: [ids] }
-        set: { $ref: '#/components/schemas/IdSet' }
-
-    ResourceHitsOutput:
+    FtsHitsOutput:
+      description: Produced by `find-exact`.
       type: object
       required: [produced, hits]
       properties:
-        produced: { type: string, enum: [resource_hits] }
+        produced: { type: string, enum: [fts_hits] }
         hits:
-          description: |
-            Homogeneous within a stage: a stage runs ONE act, and an act produces
-            ONE quantity. A mixed list is unrepresentable here, which is the
-            point.
           type: array
-          items:
-            oneOf:
-              - $ref: '#/components/schemas/FtsHit'
-              - $ref: '#/components/schemas/VecHit'
-              - $ref: '#/components/schemas/GraphHit'
+          items: { $ref: '#/components/schemas/FtsHit' }
+
+    VecHitsOutput:
+      description: Produced by `find-about-anywhere` and `find-about-within`.
+      type: object
+      required: [produced, hits]
+      properties:
+        produced: { type: string, enum: [vec_hits] }
+        hits:
+          type: array
+          items: { $ref: '#/components/schemas/VecHit' }
+
+    GraphHitsOutput:
+      description: Produced by `follow-from`.
+      type: object
+      required: [produced, hits]
+      properties:
+        produced: { type: string, enum: [graph_hits] }
+        hits:
+          type: array
+          items: { $ref: '#/components/schemas/GraphHit' }
 
     RegionHitsOutput:
+      description: Produced by `survey`.
       type: object
       required: [produced, hits]
       properties:

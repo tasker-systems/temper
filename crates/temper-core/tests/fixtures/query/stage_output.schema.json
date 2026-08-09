@@ -1,70 +1,5 @@
 {
   "$defs": {
-    "ActName": {
-      "anyOf": [
-        {
-          "const": "find-exact",
-          "description": "*I can quote the exact words.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-anywhere",
-          "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-within",
-          "description": "*A concept, plus a set to search inside.*",
-          "type": "string"
-        },
-        {
-          "const": "follow-from",
-          "description": "*A found thing; I want its neighbours.*",
-          "type": "string"
-        },
-        {
-          "const": "survey",
-          "description": "*A question about what a scope knows.*",
-          "type": "string"
-        },
-        {
-          "const": "substantiate",
-          "description": "*A claim; I want its defensibility.*",
-          "type": "string"
-        },
-        {
-          "const": "admit",
-          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
-    },
-    "ActQuantity": {
-      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is\nthe exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to\nthe migration that defined the body, which stays readable in history.",
-      "properties": {
-        "field": {
-          "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it.",
-          "type": "string"
-        },
-        "means": {
-          "description": "What the number measures, in this act's own terms.",
-          "type": "string"
-        },
-        "scale": {
-          "$ref": "#/$defs/QuantityScale"
-        }
-      },
-      "required": [
-        "field",
-        "means",
-        "scale"
-      ],
-      "type": "object"
-    },
     "BodyStorage": {
       "description": "What guarantee a resource's body carries on read — a **surfaced projection** of coverage\n(`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.\nOrthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have\nread back exactly, or only approximately?*",
       "oneOf": [
@@ -126,54 +61,6 @@
         "member_count"
       ],
       "type": "object"
-    },
-    "Extent": {
-      "description": "Whether the caller received everything that matched.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\".",
-      "oneOf": [
-        {
-          "description": "Everything that matched is here.",
-          "properties": {
-            "extent": {
-              "const": "complete",
-              "type": "string"
-            }
-          },
-          "required": [
-            "extent"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "More exists beyond what was returned.",
-          "properties": {
-            "extent": {
-              "const": "partial",
-              "type": "string"
-            }
-          },
-          "required": [
-            "extent"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Neither is determinable: the candidate set is *produced by* the bound rather than selected\nunder it. `survey` is the worked case — a region-salience traversal has no size prior to\nits own funnel width.",
-          "properties": {
-            "extent": {
-              "const": "indeterminate",
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "extent",
-            "reason"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "FtsHit": {
       "description": "A resource whose exact words matched. Produced by `find-exact`.",
@@ -331,85 +218,6 @@
         "block_id"
       ],
       "type": "object"
-    },
-    "NarrowedBy": {
-      "description": "One act-specific threshold, and what applying it did.",
-      "properties": {
-        "admitted": {
-          "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "excluded": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "key": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "value"
-      ],
-      "type": "object"
-    },
-    "QuantityScale": {
-      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`\nrescales *the same* `<=>` distance as `1 - d` into `[-1,1]`\n`[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
-      "oneOf": [
-        {
-          "description": "`[0,1]`, bounded by the expression's own arithmetic.",
-          "properties": {
-            "scale": {
-              "const": "unit_interval",
-              "type": "string"
-            }
-          },
-          "required": [
-            "scale"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Bounded, but NOT to `[0,1]`. `bounds` states the actual range.",
-          "properties": {
-            "bounds": {
-              "type": "string"
-            },
-            "scale": {
-              "const": "other_range",
-              "type": "string"
-            }
-          },
-          "required": [
-            "scale",
-            "bounds"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Nothing in the expression or in the schema bounds it.",
-          "properties": {
-            "scale": {
-              "const": "unbounded",
-              "type": "string"
-            }
-          },
-          "required": [
-            "scale"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "RegionHit": {
       "description": "A region of a cognitive map. Produced by `survey`.",
@@ -586,116 +394,6 @@
       ],
       "type": "object"
     },
-    "StageDisposition": {
-      "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
-      "oneOf": [
-        {
-          "const": "answered",
-          "description": "Rows returned.",
-          "type": "string"
-        },
-        {
-          "const": "empty",
-          "description": "Honest zero — the question was asked and nothing matched.",
-          "type": "string"
-        },
-        {
-          "const": "withheld",
-          "description": "Material exists; the asker's standing does not admit disclosure at this depth.\n\n**Only safe where existence is ALREADY licensed** — a region the asker can read containing\na node they cannot. It is a statement that something is there, so it discloses existence by\nconstruction.\n\n**Never safe for a caller-supplied id.** An id the caller named and cannot see contributes\nas an honest [`StageDisposition::Empty`], never as a withholding: the alternative is a\nsingle-probe existence oracle. Same doctrine as `CONTEXT_REFUSAL`'s byte-identical\n`NotFound` and the audit gate's denial arms — see decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
-          "type": "string"
-        },
-        {
-          "const": "refused",
-          "description": "The act declined a well-formed question.",
-          "type": "string"
-        }
-      ]
-    },
-    "StageOutput": {
-      "description": "What a RETURNED stage produced, tagged by currency AND quantity.\n\n# There is no `ids` variant\n\n`[decided — 2026-08-09, Pete]` A returned stage is always hydrated: resource hits or region\nhits, never a bare id set.\n\nIds remain the pipe's **internal** currency — the only value that crosses a stage boundary is\nmembership, and an intermediate stage that merely feeds a downstream one is never hydrated at\nall. That is unchanged, and it is what keeps `no-cross-act-ranking` structural. What is gone is\n`ids` as a thing a caller can ASK to be given back.\n\nSubselecting a result set is a client concern with a good answer already (`temper … | jq`), and\nthe principled version is a known later door: GraphQL over this surface, where a caller opts\ninto exactly the parts they want. Shipping one coarse \"just ids\" toggle now would occupy the\nspace that door is for, and it would be the only variant whose shape a caller could not read off\nthe act declarations.\n\n# Why the quantity is in the tag, not just the row\n\n`[decided during build — 2026-08-09]` The contract drafted this as one `resource_hits` variant\nholding a per-item union of the three hit types. Four flat variants instead, for two reasons:\n\n* A union on the ARRAY ITEM permits a list holding an [`FtsHit`] beside a [`VecHit`], policed\n  only by a sentence saying it must not. A stage runs ONE act and an act produces ONE quantity,\n  so homogeneity is a property of the type here rather than of everyone remembering.\n\n* It makes `/api/query/validate` self-sufficient. Told `resource_hits`, a caller still does not\n  know whether to read `fts_norm` or `vec_norm` and must cross-reference `orders_by`. Told\n  `vec_hits`, they know — and telling them the whole answer before they run anything is that\n  route's entire purpose.\n\nThe tag is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and `orders_by`, which\nis what makes that possible: this union has no member an act cannot declare in advance.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nthe quantities are floats.\nTests compare the serialized form, which is the thing a client actually observes.",
-      "oneOf": [
-        {
-          "description": "Produced by `find-exact`.",
-          "properties": {
-            "hits": {
-              "items": {
-                "$ref": "#/$defs/FtsHit"
-              },
-              "type": "array"
-            },
-            "produced": {
-              "const": "fts_hits",
-              "type": "string"
-            }
-          },
-          "required": [
-            "produced",
-            "hits"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Produced by `find-about-anywhere` and `find-about-within`.",
-          "properties": {
-            "hits": {
-              "items": {
-                "$ref": "#/$defs/VecHit"
-              },
-              "type": "array"
-            },
-            "produced": {
-              "const": "vec_hits",
-              "type": "string"
-            }
-          },
-          "required": [
-            "produced",
-            "hits"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Produced by `follow-from`.",
-          "properties": {
-            "hits": {
-              "items": {
-                "$ref": "#/$defs/GraphHit"
-              },
-              "type": "array"
-            },
-            "produced": {
-              "const": "graph_hits",
-              "type": "string"
-            }
-          },
-          "required": [
-            "produced",
-            "hits"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Produced by `survey`.",
-          "properties": {
-            "hits": {
-              "items": {
-                "$ref": "#/$defs/RegionHit"
-              },
-              "type": "array"
-            },
-            "produced": {
-              "const": "region_hits",
-              "type": "string"
-            }
-          },
-          "required": [
-            "produced",
-            "hits"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "VecHit": {
       "description": "A resource that matched an idea rather than words. Produced by both `find-about-*` acts.",
       "properties": {
@@ -727,84 +425,88 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One returned stage's answer.\n\nNeither `PartialEq` nor `Eq`, unlike its neighbours here: it holds hydrated rows, and\n[`crate::types::resource_view::ResourceView`] derives neither while the quantities are floats.\nThe tests below compare the SERIALIZED form instead, which is what a client actually observes\nand is the stronger assertion anyway — a field that fails to serialize is invisible to\nstructural equality.\n\n`[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is\nthe STAGE — it is keyed by the caller's stage name, and its numbers are about the set that\nstage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape\nalso removed.",
-  "properties": {
-    "act": {
-      "$ref": "#/$defs/ActName"
-    },
-    "disposition": {
-      "$ref": "#/$defs/StageDisposition"
-    },
-    "extent": {
-      "$ref": "#/$defs/Extent",
-      "description": "Complete / partial / indeterminate. NOT a total — see `Extent`."
-    },
-    "input_contributed": {
-      "description": "How many of the usable ids actually contributed to what came back.\n\nThe reading depends on the relation and both are honest: for a `bound`, how many of your\nids are in the output; for a `seed`, how many led to something in the output.\n\n**NULL MEANS THIS ACT CANNOT REPORT IT — never zero.** Which acts can is DECLARED in\n[`super::act::ActDeclaration::discloses`], so it is knowable before the query runs.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "input_ids": {
-      "description": "How many ids this stage was handed. Zero for a stage with no input.",
-      "format": "int64",
-      "type": "integer"
-    },
-    "input_unusable": {
-      "description": "How many did not — for ANY reason, deliberately conflated.\n\nInvisible, nonexistent and malformed are one number on purpose. Separating them, or naming\nthis field for the invisible case alone, is a **single-probe existence oracle**: pass one\nid, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,\nwhose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —\n*material exists* — and so disclosed exactly that. The arithmetic was always harmless\n(`input_ids - input_contributed` is derivable either way); the leak was in the label.\n\nThe caller still learns that 28 of their 40 did not contribute, which is what\n`composition-is-legible` asks for. They do not learn why. Decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`.",
-      "format": "int64",
-      "type": "integer"
-    },
-    "narrowed_by": {
-      "items": {
-        "$ref": "#/$defs/NarrowedBy"
-      },
-      "type": "array"
-    },
-    "orders_by": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ActQuantity"
+  "description": "What a RETURNED stage produced, tagged by currency AND quantity.\n\n# There is no `ids` variant\n\n`[decided — 2026-08-09, Pete]` A returned stage is always hydrated: resource hits or region\nhits, never a bare id set.\n\nIds remain the pipe's **internal** currency — the only value that crosses a stage boundary is\nmembership, and an intermediate stage that merely feeds a downstream one is never hydrated at\nall. That is unchanged, and it is what keeps `no-cross-act-ranking` structural. What is gone is\n`ids` as a thing a caller can ASK to be given back.\n\nSubselecting a result set is a client concern with a good answer already (`temper … | jq`), and\nthe principled version is a known later door: GraphQL over this surface, where a caller opts\ninto exactly the parts they want. Shipping one coarse \"just ids\" toggle now would occupy the\nspace that door is for, and it would be the only variant whose shape a caller could not read off\nthe act declarations.\n\n# Why the quantity is in the tag, not just the row\n\n`[decided during build — 2026-08-09]` The contract drafted this as one `resource_hits` variant\nholding a per-item union of the three hit types. Four flat variants instead, for two reasons:\n\n* A union on the ARRAY ITEM permits a list holding an [`FtsHit`] beside a [`VecHit`], policed\n  only by a sentence saying it must not. A stage runs ONE act and an act produces ONE quantity,\n  so homogeneity is a property of the type here rather than of everyone remembering.\n\n* It makes `/api/query/validate` self-sufficient. Told `resource_hits`, a caller still does not\n  know whether to read `fts_norm` or `vec_norm` and must cross-reference `orders_by`. Told\n  `vec_hits`, they know — and telling them the whole answer before they run anything is that\n  route's entire purpose.\n\nThe tag is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and `orders_by`, which\nis what makes that possible: this union has no member an act cannot declare in advance.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nthe quantities are floats.\nTests compare the serialized form, which is the thing a client actually observes.",
+  "oneOf": [
+    {
+      "description": "Produced by `find-exact`.",
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/FtsHit"
+          },
+          "type": "array"
         },
-        {
-          "type": "null"
+        "produced": {
+          "const": "fts_hits",
+          "type": "string"
         }
-      ],
-      "description": "Echoed from this act's declaration. Present iff the act orders anything.\n\n**Once per stage, rather than once per row.** The row keeps a literal field name so two\nacts' numbers cannot be summed by accident; this carries the RANGE so a reader is not left\nto assume `[0,1]`. Assuming `[0,1]` is the live mistake in this family, not a hypothetical\none: `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]` while `region_score`\nspans `[-0.6, 1.0]`, and neither column name says so."
-    },
-    "produced": {
-      "$ref": "#/$defs/StageOutput",
-      "description": "What this stage produced, as a tagged union. Declared kind, so contract chaining compares\nkinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field."
-    },
-    "terms_applied": {
-      "additionalProperties": {
-        "format": "int64",
-        "type": "integer"
       },
-      "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.\n\nThere is no separate \"you were clamped\" flag, deliberately: ceilings are published per act,\nso the applied value is the whole story. Clamping to a ceiling nobody published would be\nthe bug. This covers only terms the act ADMITS — one it does not is refused outright.",
+      "required": [
+        "produced",
+        "hits"
+      ],
       "type": "object"
     },
-    "total": {
-      "description": "Carried only by acts that can produce one WITHOUT a second query. Never by a composition.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ]
+    {
+      "description": "Produced by `find-about-anywhere` and `find-about-within`.",
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/VecHit"
+          },
+          "type": "array"
+        },
+        "produced": {
+          "const": "vec_hits",
+          "type": "string"
+        }
+      },
+      "required": [
+        "produced",
+        "hits"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Produced by `follow-from`.",
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/GraphHit"
+          },
+          "type": "array"
+        },
+        "produced": {
+          "const": "graph_hits",
+          "type": "string"
+        }
+      },
+      "required": [
+        "produced",
+        "hits"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Produced by `survey`.",
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/RegionHit"
+          },
+          "type": "array"
+        },
+        "produced": {
+          "const": "region_hits",
+          "type": "string"
+        }
+      },
+      "required": [
+        "produced",
+        "hits"
+      ],
+      "type": "object"
     }
-  },
-  "required": [
-    "act",
-    "disposition",
-    "produced",
-    "extent",
-    "terms_applied",
-    "narrowed_by",
-    "input_ids",
-    "input_unusable"
   ],
-  "title": "StageResult",
-  "type": "object"
+  "title": "StageOutput"
 }

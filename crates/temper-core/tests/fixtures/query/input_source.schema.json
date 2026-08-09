@@ -21,7 +21,7 @@
       "type": "object"
     },
     {
-      "description": "**Reserved and currently unreachable.** No compiled plan emits this — there is no\nexpression language (spec §9.1), so no caller-supplied expression ever sub-selects a stage's\nbounds. Beat C adds a test asserting no compiled plan ever produces it.\n\nIt is KEPT rather than removed because [`BoundsSource`] is a *closed* tagged enum: deleting\na variant now would make re-adding it a breaking change, whereas an unreachable-but-declared\nvariant costs nothing. The paired removal on the refusal side went the other way — a jaq\n`ExpressionNotPushdownable` reason was *removed*, because `RefusalReason` is OPEN, so keeping\nan unraisable reason there would be a claim with no referent. The two are treated differently\non the real distinction between an open and a closed vocabulary (spec §9.1).",
+      "description": "**Reserved and currently unreachable.** No compiled plan emits this — there is no\nexpression language (spec §9.1), so no caller-supplied expression ever sub-selects a stage's\nbounds. Beat C adds a test asserting no compiled plan ever produces it.\n\nIt is KEPT rather than removed because [`InputSource`] is a *closed* tagged enum: deleting\na variant now would make re-adding it a breaking change, whereas an unreachable-but-declared\nvariant costs nothing. The paired removal on the refusal side went the other way — a jaq\n`ExpressionNotPushdownable` reason was *removed*, because `RefusalReason` is OPEN, so keeping\nan unraisable reason there would be a claim with no referent. The two are treated differently\non the real distinction between an open and a closed vocabulary (spec §9.1).",
       "properties": {
         "source": {
           "const": "expression",

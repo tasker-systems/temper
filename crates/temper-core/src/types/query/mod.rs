@@ -8,6 +8,7 @@ pub mod composition;
 pub mod disposition;
 pub mod envelope;
 pub mod filter;
+pub mod hits;
 pub mod id_set;
 pub mod registry;
 pub mod scalars;
@@ -31,6 +32,7 @@ pub use filter::{
     EdgeFilter, FacetPredicate, FilterField, PropertyOp, PropertyPredicate, PropertySubject,
     ResourceFilter,
 };
+pub use hits::{FtsHit, GraphHit, MatchLocation, RegionHit, VecHit};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, Extent, MetaDetail};
