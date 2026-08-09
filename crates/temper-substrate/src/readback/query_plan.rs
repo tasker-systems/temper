@@ -704,7 +704,23 @@ fn fragment_for(act: &temper_core::types::query::ActName) -> Option<&'static str
     temper_core::types::query::emitted_fragment_for(&served)
 }
 
-/// A set combinator over its inputs, ids only.
+/// A set combinator over its inputs — **membership only, and the quantity must not enter it.**
+///
+/// `[fixed — 2026-08-09]` This selected `id, kind, quantity`, and `UNION`/`INTERSECT` compare WHOLE
+/// ROWS. A resource found by two different acts carries two different scores — `fts_norm` from the
+/// exact arm, `vec_norm` from the wide one — so it was two distinct rows: `intersect` across two
+/// acts was ALWAYS empty, and `union` counted the same resource twice. Measured: a two-resource
+/// corpus where stage `a` matched one and stage `b` matched both gave `a ∩ b` = 0 rows, reported as
+/// `disposition: empty, extent: complete`, when the true answer was one resource.
+///
+/// It survived because one `Intention` is threaded to every stage, so two `find-exact` stages score
+/// identically and a same-act combinator appears to work — and because no test below temper-core
+/// has ever constructed a `StageNode::Combine` at all.
+///
+/// Projecting to `(id, kind)` is also what the stage contract already required: a quantity never
+/// crosses a stage boundary, and a set operation is the clearest case of that rule. It stays
+/// column-consistent for a combinator over another combinator, because every arm projects
+/// explicitly rather than inheriting its input's shape.
 fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
     let op = match cn.op {
         temper_core::types::query::CombineOp::Union => "UNION",
@@ -713,7 +729,7 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
     let arms: Vec<String> = cn
         .inputs
         .iter()
-        .map(|s| format!("  SELECT id, kind, quantity FROM \"{}\"", s.as_str()))
+        .map(|s| format!("  SELECT id, kind FROM \"{}\"", s.as_str()))
         .collect();
     arms.join(&format!("\n  {op}\n"))
 }
@@ -761,8 +777,10 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         )
     }));
     if arms.is_empty() {
-        // Unreachable through `validate`, which refuses an empty `stages`. Kept because `compile`
-        // is public and a zero-arm UNION is not valid SQL.
+        // Unreachable through `validate`, which refuses an empty `stages` — a claim that was FALSE
+        // when this comment was first written and is true now (`RefusalReason::Other("no-stages")`,
+        // added 2026-08-09 after review found the gap). Kept because `compile` is public and a
+        // zero-arm UNION is not valid SQL.
         return "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
                 NULL::text AS kind, NULL::double precision AS quantity, NULL::bigint AS produced, \
                 NULL::bigint AS unusable WHERE false"

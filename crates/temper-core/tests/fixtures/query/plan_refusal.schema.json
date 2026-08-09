@@ -63,7 +63,7 @@
           "type": "string"
         },
         {
-          "description": "A reason this consumer does not recognize. Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.",
+          "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That is false**, and was when it was\nwritten: `validate` constructs it for nine topology and vocabulary refusals (`\"cycle\"`,\n`\"dangling-reference\"`, `\"duplicate-stage-name\"`, `\"combinator-arity\"`,\n`\"unknown-return-stage\"`, `\"duplicate-return-stage\"`, `\"combinator-not-returnable\"`,\n`\"unknown-act\"`, `\"empty-property-key\"`, `\"empty-contains\"`). So the server emits reasons\nits own [`RefusalReason::is_known`] answers `false` to, and those nine are kebab-case while\nevery declared variant is snake_case — a client's vocabulary is two conventions. Found in\nreview; recorded rather than repaired, because promoting nine strings to variants is a wire\nchange and belongs with the door, not ahead of it.",
           "type": "string"
         }
       ],

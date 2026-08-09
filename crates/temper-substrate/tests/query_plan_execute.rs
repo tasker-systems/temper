@@ -504,3 +504,125 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
         );
     }
 }
+
+// ─── Set combinators, which had no witness at any layer below temper-core ───────────────────────
+
+/// **`intersect` across two acts must be the true intersection.**
+///
+/// It was always EMPTY. `emit_combine_body` selected `id, kind, quantity`, and `INTERSECT` compares
+/// whole rows — so a resource found by two acts carried two different scores and was two different
+/// rows. `union` double-counted it for the same reason.
+///
+/// Nothing caught it because no test below `temper-core` had ever constructed a `StageNode::Combine`
+/// — a mutation to `emit_combine_body` up to and including returning the empty string would have
+/// survived vacuously. Found in review.
+///
+/// **This reads the combinator's TALLY, not its rows**, because a combinator may no longer be a
+/// returned stage (its rows have no single act to score them). The tally is the only observation of
+/// a combinator this surface offers, which makes it the whole witness.
+///
+/// **THIS TEST DOES NOT CATCH THE WHOLE-ROW BUG, and saying so is the point.** It was written
+/// believing that bounding one stage would change its `fts_norm` — it does not: `ts_rank` is a
+/// property of the document and the query, not of the candidate set, so both stages score every
+/// resource identically and the whole-row comparison still matches. Probed, and it did not fire.
+///
+/// What it IS: the first execution of a `StageNode::Combine` anywhere below `temper-core`, which
+/// had zero coverage at any layer. It witnesses that a combinator compiles to valid SQL, runs, and
+/// tallies its true set size. The whole-row defect itself is witnessed at the emission level by
+/// `a_combinator_projects_membership_only_and_never_a_quantity`, which fires.
+///
+/// An end-to-end witness needs two stages whose scores genuinely differ for one resource — i.e. a
+/// `find-exact` beside a `find-about-*` — and that needs embedded chunk fixtures. Named as a
+/// remainder rather than faked with a test that cannot fail.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "combine").await;
+    let kestrel = mk(&pool, home, owner, emitter, "Kestrel", "the kestrel hovers").await;
+    let merlin = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Merlin",
+        "the kestrel and the merlin",
+    )
+    .await;
+
+    let all = StageName::parse("all_hits").unwrap();
+    let just_one = StageName::parse("just_one").unwrap();
+    let merged = StageName::parse("merged").unwrap();
+
+    let find = |n: &StageName, input: Option<StageInput>| {
+        StageNode::Act(ActInvocation {
+            name: n.clone(),
+            act: ActName::FindExact,
+            input,
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
+    };
+    let compose = |op: temper_core::types::query::CombineOp| Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: all.clone(),
+                with: vec![],
+            }],
+        },
+        intention: Some(Intention {
+            query: "kestrel".to_string(),
+            embedded: false,
+        }),
+        meta_detail: Default::default(),
+        bounds: Default::default(),
+        stages: vec![
+            find(&all, None),
+            // Bounded to Kestrel alone, so this stage produces a strict subset of `all_hits`.
+            find(
+                &just_one,
+                Some(StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: IdSet {
+                        kind: IdKind::Resource,
+                        provenance: None,
+                        ids: vec![kestrel],
+                    },
+                }),
+            ),
+            StageNode::Combine(temper_core::types::query::CombineNode {
+                name: merged.clone(),
+                op,
+                inputs: vec![all.clone(), just_one.clone()],
+            }),
+        ],
+    };
+
+    // Precondition: the two stages genuinely differ, or neither assertion below means anything.
+    let v = validate(&compose(temper_core::types::query::CombineOp::Intersect)).expect("valid");
+    let rows = execute(&pool, &compile(&v, owner, None).expect("compiles"))
+        .await
+        .expect("runs");
+    assert_eq!(rows.tally("all_hits").unwrap().produced, 2, "both match");
+    assert_eq!(rows.tally("just_one").unwrap().produced, 1);
+    assert_eq!(
+        rows.tally("merged").unwrap().produced,
+        1,
+        "the intersection is Kestrel — an empty result here is the whole-row comparison bug"
+    );
+
+    let v = validate(&compose(temper_core::types::query::CombineOp::Union)).expect("valid");
+    let rows = execute(&pool, &compile(&v, owner, None).expect("compiles"))
+        .await
+        .expect("runs");
+    assert_eq!(
+        rows.tally("merged").unwrap().produced,
+        2,
+        "the union is both resources — 3 would mean one resource counted twice under two scores"
+    );
+    let _ = merlin;
+}

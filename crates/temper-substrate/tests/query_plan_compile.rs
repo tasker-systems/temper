@@ -329,6 +329,56 @@ fn an_upstream_fed_stage_tallies_zero_unusable_rather_than_re_gating_it() {
     );
 }
 
+/// **A combinator projects membership only — a quantity must never enter a set operation.**
+///
+/// `UNION` and `INTERSECT` compare WHOLE ROWS. With `quantity` in the projection, a resource found
+/// by two acts carries two different scores (`fts_norm` from the exact arm, `vec_norm` from the
+/// wide one) and is therefore two distinct rows: `intersect` across two acts was ALWAYS empty and
+/// `union` counted the resource twice. Found in review.
+///
+/// Asserted here rather than end-to-end because the execute-level version needs two acts whose
+/// scores differ for one resource, which needs embedded chunk fixtures — and because this is where
+/// the rule lives. It is also the stage contract restated: a quantity never crosses a stage
+/// boundary, and a set operation is the clearest case of that.
+#[test]
+fn a_combinator_projects_membership_only_and_never_a_quantity() {
+    let v = build(
+        vec![
+            ff_root("a", vec![Uuid::now_v7()]),
+            ff_root("b", vec![Uuid::now_v7()]),
+            StageNode::Combine(temper_core::types::query::CombineNode {
+                name: StageName::parse("merged").unwrap(),
+                op: temper_core::types::query::CombineOp::Intersect,
+                inputs: vec![
+                    StageName::parse("a").unwrap(),
+                    StageName::parse("b").unwrap(),
+                ],
+            }),
+        ],
+        vec!["a"],
+    );
+    let c = compile(&v, test_profile(), None).expect("compiles");
+    let body = c
+        .sql
+        .split(r#""merged" AS ("#)
+        .nth(1)
+        .expect("merged CTE")
+        .split("\n)")
+        .next()
+        .unwrap()
+        .to_string();
+
+    assert!(body.contains("INTERSECT"), "got: {body}");
+    assert!(
+        !body.contains("quantity"),
+        "a quantity in a set operation makes one resource two rows: {body}"
+    );
+    assert!(
+        body.contains(r#"SELECT id, kind FROM "a""#),
+        "membership only, both arms: {body}"
+    );
+}
+
 #[test]
 fn stages_are_emitted_in_dependency_order() {
     // The compiler consumes ValidatedComposition::ordered(); a CTE referencing one declared later

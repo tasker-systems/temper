@@ -378,7 +378,39 @@ fn check_act(
         ));
     }
 
-    // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution.
+    // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution. A term
+    // outside the range the fragment can express IS a refusal, and must be one HERE.
+    //
+    // `[added — 2026-08-09]` The membership check was the only one, and `applied_terms` clamps only
+    // DOWNWARD against a ceiling, so a negative value passed straight through to the statement:
+    // `limit: -1` reached Postgres as `LIMIT must not be negative` and surfaced as a 500, and
+    // `offset` has no ceiling on any act so `3_000_000_000` gave "integer out of range". Same class
+    // as the empty-intention refusal above — a caller's error rendered as a server fault, one layer
+    // below where it was decidable. Found in review.
+    for (term, value) in &inv.terms {
+        if *value < 0 {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::BoundTermNotApplicable,
+                format!(
+                    "the `{term:?}` bound term counts rows and cannot be negative; this stage \
+                     supplied {value}"
+                ),
+            ));
+        } else if *value > i64::from(i32::MAX) {
+            // The fragments take `int`, not `bigint`. A value above that range is not a large
+            // page — it is a value the mechanic cannot express, and clamping it silently would
+            // answer a different question than the one asked.
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::BoundTermNotApplicable,
+                format!(
+                    "the `{term:?}` bound term is served by a 32-bit slot; {value} is outside the \
+                     range this act can express"
+                ),
+            ));
+        }
+    }
     for term in inv.terms.keys() {
         if !decl.accepts_bound_terms.contains(term) {
             errs.push(refusal(
@@ -595,6 +627,19 @@ fn section_advice(section: ResourceSection) -> &'static str {
 pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
     let mut errs: Vec<PlanRefusal> = Vec::new();
 
+    // **A composition with no stages asks nothing.** `[added — 2026-08-09]` The contract declares
+    // `stages: minItems 1` and nothing enforced it: an empty plan validated cleanly, compiled to a
+    // zero-arm statement saved only by a fallback branch, and the compiler's comment beside that
+    // fallback claimed it was "unreachable through `validate`, which refuses an empty `stages`" —
+    // which was simply untrue. Found in review. Refusing here is what makes that sentence true.
+    if c.stages.is_empty() {
+        errs.push(refusal(
+            None,
+            RefusalReason::Other("no-stages".to_string()),
+            "a composition must declare at least one stage; this one asks nothing",
+        ));
+    }
+
     // Distinct declared names (first wins) + duplicate detection.
     let mut by_name: BTreeMap<&str, &StageNode> = BTreeMap::new();
     let mut declared: BTreeSet<&str> = BTreeSet::new();
@@ -639,6 +684,27 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
 
     // A `returns` entry must name a declared stage, and may only ask for sections this door
     // hydrates.
+    // **A stage may be named in `returns` at most once.**
+    //
+    // `[added — 2026-08-09]` A duplicate emitted one hit arm PER ENTRY, so every row of that stage
+    // came back twice while its tally still said `produced: 1` — and because `returned` is keyed by
+    // stage, only the LAST entry's `with` survived, silently discarding the other's. Two answers to
+    // one question, one of them thrown away without a word. Found in review.
+    let mut returned_once: BTreeSet<&str> = BTreeSet::new();
+    for ret in &c.outcome.returns {
+        if !returned_once.insert(ret.stage.as_str()) {
+            errs.push(refusal(
+                Some(&ret.stage),
+                RefusalReason::Other("duplicate-return-stage".to_string()),
+                format!(
+                    "stage `{}` is named more than once in `returns`; a stage answers once, and \
+                     two entries would duplicate its rows while only one `with` survived",
+                    ret.stage.as_str()
+                ),
+            ));
+        }
+    }
+
     for ret in &c.outcome.returns {
         // **A combinator may not be RETURNED.** `[added — 2026-08-09]` Its rows come from two or
         // more acts, so the stage has no single act, no single `orders_by`, and no single
@@ -785,6 +851,16 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    /// [`plan`] with a threaded question, for the find acts that require one.
+    fn plan_with_intention(stages: Vec<StageNode>, returns: Vec<&str>) -> Composition {
+        let mut c = plan(stages, returns);
+        c.intention = Some(Intention {
+            query: "q".to_string(),
+            embedded: false,
+        });
+        c
     }
 
     fn plan_returning(stages: Vec<StageNode>, returns: Vec<ReturnSpec>) -> Composition {
@@ -1082,6 +1158,92 @@ mod tests {
         assert!(
             errs.iter()
                 .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
+            "got: {errs:?}"
+        );
+    }
+
+    /// A negative paging term is the CALLER's error and is refused here — not carried into the
+    /// statement to come back as a 500.
+    #[test]
+    fn a_negative_paging_term_is_refused_rather_than_handed_to_postgres() {
+        for term in [BoundTerm::Limit, BoundTerm::Offset] {
+            let mut node = act("hits", ActName::FindExact, None);
+            if let StageNode::Act(a) = &mut node {
+                a.terms.insert(term, -1);
+            }
+            let c = plan_with_intention(vec![node], vec!["hits"]);
+            let errs = validate(&c).unwrap_err();
+            assert!(
+                errs.iter()
+                    .any(|e| e.reason == RefusalReason::BoundTermNotApplicable),
+                "{term:?} = -1 must refuse; got: {errs:?}"
+            );
+        }
+    }
+
+    /// The fragments' paging slots are `int`. A value above that range is not a large page — it is
+    /// one the mechanic cannot express, and clamping it silently would answer a different question.
+    #[test]
+    fn a_paging_term_beyond_the_slots_range_is_refused_rather_than_truncated() {
+        let mut node = act("hits", ActName::FindExact, None);
+        if let StageNode::Act(a) = &mut node {
+            a.terms.insert(BoundTerm::Offset, 3_000_000_000);
+        }
+        let c = plan_with_intention(vec![node], vec!["hits"]);
+        let errs = validate(&c).unwrap_err();
+        assert!(errs
+            .iter()
+            .any(|e| e.reason == RefusalReason::BoundTermNotApplicable));
+    }
+
+    /// A stage answers once. Two `returns` entries naming it duplicated every row while its tally
+    /// still said one, and only the LAST entry's `with` survived.
+    #[test]
+    fn a_stage_named_twice_in_returns_is_refused_rather_than_answered_twice() {
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![
+                    ReturnSpec {
+                        stage: StageName::parse("hits").unwrap(),
+                        with: vec![],
+                    },
+                    ReturnSpec {
+                        stage: StageName::parse("hits").unwrap(),
+                        with: vec![ResourceSection::OpenMeta],
+                    },
+                ],
+            },
+            intention: Some(Intention {
+                query: "q".to_string(),
+                embedded: false,
+            }),
+            meta_detail: Default::default(),
+            bounds: Default::default(),
+            stages: vec![act("hits", ActName::FindExact, None)],
+        };
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::Other("duplicate-return-stage".to_string())),
+            "got: {errs:?}"
+        );
+    }
+
+    /// A composition with no stages asks nothing, and the compiler's fallback should never be the
+    /// thing that catches it.
+    #[test]
+    fn a_composition_with_no_stages_is_refused() {
+        let c = Composition {
+            outcome: OutcomeDeclaration { returns: vec![] },
+            intention: None,
+            meta_detail: Default::default(),
+            bounds: Default::default(),
+            stages: vec![],
+        };
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::Other("no-stages".to_string())),
             "got: {errs:?}"
         );
     }

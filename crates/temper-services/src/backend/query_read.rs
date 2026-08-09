@@ -61,11 +61,24 @@ pub async fn run_composition(
             r.reason, r.detail
         ))
     })?;
-    let rows = execute(pool, &compiled)
-        .await
-        .map_err(|e| ApiError::Internal(format!("query execution failed: {e}")))?;
+    let rows = execute(pool, &compiled).await.map_err(opaque)?;
     let hydrated = hydrate(pool, principal, v, &rows).await?;
     Ok(assemble(v, &rows, &hydrated))
+}
+
+/// Log the real failure; hand the caller nothing but the fact of it.
+///
+/// `[fixed — 2026-08-09]` These three sites formatted the underlying error into
+/// `ApiError::Internal`, whose message goes STRAIGHT INTO THE RESPONSE BODY — so a composition
+/// naming `follow-from` answered the caller with
+/// `function __temper_unbound_act(uuid[]) does not exist`, and a mis-sized caller embedding would
+/// answer with pgvector's dimension complaint. This crate's own `From<sqlx::Error> for ApiError`
+/// redacts to "An internal error occurred" and logs the detail; these bypassed that convention.
+/// Found in review. Not an RBAC hole — but internal function names and argument types are exactly
+/// what this codebase refuses to echo everywhere else.
+fn opaque(e: anyhow::Error) -> ApiError {
+    tracing::error!(error = %e, "query read failed");
+    ApiError::Internal("An internal error occurred".to_string())
 }
 
 /// The vector, or the honest absence of one.
@@ -127,6 +140,7 @@ async fn hydrate(
     rows: &QueryRows,
 ) -> ApiResult<Hydrated> {
     let mut ids: Vec<ResourceId> = Vec::new();
+
     for spec in v.returns() {
         for hit in rows.hits_for(spec.stage.as_str()) {
             if hit.kind == "resource" {
@@ -142,7 +156,7 @@ async fn hydrate(
 
     let views = readback::hit_identities(pool, principal, &ids)
         .await
-        .map_err(|e| ApiError::Internal(format!("hydration failed: {e}")))?;
+        .map_err(|e| opaque(anyhow::anyhow!(e)))?;
 
     // ONE statement for the whole response if ANY arm asked — the read is shared, the APPLICATION
     // is not. Its predecessor on the list surface ran a per-view read and a 13-row page cost 28
@@ -154,7 +168,7 @@ async fn hydrate(
     {
         readback::meta_batch(pool, principal, &ids)
             .await
-            .map_err(|e| ApiError::Internal(format!("open-meta read failed: {e}")))?
+            .map_err(|e| opaque(anyhow::anyhow!(e)))?
             .into_iter()
             .map(|(id, rb)| (id.uuid(), serde_json::Value::Object(rb.open)))
             .collect()
@@ -436,9 +450,12 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         input_contributed: n.input_contributed,
         input_unusable: n.input_unusable,
         narrowed_by: narrowed_by(node),
-        // Set only where the per-resource meta budget bit. Nothing truncates today — `meta_detail`
-        // is threaded and honoured but no budget is enforced, so absent is the truthful answer
-        // rather than a zeroed pair claiming nothing was dropped.
+        // Set only where the per-resource meta budget bit. **Nothing truncates, and nothing HONOURS
+        // `meta_detail` either** — it is echoed into the trace and read nowhere else, so `full` and
+        // `none` behave exactly like `surviving`. `[corrected — 2026-08-09]` This comment claimed it
+        // was "threaded and honoured"; only the first half was true. Absent is still the truthful
+        // value for this field — a zeroed pair would claim nothing was dropped, which is a claim no
+        // budget was ever consulted to make.
         meta_truncated: None,
     })
 }

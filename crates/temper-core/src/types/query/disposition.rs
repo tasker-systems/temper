@@ -137,8 +137,18 @@ pub enum RefusalReason {
     /// this is the only one that can appear mid-flight, and it is what gives a runtime refusal a
     /// referent at all. `[decided — 2026-08-08, Pete]`
     EmbeddingUnavailable,
-    /// A reason this consumer does not recognize. Never constructed by this crate — only by
-    /// deserializing a producer newer than this consumer.
+    /// A reason outside the declared vocabulary.
+    ///
+    /// `[corrected — 2026-08-09]` This said "Never constructed by this crate — only by
+    /// deserializing a producer newer than this consumer." **That is false**, and was when it was
+    /// written: `validate` constructs it for nine topology and vocabulary refusals (`"cycle"`,
+    /// `"dangling-reference"`, `"duplicate-stage-name"`, `"combinator-arity"`,
+    /// `"unknown-return-stage"`, `"duplicate-return-stage"`, `"combinator-not-returnable"`,
+    /// `"unknown-act"`, `"empty-property-key"`, `"empty-contains"`). So the server emits reasons
+    /// its own [`RefusalReason::is_known`] answers `false` to, and those nine are kebab-case while
+    /// every declared variant is snake_case — a client's vocabulary is two conventions. Found in
+    /// review; recorded rather than repaired, because promoting nine strings to variants is a wire
+    /// change and belongs with the door, not ahead of it.
     #[serde(untagged)]
     Other(String),
 }
