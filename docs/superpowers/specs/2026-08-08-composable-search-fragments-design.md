@@ -336,21 +336,49 @@ not of materializing at all, which is what §9's narrowing turns on.
   plus CREATE OR REPLACE on two existing ones at unchanged signatures, no DROP."*
 
   ~~**The one figure that decides it is unmeasured: what share of gate cost the closure actually
-  is.**~~ **MEASURED `[2026-08-09]` — and the answer is NEITHER branch.** Research
-  [Spec §9 measured](./019fe7f9-7d40-7c30-aff5-7eaadb3ab6dd).
+  is. If 10%, this buys little; if 70%, it changes this design.**~~ **MEASURED `[2026-08-09]`.**
+  Method and numbers: [Measuring the visibility gate's closure
+  share](./019fe7f9-7d40-7c30-aff5-7eaadb3ab6dd). The call:
+  [At current scale a team-closure table is not borne out by
+  need](./019fe80d-152c-72d1-b612-212d77dff47d).
+
+  **First, the framing above is withdrawn.** *"If 10% … if 70%"* was a **prior agent session's
+  note, not the frame owner's valuation** `[corrected — 2026-08-09, Pete]`. It should not be read
+  as a threshold anyone set, and an argument of the form *"it never reaches 70%, therefore this is
+  minor"* reasons from a number nobody chose.
 
   The closure is **1.0–1.9%** of gate cost at this deployment's topology (depth 2, ≤2 memberships —
-  and note the team-anchored grant arm that returns zero rows in community has **4,800 rows** here,
-  so this is not the corpus §9 was worried about). Across synthetic plausible tenants it rises to
-  **~40%**, crossing 10% at roughly 8 memberships / depth 5 / 100 teams. It never approaches 70% at
-  any shape a tenant plausibly has; 70%+ required 32–64 memberships over **disjoint** chains, which
-  is a worst case rather than an org.
+  and the team-anchored grant arm that returns zero rows in community has **4,800 rows** here, so
+  this is not the corpus this section feared). Across synthetic plausible tenants it rises to
+  **~40%**, crossing 10% at roughly 8 memberships / depth 5 / 100 teams. **At ~40%, on a large
+  corpus, that is a felt difference** — the decision defers on current need, and explicitly does not
+  rank the work as minor.
 
-  **So §5 and §6 do NOT become unnecessary.** That conclusion required the closure to be the
-  dominant cost. Removing it entirely would make the gate ~1.02× faster here and ~1.7× faster at the
-  largest plausible tenant; the remaining 60–98% is the six-arm `UNION` over the visible corpus,
-  which is precisely what §5 and §6 address. The trigger-maintained closure table stays a legitimate
-  **second-order** optimization — worth doing, never the lever this paragraph hoped for.
+  What 70% turned out to describe: ~32–64 memberships over **disjoint** ancestor chains. Not an org
+  chart. The value of having measured it is the **map** — we now know what topology gets there and
+  what removing the closure buys at each point (~1.02× here, ~1.13× at the 10% marker, ~1.65× at
+  16 memberships / 500 teams).
+
+  **§5 and §6 do NOT become unnecessary**, and that conclusion is independent of the withdrawn
+  framing: it required the closure to be the dominant cost at *our* scale, and at 1–2% it is not.
+  The remaining 98% is the six-arm `UNION` over the visible corpus, which is precisely what §5 and
+  §6 address.
+
+  **Three findings that change what a probe must gather:**
+
+  - **Reachable-team cardinality does not predict cost.** Shared reach 39 costs 4.14 ms; disjoint
+    reach 32 costs 0.55 ms — 7.5× apart at nearly equal reach. The `CROSS JOIN LATERAL` walks once
+    per MEMBERSHIP and the `DISTINCT` collapses only the output, so cost tracks **memberships ×
+    depth**, modulated by team-table size. [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)
+    question 3 asks for the cardinality; it should ask for the walk-steps.
+  - **The tenant's total team count is a cost input**, independent of any principal's position:
+    16 memberships at depth 4 in a 500-team org costs more than 16 at depth 6 in a 200-team org.
+  - **Cost is superlinear** — a 4× topology is a 12× cost, so a mean understates the tail.
+
+  Still true and unchanged: **nothing in this design may assume the narrowing lands**, and arm
+  contribution remains [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)'s *"biggest single
+  unknown"* — this figure does not answer it and does not touch the hoist rule. Custom and generic
+  plans were both measured and agree to within 0.2pp, so that caveat is closed rather than carried.
 
   Three things the measurement found that were not predicted, and that change what to gather:
 
