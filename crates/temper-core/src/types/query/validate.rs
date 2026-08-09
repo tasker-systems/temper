@@ -792,7 +792,9 @@ mod tests {
         CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration,
     };
     use crate::types::query::envelope::ActInvocation;
-    use crate::types::query::filter::{EdgeFilter, PropertyPredicate};
+    use crate::types::query::filter::{
+        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, PropertySubject, ResourceFilter,
+    };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
     use crate::types::query::scalars::BoundTerm;
     use std::collections::BTreeMap;
@@ -1260,6 +1262,143 @@ mod tests {
         assert!(errs
             .iter()
             .any(|e| e.reason == RefusalReason::BoundTermNotApplicable));
+    }
+
+    /// **Every narrowing this door drops is refused — all nine, not the one that had a test.**
+    ///
+    /// A narrowing is "declined, never ignored": accepting one the compiler emits no slot for
+    /// answers a different question than the one asked, and then echoes the filter back in
+    /// `narrowed_by` as evidence for the answer.
+    ///
+    /// Written as one parameterised case per field because the rule is about the SET. Eight of the
+    /// nine arms had no witness while `tags` had one, so restricting the rule to `tags` — or
+    /// dropping any single arm — survived the whole suite. A test per field would have the same
+    /// hole the moment a tenth narrowing is added; this one at least fails loudly when an existing
+    /// arm goes missing.
+    ///
+    /// Presence, not exclusivity: `stage` / `status` / `doc_type` also carry closed vocabularies, so
+    /// a case may legitimately raise `UnknownFilterValue` beside the refusal under test. The
+    /// validator returns ALL refusals, so asserting the one this test is about stays sharp.
+    #[test]
+    fn every_narrowing_this_door_cannot_apply_is_refused_and_none_is_silently_dropped() {
+        /// One case: a label, the narrowing the caller supplied, and the fragment of the refusal
+        /// that must name it back.
+        type NarrowingCase = (&'static str, Box<dyn Fn(&mut ActInvocation)>, &'static str);
+
+        let cases: Vec<NarrowingCase> = vec![
+            (
+                "tags",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        tags: vec!["x".to_string()],
+                        ..Default::default()
+                    })
+                }),
+                "`tags` narrowing",
+            ),
+            (
+                "facets",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        facets: vec![FacetPredicate {
+                            key: "k".to_string(),
+                            value: "v".to_string(),
+                        }],
+                        ..Default::default()
+                    })
+                }),
+                "`facets` narrowing",
+            ),
+            (
+                "stage",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        stage: Some("done".to_string()),
+                        ..Default::default()
+                    })
+                }),
+                "`stage` narrowing",
+            ),
+            (
+                "status",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        status: Some("active".to_string()),
+                        ..Default::default()
+                    })
+                }),
+                "`status` narrowing",
+            ),
+            (
+                "owner",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        owner: Some("@someone".to_string()),
+                        ..Default::default()
+                    })
+                }),
+                "`owner` narrowing",
+            ),
+            (
+                "title_contains",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        title_contains: Some("pipe".to_string()),
+                        ..Default::default()
+                    })
+                }),
+                "`title_contains` narrowing",
+            ),
+            (
+                "two doc types",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        doc_type: vec!["task".to_string(), "session".to_string()],
+                        ..Default::default()
+                    })
+                }),
+                "holds exactly one value",
+            ),
+            (
+                "a property predicate",
+                Box::new(|a: &mut ActInvocation| {
+                    a.properties = vec![PropertyPredicate {
+                        subject: PropertySubject::Resource,
+                        key: "k".to_string(),
+                        op: PropertyOp::HasKey,
+                    }]
+                }),
+                "property predicates",
+            ),
+            (
+                "an edge filter",
+                Box::new(|a: &mut ActInvocation| {
+                    a.edge_filter = Some(EdgeFilter {
+                        edge_kinds: vec![EdgeKind::LeadsTo],
+                        labels: vec![],
+                    })
+                }),
+                "edge filters",
+            ),
+        ];
+
+        // The denominator, stated so a shrinking case list is a failure rather than a quieter test.
+        assert_eq!(cases.len(), 9, "nine narrowings this door drops");
+
+        for (label, supply, expected) in cases {
+            let mut node = act("hits", ActName::FindExact, None);
+            if let StageNode::Act(a) = &mut node {
+                supply(a);
+            }
+            let errs = validate(&plan(vec![node], vec!["hits"]))
+                .expect_err("an unapplied narrowing must refuse");
+            assert!(
+                errs.iter()
+                    .any(|e| e.reason == RefusalReason::FilterNotApplicable
+                        && e.detail.contains(expected)),
+                "supplying {label} must be DECLINED, naming what it declined; got: {errs:?}"
+            );
+        }
     }
 
     #[test]

@@ -718,6 +718,104 @@ mod tests {
         assert_eq!(r.trace.stages[0].disposition, StageDisposition::Refused);
     }
 
+    /// **A refusal is PER STAGE**, and one composition holding both is the only fixture that can
+    /// say so.
+    ///
+    /// Every refusal test above is single-stage, where "this stage refused" and "the composition
+    /// refused" are indistinguishable — so `refusal()` ignoring the stage name it was handed
+    /// survived, and one stage's `embedding_unavailable` marking EVERY stage refused was
+    /// unwitnessed at the layer that RENDERS it. The compiler asserts the same property on the
+    /// emitted text; nothing asserted it on the response.
+    ///
+    /// The healthy stage is what makes the test bite: without it there is no arm whose disposition
+    /// a leaking refusal could wrongly change.
+    #[test]
+    fn a_stage_refusing_does_not_refuse_the_healthy_stage_beside_it() {
+        let v = plan(
+            vec![
+                act_node("wide", ActName::FindAboutAnywhere, None),
+                act_node("exact", ActName::FindExact, None),
+            ],
+            vec!["wide", "exact"],
+        );
+        let id = Uuid::from_u128(1);
+        let rows = QueryRows {
+            hits: vec![hit("exact", id, 0.7)],
+            tallies: vec![tally("wide", 0, 0), tally("exact", 1, 0)],
+            refusals: vec![PlanRefusal {
+                stage: Some(name("wide")),
+                reason: RefusalReason::EmbeddingUnavailable,
+                detail: "the server could not compute one".to_string(),
+            }],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+
+        assert_eq!(
+            r.returned[&name("wide")].disposition,
+            StageDisposition::Refused,
+            "the stage that could not be served"
+        );
+        assert_eq!(
+            r.returned[&name("exact")].disposition,
+            StageDisposition::Answered,
+            "a refusal must not travel to a stage that ran — the composition did not refuse, one \
+             stage did"
+        );
+        // And the same distinction in the trace, which is where a reader looks for it.
+        let refused: Vec<&StageDisposition> = r
+            .trace
+            .stages
+            .iter()
+            .filter(|s| s.disposition == StageDisposition::Refused)
+            .map(|s| &s.disposition)
+            .collect();
+        assert_eq!(refused.len(), 1, "exactly one stage refused: {:?}", r.trace);
+    }
+
+    /// **`Extent::Partial` — produced by no test until now**, though `extent` is how a caller decides
+    /// whether to page at all.
+    ///
+    /// `Partial` iff a limit was applied and the stage produced exactly that many. It over-reports
+    /// at the boundary and never under-reports, which is the direction that matters: claiming
+    /// `complete` over a truncated set would be a false claim about the corpus.
+    #[test]
+    fn a_stage_that_filled_its_page_reports_partial_rather_than_claiming_completeness() {
+        let node = StageNode::Act(ActInvocation {
+            name: name("hits"),
+            act: ActName::FindExact,
+            input: None,
+            terms: std::collections::BTreeMap::from([(BoundTerm::Limit, 2)]),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        });
+        let v = plan(vec![node], vec!["hits"]);
+
+        let full = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("hits", 2, 0)],
+            refusals: vec![],
+        };
+        assert_eq!(
+            assemble(&v, &full, &Hydrated::default()).returned[&name("hits")].extent,
+            Extent::Partial,
+            "a page filled to its limit may have more behind it"
+        );
+
+        // The other side of the same boundary, so the test measures the RULE and not a constant.
+        let short = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("hits", 1, 0)],
+            refusals: vec![],
+        };
+        assert_eq!(
+            assemble(&v, &short, &Hydrated::default()).returned[&name("hits")].extent,
+            Extent::Complete,
+            "a page the limit did not fill has nothing behind it"
+        );
+    }
+
     #[test]
     fn a_stage_that_asked_and_matched_nothing_is_empty_rather_than_refused() {
         // The other half of the pair. Same zero rows, no refusal — `empty` means "asked, no match",
