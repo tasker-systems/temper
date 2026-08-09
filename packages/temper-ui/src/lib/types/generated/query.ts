@@ -546,7 +546,24 @@ facets: Array<FacetPredicate>, stage: string | null, status: string | null, owne
  * search arms answer in — six near-identical projections collapsed into one. A hit adds scoring
  * and nothing else.
  */
-export type ResourceHit = { resource: ResourceView, scoring: Scoring, };
+export type ResourceHit = { resource: ResourceView, scoring: Scoring, 
+/**
+ * Where in the resource the match was — the closest chunk's block.
+ *
+ * **Filled only by the wide arm**, and its absence is declared in advance rather than
+ * discovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.
+ * The wide arm matches at CHUNK grain and already computes which chunk was closest, then
+ * discards it collapsing to a per-resource score; recovering it is an argmin beside an
+ * aggregate that already runs.
+ *
+ * `find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by
+ * concatenating every chunk into a single blob, so the block boundary is gone before the query
+ * is asked. `follow-from` has no match position at all — it returns nodes reached by walking.
+ *
+ * It sits on this type rather than on [`Scoring`] because `Scoring` is shared with
+ * [`RegionHit`], and a region is not somewhere inside a resource.
+ */
+located_at: MatchLocation | null, };
 
 /**
  * One stage whose rows come back, and how much of each row.
@@ -602,22 +619,7 @@ export type Scoring = { score_kind: ScoreKind,
  * Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
  * carried per row because it is a property of the act, identical for every row of a stage.
  */
-score: number, 
-/**
- * Where in the resource the match was — the closest chunk's block.
- *
- * **Filled only by the wide arm**, and its absence is declared in advance rather than
- * discovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.
- * The wide arm matches at CHUNK grain and already computes which chunk was closest, then
- * discards it collapsing to a per-resource score; recovering it is an argmin beside an
- * aggregate that already runs.
- *
- * `find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by
- * concatenating every chunk into a single blob, so the block boundary is gone before the query
- * is asked. `follow-from` and `survey` have no match position at all — one returns nodes
- * reached by walking, the other returns regions.
- */
-located_at: MatchLocation | null, };
+score: number, };
 
 /**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).

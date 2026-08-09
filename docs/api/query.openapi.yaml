@@ -1005,6 +1005,24 @@ components:
             for every row of a stage.
           type: number
           format: float
+      # `located_at` is deliberately NOT here. This schema is shared by resource
+      # hits and region hits, so a field here would exist on a region — and a
+      # region is not somewhere inside a resource, so it could never be filled.
+      # An always-null field says "no match location" where the truth is "this
+      # can never tell you", which is the same refusal that denied the old
+      # `FtsHit` one. It lives on `ResourceHit`.
+    ResourceHit:
+      description: |
+        One resource that matched, however it matched.
+
+        `ResourceView` is the same projection `list`/`show`/`create`/`update`/
+        `annotate` and both search arms answer in — six near-identical
+        projections collapsed into one. A hit adds scoring and nothing else.
+      type: object
+      required: [resource, scoring]
+      properties:
+        resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
+        scoring: { $ref: '#/components/schemas/Scoring' }
         located_at:
           description: |
             WHERE in the resource the match was — the closest chunk's block.
@@ -1044,18 +1062,6 @@ components:
                 isolated either.
               type: [string, "null"]
 
-    ResourceHit:
-      description: |
-        One resource that matched, however it matched.
-
-        `ResourceView` is the same projection `list`/`show`/`create`/`update`/
-        `annotate` and both search arms answer in — six near-identical
-        projections collapsed into one. A hit adds scoring and nothing else.
-      type: object
-      required: [resource, scoring]
-      properties:
-        resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
-        scoring: { $ref: '#/components/schemas/Scoring' }
 
     RegionHit:
       description: A region of a cognitive map. Produced by `survey`.

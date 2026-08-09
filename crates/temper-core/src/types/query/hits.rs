@@ -109,20 +109,17 @@ pub struct Scoring {
     /// Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
     /// carried per row because it is a property of the act, identical for every row of a stage.
     pub score: f32,
-    /// Where in the resource the match was — the closest chunk's block.
-    ///
-    /// **Filled only by the wide arm**, and its absence is declared in advance rather than
-    /// discovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.
-    /// The wide arm matches at CHUNK grain and already computes which chunk was closest, then
-    /// discards it collapsing to a per-resource score; recovering it is an argmin beside an
-    /// aggregate that already runs.
-    ///
-    /// `find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by
-    /// concatenating every chunk into a single blob, so the block boundary is gone before the query
-    /// is asked. `follow-from` and `survey` have no match position at all — one returns nodes
-    /// reached by walking, the other returns regions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub located_at: Option<MatchLocation>,
+    // `located_at` is NOT here, and the reason is the one this contract already applied once.
+    //
+    // `Scoring` is shared by both hit types, so a field here exists on region hits too — and a
+    // region is not somewhere inside a resource, so it could never be filled. That is precisely
+    // what was refused when `FtsHit` was denied an always-null `located_at`: a field that is
+    // always null says "no match location" where the truth is "this can never tell you".
+    //
+    // It lives on `ResourceHit` instead, where it is null for `find-exact` and `follow-from` but
+    // FILLABLE by the wide arm — which is the ordinary case `discloses` exists to declare in
+    // advance. The distinction is between an act that does not fill a field and a shape that
+    // cannot.
 }
 
 /// Where in a resource a chunk-grain match landed.
@@ -161,6 +158,22 @@ pub struct MatchLocation {
 pub struct ResourceHit {
     pub resource: ResourceView,
     pub scoring: Scoring,
+    /// Where in the resource the match was — the closest chunk's block.
+    ///
+    /// **Filled only by the wide arm**, and its absence is declared in advance rather than
+    /// discovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.
+    /// The wide arm matches at CHUNK grain and already computes which chunk was closest, then
+    /// discards it collapsing to a per-resource score; recovering it is an argmin beside an
+    /// aggregate that already runs.
+    ///
+    /// `find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by
+    /// concatenating every chunk into a single blob, so the block boundary is gone before the query
+    /// is asked. `follow-from` has no match position at all — it returns nodes reached by walking.
+    ///
+    /// It sits on this type rather than on [`Scoring`] because `Scoring` is shared with
+    /// [`RegionHit`], and a region is not somewhere inside a resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub located_at: Option<MatchLocation>,
 }
 
 /// One region of a cognitive map. Produced by `survey`.

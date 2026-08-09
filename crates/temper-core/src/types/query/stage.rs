@@ -266,7 +266,7 @@ impl StageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::query::hits::{ScoreKind, Scoring};
+    use crate::types::query::hits::{MatchLocation, ScoreKind, Scoring};
     use crate::types::query::id_set::{IdKind, IdSet};
 
     /// A hit whose only interesting property is its scoring.
@@ -277,11 +277,8 @@ mod tests {
     fn resource_hit(score_kind: ScoreKind, score: f32) -> ResourceHit {
         ResourceHit {
             resource: inert_resource(),
-            scoring: Scoring {
-                score_kind,
-                score,
-                located_at: None,
-            },
+            scoring: Scoring { score_kind, score },
+            located_at: None,
         }
     }
 
@@ -529,6 +526,49 @@ mod tests {
         assert!(ScoreKind::VecNorm.is_known());
         // And it still compares unequal to a known kind, which is the whole job.
         assert_ne!(k, ScoreKind::VecNorm);
+    }
+
+    #[test]
+    fn a_region_hit_has_no_match_location_field_at_all() {
+        // Not "null for regions" — ABSENT. `located_at` sits on `ResourceHit` rather than on the
+        // shared `Scoring` precisely so this shape cannot carry it: a region is not somewhere
+        // inside a resource, so a field there could never be filled, and an always-null field says
+        // "no match location" where the truth is "this can never tell you". That is the same
+        // refusal that denied the old `FtsHit` an always-null one.
+        //
+        // On resource hits it IS absent-but-fillable, which is the ordinary case `discloses`
+        // declares in advance — the distinction being kept is between an act that does not fill a
+        // field and a shape that cannot.
+        let region = serde_json::to_value(RegionHit {
+            region: crate::types::cognitive_maps::CogmapRegionRow {
+                region_id: crate::types::ids::RegionId::new(),
+                lens_id: crate::types::ids::LensId::new(),
+                salience: 0.61,
+                content_cohesion: None,
+                label: None,
+                member_count: 4,
+            },
+            scoring: Scoring {
+                score_kind: ScoreKind::RegionScore,
+                score: 0.42,
+            },
+        })
+        .unwrap();
+        assert!(region.get("scoring").is_some());
+        assert!(
+            region.get("located_at").is_none() && region["scoring"].get("located_at").is_none(),
+            "a region cannot have a position inside a resource: {region}"
+        );
+
+        // And a resource hit can carry one.
+        let mut hit = resource_hit(ScoreKind::VecNorm, 0.9);
+        hit.located_at = Some(MatchLocation {
+            block_id: crate::types::ids::BlockId::new(),
+            header_path: Some("## Findings".to_string()),
+            snippet: None,
+        });
+        let json = serde_json::to_value(&hit).unwrap();
+        assert!(json["located_at"]["block_id"].is_string(), "got: {json}");
     }
 
     #[test]

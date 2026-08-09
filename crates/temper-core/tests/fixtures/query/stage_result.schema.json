@@ -395,6 +395,17 @@
     "ResourceHit": {
       "description": "One resource that matched, however it matched.\n\n[`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both\nsearch arms answer in — six near-identical projections collapsed into one. A hit adds scoring\nand nothing else.",
       "properties": {
+        "located_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MatchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in the resource the match was — the closest chunk's block.\n\n**Filled only by the wide arm**, and its absence is declared in advance rather than\ndiscovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.\nThe wide arm matches at CHUNK grain and already computes which chunk was closest, then\ndiscards it collapsing to a per-resource score; recovering it is an argmin beside an\naggregate that already runs.\n\n`find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by\nconcatenating every chunk into a single blob, so the block boundary is gone before the query\nis asked. `follow-from` has no match position at all — it returns nodes reached by walking.\n\nIt sits on this type rather than on [`Scoring`] because `Scoring` is shared with\n[`RegionHit`], and a region is not somewhere inside a resource."
+        },
         "resource": {
           "$ref": "#/$defs/ResourceView"
         },
@@ -596,17 +607,6 @@
     "Scoring": {
       "description": "How one hit scored, and by what measure.\n\nThe kind travels WITH the number, which is what lets a row be understood on its own. Two hits\nwhose `score_kind` differs hold values that must never be added, averaged, or sorted into one\nlist — and unlike a bare field name, that is something a client can actually check.",
       "properties": {
-        "located_at": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MatchLocation"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Where in the resource the match was — the closest chunk's block.\n\n**Filled only by the wide arm**, and its absence is declared in advance rather than\ndiscovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.\nThe wide arm matches at CHUNK grain and already computes which chunk was closest, then\ndiscards it collapsing to a per-resource score; recovering it is an argmin beside an\naggregate that already runs.\n\n`find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by\nconcatenating every chunk into a single blob, so the block boundary is gone before the query\nis asked. `follow-from` and `survey` have no match position at all — one returns nodes\nreached by walking, the other returns regions."
-        },
         "score": {
           "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.",
           "format": "float",
