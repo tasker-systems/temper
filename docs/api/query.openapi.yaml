@@ -1334,6 +1334,7 @@ components:
       type: string
       enum:
         - unsupported_bound_kind     # this act does not narrow on that kind of id
+        - anchor_takes_one_id        # see below — a cogmap/context bound carrying anything but one
         - unsupported_seed_kind      # this act does not grow from that kind of id
         - missing_provenance         # a region set arrived without the anchor it requires
         - not_implemented            # the act is declared but has no mechanic
@@ -1346,6 +1347,31 @@ components:
         - not_separably_reachable    # the act exists; this surface cannot call its mechanic yet
         - embedding_unavailable      # RUNTIME. see below.
 
+    # ── `anchor_takes_one_id` IS NOT `unsupported_bound_kind`, AND THAT IS THE POINT ──
+    #
+    # `[decided — 2026-08-09, Pete]` A cogmap or context bound is served by the fragments'
+    # `(anchor_table, anchor_id)` PAIR, which holds one id, while an `IdSet` holds N.
+    # Spec §9 names the mismatch. Two ids refuse; so does zero.
+    #
+    # It gets its own reason rather than reusing `unsupported_bound_kind` because
+    # that one says something FALSE here — the kind is accepted, and a client
+    # reading it learns "stop sending context bounds to this act" when the fix is
+    # "send one". `RefusalReason` is OPEN precisely so a reason that says the true
+    # thing costs nothing to add.
+    #
+    # ZERO IS NOT "UNBOUNDED". For a resource array the fragments distinguish
+    # `'{}'` (bounded to nothing) from `NULL` (unbounded). An anchor has no such
+    # pair, so an empty anchor set is a caller who asked to scope and named
+    # nothing — admitting it would drop the scope and answer the unscoped
+    # question, which is `no-silent-question-substitution`.
+    #
+    # IT IS STATIC, so it is a 400 beside every other refusal, not a stage
+    # disposition. The compiler used to raise it — as an `Err` that aborted the
+    # WHOLE composition, costing every innocent stage in it. That is the same
+    # defect the per-stage embedding refusal removed, and it is fixed the same
+    # way: refuse where the caller can be told everything at once. The compiler's
+    # arm survives as an unreachable drift guard between two crates.
+    #
     # ── THERE IS NO `on_stage_refusal`. ONE BEHAVIOUR, NOT A CHOICE. ──────────
     #
     # `[decided — 2026-08-08, Pete]` The merged `Composition` carries a required

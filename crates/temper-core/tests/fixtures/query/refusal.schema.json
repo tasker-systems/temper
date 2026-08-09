@@ -8,6 +8,11 @@
           "type": "string"
         },
         {
+          "const": "anchor_takes_one_id",
+          "description": "A cogmap or context bound arrived carrying anything other than exactly one id.\n\n**Distinct from [`RefusalReason::UnsupportedBoundKind`] on purpose, and the distinction is\nthe whole reason this variant exists.** The kind IS accepted — reporting \"this act does not\nnarrow on that kind of id\" would teach the caller the wrong lesson (*stop sending cogmap\nbounds*) when the right one is *send one*. `RefusalReason` is OPEN precisely so a reason that\nsays the true thing can be added without breaking a client.\n\nThe constraint is the fragments': a resource bound is a `uuid[]`, but a cogmap or context\nbound is served by an `(anchor_table, anchor_id)` PAIR, which holds one id. Spec §9 names the\nmismatch — *\"an `IdSet` holds N ids; an anchor slot holds one\"* — as an open cardinality gap,\nand refusing is the honest response to it. Silently anchoring on the first element would\nanswer a different question than the one asked and look like a successful narrowing.\n\n**Zero refuses too, and is not \"unbounded\".** For a resource array the fragments distinguish\n`'{}'` (bounded to nothing) from `NULL` (unbounded); an anchor has no such pair, so an empty\nanchor set is a caller who asked to scope and named nothing. Admitting it would drop the\nscope and answer the unscoped question.\n\n`[moved from the compiler — 2026-08-09, Pete]` The compiler used to raise this as an `Err`\nthat aborted the whole composition, costing every innocent stage beside it. It is a STATIC\nproperty of the plan, so it belongs here, in the 400 with every other refusal at once.",
+          "type": "string"
+        },
+        {
           "const": "unsupported_seed_kind",
           "description": "The act does not accept seeds of the supplied `IdKind`.",
           "type": "string"

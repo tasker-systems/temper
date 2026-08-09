@@ -559,10 +559,18 @@ fn narrowing_for(
                     IdKind::Cogmap => "kb_cogmaps",
                     _ => "kb_contexts",
                 };
+                // **Unreachable through `validate`, and asserted anyway.** The cardinality is a
+                // static property of the plan and is refused there now
+                // (`RefusalReason::AnchorTakesOneId`), so a caller's mistake arrives in the 400
+                // beside every other refusal rather than costing every innocent stage in the
+                // composition. This arm survives as the same kind of last line as `bound_expr`'s:
+                // the two decisions live in different crates and could drift, and if they ever do,
+                // the loud answer is the safe one. Same reason on both sides so the drift cannot be
+                // a difference of opinion about WHAT is wrong.
                 let [id] = ids.ids.as_slice() else {
                     return Err(PlanRefusal {
                         stage: Some(inv.name.clone()),
-                        reason: RefusalReason::UnsupportedBoundKind,
+                        reason: RefusalReason::AnchorTakesOneId,
                         detail: format!(
                             "a {table} bound is served by the anchor pair, which holds exactly one \
                              id; this stage supplied {}. Anchoring on one of them would answer a \

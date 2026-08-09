@@ -714,10 +714,35 @@ fn a_cogmap_bound_is_emitted_as_the_anchor_pair_not_as_a_resource_id_array() {
 /// Spec §9 names this cardinality gap. Anchoring on `ids[0]` would answer a different question than
 /// the one asked while looking like a successful narrowing — the failure mode this whole arc is
 /// against.
+///
+/// **`[moved to the validator — 2026-08-09, Pete]` This test now asserts that the compiler never
+/// SEES the case, which is the change.** It used to build the plan, compile it, and read an `Err` —
+/// and that `Err` aborted the whole composition, so a healthy stage beside the bad one was refused
+/// for its neighbour's mistake. The cardinality is static, so it is refused at validation now and
+/// arrives in the 400 with every other refusal.
+///
+/// Re-pointed rather than deleted, for the reason this file has re-pointed twice before: the
+/// property still needs a witness, and deleting a test when its expected value changes retires the
+/// only thing holding the distinction. What it can no longer assert is the compiler's own arm —
+/// `ValidatedComposition` is parse-don't-validate, so no test can construct one that skipped the
+/// check. That arm survives as an unreachable drift guard (same shape as `bound_expr`'s seed arm),
+/// and this is the note saying so.
 #[test]
-fn a_multi_id_anchor_bound_refuses_rather_than_anchoring_on_the_first() {
-    let v = build_with_intention(
-        vec![find_stage(
+fn a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it() {
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![],
+            }],
+        },
+        intention: Some(Intention {
+            query: "salience".to_string(),
+            embedded: true,
+        }),
+        meta_detail: Default::default(),
+        bounds: Default::default(),
+        stages: vec![find_stage(
             "hits",
             ActName::FindExact,
             Some(caller_set(
@@ -725,11 +750,22 @@ fn a_multi_id_anchor_bound_refuses_rather_than_anchoring_on_the_first() {
                 vec![Uuid::now_v7(), Uuid::now_v7()],
             )),
         )],
-        vec!["hits"],
+    };
+
+    let errs = validate(&c).expect_err("two anchor ids must refuse");
+    assert!(
+        errs.iter()
+            .any(|e| e.reason == RefusalReason::AnchorTakesOneId
+                && e.stage.as_ref().is_some_and(|s| s.as_str() == "hits")),
+        "got: {errs:?}"
     );
-    let err = compile(&v, test_profile(), None).expect_err("two anchor ids must refuse");
-    assert_eq!(err.reason, RefusalReason::UnsupportedBoundKind);
-    assert_eq!(err.stage.as_ref().map(|s| s.as_str()), Some("hits"));
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.reason == RefusalReason::UnsupportedBoundKind),
+        "the KIND is accepted — saying otherwise teaches the caller to stop sending context \
+         bounds, when the fix is to send one: {errs:?}"
+    );
 }
 
 /// Declared paging terms are BOUND, not dropped.

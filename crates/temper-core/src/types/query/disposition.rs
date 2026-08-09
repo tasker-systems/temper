@@ -57,6 +57,29 @@ pub enum StageDisposition {
 pub enum RefusalReason {
     /// The act does not accept bounds of the supplied `IdKind`.
     UnsupportedBoundKind,
+    /// A cogmap or context bound arrived carrying anything other than exactly one id.
+    ///
+    /// **Distinct from [`RefusalReason::UnsupportedBoundKind`] on purpose, and the distinction is
+    /// the whole reason this variant exists.** The kind IS accepted — reporting "this act does not
+    /// narrow on that kind of id" would teach the caller the wrong lesson (*stop sending cogmap
+    /// bounds*) when the right one is *send one*. `RefusalReason` is OPEN precisely so a reason that
+    /// says the true thing can be added without breaking a client.
+    ///
+    /// The constraint is the fragments': a resource bound is a `uuid[]`, but a cogmap or context
+    /// bound is served by an `(anchor_table, anchor_id)` PAIR, which holds one id. Spec §9 names the
+    /// mismatch — *"an `IdSet` holds N ids; an anchor slot holds one"* — as an open cardinality gap,
+    /// and refusing is the honest response to it. Silently anchoring on the first element would
+    /// answer a different question than the one asked and look like a successful narrowing.
+    ///
+    /// **Zero refuses too, and is not "unbounded".** For a resource array the fragments distinguish
+    /// `'{}'` (bounded to nothing) from `NULL` (unbounded); an anchor has no such pair, so an empty
+    /// anchor set is a caller who asked to scope and named nothing. Admitting it would drop the
+    /// scope and answer the unscoped question.
+    ///
+    /// `[moved from the compiler — 2026-08-09, Pete]` The compiler used to raise this as an `Err`
+    /// that aborted the whole composition, costing every innocent stage beside it. It is a STATIC
+    /// property of the plan, so it belongs here, in the 400 with every other refusal at once.
+    AnchorTakesOneId,
     /// The act does not accept seeds of the supplied `IdKind`.
     UnsupportedSeedKind,
     /// A region set arrived without the `provenance` its kind requires.

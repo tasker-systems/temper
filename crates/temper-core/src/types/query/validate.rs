@@ -285,6 +285,25 @@ fn check_act(
                     ),
                 ));
             }
+
+            // The anchor slot's CARDINALITY, checked separately from its kind because they are
+            // different complaints: the kind is accepted and the count is not. Only a CALLER can
+            // supply one of these — `cogmap` and `context` are accepted but never produced, so an
+            // upstream set is never anchor-kind (see the chainability relation in the contract).
+            if let StageInput::Caller { ids, .. } = input {
+                if matches!(ids.kind, IdKind::Cogmap | IdKind::Context) && ids.ids.len() != 1 {
+                    errs.push(refusal(
+                        Some(name),
+                        RefusalReason::AnchorTakesOneId,
+                        format!(
+                            "a `{kind:?}` bound is served by the anchor pair, which holds exactly \
+                             one id; this stage supplied {}. Anchoring on one of them would answer \
+                             a different question than the one asked",
+                            ids.ids.len()
+                        ),
+                    ));
+                }
+            }
         }
     }
 
@@ -678,6 +697,16 @@ mod tests {
 
     /// A caller id set, with region provenance supplied so it is well-formed. The relation here is
     /// a placeholder — [`act`] overwrites it with the one the act actually accepts.
+    /// A caller-supplied bound of `kind`, carrying **one** id.
+    ///
+    /// `[was `ids: vec![]` — 2026-08-09]` The empty list made every anchor-kind fixture here an
+    /// UNEXECUTABLE plan that happened to validate: the compiler's `let [id] = ids.as_slice()`
+    /// matches exactly one element, so zero fell to its `else` and refused fatally. Nothing noticed,
+    /// because no test in this file compiles anything. When the cardinality check moved here the
+    /// fixtures started failing, which is the check working — these tests assert *"this plan is
+    /// legal"*, and it now means legal all the way down rather than legal until the next layer.
+    ///
+    /// Use [`anchor_ids`] where the CARDINALITY is the subject.
     fn caller_ids(kind: IdKind) -> StageInput {
         let provenance = if kind == IdKind::Region {
             Some(IdProvenance::Cogmap(CogmapId::new()))
@@ -689,7 +718,20 @@ mod tests {
             ids: IdSet {
                 kind,
                 provenance,
-                ids: vec![],
+                ids: vec![uuid::Uuid::now_v7()],
+            },
+        }
+    }
+
+    /// A caller-supplied anchor-kind set of a chosen SIZE — the cardinality is the subject, so it
+    /// is a parameter rather than a fixture constant.
+    fn anchor_ids(kind: IdKind, n: usize) -> StageInput {
+        StageInput::Caller {
+            relation: StageRelation::Bound,
+            ids: IdSet {
+                kind,
+                provenance: None,
+                ids: (0..n).map(|_| uuid::Uuid::now_v7()).collect(),
             },
         }
     }
@@ -856,6 +898,88 @@ mod tests {
         assert!(
             errs.iter()
                 .any(|e| e.reason == RefusalReason::UnsupportedBoundKind),
+            "got: {errs:?}"
+        );
+    }
+
+    /// A cogmap/context bound is served by the fragments' `(table, id)` ANCHOR PAIR, which holds
+    /// exactly one id — so a set of any other size is refused, and it is refused HERE.
+    ///
+    /// `[moved from the compiler — 2026-08-09, Pete]` The compiler was the first thing to notice,
+    /// and it noticed by returning `Err`, which aborts the WHOLE composition: a healthy `find-exact`
+    /// stage beside a two-context `find-about-within` lost both. That is the same defect the
+    /// per-stage embedding refusal removed one layer up, and the repair is not a second runtime
+    /// refusal — the cardinality is a STATIC property of the plan, decidable with no database, so
+    /// it belongs in the 400 alongside every other refusal.
+    #[test]
+    fn a_multi_id_anchor_bound_is_refused_here_rather_than_costing_the_whole_composition() {
+        // `survey` throughout: it takes cogmap/context bounds and is not a find act, so no
+        // intention is threaded and the only thing under test is the cardinality.
+        let c = plan(
+            vec![
+                act("ok", ActName::Survey, Some(anchor_ids(IdKind::Cogmap, 1))),
+                act(
+                    "scoped",
+                    ActName::Survey,
+                    Some(anchor_ids(IdKind::Context, 2)),
+                ),
+            ],
+            vec!["ok", "scoped"],
+        );
+        let errs = validate(&c).unwrap_err();
+        let anchor: Vec<&PlanRefusal> = errs
+            .iter()
+            .filter(|e| e.reason == RefusalReason::AnchorTakesOneId)
+            .collect();
+        assert_eq!(anchor.len(), 1, "got: {errs:?}");
+        assert_eq!(
+            anchor[0].stage.as_ref().map(|s| s.as_str()),
+            Some("scoped"),
+            "the refusal names the stage that earned it, not the composition"
+        );
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.stage.as_ref().is_some_and(|s| s.as_str() == "ok")),
+            "the innocent stage must not be refused for its neighbour's mistake: {errs:?}"
+        );
+    }
+
+    /// The boundary, so the check above is about CARDINALITY and not about anchors being unwelcome.
+    #[test]
+    fn a_single_id_anchor_bound_is_exactly_what_the_slot_holds_and_validates() {
+        let c = plan(
+            vec![act(
+                "scoped",
+                ActName::Survey,
+                Some(anchor_ids(IdKind::Context, 1)),
+            )],
+            vec!["scoped"],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).unwrap_err());
+    }
+
+    /// **Zero is not "unbounded" here, and that is the trap this arm exists for.**
+    ///
+    /// For a resource ARRAY, empty means bounded-to-nothing and NULL means unbounded — a
+    /// distinction the fragments carry and this surface depends on. An anchor has no such pair: the
+    /// slot holds one id or the stage is unscoped, so an empty anchor set is a caller who asked to
+    /// scope to a set of contexts and named none. Admitting it would silently drop the scope and
+    /// answer the unscoped question instead.
+    #[test]
+    fn an_empty_anchor_set_is_refused_rather_than_read_as_unscoped() {
+        let c = plan(
+            vec![act(
+                "scoped",
+                ActName::Survey,
+                Some(anchor_ids(IdKind::Context, 0)),
+            )],
+            vec!["scoped"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
             "got: {errs:?}"
         );
     }
