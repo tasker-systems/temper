@@ -5,6 +5,7 @@
 //! read path); writes compose `temper_substrate::writes` and fire through the event ledger.
 
 mod db_backend;
+pub mod query_read;
 pub mod region_clocks;
 pub mod substrate_read;
 

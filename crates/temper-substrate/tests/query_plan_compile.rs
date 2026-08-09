@@ -768,6 +768,53 @@ fn a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it() {
     );
 }
 
+/// **A term above its published ceiling is CLAMPED, and the clamped value is what runs.**
+///
+/// The contract: *"A term the act accepts, above its published ceiling → CLAMPED. The value used
+/// comes back in `StageResult.terms_applied`."* Binding the caller's number instead makes the
+/// ceiling a decoration — `find-exact` publishes `limit: 50` and would happily draw 500 — and then
+/// `terms_applied` has to either report a value that did not run or become a second opinion about
+/// what did. One function decides it, and both the bind and the report read that function.
+#[test]
+fn a_term_above_its_published_ceiling_is_clamped_to_the_ceiling_that_was_published() {
+    let mut node = find_stage("hits", ActName::FindExact, None);
+    if let StageNode::Act(a) = &mut node {
+        a.terms.insert(BoundTerm::Limit, 500);
+    }
+    let v = build_with_intention(vec![node], vec!["hits"]);
+    let c = compile(&v, test_profile(), None).expect("compiles");
+
+    let ints: Vec<i64> = c
+        .binds
+        .iter()
+        .filter_map(|b| match b {
+            QueryBind::Int(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        ints.contains(&50),
+        "the published ceiling is what runs; got binds {ints:?}"
+    );
+    assert!(
+        !ints.contains(&500),
+        "the caller's number must not reach the fragment: {ints:?}"
+    );
+}
+
+/// Below the ceiling, the caller's own value is used — so the rule above is a CEILING and not a
+/// fixed page size.
+#[test]
+fn a_term_below_its_ceiling_is_used_as_the_caller_asked() {
+    let mut node = find_stage("hits", ActName::FindExact, None);
+    if let StageNode::Act(a) = &mut node {
+        a.terms.insert(BoundTerm::Limit, 7);
+    }
+    let v = build_with_intention(vec![node], vec!["hits"]);
+    let c = compile(&v, test_profile(), None).expect("compiles");
+    assert!(c.binds.iter().any(|b| matches!(b, QueryBind::Int(7))));
+}
+
 /// Declared paging terms are BOUND, not dropped.
 ///
 /// Emitting literal `NULL`/`0` means a plan declaring `limit: 10` compiles to the entire match set —

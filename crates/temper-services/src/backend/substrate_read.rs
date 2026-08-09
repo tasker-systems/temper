@@ -738,33 +738,65 @@ async fn embed_query_if_missing(params: &mut SearchParams) -> bool {
         Some(q) if !q.is_empty() => q.to_string(),
         _ => return false,
     };
-    let budget = query_embed_budget();
-    let embed = tokio::task::spawn_blocking(move || temper_ingest::embed::embed_text(&query));
-    match tokio::time::timeout(budget, embed).await {
-        Ok(Ok(Ok(embedding))) => {
+    match embed_query_text(&query).await {
+        QueryEmbed::Embedded(embedding) => {
             params.embedding = Some(embedding);
             false
         }
+        QueryEmbed::Unavailable => true,
+    }
+}
+
+/// What a server-side embed attempt came to. **Two outcomes, and neither is "the caller declined"**
+/// — that question is answered before this is called, by whether a vector already arrived.
+///
+/// The distinction matters differently to each surface. `/api/search` collapses it into a
+/// `degraded` boolean because its arms are fixed and an arm that could not run must say so in
+/// place. `/api/query` cannot: an unavailable embedding is a per-stage REFUSAL there
+/// ([`temper_core::types::query::RefusalReason::EmbeddingUnavailable`]), reported where a reader is
+/// already looking. So this returns the outcome and lets each surface render it.
+pub(crate) enum QueryEmbed {
+    Embedded(Vec<f32>),
+    /// The server tried and could not — an embed error, a task panic, or the budget expiring.
+    ///
+    /// **Never "there was nothing to embed".** An empty query is the caller's omission, decided
+    /// statically by whoever calls this, long before here.
+    Unavailable,
+}
+
+/// Embed one query string, off the async executor and under a wall-clock budget.
+///
+/// Extracted from [`embed_query_if_missing`] so `/api/query` reaches the SAME attempt rather than a
+/// second one, and it has to be the same: the query is embedded with the same plain `embed_text`
+/// path the corpus was ingested with (no BGE "represent this sentence…" query prefix), which is what
+/// keeps it in the stored chunks' vector space so scores stay comparable. A second implementation
+/// here would be a second answer to "which space is this vector in".
+pub(crate) async fn embed_query_text(query: &str) -> QueryEmbed {
+    let budget = query_embed_budget();
+    let owned = query.to_string();
+    let embed = tokio::task::spawn_blocking(move || temper_ingest::embed::embed_text(&owned));
+    match tokio::time::timeout(budget, embed).await {
+        Ok(Ok(Ok(embedding))) => QueryEmbed::Embedded(embedding),
         Ok(Ok(Err(e))) => {
             tracing::warn!(
                 error = %e,
                 "server-side query embedding failed; falling back to FTS + graph only"
             );
-            true
+            QueryEmbed::Unavailable
         }
         Ok(Err(join_err)) => {
             tracing::warn!(
                 error = %join_err,
                 "server-side query embedding task panicked; falling back to FTS + graph only"
             );
-            true
+            QueryEmbed::Unavailable
         }
         Err(_elapsed) => {
             tracing::warn!(
                 budget_ms = budget.as_millis(),
                 "server-side query embedding exceeded its budget; falling back to FTS + graph only"
             );
-            true
+            QueryEmbed::Unavailable
         }
     }
 }

@@ -47,31 +47,17 @@ pub struct CompiledQuery {
     /// `NULL` they read as unbounded. Collapsing those two turns a failed stage into a global
     /// search.
     ///
-    /// **This carries the per-stage refusals only, and `compile` can still fail whole.** The
-    /// tempting sentence here is "static refusals never reach the compiler, they are `validate`'s",
-    /// and it is FALSE — which is worth saying, because believing it is how the next refusal gets
-    /// added to the wrong side.
+    /// **This carries the per-stage refusals, and `compile` can still fail whole.** The tempting
+    /// sentence here is "static refusals never reach the compiler, they are `validate`'s" — worth
+    /// stating carefully, because getting it wrong is how the next refusal lands on the wrong side.
     ///
-    /// Two refusals still abort the entire composition by returning `Err`:
+    /// One case still returns `Err`: `UnsupportedSeedKind` from `StageNarrowing::bound_expr`, and
+    /// `AnchorTakesOneId` from the anchor arm. Both are compiler/validator **contradictions** rather
+    /// than anything a caller did — `validate` refuses each of them first — so they are unreachable
+    /// through any public path, and failing loud if the two crates ever drift is correct.
     ///
-    /// * `UnsupportedBoundKind` from a multi-id anchor. `validate` accepts it — an `IdSet` holds N
-    ///   ids and the anchor slot holds one, a cardinality gap spec §9 names as open — so this is a
-    ///   caller error the compiler is the first to see. **It has the defect this field exists to
-    ///   remove**: a healthy `find-exact` stage beside a two-context `find-about-within` loses both.
-    ///   Making it per-stage is not the right repair; teaching `validate` to refuse it is, so the
-    ///   caller gets it in the 400 with everything else. Named here rather than fixed in passing.
-    /// * `UnsupportedSeedKind` from `StageNarrowing::bound_expr` — a compiler/validator
-    ///   contradiction rather than anything a caller did, so failing loud is correct.
-    ///
-    /// What DOES ride here is the runtime refusal: a `find-about-*` stage whose embedding the server
-    /// had to compute and could not. Carried rather than returned as an `Err` because a refusal is
-    /// per stage — *"Every other stage runs… a composition holding both a `find-exact` and a
-    /// `find-about-*` still returns the exact arm."* An `Err` refuses the exact arm too.
-    ///
-    /// A refused stage's CTE is an EMPTY set, so a stage bounded by it is bounded to nothing —
-    /// `ARRAY(SELECT id FROM <it>)` is `'{}'`, which the fragments read as zero rows, and never the
-    /// `NULL` they read as unbounded. Collapsing those two turns a failed stage into a global
-    /// search.
+    /// The anchor case used to be a genuine caller error reaching `Err` here, with exactly the
+    /// defect this field exists to remove. `[moved to `validate` — 2026-08-09, Pete]`
     pub refusals: Vec<PlanRefusal>,
 }
 
@@ -627,7 +613,13 @@ fn paging_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
 ) -> (String, String) {
-    let mut bind_term = |t: BoundTerm, absent: &str| match inv.terms.get(&t) {
+    // The APPLIED values, not the asked-for ones: a term above its act's published ceiling is
+    // clamped, and the clamped value is what must run. Read from the one function the assembler
+    // also reports from, so the statement and `terms_applied` cannot claim different page sizes.
+    let applied = temper_core::types::query::declaration(&inv.act)
+        .map(|d| temper_core::types::query::applied_terms(&inv.terms, &d))
+        .unwrap_or_default();
+    let mut bind_term = |t: BoundTerm, absent: &str| match applied.get(&t) {
         Some(v) => {
             let idx = binds.len() + 1;
             binds.push(QueryBind::Int(*v));

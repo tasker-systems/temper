@@ -413,6 +413,38 @@ pub fn search_family() -> Vec<ActDeclaration> {
 }
 
 /// Look up one declaration by name.
+/// The value each admitted term will ACTUALLY run with — the caller's, clamped to the act's
+/// published ceiling.
+///
+/// **The one definition, and it exists because there are two consumers who must not disagree.** The
+/// compiler binds these into the statement; the assembler reports them as
+/// [`super::envelope::StageResult::terms_applied`]. Computed twice, they would eventually differ,
+/// and the difference would be a response claiming a page size that did not run — the quiet kind of
+/// wrong this surface is built against.
+///
+/// There is deliberately **no "you were clamped" flag**. Ceilings are published per act, so the
+/// applied value is the whole story; clamping to a ceiling nobody published would be the bug, not
+/// the silence. A term the act does not admit is not clamped either — it is refused outright at
+/// validation, and never reinterpreted to fit.
+///
+/// A term with no ceiling passes through unchanged: absence here means *no ceiling*, not *zero*.
+pub fn applied_terms(
+    requested: &std::collections::BTreeMap<super::scalars::BoundTerm, i64>,
+    decl: &ActDeclaration,
+) -> std::collections::BTreeMap<super::scalars::BoundTerm, i64> {
+    requested
+        .iter()
+        .filter(|(term, _)| decl.accepts_bound_terms.contains(term))
+        .map(|(term, asked)| {
+            let applied = match decl.bound_ceilings.get(term) {
+                Some(ceiling) => (*asked).min(*ceiling),
+                None => *asked,
+            };
+            (*term, applied)
+        })
+        .collect()
+}
+
 pub fn declaration(name: &ActName) -> Option<ActDeclaration> {
     search_family().into_iter().find(|a| &a.name == name)
 }

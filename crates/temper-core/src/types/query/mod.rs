@@ -34,7 +34,7 @@ pub use filter::{
 };
 pub use hits::{MatchLocation, RegionHit, ResourceHit, ScoreKind, Scoring};
 pub use id_set::{IdKind, IdProvenance, IdSet};
-pub use registry::{declaration, search_family};
+pub use registry::{applied_terms, declaration, search_family};
 pub use scalars::{BoundTerm, Extent, MetaDetail};
 pub use stage::{ProducedVariant, StageInput, StageName, StageOutput, StageRelation};
 pub use trace::{CompositionTrace, InputSource, MetaTruncated, StageTrace};
