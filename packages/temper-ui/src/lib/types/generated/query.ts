@@ -10,6 +10,8 @@ import type { ResourceView } from "./resource_view";
 
 /**
  * One act, declared.
+ *
+ * See [`ActDeclaration::produced_variant`] for how a declaration predicts the response shape.
  */
 export type ActDeclaration = { name: ActName, 
 /**
@@ -451,6 +453,16 @@ stage: StageName | null, reason: RefusalReason,
 detail: string, };
 
 /**
+ * Which [`StageOutput`] variant a stage carries — the tag, as a value.
+ *
+ * It exists so `/api/query/validate` can PROMISE a variant using the same type the response
+ * REPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from
+ * an actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a
+ * declaration, and a test asserts the two agree for every act.
+ */
+export type ProducedVariant = "fts_hits" | "vec_hits" | "graph_hits" | "region_hits";
+
+/**
  * A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
  * operator takes a fragment of a query language; both bind their values.
  */
@@ -797,6 +809,32 @@ input_contributed: bigint | null,
 input_unusable: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
 
 /**
+ * What a composition WOULD return, derived from the act declarations without running anything.
+ *
+ * This exists because `QueryResponse.returned` is an open map and has to be: its keys are whatever
+ * the caller named their stages, and the shape under each depends on which act that stage runs.
+ * That is a dependency from the request to the response, and **OpenAPI has no way to express it**.
+ * A reader of the schema alone learns only *"some stage names, each holding one of four
+ * variants."*
+ *
+ * This closes it for one specific composition. Every fact it needs is already declared — an act's
+ * `produces` and `orders_by` give the output variant, and its `discloses` gives which optional
+ * fields will be filled — so it COMPUTES rather than guesses, and touches no rows.
+ */
+export type ValidationOutcome = { 
+/**
+ * The stages in the order they will run — the topological sort, which is not the order they
+ * were listed in and which a DAG does not otherwise reveal.
+ */
+order: Array<StageName>, 
+/**
+ * Exactly the keys `QueryResponse.returned` will carry, and what will be under each.
+ *
+ * **This is the part the schema cannot say for itself.**
+ */
+will_return: { [key in StageName]?: WillReturn }, };
+
+/**
  * A resource that matched an idea rather than words. Produced by both `find-about-*` acts.
  */
 export type VecHit = { resource: ResourceView, 
@@ -836,3 +874,26 @@ located_at: MatchLocation | null, };
  * ordering-bearing quantity. No act in the search family does today.
  */
 export type VisibilityProfile = "principal-agnostic" | "agnostic-in-value-relative-in-domain" | "principal-relative";
+
+/**
+ * What one returned stage will carry.
+ */
+export type WillReturn = { act: ActName, 
+/**
+ * Which `StageOutput` variant this stage will carry — the whole answer, including which
+ * quantity field its rows hold, so a caller can write their parser before running anything.
+ */
+produced: ProducedVariant, 
+/**
+ * The quantity its rows will be ordered by, with its range. Absent for an act that orders
+ * nothing — which, since every returnable act orders something, does not happen today.
+ */
+orders_by: ActQuantity | null, 
+/**
+ * Which optional fields will be FILLED rather than null, for this act.
+ *
+ * Read it and you know in advance whether asking for `input_contributed` or `located_at` is
+ * worth doing — rather than discovering a null in a response and having to guess whether it
+ * means *cannot* or *none*.
+ */
+discloses: Array<Disclosure>, };

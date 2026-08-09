@@ -15,14 +15,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::act::{ActName, BuildState};
+use super::act::{ActName, ActQuantity, BuildState, Disclosure};
 use super::composition::{Composition, ReturnSpec, StageNode};
 use super::disposition::RefusalReason;
 use super::envelope::ActInvocation;
 use super::filter::{FilterField, PropertyOp, PropertySubject};
 use super::id_set::IdKind;
 use super::registry::declaration;
-use super::stage::{StageInput, StageName, StageRelation};
+use super::stage::{ProducedVariant, StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
 /// Declared mechanic (`served_by`) → the SQL function the compiler actually emits.
@@ -363,6 +363,104 @@ fn check_act(
                 ));
             }
         }
+    }
+}
+
+/// What a composition WOULD return, derived from the act declarations without running anything.
+///
+/// This exists because `QueryResponse.returned` is an open map and has to be: its keys are whatever
+/// the caller named their stages, and the shape under each depends on which act that stage runs.
+/// That is a dependency from the request to the response, and **OpenAPI has no way to express it**.
+/// A reader of the schema alone learns only *"some stage names, each holding one of four
+/// variants."*
+///
+/// This closes it for one specific composition. Every fact it needs is already declared — an act's
+/// `produces` and `orders_by` give the output variant, and its `discloses` gives which optional
+/// fields will be filled — so it COMPUTES rather than guesses, and touches no rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ValidationOutcome {
+    /// The stages in the order they will run — the topological sort, which is not the order they
+    /// were listed in and which a DAG does not otherwise reveal.
+    pub order: Vec<StageName>,
+    /// Exactly the keys `QueryResponse.returned` will carry, and what will be under each.
+    ///
+    /// **This is the part the schema cannot say for itself.**
+    pub will_return: BTreeMap<StageName, WillReturn>,
+}
+
+/// What one returned stage will carry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct WillReturn {
+    pub act: ActName,
+    /// Which `StageOutput` variant this stage will carry — the whole answer, including which
+    /// quantity field its rows hold, so a caller can write their parser before running anything.
+    pub produced: ProducedVariant,
+    /// The quantity its rows will be ordered by, with its range. Absent for an act that orders
+    /// nothing — which, since every returnable act orders something, does not happen today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orders_by: Option<ActQuantity>,
+    /// Which optional fields will be FILLED rather than null, for this act.
+    ///
+    /// Read it and you know in advance whether asking for `input_contributed` or `located_at` is
+    /// worth doing — rather than discovering a null in a response and having to guess whether it
+    /// means *cannot* or *none*.
+    pub discloses: Vec<Disclosure>,
+}
+
+impl ValidationOutcome {
+    /// Compute what this composition would return. No database, no execution.
+    ///
+    /// Takes a [`ValidatedComposition`] rather than a `Composition` on purpose: parse-don't-validate
+    /// means the topological order is already computed and every declaration-driven check has
+    /// already passed, so this cannot be asked about a plan that would be refused.
+    pub fn of(v: &ValidatedComposition) -> ValidationOutcome {
+        let order = v
+            .ordered()
+            .iter()
+            .map(|n| n.name().clone())
+            .collect::<Vec<_>>();
+
+        let by_name: BTreeMap<&str, &StageNode> = v
+            .composition()
+            .stages
+            .iter()
+            .map(|n| (n.name().as_str(), n))
+            .collect();
+
+        let will_return = v
+            .returns()
+            .iter()
+            .filter_map(|ret| {
+                // A combinator node names no act, so it has no declared response shape. It cannot
+                // be a returned stage today — `emit_combine_body` passes ids through and no act
+                // hydrates them — so it is SKIPPED rather than guessed at. The absence is visible:
+                // a caller sees a key they asked for missing from `will_return`, which is the
+                // honest answer to "what will this give me", not a fabricated one.
+                let StageNode::Act(inv) = by_name.get(ret.stage.as_str())? else {
+                    return None;
+                };
+                let decl = declaration(&inv.act)?;
+                Some((
+                    ret.stage.clone(),
+                    WillReturn {
+                        act: inv.act.clone(),
+                        produced: decl.produced_variant()?,
+                        orders_by: decl.orders_by.clone(),
+                        discloses: decl.discloses.clone(),
+                    },
+                ))
+            })
+            .collect();
+
+        ValidationOutcome { order, will_return }
     }
 }
 
@@ -1100,6 +1198,177 @@ mod tests {
             embedded: true,
         });
         assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
+    }
+
+    // ---- What validate PROMISES about the response ------------------------------------------
+
+    #[test]
+    fn the_outcome_names_the_exact_variant_each_returned_stage_will_carry() {
+        // The thing OpenAPI cannot state: `returned` is an open map whose keys are the caller's own
+        // stage names and whose value shape depends on which act each stage runs. Told
+        // `resource_hits`, a caller still would not know whether to read `fts_norm` or `vec_norm`;
+        // told `vec_hits`, they can write their parser before running anything.
+        let mut c = plan(
+            vec![
+                act("wide", ActName::FindAboutAnywhere, None),
+                act("quoted", ActName::FindExact, None),
+            ],
+            vec!["wide", "quoted"],
+        );
+        c.intention = Some(Intention {
+            query: "composable fragments".to_string(),
+            embedded: true,
+        });
+        let v = validate(&c).expect("plan is legal");
+        let out = ValidationOutcome::of(&v);
+
+        assert_eq!(
+            out.will_return[&StageName::parse("wide").unwrap()].produced,
+            ProducedVariant::VecHits
+        );
+        assert_eq!(
+            out.will_return[&StageName::parse("quoted").unwrap()].produced,
+            ProducedVariant::FtsHits
+        );
+        // Two acts, same CURRENCY (both produce resources), different shapes — which is the whole
+        // reason the quantity is in the tag rather than only in `orders_by`.
+        assert_ne!(
+            out.will_return[&StageName::parse("wide").unwrap()].produced,
+            out.will_return[&StageName::parse("quoted").unwrap()].produced
+        );
+    }
+
+    #[test]
+    fn the_outcome_carries_exactly_the_keys_returns_asked_for_no_more_no_fewer() {
+        // A stage that only FEEDS a downstream one is never hydrated and must not appear here —
+        // promising a key the response will not carry is the same class of lie as omitting one it
+        // will.
+        let mut c = plan(
+            vec![
+                act("seeds", ActName::FindAboutAnywhere, None),
+                act("near", ActName::FollowFrom, upstream("seeds")),
+            ],
+            vec!["near"],
+        );
+        c.intention = Some(Intention {
+            query: "x".to_string(),
+            embedded: true,
+        });
+        let out = ValidationOutcome::of(&validate(&c).expect("legal"));
+
+        assert_eq!(out.will_return.len(), 1);
+        assert!(out
+            .will_return
+            .contains_key(&StageName::parse("near").unwrap()));
+        assert!(
+            !out.will_return
+                .contains_key(&StageName::parse("seeds").unwrap()),
+            "an intermediate stage is not returned, so it is not promised"
+        );
+        // But it IS in the run order — the trace covers every stage, and the order is the other
+        // thing a DAG does not otherwise reveal.
+        assert_eq!(
+            out.order,
+            vec![
+                StageName::parse("seeds").unwrap(),
+                StageName::parse("near").unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn the_outcome_tells_a_caller_which_optional_fields_will_be_null() {
+        // The reason `discloses` exists at all. `follow-from` cannot report input contribution —
+        // its walk discards path origin — and a caller learns that HERE rather than by finding a
+        // null in a response and guessing whether it means "cannot" or "none".
+        let c = plan(
+            vec![act(
+                "near",
+                ActName::FollowFrom,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec!["near"],
+        );
+        let out = ValidationOutcome::of(&validate(&c).expect("legal"));
+        let near = &out.will_return[&StageName::parse("near").unwrap()];
+
+        assert_eq!(near.produced, ProducedVariant::GraphHits);
+        assert!(
+            near.discloses.is_empty(),
+            "follow-from declares neither disclosure; got: {:?}",
+            near.discloses
+        );
+        // And the quantity's RANGE rides along, because assuming [0,1] is the live mistake in this
+        // family — `graph_score` is unbounded.
+        assert_eq!(
+            near.orders_by.as_ref().map(|q| q.field.as_str()),
+            Some("graph_score")
+        );
+    }
+
+    #[test]
+    fn a_combinator_stage_is_absent_from_the_promise_rather_than_guessed_at() {
+        // A combinator names no act, so nothing declares a response shape for it. Rather than
+        // inventing one, it is omitted — a caller sees the key they asked for missing, which is an
+        // honest "I cannot tell you" instead of a fabricated variant they would then parse for.
+        //
+        // This also PINS a real limitation: a combinator cannot currently be a returned stage.
+        // Whoever makes it one has to come here.
+        let c = plan(
+            vec![
+                act("a", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("both").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("b").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["both"],
+        );
+        let out = ValidationOutcome::of(&validate(&c).expect("legal"));
+        assert!(
+            out.will_return.is_empty(),
+            "no act, no declared shape, no promise; got: {:?}",
+            out.will_return
+        );
+        assert_eq!(
+            out.order.len(),
+            3,
+            "but it still runs, and is still ordered"
+        );
+    }
+
+    #[test]
+    fn the_promised_variant_is_the_one_a_real_output_reports() {
+        // The two halves of the contract meeting: `ActDeclaration::produced_variant` PREDICTS from
+        // a declaration, `StageOutput::variant` REPORTS from an actual output. If they were
+        // separate enums, or one were a hand-kept table, they could disagree — and a caller who
+        // parsed against the promise would break on the response.
+        use crate::types::query::stage::StageOutput;
+        for (variant, actual) in [
+            (
+                ProducedVariant::FtsHits,
+                StageOutput::FtsHits { hits: vec![] },
+            ),
+            (
+                ProducedVariant::VecHits,
+                StageOutput::VecHits { hits: vec![] },
+            ),
+            (
+                ProducedVariant::GraphHits,
+                StageOutput::GraphHits { hits: vec![] },
+            ),
+            (
+                ProducedVariant::RegionHits,
+                StageOutput::RegionHits { hits: vec![] },
+            ),
+        ] {
+            assert_eq!(variant, actual.variant());
+        }
     }
 
     #[test]

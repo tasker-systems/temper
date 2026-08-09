@@ -36,6 +36,9 @@ pub use hits::{FtsHit, GraphHit, MatchLocation, RegionHit, VecHit};
 pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{declaration, search_family};
 pub use scalars::{BoundTerm, Extent, MetaDetail};
-pub use stage::{StageInput, StageName, StageOutput, StageRelation};
+pub use stage::{ProducedVariant, StageInput, StageName, StageOutput, StageRelation};
 pub use trace::{CompositionTrace, InputSource, MetaTruncated, StageTrace};
-pub use validate::{emitted_fragment_for, validate, PlanRefusal, ValidatedComposition};
+pub use validate::{
+    emitted_fragment_for, validate, PlanRefusal, ValidatedComposition, ValidationOutcome,
+    WillReturn,
+};

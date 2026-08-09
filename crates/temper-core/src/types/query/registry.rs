@@ -630,6 +630,46 @@ mod tests {
         }
     }
 
+    /// Every act that SELECTS something predicts a response shape.
+    ///
+    /// `produced_variant` derives from `produces` plus the deployed column name in
+    /// `orders_by.field`, rather than from a table keyed on the act name — so this is what catches
+    /// a scoring column renamed without its declaration following, and a new selecting act whose
+    /// quantity nobody taught the response side about. Either would otherwise surface as
+    /// `/api/query/validate` silently omitting a key it was asked about.
+    #[test]
+    fn every_selecting_act_predicts_a_response_shape() {
+        for d in search_family() {
+            if d.produces.is_some() {
+                assert!(
+                    d.produced_variant().is_some(),
+                    "{:?} selects but predicts no response shape — its `orders_by.field` \
+                     ({:?}) is not one the response side knows",
+                    d.name,
+                    d.orders_by.as_ref().map(|q| q.field.as_str())
+                );
+            }
+        }
+    }
+
+    /// And an act that selects NOTHING predicts nothing.
+    ///
+    /// The pair to the test above: without it, a `produced_variant` that returned some default
+    /// would pass the first assertion everywhere and quietly give `substantiate` a result shape it
+    /// does not have.
+    #[test]
+    fn an_act_that_selects_nothing_predicts_no_response_shape() {
+        for d in search_family() {
+            if d.produces.is_none() {
+                assert!(
+                    d.produced_variant().is_none(),
+                    "{:?} produces nothing and must promise nothing",
+                    d.name
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_declaration_states_what_the_asker_holds() {
         for a in search_family() {

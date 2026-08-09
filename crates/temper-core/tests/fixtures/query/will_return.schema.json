@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "ActName": {
+      "anyOf": [
+        {
+          "const": "find-exact",
+          "description": "*I can quote the exact words.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-anywhere",
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-within",
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string"
+        },
+        {
+          "const": "follow-from",
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string"
+        },
+        {
+          "const": "survey",
+          "description": "*A question about what a scope knows.*",
+          "type": "string"
+        },
+        {
+          "const": "substantiate",
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string"
+        },
+        {
+          "const": "admit",
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+    },
+    "ActQuantity": {
+      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is\nthe exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to\nthe migration that defined the body, which stays readable in history.",
+      "properties": {
+        "field": {
+          "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it.",
+          "type": "string"
+        },
+        "means": {
+          "description": "What the number measures, in this act's own terms.",
+          "type": "string"
+        },
+        "scale": {
+          "$ref": "#/$defs/QuantityScale"
+        }
+      },
+      "required": [
+        "field",
+        "means",
+        "scale"
+      ],
+      "type": "object"
+    },
+    "Disclosure": {
+      "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with three members, not three special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A fourth disclosure is a breaking\nchange, and should be.",
+      "oneOf": [
+        {
+          "const": "input_contribution",
+          "description": "How many of the caller's ids contributed — `StageResult.input_contributed`.\n\nThe reading depends on the relation and both are honest: for a `bound`, how many of your\nids are in the output; for a `seed`, how many led to something in the output.",
+          "type": "string"
+        },
+        {
+          "const": "match_location",
+          "description": "Where in the resource the match was — `VecHit.located_at`.",
+          "type": "string"
+        },
+        {
+          "const": "filter_counts",
+          "description": "How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.\n\nDeclared by NO act today, and that is a measured absence rather than an oversight: no\ndeployed fragment computes these counts, and counting on demand costs a second query. The\nvariant exists because the fields it names exist; a closed vocabulary may carry a member\nwith no current declarer, where an open one may not.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProducedVariant": {
+      "description": "Which [`StageOutput`] variant a stage carries — the tag, as a value.\n\nIt exists so `/api/query/validate` can PROMISE a variant using the same type the response\nREPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from\nan actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a\ndeclaration, and a test asserts the two agree for every act.",
+      "enum": [
+        "fts_hits",
+        "vec_hits",
+        "graph_hits",
+        "region_hits"
+      ],
+      "type": "string"
+    },
+    "QuantityScale": {
+      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`\nrescales *the same* `<=>` distance as `1 - d` into `[-1,1]`\n`[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
+      "oneOf": [
+        {
+          "description": "`[0,1]`, bounded by the expression's own arithmetic.",
+          "properties": {
+            "scale": {
+              "const": "unit_interval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Bounded, but NOT to `[0,1]`. `bounds` states the actual range.",
+          "properties": {
+            "bounds": {
+              "type": "string"
+            },
+            "scale": {
+              "const": "other_range",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale",
+            "bounds"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Nothing in the expression or in the schema bounds it.",
+          "properties": {
+            "scale": {
+              "const": "unbounded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What one returned stage will carry.",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/ActName"
+    },
+    "discloses": {
+      "description": "Which optional fields will be FILLED rather than null, for this act.\n\nRead it and you know in advance whether asking for `input_contributed` or `located_at` is\nworth doing — rather than discovering a null in a response and having to guess whether it\nmeans *cannot* or *none*.",
+      "items": {
+        "$ref": "#/$defs/Disclosure"
+      },
+      "type": "array"
+    },
+    "orders_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActQuantity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The quantity its rows will be ordered by, with its range. Absent for an act that orders\nnothing — which, since every returnable act orders something, does not happen today."
+    },
+    "produced": {
+      "$ref": "#/$defs/ProducedVariant",
+      "description": "Which `StageOutput` variant this stage will carry — the whole answer, including which\nquantity field its rows hold, so a caller can write their parser before running anything."
+    }
+  },
+  "required": [
+    "act",
+    "produced",
+    "discloses"
+  ],
+  "title": "WillReturn",
+  "type": "object"
+}

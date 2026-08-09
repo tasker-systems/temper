@@ -211,7 +211,36 @@ pub enum StageOutput {
     RegionHits { hits: Vec<RegionHit> },
 }
 
+/// Which [`StageOutput`] variant a stage carries — the tag, as a value.
+///
+/// It exists so `/api/query/validate` can PROMISE a variant using the same type the response
+/// REPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from
+/// an actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a
+/// declaration, and a test asserts the two agree for every act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ProducedVariant {
+    FtsHits,
+    VecHits,
+    GraphHits,
+    RegionHits,
+}
+
 impl StageOutput {
+    /// Which variant this is — the same value `/api/query/validate` promised in advance.
+    pub fn variant(&self) -> ProducedVariant {
+        match self {
+            StageOutput::FtsHits { .. } => ProducedVariant::FtsHits,
+            StageOutput::VecHits { .. } => ProducedVariant::VecHits,
+            StageOutput::GraphHits { .. } => ProducedVariant::GraphHits,
+            StageOutput::RegionHits { .. } => ProducedVariant::RegionHits,
+        }
+    }
+
     /// The kind of thing this stage produced. Contract chaining compares kinds, so wrapping the
     /// rows must not cost that comparison.
     pub fn kind(&self) -> IdKind {

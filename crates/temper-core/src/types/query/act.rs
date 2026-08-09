@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::filter::FilterField;
 use super::id_set::IdKind;
 use super::scalars::BoundTerm;
+use super::stage::ProducedVariant;
 
 /// The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
 /// the mechanic currently serving it is evidence rather than identity.
@@ -260,6 +261,8 @@ pub enum Disclosure {
 }
 
 /// One act, declared.
+///
+/// See [`ActDeclaration::produced_variant`] for how a declaration predicts the response shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -330,6 +333,38 @@ pub struct ActDeclaration {
     /// Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4
     /// reds when the body hash moves and this does not.
     pub scoring_revision: u32,
+}
+
+impl ActDeclaration {
+    /// Which [`super::stage::StageOutput`] variant a stage running this act will carry — computed
+    /// from the declaration, before anything runs.
+    ///
+    /// This is what makes `/api/query/validate` able to answer completely: hand it a composition
+    /// and it names the exact shape under each returned key, so a caller can write their parser
+    /// first. `None` for an act that selects nothing (`substantiate`, `admit`) — those are not
+    /// composable and never appear as a returned stage.
+    ///
+    /// **Derived from the two declared facts, never from a table keyed on the act name.** The
+    /// currency is `produces`; the quantity is `orders_by.field`, which is the DEPLOYED column name
+    /// the serving function emits — a caller who greps the SQL for it finds it. Keying on
+    /// `ActName` instead would be a second copy of the same relation, free to drift from the
+    /// declarations, which is the `ADMIN_EVENT_TYPES` failure this registry is written to avoid.
+    ///
+    /// The consequence worth knowing: renaming a scoring column without updating `orders_by.field`
+    /// makes this return `None`, and `every_selecting_act_predicts_a_response_shape` goes red. That
+    /// is the intended direction — the declaration is supposed to describe the deployed system.
+    pub fn produced_variant(&self) -> Option<ProducedVariant> {
+        match (
+            self.produces.as_ref()?,
+            self.orders_by.as_ref()?.field.as_str(),
+        ) {
+            (IdKind::Resource, "fts_norm") => Some(ProducedVariant::FtsHits),
+            (IdKind::Resource, "vec_norm") => Some(ProducedVariant::VecHits),
+            (IdKind::Resource, "graph_score") => Some(ProducedVariant::GraphHits),
+            (IdKind::Region, "region_score") => Some(ProducedVariant::RegionHits),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

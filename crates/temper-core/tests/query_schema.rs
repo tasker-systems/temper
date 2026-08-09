@@ -107,6 +107,7 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::ActInvocation>("act_invocation");
     // `StageOutput` is snapshotted in its own right, not only through `StageResult`: the removal of
     // its `ids` variant is a decision, and a committed artifact is where a decision stays visible.
+    c.check::<q::ProducedVariant>("produced_variant");
     c.check::<q::StageOutput>("stage_output");
     c.check::<q::StageResult>("stage_result");
     c.check::<q::InputSource>("input_source");
@@ -117,6 +118,10 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::ReturnSpec>("return_spec");
     c.check::<q::OutcomeDeclaration>("outcome_declaration");
     c.check::<q::Composition>("composition");
+    // The answer `/api/query/validate` gives — the one thing OpenAPI cannot state about
+    // `QueryResponse.returned`, so its shape is worth pinning in a committed artifact.
+    c.check::<q::WillReturn>("will_return");
+    c.check::<q::ValidationOutcome>("validation_outcome");
 
     no_orphaned_fixtures(&c);
 }
