@@ -487,6 +487,47 @@ export type PropertySubject = "resource" | "edge" | string;
 export type QuantityScale = { "scale": "unit_interval" } | { "scale": "other_range", bounds: string, } | { "scale": "unbounded" };
 
 /**
+ * What `POST /api/query` answers with: the returned arms, keyed by the caller's own stage names,
+ * and the trace covering every stage.
+ *
+ * **A 200 does not mean every stage answered.** A stage may be empty, withheld or refused and
+ * still be reported here — see [`super::disposition::StageDisposition`]. Static invalidity never
+ * reaches this type at all; it is a 400 carrying every [`super::validate::PlanRefusal`] at once.
+ *
+ * # The schema cannot state the real invariant, and that is said plainly rather than hidden
+ *
+ * The keys of `returned` are exactly `outcome.returns[].stage`, and the variant of `produced`
+ * under each is determined by the declared `produces` of the act that stage names. That is a
+ * dependency from REQUEST to RESPONSE, and OpenAPI has no way to express it.
+ *
+ * Nothing on this surface closes it today. A `POST /api/query/validate` route was drafted to and
+ * was withdrawn (it authenticated nobody and protected nothing). The facts needed to compute it
+ * all live in the act declarations, and [`super::validate::ValidationOutcome`] is the pure
+ * function that does — so a client holding the declarations can derive it. Publishing them is an
+ * open question, not a promise.
+ */
+export type QueryResponse = { 
+/**
+ * One entry per `outcome.returns` — no more, no fewer.
+ *
+ * **A map rather than a list, and that is the structural half of `no-cross-act-ranking`.**
+ * Arms are keyed separately and there is no merged ordered list anywhere for two acts' rows
+ * to fall into, so combining them takes a deliberate act by the caller. The row types no
+ * longer differ per act — incommensurability is DATA now, carried by
+ * [`super::hits::Scoring::score_kind`] — which makes this keying the protection rather than a
+ * convenience.
+ */
+returned: { [key in StageName]?: StageResult }, 
+/**
+ * EVERY stage, including the ones whose rows were not returned.
+ *
+ * Intermediate stages are mostly not returned — the pipe carries ids, not rows — so without
+ * this a composition is a black box with an answer at the end and no way to tell whether
+ * stage 2 earned its place.
+ */
+trace: CompositionTrace, };
+
+/**
  * Why an act refused. A typed variant so every door renders the same value; how a door
  * TRANSPORTS it (HTTP status, MCP error code) stays a door concern.
  *

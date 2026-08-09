@@ -12,7 +12,11 @@
 //! Their fragments take arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), which is what
 //! binding them waits on.
 //!
-//! There is deliberately no executor here yet; nothing runs a [`CompiledQuery`].
+//! [`query_exec`](super::query_exec) runs a [`CompiledQuery`] and hands back its two row classes.
+//! What does NOT live in either module is the assembly of a `QueryResponse` — deciding a stage's
+//! disposition, hydrating the returned arms, building the trace. That needs the composition and the
+//! act declarations together, and keeping it out of the substrate is what stops this layer forming
+//! an opinion about what a stage MEANT.
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
@@ -29,6 +33,46 @@ pub struct CompiledQuery {
     pub binds: Vec<QueryBind>,
     /// Stage name -> CTE name, in emission order. A later task uses it to attribute rows to arms.
     pub cte_names: Vec<(String, String)>,
+    /// The stages that refused at COMPILE time — today, exactly the `find-about-*` stages whose
+    /// embedding the server had to compute and could not.
+    ///
+    /// **Carried here rather than returned as an `Err`, and that is the contract's rule not a
+    /// convenience.** A refusal is per stage: *"Every other stage runs. Stages that do not depend on
+    /// it are unaffected and answer normally — a composition holding both a `find-exact` and a
+    /// `find-about-*` still returns the exact arm."* An `Err` would refuse the exact arm too, for a
+    /// reason that has nothing to do with it.
+    ///
+    /// A refused stage's CTE is an EMPTY set, so a stage bounded by it is bounded to nothing —
+    /// `ARRAY(SELECT id FROM <it>)` is `'{}'`, which the fragments read as zero rows, and never the
+    /// `NULL` they read as unbounded. Collapsing those two turns a failed stage into a global
+    /// search.
+    ///
+    /// **This carries the per-stage refusals only, and `compile` can still fail whole.** The
+    /// tempting sentence here is "static refusals never reach the compiler, they are `validate`'s",
+    /// and it is FALSE — which is worth saying, because believing it is how the next refusal gets
+    /// added to the wrong side.
+    ///
+    /// Two refusals still abort the entire composition by returning `Err`:
+    ///
+    /// * `UnsupportedBoundKind` from a multi-id anchor. `validate` accepts it — an `IdSet` holds N
+    ///   ids and the anchor slot holds one, a cardinality gap spec §9 names as open — so this is a
+    ///   caller error the compiler is the first to see. **It has the defect this field exists to
+    ///   remove**: a healthy `find-exact` stage beside a two-context `find-about-within` loses both.
+    ///   Making it per-stage is not the right repair; teaching `validate` to refuse it is, so the
+    ///   caller gets it in the 400 with everything else. Named here rather than fixed in passing.
+    /// * `UnsupportedSeedKind` from `StageNarrowing::bound_expr` — a compiler/validator
+    ///   contradiction rather than anything a caller did, so failing loud is correct.
+    ///
+    /// What DOES ride here is the runtime refusal: a `find-about-*` stage whose embedding the server
+    /// had to compute and could not. Carried rather than returned as an `Err` because a refusal is
+    /// per stage — *"Every other stage runs… a composition holding both a `find-exact` and a
+    /// `find-about-*` still returns the exact arm."* An `Err` refuses the exact arm too.
+    ///
+    /// A refused stage's CTE is an EMPTY set, so a stage bounded by it is bounded to nothing —
+    /// `ARRAY(SELECT id FROM <it>)` is `'{}'`, which the fragments read as zero rows, and never the
+    /// `NULL` they read as unbounded. Collapsing those two turns a failed stage into a global
+    /// search.
+    pub refusals: Vec<PlanRefusal>,
 }
 
 /// One positional bind. The compiler emits `$1`, `$2`, … in this order and never renders a value
@@ -76,6 +120,27 @@ const VIS_CTE: &str = "__temper_vis";
 /// the cores read a NULL `p_visible_ids` as admitting nothing, so a principal who sees nothing gets
 /// nothing. Fail-closed, and the same value either spelling would produce through `unnest`.
 const VISIBLE_IDS: &str = "(SELECT ids FROM __temper_vis)";
+
+/// The unusable tally for a stage whose input needs none — no input at all, an upstream set, or an
+/// anchor pair.
+///
+/// A literal zero rather than NULL, and the two are not interchangeable here:
+/// [`temper_core::types::query::StageResult::input_unusable`] is a non-null count, so NULL would
+/// have to be rendered as *something* on the wire and the only candidate is zero anyway. Saying it
+/// in the SQL keeps the claim where a reader of the statement can see it.
+///
+/// For an UPSTREAM set the zero is a fact, not a default: the set is what a visibility-gated
+/// fragment returned, so every id in it was usable by construction, and re-checking would cost a
+/// gate call to confirm a known answer.
+///
+/// For an ANCHOR it is a **named under-report**. Whether a cogmap or context anchor was readable is
+/// decided inside the fragment against `p_anchor_reader`, and finding out here would mean calling
+/// `contexts_readable_by` — a second recursive team closure, which is the exact cost the `vis`
+/// hoist exists to avoid. An unreadable anchor therefore comes back as an `empty` stage rather than
+/// as one unusable id. That is the disposition the contract prescribes for it anyway (an id YOU
+/// supplied that you cannot see is `empty`, never `withheld`, or the trace becomes a single-probe
+/// existence oracle), so the loss is one counter, not the disclosure.
+const NO_UNUSABLE: &str = "0::bigint";
 
 /// The principal, always `$1` — `compile` pushes it first, before any per-stage bind. The cores read
 /// it ONLY for cogmap-anchor readability, which is one boolean per call and a property of no row, so
@@ -137,24 +202,70 @@ pub fn compile(
     ));
 
     let intention = v.composition().intention.as_ref();
+    let mut tallies: Vec<StageTally> = Vec::new();
+    let mut refusals: Vec<PlanRefusal> = Vec::new();
     for node in v.ordered() {
-        let (name, body) = match node {
-            StageNode::Act(inv) => (
-                inv.name.as_str(),
-                emit_act_body(inv, intention, embedding, &mut binds)?,
+        let (name, body, unusable) = match node {
+            StageNode::Act(inv) => {
+                let emitted = emit_act_body(inv, intention, embedding, &mut binds, &mut refusals)?;
+                (inv.name.as_str(), emitted.body, emitted.unusable)
+            }
+            // A combinator's inputs are upstream stages, so nothing it was handed can be unusable.
+            StageNode::Combine(cn) => (
+                cn.name.as_str(),
+                emit_combine_body(cn),
+                NO_UNUSABLE.to_string(),
             ),
-            StageNode::Combine(cn) => (cn.name.as_str(), emit_combine_body(cn)),
         };
         ctes.push(format!("{name} AS (\n{body}\n)"));
         cte_names.push((name.to_string(), name.to_string()));
+        tallies.push(StageTally {
+            stage: name.to_string(),
+            unusable,
+        });
     }
 
-    let sql = format!("WITH {}\n{}", ctes.join(",\n"), final_select(v));
+    let sql = format!("WITH {}\n{}", ctes.join(",\n"), final_select(v, &tallies));
     Ok(CompiledQuery {
         sql,
         binds,
         cte_names,
+        refusals,
     })
+}
+
+/// What one stage contributes to the statement: its CTE body, and the scalar expression that counts
+/// the ids it was handed and could not use.
+struct EmittedAct {
+    body: String,
+    unusable: String,
+}
+
+/// One stage's entry in the disclosure half of the final select.
+struct StageTally {
+    stage: String,
+    /// A SQL scalar expression yielding `bigint`. See [`NO_UNUSABLE`] for when it is a literal zero
+    /// and why that is a fact rather than a default.
+    unusable: String,
+}
+
+/// The body of a stage that REFUSED — the stage-contract shape, and no rows.
+///
+/// **Empty, never absent.** A stage bounded by this one takes `ARRAY(SELECT id FROM <it>)`, which is
+/// `'{}'` — bounded to nothing — and never the `NULL` the fragments read as unbounded. Collapsing
+/// those two would turn a failed stage into a global search: a different question, answered
+/// confidently, with a full page of plausible results and nothing to distinguish it from a real
+/// answer.
+///
+/// It emits no function call at all, deliberately. Binding NULL into the vector core would run a
+/// similarity search against nothing and return a list that reads like an answer, which is the
+/// distinction between a refusal and an honest empty collapsing at exactly the point it matters.
+fn refused_body(act: &str) -> String {
+    format!(
+        "  -- act: {act} REFUSED (no rows, and an EMPTY set for anything bounded by it)\n  \
+         SELECT NULL::uuid AS id, NULL::text AS kind, NULL::double precision AS quantity \
+         WHERE false"
+    )
 }
 
 /// A placeholder act body in the `(id, kind, quantity)` stage-contract shape. IDs only cross a stage
@@ -165,10 +276,15 @@ fn emit_act_body(
     intention: Option<&Intention>,
     embedding: Option<&[f32]>,
     binds: &mut Vec<QueryBind>,
-) -> Result<String, PlanRefusal> {
+    refusals: &mut Vec<PlanRefusal>,
+) -> Result<EmittedAct, PlanRefusal> {
     let act = act_name(&inv.act);
 
-    let narrowing = narrowing_for(inv, binds)?;
+    let (narrowing, unusable) = narrowing_for(inv, binds)?;
+    let emitted = |body: String| EmittedAct {
+        body,
+        unusable: unusable.clone(),
+    };
     let (anchor_table, anchor_id) = narrowing.anchor();
     let (anchor_table, anchor_id) = (anchor_table.to_string(), anchor_id.to_string());
     let (limit, offset) = paging_for(inv, binds);
@@ -208,12 +324,12 @@ fn emit_act_body(
                 limit: &limit,
                 offset: &offset,
             });
-            Ok(format!(
+            Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_EXACT}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  fts_norm::double precision AS quantity\n    \
                  FROM {call}"
-            ))
+            )))
         }
         Some(EMIT_FIND_WIDE) => {
             let bound = bound_for_find(inv)?;
@@ -230,13 +346,16 @@ fn emit_act_body(
             //
             // Still a refusal rather than a NULL bind: the stage holds a well-formed question it
             // cannot answer, and searching on nothing would return a list that reads like an answer.
-            let emb = embedding.ok_or_else(|| PlanRefusal {
-                stage: Some(inv.name.clone()),
-                reason: RefusalReason::EmbeddingUnavailable,
-                detail: "a find-about-* stage needs a query embedding; none was supplied and the \
-                         server could not compute one"
-                    .to_string(),
-            })?;
+            let Some(emb) = embedding else {
+                refusals.push(PlanRefusal {
+                    stage: Some(inv.name.clone()),
+                    reason: RefusalReason::EmbeddingUnavailable,
+                    detail: "a find-about-* stage needs a query embedding; none was supplied and \
+                             the server could not compute one"
+                        .to_string(),
+                });
+                return Ok(emitted(refused_body(&act)));
+            };
             let ei = binds.len() + 1;
             binds.push(QueryBind::Embedding(emb.to_vec()));
             let ki = binds.len() + 1;
@@ -250,21 +369,21 @@ fn emit_act_body(
                 limit: &limit,
                 offset: &offset,
             });
-            Ok(format!(
+            Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_WIDE}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  vec_norm::double precision AS quantity\n    \
                  FROM {call}"
-            ))
+            )))
         }
         // `follow-from` and `survey` reach here: their mechanics are declared reachable, but their
         // fragments take arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), so this
         // builder still emits the deliberately-absent placeholder rather than guessing a value.
-        _ => Ok(format!(
+        _ => Ok(emitted(format!(
             "  -- act: {act} (placeholder body; this builder emits no fragment for it yet)\n  \
              SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({})",
             narrowing.any_set_expr(),
-        )),
+        ))),
     }
 }
 
@@ -389,12 +508,20 @@ impl StageNarrowing {
 /// no disclosure that the narrowing was nonsense.
 ///
 /// A `None` input is UNBOUNDED, which is `NULL::uuid[]` and never `'{}'`.
+///
+/// It also returns the stage's **unusable tally** — a scalar SQL expression counting how many of the
+/// handed-in ids this stage could not use. It is computed here rather than beside the tallies
+/// because this is the only place that knows both where the set came from and which bind holds it,
+/// and re-deriving either downstream would mean sniffing the emitted string.
+///
+/// Only a caller-supplied RESOURCE set can be non-zero — see [`NO_UNUSABLE`] for why an upstream
+/// set is a factual zero and why an anchor is a named under-report.
 fn narrowing_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
-) -> Result<StageNarrowing, PlanRefusal> {
+) -> Result<(StageNarrowing, String), PlanRefusal> {
     let Some(input) = &inv.input else {
-        return Ok(StageNarrowing::Unbounded);
+        return Ok((StageNarrowing::Unbounded, NO_UNUSABLE.to_string()));
     };
     // Read once, up front. The relation is a property of the edge and is the same whether the set
     // came from the caller or from an upstream stage — which is why it is not re-derived in each
@@ -413,15 +540,15 @@ fn narrowing_for(
         // `no-cross-act-ranking` structural rather than policed. An upstream set is always resource
         // ids (that is what these acts produce), so it is always an array slot; WHICH array slot is
         // the relation's business.
-        StageInput::Upstream { stage, .. } => Ok(by_relation(format!(
-            "ARRAY(SELECT id FROM {})",
-            stage.as_str()
-        ))),
+        StageInput::Upstream { stage, .. } => Ok((
+            by_relation(format!("ARRAY(SELECT id FROM {})", stage.as_str())),
+            NO_UNUSABLE.to_string(),
+        )),
         StageInput::Caller { ids, .. } => match ids.kind {
             IdKind::Resource => {
                 let idx = binds.len() + 1;
                 binds.push(QueryBind::Uuids(ids.ids.clone()));
-                Ok(by_relation(format!("${idx}::uuid[]")))
+                Ok((by_relation(format!("${idx}::uuid[]")), unusable_tally(idx)))
             }
             // The anchor slot holds exactly ONE id. Spec §9 names this as an open cardinality gap
             // — "an IdSet holds N ids; an anchor slot holds one" — and the honest response to it is
@@ -446,16 +573,39 @@ fn narrowing_for(
                 };
                 let ai = binds.len() + 1;
                 binds.push(QueryBind::Uuids(vec![*id]));
-                Ok(StageNarrowing::Anchor {
-                    table: format!("'{table}'::varchar"),
-                    id: format!("(${ai}::uuid[])[1]"),
-                })
+                Ok((
+                    StageNarrowing::Anchor {
+                        table: format!("'{table}'::varchar"),
+                        id: format!("(${ai}::uuid[])[1]"),
+                    },
+                    NO_UNUSABLE.to_string(),
+                ))
             }
             // A region set reaching a find act is already refused by the validator against
             // `accepts_bounds`; unbounded here rather than a second, divergent opinion about it.
-            _ => Ok(StageNarrowing::Unbounded),
+            _ => Ok((StageNarrowing::Unbounded, NO_UNUSABLE.to_string())),
         },
     }
+}
+
+/// How many of the ids bound at `$idx` the principal cannot use — **invisible, nonexistent and
+/// malformed as ONE number**, counted against the relation the statement already computed.
+///
+/// Conflated on purpose. Splitting them, or naming a counter for the invisible case alone, turns
+/// the trace into a single-probe existence oracle: pass one id, read the counter, learn whether that
+/// id exists. A nonexistent id and an invisible one are both simply absent from the visible set,
+/// which is what makes one subtraction the honest answer rather than a compromise.
+///
+/// **`COALESCE` is load-bearing and not defensive.** `array_agg` over zero rows yields NULL, so a
+/// principal who can see nothing would give `u.id = ANY(NULL)` → NULL → `NOT NULL` → NULL, and
+/// `count(*)` over a NULL predicate counts nothing: every id unusable would tally as zero unusable,
+/// which is the one direction this number must never fail in. Against `'{}'` the comparison is
+/// false and all of them are counted.
+fn unusable_tally(idx: usize) -> String {
+    format!(
+        "(SELECT count(*) FROM unnest(${idx}::uuid[]) AS u(id) \
+         WHERE NOT (u.id = ANY(COALESCE({VISIBLE_IDS}, '{{}}'::uuid[]))))::bigint"
+    )
 }
 
 /// The declared paging terms, bound.
@@ -524,22 +674,56 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
     arms.join(&format!("\n  {op}\n"))
 }
 
-/// The final per-arm select over the declared returned stages. Each returned stage is its own arm,
-/// labelled by its stage name; nothing ranks one arm's quantity against another's.
-fn final_select(v: &ValidatedComposition) -> String {
-    let returns = v.returns();
-    if returns.is_empty() {
-        return "SELECT NULL::uuid AS id, NULL::text AS kind, NULL::double precision AS quantity, \
-                NULL::text AS stage WHERE false"
-            .to_string();
-    }
-    let arms: Vec<String> = returns
+/// The final select: one `hit` arm per RETURNED stage, then one `tally` arm per stage — every
+/// stage, returned or not.
+///
+/// Each returned stage is its own arm, labelled by its stage name; nothing ranks one arm's quantity
+/// against another's, and there is no arm two acts' rows share.
+///
+/// # Why the tallies ride in this statement rather than a second one
+///
+/// The trace covers every stage, including the intermediates whose rows nobody asked for — that is
+/// what lets a reader decide whether stage 2 earned its place. A non-returned stage ships no rows,
+/// so a count is the only thing that can distinguish `answered` from `empty` for it. Asking
+/// separately would answer from a **different snapshot**, and a trace that disagrees with the rows
+/// beside it is worse than no trace: it reads as disclosure and is not.
+///
+/// A tally carries **how many, never which**. Its id, kind and quantity columns are NULL by
+/// construction, so an intermediate stage's membership stays the pipe's internal currency.
+///
+/// The two classes share one column list because they are one statement's result set. `row_class`
+/// is what the executor switches on; it is a literal in the SQL rather than an inferred property of
+/// a NULL id, because "this row has no id" and "this row is a tally" are different claims and
+/// deriving one from the other would make an act that legitimately produced a NULL id unreadable.
+fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
+    let mut arms: Vec<String> = v
+        .returns()
         .iter()
         .map(|r| {
             let s = r.stage.as_str();
-            format!("SELECT id, kind, quantity, '{s}'::text AS stage FROM {s}")
+            format!(
+                "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, \
+                 NULL::bigint AS produced, NULL::bigint AS unusable FROM {s}"
+            )
         })
         .collect();
+    arms.extend(tallies.iter().map(|t| {
+        let s = &t.stage;
+        let unusable = &t.unusable;
+        format!(
+            "SELECT 'tally'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
+             NULL::text AS kind, NULL::double precision AS quantity, \
+             (SELECT count(*) FROM {s})::bigint AS produced, {unusable} AS unusable"
+        )
+    }));
+    if arms.is_empty() {
+        // Unreachable through `validate`, which refuses an empty `stages`. Kept because `compile`
+        // is public and a zero-arm UNION is not valid SQL.
+        return "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
+                NULL::text AS kind, NULL::double precision AS quantity, NULL::bigint AS produced, \
+                NULL::bigint AS unusable WHERE false"
+            .to_string();
+    }
     arms.join("\nUNION ALL\n")
 }
 
@@ -574,6 +758,13 @@ mod tests {
         })
     }
 
+    /// The narrowing half of [`narrowing_for`]'s answer. The unusable-tally half is asserted at the
+    /// emitted-SQL level (`tests/query_plan_compile.rs`), where the expression it produces can be
+    /// read in the statement it has to be valid inside.
+    fn narrowing(input: Option<StageInput>, binds: &mut Vec<QueryBind>) -> StageNarrowing {
+        narrowing_for(&inv(input), binds).unwrap().0
+    }
+
     fn caller(relation: StageRelation) -> Option<StageInput> {
         Some(StageInput::Caller {
             relation,
@@ -603,13 +794,13 @@ mod tests {
         let mut binds = vec![];
         assert!(
             matches!(
-                narrowing_for(&inv(upstream(StageRelation::Seed)), &mut binds).unwrap(),
+                narrowing(upstream(StageRelation::Seed), &mut binds),
                 StageNarrowing::Seed(_)
             ),
             "an upstream set declared `seed` must not land in the narrowing slot"
         );
         assert!(matches!(
-            narrowing_for(&inv(upstream(StageRelation::Bound)), &mut binds).unwrap(),
+            narrowing(upstream(StageRelation::Bound), &mut binds),
             StageNarrowing::Bound(_)
         ));
     }
@@ -623,11 +814,11 @@ mod tests {
     fn the_relation_is_independent_of_where_the_set_came_from() {
         let mut binds = vec![];
         assert!(matches!(
-            narrowing_for(&inv(caller(StageRelation::Seed)), &mut binds).unwrap(),
+            narrowing(caller(StageRelation::Seed), &mut binds),
             StageNarrowing::Seed(_)
         ));
         assert!(matches!(
-            narrowing_for(&inv(caller(StageRelation::Bound)), &mut binds).unwrap(),
+            narrowing(caller(StageRelation::Bound), &mut binds),
             StageNarrowing::Bound(_)
         ));
     }
@@ -639,7 +830,7 @@ mod tests {
     #[test]
     fn no_input_is_unbounded_and_that_is_not_an_empty_array() {
         let mut binds = vec![];
-        let n = narrowing_for(&inv(None), &mut binds).unwrap();
+        let n = narrowing(None, &mut binds);
         assert!(matches!(n, StageNarrowing::Unbounded));
         assert_eq!(n.bound_expr().unwrap(), "NULL::uuid[]");
         assert_ne!(n.bound_expr().unwrap(), "'{}'");

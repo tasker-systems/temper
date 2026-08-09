@@ -58,6 +58,7 @@
 //! (`public`), and the connection's search_path resolves unqualified names and the visibility
 //! function's own unqualified internals correctly with no per-txn `SET LOCAL`.
 
+pub mod query_exec;
 pub mod query_plan;
 
 use anyhow::Result;

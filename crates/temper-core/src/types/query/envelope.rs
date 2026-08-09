@@ -138,6 +138,47 @@ pub struct StageResult {
     pub input_unusable: i64,
 }
 
+/// What `POST /api/query` answers with: the returned arms, keyed by the caller's own stage names,
+/// and the trace covering every stage.
+///
+/// **A 200 does not mean every stage answered.** A stage may be empty, withheld or refused and
+/// still be reported here — see [`super::disposition::StageDisposition`]. Static invalidity never
+/// reaches this type at all; it is a 400 carrying every [`super::validate::PlanRefusal`] at once.
+///
+/// # The schema cannot state the real invariant, and that is said plainly rather than hidden
+///
+/// The keys of `returned` are exactly `outcome.returns[].stage`, and the variant of `produced`
+/// under each is determined by the declared `produces` of the act that stage names. That is a
+/// dependency from REQUEST to RESPONSE, and OpenAPI has no way to express it.
+///
+/// Nothing on this surface closes it today. A `POST /api/query/validate` route was drafted to and
+/// was withdrawn (it authenticated nobody and protected nothing). The facts needed to compute it
+/// all live in the act declarations, and [`super::validate::ValidationOutcome`] is the pure
+/// function that does — so a client holding the declarations can derive it. Publishing them is an
+/// open question, not a promise.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct QueryResponse {
+    /// One entry per `outcome.returns` — no more, no fewer.
+    ///
+    /// **A map rather than a list, and that is the structural half of `no-cross-act-ranking`.**
+    /// Arms are keyed separately and there is no merged ordered list anywhere for two acts' rows
+    /// to fall into, so combining them takes a deliberate act by the caller. The row types no
+    /// longer differ per act — incommensurability is DATA now, carried by
+    /// [`super::hits::Scoring::score_kind`] — which makes this keying the protection rather than a
+    /// convenience.
+    pub returned: BTreeMap<StageName, StageResult>,
+    /// EVERY stage, including the ones whose rows were not returned.
+    ///
+    /// Intermediate stages are mostly not returned — the pipe carries ids, not rows — so without
+    /// this a composition is a black box with an answer at the end and no way to tell whether
+    /// stage 2 earned its place.
+    pub trace: super::trace::CompositionTrace,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +188,7 @@ mod tests {
     use crate::types::query::hits::{RegionHit, ScoreKind, Scoring};
     use crate::types::query::id_set::IdKind;
     use crate::types::query::stage::ProducedVariant;
+    use crate::types::query::trace::CompositionTrace;
     use std::collections::BTreeMap;
 
     fn region_hit() -> RegionHit {
@@ -274,6 +316,68 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains(r#""key":"doc_type""#));
         assert!(!json.contains("admitted"), "absent, not zero: {json}");
+    }
+
+    #[test]
+    fn a_query_response_keys_its_arms_by_the_callers_own_stage_names() {
+        // The whole point of `returned` being a map rather than a list: what you asked for by name
+        // comes back under that name. An ordinal key here would be the same defect the trace's
+        // `StageName` amendment already removed one layer up.
+        let response = QueryResponse {
+            returned: BTreeMap::from([(StageName::parse("seeds").unwrap(), result(vec![], 0))]),
+            trace: CompositionTrace {
+                meta_detail: crate::types::query::scalars::MetaDetail::Surviving,
+                stages: vec![],
+            },
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(
+            json["returned"]["seeds"].is_object(),
+            "the arm is keyed by the caller's own name: {json}"
+        );
+        assert!(json["trace"]["stages"].is_array(), "got: {json}");
+    }
+
+    #[test]
+    fn the_arms_are_keyed_separately_with_no_merged_ordered_list() {
+        // The structural protection against `unified_search`'s conflation, asserted on the WIRE.
+        // Two acts' rows can only be combined by a deliberate act of the caller because there is
+        // nowhere for them to fall into together — not because their row types differ (they do
+        // not; incommensurability is data now, carried by `score_kind`).
+        let mut regions = result(vec![], 0);
+        regions.act = ActName::Survey;
+        let response = QueryResponse {
+            returned: BTreeMap::from([
+                (StageName::parse("a").unwrap(), result(vec![], 0)),
+                (StageName::parse("b").unwrap(), regions),
+            ]),
+            trace: CompositionTrace {
+                meta_detail: crate::types::query::scalars::MetaDetail::Surviving,
+                stages: vec![],
+            },
+        };
+        let json = serde_json::to_value(&response).unwrap();
+
+        // Each arm's rows are reachable ONLY under its own stage key.
+        assert!(json["returned"]["a"]["produced"]["hits"].is_array());
+        assert!(json["returned"]["b"]["produced"]["hits"].is_array());
+
+        // And there is nowhere else for rows to be. `!returned.is_array()` was the obvious
+        // assertion here and was VACUOUS: `returned` is a `BTreeMap`, which serde always renders as
+        // an object, so it could not fail — including under the change it was written to catch,
+        // which would not compile in the first place. This one can fail: a merged list would have
+        // to appear as a third top-level key, and that is what is checked.
+        let top: Vec<&str> = json
+            .as_object()
+            .expect("the response is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            top,
+            vec!["returned", "trace"],
+            "a third top-level key is where a merged ordered list would live: {json}"
+        );
     }
 
     #[test]

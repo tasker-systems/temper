@@ -57,7 +57,9 @@
 #       indistinguishable for that one case.
 #   ⟨3⟩ `RegionHit` keeps `CogmapRegionRow` with its `salience`, documented as an
 #       INPUT to `region_score` rather than a rival ordering.
-#   ⟨4⟩ `located_at` lands, on `VecHit` only. Exact-arm snippet is a named
+#   ⟨4⟩ `located_at` lands, on `VecHit` only — the type that has since become
+#       `ResourceHit`, when the per-act hit types collapsed to one per currency
+#       `[2026-08-09]`. Exact-arm snippet is a named
 #       remainder with a cost question, not a gap.
 #   ⟨5⟩ WITHDRAWN — see the block below. It was never Pete's, and it does not
 #       survive the question "what authenticates it".
@@ -684,7 +686,9 @@ components:
                               cannot: its walk discards path origin.
 
           match_location      Where in the resource the match was
-                              (`VecHit.located_at`). `find-exact` cannot: its
+                              (`ResourceHit.located_at` — it was `VecHit`'s
+                              until the four per-act hit types collapsed into
+                              one per currency). `find-exact` cannot: its
                               index is per-resource, so block boundaries are
                               gone before the query is asked.
 
@@ -1561,7 +1565,7 @@ components:
 #                      "means": "cosine proximity of the best-scoring chunk, shrunk toward the mean",
 #                      "scale": { "scale": "unit_interval" } },
 #       "produced": {
-#         "produced": "resource_hits",
+#         "produced": "resources",
 #         "hits": [
 #           { "resource": { "id": "019fe267-131f-7cf2-92d4-43b797ba50d4",
 #                           "ref": "composable-find-fragments-five-of-six-…-019fe267-…",
@@ -1570,7 +1574,9 @@ components:
 #                           "context_ref": "@j-cole-taylor/temper",
 #                           "managed_meta": { "temper-provenance": "user-created" },
 #                           "open_meta": { "tags": ["search", "composition"] } },
-#             "vec_norm": 0.8616 }
+#             "scoring": { "score_kind": "vec_norm", "score": 0.8616 },
+#             "located_at": { "block_id": "019fe267-1320-7a41-9c60-2b1f0c4d5e88",
+#                             "header_path": "The trajectory", "snippet": null } }
 #         ]
 #       },
 #       "extent": "partial",
@@ -1584,8 +1590,9 @@ components:
 #       "orders_by": { "field": "graph_score",
 #                      "means": "product of edge weights along the best path",
 #                      "scale": { "scale": "unbounded" } },
-#       "produced": { "produced": "resource_hits",
-#                     "hits": [ { "resource": { "…": "…" }, "graph_score": 0.72 } ] },
+#       "produced": { "produced": "resources",
+#                     "hits": [ { "resource": { "…": "…" },
+#                                 "scoring": { "score_kind": "graph_score", "score": 0.72 } } ] },
 #       "extent": "complete",
 #       "terms_applied": {},
 #       "narrowed_by": [],
@@ -1600,7 +1607,7 @@ components:
 #         "input_ids": 0, "input_unusable": 0, "input_contributed": 0 },
 #       { "stage": "neighbours", "act": "follow-from", "disposition": "answered",
 #         "relation": "seed",
-#         "bounds_source": { "source": "upstream", "stage": "seeds" },
+#         "input_source": { "source": "upstream", "stage": "seeds" },
 #         "narrowed_by": [],
 #         "input_ids": 10, "input_unusable": 2, "input_contributed": null }
 #     ]
@@ -1609,10 +1616,12 @@ components:
 #
 # Read the example for the four properties it demonstrates:
 #
-#   * `seeds.vec_norm` (0.8616) and `neighbours.graph_score` (0.72) are NEVER in
-#     one ordered list, and there is no field into which they could be summed.
-#     They are not the same kind of number and the schema does not let you forget
-#     it — one is [0,1], the other unbounded, and each stage says so.
+#   * `seeds`' 0.8616 and `neighbours`' 0.72 are NEVER in one ordered list, and
+#     there is no field into which they could be summed. Each row NAMES its kind
+#     — `score_kind: "vec_norm"` beside `score_kind: "graph_score"` — so a client
+#     can CHECK that combining them is a category error rather than having to
+#     already know it. One is [0,1], the other unbounded, and each stage's
+#     `orders_by.scale` says so.
 #
 #   * `neighbours` is `"relation": "seed"`, so a reader knows stage 2 REACHED
 #     BEYOND stage 1 rather than narrowing it — without knowing that

@@ -27,7 +27,7 @@ pub use composition::{
     CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
 };
 pub use disposition::{ActRefusal, RefusalReason, StageDisposition};
-pub use envelope::{ActInvocation, NarrowedBy, StageResult};
+pub use envelope::{ActInvocation, NarrowedBy, QueryResponse, StageResult};
 pub use filter::{
     EdgeFilter, FacetPredicate, FilterField, PropertyOp, PropertyPredicate, PropertySubject,
     ResourceFilter,

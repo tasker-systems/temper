@@ -227,6 +227,104 @@ fn a_downstream_stage_selects_ids_only_and_never_a_quantity() {
     );
 }
 
+// ─── The tallies the executor reads to fill the trace ───────────────────────────────────────────
+//
+// The trace covers EVERY stage, including the ones whose rows are not returned — that is what lets
+// a reader see whether stage 2 earned its place. Those stages have no rows in the result, so the
+// only thing that can tell the executor a non-returned stage was `empty` rather than `answered` is
+// a count travelling in the SAME statement. A second query would answer from a different snapshot,
+// which is the property `one statement, one snapshot` exists to hold.
+
+/// The one tally arm for `stage`, isolated from the rest of the statement.
+///
+/// Split on the tally's own row-class marker rather than on the stage label alone: a RETURNED
+/// stage labels both a hit arm and a tally arm, so matching the label would silently hand back the
+/// hit arm and let an assertion about the tally pass without ever reading one.
+fn tally_arm(sql: &str, stage: &str) -> String {
+    let marker = format!("'tally'::text AS row_class, '{stage}'::text AS stage");
+    let rest = sql
+        .split(&marker)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no tally arm for `{stage}` in:\n{sql}"));
+    rest.split("UNION ALL").next().unwrap().to_string()
+}
+
+fn hit_arm(sql: &str, stage: &str) -> Option<String> {
+    let marker = format!("'hit'::text AS row_class, '{stage}'::text AS stage");
+    let rest = sql.split(&marker).nth(1)?;
+    Some(rest.split("UNION ALL").next().unwrap().to_string())
+}
+
+#[test]
+fn every_stage_is_tallied_including_one_whose_rows_are_not_returned() {
+    let v = plan_two_stages("hits", "near");
+    let c = compile(&v, test_profile(), None).expect("compiles");
+    // `near` is the only returned stage; `hits` feeds it and reaches the caller only as a trace
+    // entry — which it cannot have without a count.
+    tally_arm(&c.sql, "hits");
+    tally_arm(&c.sql, "near");
+    assert!(hit_arm(&c.sql, "near").is_some(), "got: {}", c.sql);
+    assert!(
+        hit_arm(&c.sql, "hits").is_none(),
+        "a stage nobody asked for must not ship its rows: {}",
+        c.sql
+    );
+}
+
+#[test]
+fn a_tally_row_carries_no_id_so_a_non_returned_stages_rows_never_leave_the_database() {
+    // The tally discloses HOW MANY, never WHICH. A non-returned stage's ids are the pipe's internal
+    // currency, and shipping them would hand back rows the caller did not ask for.
+    let v = plan_two_stages("hits", "near");
+    let c = compile(&v, test_profile(), None).expect("compiles");
+    let tally = tally_arm(&c.sql, "hits");
+    assert!(
+        tally.contains("NULL::uuid"),
+        "a tally carries no id: {tally}"
+    );
+    assert!(
+        tally.contains("count(*) FROM hits"),
+        "and it does carry the count: {tally}"
+    );
+}
+
+#[test]
+fn a_caller_supplied_set_is_tallied_against_the_hoisted_visibility_relation() {
+    // `input_unusable` — invisible, nonexistent and malformed as ONE number. It is computable only
+    // where the ids came from the CALLER, and it is counted against the relation that already
+    // exists rather than by asking the gate a second time.
+    let (v, _ids) = plan_with_caller_ids();
+    let c = compile(&v, test_profile(), None).expect("compiles");
+    let tally = tally_arm(&c.sql, "hits");
+    assert!(
+        tally.contains("unnest(") && tally.contains("__temper_vis"),
+        "the supplied set is counted against the ONE visibility relation: {tally}"
+    );
+    assert_eq!(
+        c.sql.matches("resources_visible_to").count(),
+        1,
+        "tallying must not add a second gate call: {}",
+        c.sql
+    );
+}
+
+#[test]
+fn an_upstream_fed_stage_tallies_zero_unusable_rather_than_re_gating_it() {
+    // Not a shortcut: an upstream set is what a visibility-gated fragment returned, so every id in
+    // it was usable by construction. Re-checking would cost a gate call to confirm a known answer.
+    let v = plan_two_stages("hits", "near");
+    let c = compile(&v, test_profile(), None).expect("compiles");
+    let tally = tally_arm(&c.sql, "near");
+    assert!(
+        !tally.contains("unnest("),
+        "an upstream-fed stage re-gated its input: {tally}"
+    );
+    assert!(
+        tally.contains("0::bigint"),
+        "and says so as a literal zero rather than leaving it null: {tally}"
+    );
+}
+
 #[test]
 fn stages_are_emitted_in_dependency_order() {
     // The compiler consumes ValidatedComposition::ordered(); a CTE referencing one declared later
@@ -241,6 +339,11 @@ fn stages_are_emitted_in_dependency_order() {
 // ─── Beat D: the find acts emit real fragments ──────────────────────────────────────────────────
 
 use temper_core::types::query::{BoundTerm, Intention, RefusalReason};
+
+/// The ungated cores, restated here because they are private to the crate. A drift between these
+/// and the compiler's own constants shows up as a failing assertion, which is the right failure.
+const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
+const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 
 fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode {
     StageNode::Act(ActInvocation {
@@ -377,28 +480,131 @@ fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_core() {
 /// Re-pointing rather than deleting, for the same reason `a_served_act_this_builder_has_no_fragment_for_refuses_honestly`
 /// was re-pointed at beat D: the property still needs a witness, and deleting a test when its
 /// expected value changes retires the only thing holding the distinction.
+///
+/// `[re-pointed again — 2026-08-09]` What changed this time is not WHICH refusal but WHERE it is
+/// reported. It used to be an `Err`, which aborted the whole compilation — and the contract says
+/// the opposite in as many words: *"Every other stage runs. Stages that do not depend on it are
+/// unaffected and answer normally — a composition holding both a `find-exact` and a `find-about-*`
+/// still returns the exact arm."* An `Err` loses the exact arm as well, which is a second stage
+/// refused for a reason that has nothing to do with it. The refusal now rides on the compiled
+/// query. The property under test is unchanged: a missing vector refuses rather than binding NULL.
 #[test]
 fn a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_callers() {
     let v = build_with_intention(
         vec![find_stage("wide", ActName::FindAboutAnywhere, None)],
         vec!["wide"],
     );
-    let err = compile(&v, test_profile(), None)
-        .expect_err("no embedding must refuse, not compile to a NULL bind");
+    let c = compile(&v, test_profile(), None).expect("a runtime refusal does not abort the plan");
 
-    assert_eq!(err.reason, RefusalReason::EmbeddingUnavailable);
+    let [refusal] = c.refusals.as_slice() else {
+        panic!("exactly one stage refuses; got {:?}", c.refusals)
+    };
+    assert_eq!(refusal.reason, RefusalReason::EmbeddingUnavailable);
     assert_ne!(
-        err.reason,
+        refusal.reason,
         RefusalReason::MissingIntention,
         "the composition threaded a question; the vector is the server's job, so reporting this \
          as a missing intention would blame the caller for the server's failure"
     );
-    assert_eq!(err.stage.as_ref().map(|s| s.as_str()), Some("wide"));
+    assert_eq!(refusal.stage.as_ref().map(|s| s.as_str()), Some("wide"));
 
-    // And the same plan WITH an embedding compiles — so the refusal is about the embedding and not
-    // about the plan being malformed in some other way.
+    // Still not a NULL bind: the stage produces nothing rather than searching on nothing, which
+    // would return a list that reads like an answer.
+    assert!(
+        !c.sql.contains(EMIT_FIND_WIDE),
+        "a refused stage must not call the vector core at all: {}",
+        c.sql
+    );
+
+    // And the same plan WITH an embedding compiles clean — so the refusal is about the embedding
+    // and not about the plan being malformed in some other way.
     let emb = an_embedding();
-    assert!(compile(&v, test_profile(), Some(&emb)).is_ok());
+    let ok = compile(&v, test_profile(), Some(&emb)).expect("compiles");
+    assert!(ok.refusals.is_empty());
+}
+
+/// **A refusal is per stage; the stages that do not depend on it answer normally.**
+///
+/// The contract's own worked case, and the reason the refusal cannot be an `Err`: a caller who asked
+/// two independent questions and got one unanswerable vector must still be given the other answer.
+#[test]
+fn one_stage_refusing_for_want_of_an_embedding_does_not_refuse_the_others() {
+    let v = build_with_intention(
+        vec![
+            find_stage("exact", ActName::FindExact, None),
+            find_stage("wide", ActName::FindAboutAnywhere, None),
+        ],
+        vec!["exact", "wide"],
+    );
+    let c = compile(&v, test_profile(), None).expect("compiles");
+
+    assert_eq!(c.refusals.len(), 1, "only the wide stage refuses");
+    assert_eq!(
+        c.refusals[0].stage.as_ref().map(|s| s.as_str()),
+        Some("wide")
+    );
+    assert!(
+        c.sql.contains(EMIT_FIND_EXACT),
+        "the exact arm still runs: {}",
+        c.sql
+    );
+}
+
+/// **A refused stage yields an EMPTY set, and a stage bounded by it is bounded to NOTHING.**
+///
+/// Empty is bounded-to-nothing; absent is unbounded. Collapsing them turns a failed stage into a
+/// global search — a different question, answered confidently, with a full page of plausible
+/// results and nothing to distinguish it from a real answer.
+///
+/// It needs no new mechanism, and that is the point of asserting it here rather than inventing one:
+/// `ARRAY(SELECT id FROM <empty cte>)` is `'{}'`, which the fragments already read as zero rows,
+/// while `NULL` is what they read as unbounded.
+#[test]
+fn a_stage_downstream_of_a_refusal_is_bounded_to_nothing_rather_than_unbounded() {
+    let v = build_with_intention(
+        vec![
+            find_stage("wide", ActName::FindAboutAnywhere, None),
+            find_stage(
+                "narrowed",
+                ActName::FindExact,
+                Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("wide").unwrap(),
+                }),
+            ),
+        ],
+        vec!["narrowed"],
+    );
+    let c = compile(&v, test_profile(), None).expect("compiles");
+
+    let refused = c
+        .sql
+        .split("wide AS (")
+        .nth(1)
+        .expect("wide CTE")
+        .to_string();
+    let refused = refused.split("\n)").next().unwrap();
+    assert!(
+        refused.contains("WHERE false"),
+        "a refused stage produces nothing: {refused}"
+    );
+
+    let downstream = c
+        .sql
+        .split("narrowed AS (")
+        .nth(1)
+        .expect("narrowed CTE")
+        .to_string();
+    let downstream = downstream.split("\n)").next().unwrap();
+    assert!(
+        downstream.contains("ARRAY(SELECT id FROM wide)"),
+        "the downstream stage still takes its bound from the refused stage — an EMPTY array, \
+         never a NULL that would read as unbounded: {downstream}"
+    );
+    assert!(
+        !downstream.contains("NULL::uuid[]"),
+        "a refusal must not silently widen the stage below it to the whole corpus: {downstream}"
+    );
 }
 
 /// The other half of the pair: an absent QUESTION is still the caller's, and still refuses.

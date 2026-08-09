@@ -120,8 +120,14 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::ReturnSpec>("return_spec");
     c.check::<q::OutcomeDeclaration>("outcome_declaration");
     c.check::<q::Composition>("composition");
-    // The answer `/api/query/validate` gives — the one thing OpenAPI cannot state about
-    // `QueryResponse.returned`, so its shape is worth pinning in a committed artifact.
+    // The whole answer. Snapshotted because `returned`'s keying — by the caller's own stage names,
+    // with no merged ordered list two acts' rows could share — is the structural half of
+    // `no-cross-act-ranking`, and a committed artifact is where that stays visible.
+    c.check::<q::QueryResponse>("query_response");
+    // The pure computation describing what a composition WOULD return — the one thing OpenAPI
+    // cannot state about `QueryResponse.returned`, since the keys and the variant under each depend
+    // on the submitted composition. Its route was withdrawn; the shape is still what the server
+    // computes and what a client holding the declarations could compute for itself.
     c.check::<q::WillReturn>("will_return");
     c.check::<q::ValidationOutcome>("validation_outcome");
 
