@@ -222,9 +222,13 @@ async fn open_meta_is_absent_until_asked_for_and_empty_is_a_different_answer(poo
     )
     .await
     .expect("runs");
-    assert!(
-        hits(&with)[0].resource.open_meta.is_some(),
-        "requested and empty is `{{}}`, which is a different answer from absent"
+    // `is_some()` cannot see this property and used to be the whole assertion: `Some(Value::Null)`
+    // passes it while saying something the doc above forbids. The tier must be an empty OBJECT —
+    // "you asked, and there is nothing here" — not merely present. Mutation-probed.
+    assert_eq!(
+        hits(&with)[0].resource.open_meta,
+        Some(serde_json::Value::Object(Default::default())),
+        "requested and empty is `{{}}`, which is a different answer from both absent and null"
     );
 }
 
@@ -435,9 +439,10 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
         StageOutput::Resources { hits } => hits[0].resource.open_meta.clone(),
         other => panic!("expected resources, got {other:?}"),
     };
-    assert!(
-        arm(&asked).is_some(),
-        "the arm that asked receives the tier"
+    assert_eq!(
+        arm(&asked),
+        Some(serde_json::Value::Object(Default::default())),
+        "the arm that asked receives the tier, and an empty tier is `{{}}` rather than null"
     );
     assert_eq!(
         arm(&silent),

@@ -155,3 +155,80 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
     }
     Ok(out)
 }
+
+/// `hits_for` is pure, so its two claims are decidable without a database — and both were
+/// unwitnessed at every layer until now. Mutation-probed: dropping the stage filter and reversing
+/// the comparator each survived the whole suite.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ids are literal rather than generated: this crate mints UUIDv7 only, and nothing here turns
+    /// on the id's shape — only on which rows come back and in what order.
+    fn hit(stage: &str, id: u128, q: Option<f64>) -> HitRow {
+        HitRow {
+            stage: stage.to_string(),
+            id: Uuid::from_u128(id),
+            kind: "resource".to_string(),
+            quantity: q,
+        }
+    }
+
+    /// **A stage's hits are its own.** The structural half of `no-cross-act-ranking`: there is no
+    /// call that produces one ordered list two acts' rows share, so summing or interleaving them
+    /// cannot happen by reaching for the obvious accessor.
+    ///
+    /// The two stages hold DISJOINT rows on purpose. A fixture where both stages match the same
+    /// resource cannot express this property — the filter and `true` return the same set — which is
+    /// how the accessor stayed unwitnessed while a two-arm test passed over it.
+    #[test]
+    fn a_stages_hits_are_its_own_and_never_another_stages() {
+        let rows = QueryRows {
+            hits: vec![
+                hit("left", 1, Some(0.9)),
+                hit("right", 2, Some(0.8)),
+                hit("left", 3, Some(0.7)),
+            ],
+            ..QueryRows::default()
+        };
+
+        let left = rows.hits_for("left");
+        let right = rows.hits_for("right");
+        assert_eq!(left.len(), 2, "got: {left:?}");
+        assert_eq!(right.len(), 1, "got: {right:?}");
+        assert!(
+            left.iter().all(|h| h.stage == "left"),
+            "an arm carrying another arm's row is a list two acts share: {left:?}"
+        );
+        assert!(right.iter().all(|h| h.stage == "right"), "got: {right:?}");
+        // Named so the whole-set escape is closed: no accessor hands back every stage's rows.
+        assert_eq!(
+            left.len() + right.len(),
+            rows.hits.len(),
+            "the arms partition the row set — they do not each see all of it"
+        );
+    }
+
+    /// Best first, and **a missing quantity sorts last rather than first** — it is the absence of a
+    /// score, not a perfect one. `UNION ALL` has no ordering guarantee, so this is the only thing
+    /// that makes a stage's declared `orders_by` true of what a caller receives.
+    #[test]
+    fn a_stages_hits_come_back_best_first_and_an_absent_quantity_sorts_last() {
+        let rows = QueryRows {
+            hits: vec![
+                hit("a", 1, Some(0.2)),
+                hit("a", 2, None),
+                hit("a", 3, Some(0.9)),
+                hit("a", 4, Some(0.5)),
+            ],
+            ..QueryRows::default()
+        };
+
+        let got: Vec<Option<f64>> = rows.hits_for("a").iter().map(|h| h.quantity).collect();
+        assert_eq!(
+            got,
+            vec![Some(0.9), Some(0.5), Some(0.2), None],
+            "descending, with the unscored row last"
+        );
+    }
+}

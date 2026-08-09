@@ -29,8 +29,9 @@
 mod common;
 
 use temper_core::types::query::{
-    validate, ActInvocation, ActName, Composition, IdKind, IdSet, Intention, OutcomeDeclaration,
-    ReturnSpec, StageInput, StageName, StageNode, StageRelation, ValidatedComposition,
+    validate, ActInvocation, ActName, BoundTerm, Composition, IdKind, IdSet, Intention,
+    OutcomeDeclaration, ReturnSpec, StageInput, StageName, StageNode, StageRelation,
+    ValidatedComposition,
 };
 use temper_substrate::ids::{ContextId, EntityId, ProfileId};
 use temper_substrate::payloads::AnchorRef;
@@ -295,6 +296,108 @@ fn one_find_exact(query: &str, bound: Option<Vec<Uuid>>) -> ValidatedComposition
         })],
     };
     validate(&c).expect("plan is valid")
+}
+
+/// One `find-exact` stage carrying declared bound terms, returned.
+fn find_exact_paged(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedComposition {
+    let name = StageName::parse("a").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: name.clone(),
+                with: vec![],
+            }],
+        },
+        intention: Some(Intention {
+            query: query.to_string(),
+            embedded: false,
+        }),
+        meta_detail: Default::default(),
+        bounds: Default::default(),
+        stages: vec![StageNode::Act(ActInvocation {
+            name,
+            act: ActName::FindExact,
+            input: None,
+            terms: terms.into_iter().collect(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })],
+    };
+    validate(&c).expect("plan is valid")
+}
+
+/// **`limit` returns that many rows and `offset` returns different ones.**
+///
+/// `limit` and `offset` are POSITIONAL — two `int` slots in the fragment's signature — and until
+/// this test nothing anywhere asserted which value reached which slot. The compile-level test
+/// asserts `ints.contains(&10) && ints.contains(&20)`, which is set membership over a positional
+/// property: swapping the two binds leaves it green. Mutation-probed by swapping the slots outright;
+/// the whole suite stayed green, and this test fires.
+///
+/// The three resources carry the term at descending frequency so `ts_rank` orders them stably.
+/// Without that, "offset moved the window" would be a claim about a tie-break Postgres never
+/// promised, and the test would be measuring luck.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_declared_limit_returns_that_many_rows_and_an_offset_returns_a_different_one(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "paging").await;
+    for (title, body) in [
+        ("Thrice", "kestrel kestrel kestrel"),
+        ("Twice", "kestrel kestrel"),
+        ("Once", "kestrel"),
+    ] {
+        mk(&pool, home, owner, emitter, title, body).await;
+    }
+
+    async fn page(
+        pool: &sqlx::PgPool,
+        owner: ProfileId,
+        terms: Vec<(BoundTerm, i64)>,
+    ) -> Vec<Uuid> {
+        let v = find_exact_paged("kestrel", terms);
+        let rows = execute(pool, &compile(&v, owner, None).expect("compiles"))
+            .await
+            .expect("runs");
+        rows.hits_for("a").into_iter().map(|h| h.id).collect()
+    }
+
+    // The denominator: without a limit the stage sees all three, so a short page below is the
+    // limit biting rather than the corpus being small.
+    assert_eq!(
+        page(&pool, owner, vec![]).await.len(),
+        3,
+        "all three match unbounded"
+    );
+
+    let one = page(&pool, owner, vec![(BoundTerm::Limit, 1)]).await;
+    assert_eq!(
+        one.len(),
+        1,
+        "the caller asked for one row and got: {one:?}"
+    );
+
+    let two = page(&pool, owner, vec![(BoundTerm::Limit, 2)]).await;
+    assert_eq!(two.len(), 2, "and for two: {two:?}");
+
+    let skipped = page(
+        &pool,
+        owner,
+        vec![(BoundTerm::Limit, 1), (BoundTerm::Offset, 1)],
+    )
+    .await;
+    assert_eq!(skipped.len(), 1, "one row, from further in: {skipped:?}");
+    assert_ne!(
+        one[0], skipped[0],
+        "offset must move the window, not merely be accepted"
+    );
+    assert_eq!(
+        two[1], skipped[0],
+        "and it must move it by exactly one — the second row of a two-row page"
+    );
 }
 
 /// A matched row carries the quantity its act ordered by, and the tally counts it.

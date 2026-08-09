@@ -378,6 +378,16 @@ fn stage_result(
             // and empty, and both survive the wire. An arm that asked and whose resource has no open
             // properties still gets `{}` — the read returning no row for it is an empty tier.
             if wants_open_meta {
+                // **The `unwrap_or_else` arm is defensive and is NOT the source of the `{}`.**
+                // `meta_batch` groups the property ROWS it read, so a resource reaches this map
+                // whenever it has any property at all — and `create_resource` always writes the
+                // managed identity keys, so the open tier arrives as an already-empty `{}` and the
+                // default never runs. It is reachable only for a visible resource with zero
+                // property rows of any tier, which no write path produces.
+                // `[measured — 2026-08-09]` Mutating the default to `Null` survives the whole
+                // suite; mutating the WHOLE expression is caught by both open-meta tests. So this
+                // is an equivalent mutant, not a coverage gap — do not "close" it with a fixture
+                // that cannot reach the branch.
                 resource.open_meta = Some(
                     hydrated
                         .open_meta
@@ -598,6 +608,54 @@ mod tests {
             kind: "resource".to_string(),
             quantity: Some(q),
         }
+    }
+
+    /// **`terms_applied` reports the APPLIED page, and the applied page is the clamped one.**
+    ///
+    /// [`applied_terms`] exists so the statement and the response cannot claim different page sizes
+    /// — `paging_for` reads it to BIND and this module reads it to REPORT. Only the binding consumer
+    /// had a test: the assembler could have echoed the request unclamped, or reported nothing at
+    /// all, and every test stayed green. Mutation-probed both ways.
+    ///
+    /// `find-exact` publishes `limit: 50` and no `offset` ceiling, so one term is clamped and the
+    /// other passes through — which is what distinguishes "clamps" from "returns a constant".
+    #[test]
+    fn the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran() {
+        let asked =
+            std::collections::BTreeMap::from([(BoundTerm::Limit, 999), (BoundTerm::Offset, 5)]);
+        let node = StageNode::Act(ActInvocation {
+            name: name("hits"),
+            act: ActName::FindExact,
+            input: None,
+            terms: asked.clone(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        });
+        let v = plan(vec![node], vec!["hits"]);
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("hits", 0, 0)],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        let applied = &r.returned[&name("hits")].terms_applied;
+
+        assert_eq!(
+            applied.get(&BoundTerm::Limit),
+            Some(&50),
+            "the ceiling find-exact publishes, not the 999 the caller asked for"
+        );
+        assert_eq!(
+            applied.get(&BoundTerm::Offset),
+            Some(&5),
+            "a term below any ceiling passes through unchanged"
+        );
+        assert_ne!(
+            *applied, asked,
+            "reporting the request back would make `terms_applied` an echo rather than a disclosure"
+        );
     }
 
     #[test]
