@@ -769,13 +769,21 @@ components:
               act: { $ref: '#/components/schemas/ActName' }
               produced:
                 description: |
-                  Which `StageOutput` variant this stage will carry — the whole
-                  answer, including which quantity field its rows hold, so a
-                  caller can write their parser before running anything.
-
-                  There is no `ids`: a returned stage is always hydrated.
+                  Which `StageOutput` variant this stage will carry: resources,
+                  or regions. There is no `ids` — a returned stage is always
+                  hydrated.
                 type: string
-                enum: [fts_hits, vec_hits, graph_hits, region_hits]
+                enum: [resources, regions]
+              score_kind:
+                description: |
+                  The score kind every row of this stage will carry, typed
+                  exactly as the rows carry it.
+
+                  The envelope tags currency only, so `produced` alone does not
+                  distinguish two acts that both return resources. THIS is what
+                  completes the answer — and it is the same value a hit holds, so
+                  a caller compares it directly rather than across a translation.
+                $ref: '#/components/schemas/ScoreKind'
               orders_by:
                 description: |
                   The quantity its rows will be ordered by, with its range.
@@ -883,152 +891,136 @@ components:
           format: int64
 
     StageOutput:
-      # DESIGNED. The merged `StageOutput` (stage.rs) had exactly one variant,
-      # `Ids`, and was tagged from its first line so that admitting another
-      # currency later would be additive rather than breaking. This is that
-      # addition — and it REMOVES `ids` at the same time. See below.
       description: |
-        What a RETURNED stage produced, tagged by currency and quantity. The tag
-        is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and
-        `orders_by`, which is what makes `/api/query/validate` able to tell you
-        the exact variant before you run.
+        What a RETURNED stage produced, tagged by CURRENCY.
+
+        ── TWO VARIANTS, AND THE TAG ANSWERS EXACTLY ONE QUESTION ───────────────
+
+        `[decided — 2026-08-09, Pete]` What was produced is resources, or
+        regions. HOW they were scored is a different question, answered per row
+        by `Scoring.score_kind`.
+
+        An earlier draft split this four ways — `fts_hits`, `vec_hits`,
+        `graph_hits` — so that two acts' rows could not share a list type. That
+        guard was real, but the name was a misnomer and it cost something worse:
+        **a row could not be read without knowing which envelope carried it.**
+        The quantity WAS the field name, so the envelope was load-bearing for
+        interpreting the row, and a client needed one type per act rather than
+        one per currency.
+
+        ── WHAT STILL PREVENTS `unified_search`'s CONFLATION ────────────────────
+
+        `unified_search` renamed `fts_norm`/`vec_norm` to
+        `fts_score`/`vector_score` and SUMMED them into `combined_score`. The
+        lesson is that incommensurable quantities must not be silently addable.
+
+        The protection is structural and unchanged: arms are keyed separately in
+        `returned`, and there is no merged ordered list anywhere for two acts'
+        rows to fall into. Combining two arms takes a deliberate act.
+
+        What changed is that the difference is now DATA rather than schema —
+        every hit carries `score_kind` beside its number. That is strictly more
+        legible than a bare field name: `fts_norm` requires the reader to already
+        know what it means, while `score_kind: "fts_norm"` is a machine-readable
+        assertion that kinds exist, differ, and must be compared before anything
+        is combined. A client can check it; nothing about `hit.fts_norm` invites
+        checking anything.
 
         ── THERE IS NO `ids` VARIANT ────────────────────────────────────────────
 
-        `[decided — 2026-08-09, Pete]` A returned stage is always hydrated:
-        resource hits or region hits, never a bare id set. Asked for and
-        declined, with the alternative named rather than deferred vaguely.
-
-        Ids remain the pipe's internal currency — the only value that crosses a
-        stage boundary is membership, and an intermediate stage that merely feeds
-        a downstream one is never hydrated at all. That is unchanged and is what
-        keeps `no-cross-act-ranking` structural. What is removed is `ids` as a
-        thing you can ASK to be given back.
-
-        The reason it is not needed: subselecting a result set is a client-side
-        concern that already has a good answer, `temper … | jq`. And the
-        principled version of it is a KNOWN LATER DOOR — GraphQL over this
-        surface, where a caller opts into exactly the parts they want, recorded
-        as a deferred second door with its adapter shape rather than refused.
-        Shipping a half-measure now (one coarse "just ids" toggle) would occupy
-        the space that door is for, and would be the only variant whose shape a
-        caller could not read off the act declarations.
-
-        ── WHY THE QUANTITY IS IN THE TAG ───────────────────────────────────────
-
-        `[decided during build — 2026-08-09]` Drafted as `resource_hits` with a
-        per-item `oneOf` over the three hit types. Built as four flat variants,
-        for two reasons this document already argues elsewhere:
-
-          * A `oneOf` on the ARRAY ITEM permits a list holding an `FtsHit` beside
-            a `VecHit`. The prose beside it said "a mixed list is unrepresentable
-            here, which is the point" — but the shape permitted exactly that, and
-            policed it with a sentence. A stage runs ONE act and an act produces
-            ONE quantity, so the homogeneity is structural now.
-
-          * It makes `/api/query/validate` SELF-SUFFICIENT. Told `resource_hits`,
-            a caller still does not know whether to read `fts_norm` or
-            `vec_norm`; they would have to cross-reference `orders_by`. Told
-            `vec_hits`, they know. Telling them the whole answer is the entire
-            purpose of that route.
+        A returned stage is always hydrated. Ids remain the pipe's INTERNAL
+        currency — the only value that crosses a stage boundary is membership,
+        and an intermediate stage that merely feeds a downstream one is never
+        hydrated at all. What is removed is `ids` as a thing you can ASK to be
+        given back: subselecting a result set is a client concern with a good
+        answer already (`temper … | jq`), and the principled version is a known
+        later door (GraphQL over this surface, where a caller opts into exactly
+        the parts they want). Shipping one coarse "just ids" toggle now would
+        occupy the space that door is for.
       oneOf:
-        - $ref: '#/components/schemas/FtsHitsOutput'
-        - $ref: '#/components/schemas/VecHitsOutput'
-        - $ref: '#/components/schemas/GraphHitsOutput'
-        - $ref: '#/components/schemas/RegionHitsOutput'
+        - $ref: '#/components/schemas/ResourcesOutput'
+        - $ref: '#/components/schemas/RegionsOutput'
       discriminator:
         propertyName: produced
         mapping:
-          fts_hits: '#/components/schemas/FtsHitsOutput'
-          vec_hits: '#/components/schemas/VecHitsOutput'
-          graph_hits: '#/components/schemas/GraphHitsOutput'
-          region_hits: '#/components/schemas/RegionHitsOutput'
+          resources: '#/components/schemas/ResourcesOutput'
+          regions: '#/components/schemas/RegionsOutput'
 
-    FtsHitsOutput:
-      description: Produced by `find-exact`.
+    ResourcesOutput:
+      description: Produced by `find-exact`, both `find-about-*` acts, and `follow-from`.
       type: object
       required: [produced, hits]
       properties:
-        produced: { type: string, enum: [fts_hits] }
+        produced: { type: string, enum: [resources] }
         hits:
           type: array
-          items: { $ref: '#/components/schemas/FtsHit' }
+          items: { $ref: '#/components/schemas/ResourceHit' }
 
-    VecHitsOutput:
-      description: Produced by `find-about-anywhere` and `find-about-within`.
-      type: object
-      required: [produced, hits]
-      properties:
-        produced: { type: string, enum: [vec_hits] }
-        hits:
-          type: array
-          items: { $ref: '#/components/schemas/VecHit' }
-
-    GraphHitsOutput:
-      description: Produced by `follow-from`.
-      type: object
-      required: [produced, hits]
-      properties:
-        produced: { type: string, enum: [graph_hits] }
-        hits:
-          type: array
-          items: { $ref: '#/components/schemas/GraphHit' }
-
-    RegionHitsOutput:
+    RegionsOutput:
       description: Produced by `survey`.
       type: object
       required: [produced, hits]
       properties:
-        produced: { type: string, enum: [region_hits] }
+        produced: { type: string, enum: [regions] }
         hits:
           type: array
           items: { $ref: '#/components/schemas/RegionHit' }
 
-    FtsHit:
-      description: You could quote the words. Produced by `find-exact`.
-      type: object
-      required: [resource, fts_norm]
-      properties:
-        resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
-        fts_norm:
-          description: '`ts_rank` flag 33 — rank/(rank+1) plus log-length division — in [0,1).'
-          type: number
-          format: float
-
-    VecHit:
+    ScoreKind:
       description: |
-        You had the idea, not the words. Produced by `find-about-anywhere` and
-        `find-about-within`.
+        Which quantity a hit's score is, named so that combining two of different
+        kinds reads as the category error it is.
+
+        The values are the DEPLOYED column names the serving functions emit — not
+        names invented here — so a caller who greps the SQL for one finds it, and
+        each equals the `orders_by.field` of the act that produced the row.
+
+        OPEN, like `ActName`: a new act brings a new quantity, and a closed
+        vocabulary would make adding one a breaking change for every client.
+        Openness costs nothing because the operation a client performs on this
+        value is EQUALITY — *are these two scores the same kind?* — never
+        exhaustive enumeration. Treat an unrecognized kind as "not comparable to
+        anything I know", never as an error.
+
+        THE RANGES DIFFER AND THESE NAMES DO NOT SAY SO. Read `orders_by.scale`
+        on the stage rather than assuming `[0,1]`, which is the live mistake in
+        this family: `vec_norm` rescales a cosine distance as `1 - d/2` into
+        `[0,1]`, `region_score` rescales the identical operator as `1 - d` and
+        spans `[-0.6, 1.0]`, and `graph_score` is unbounded.
+      type: string
+      examples: [fts_norm, vec_norm, graph_score, region_score]
+
+    Scoring:
+      description: |
+        How one hit scored, and by what measure. The kind travels WITH the
+        number, which is what lets a row be understood on its own.
       type: object
-      required: [resource, vec_norm]
+      required: [score_kind, score]
       properties:
-        resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
-        vec_norm:
+        score_kind: { $ref: '#/components/schemas/ScoreKind' }
+        score:
           description: |
-            The pgvector cosine DISTANCE (span [0,2]) rescaled as `1 - d/2`,
-            landing in [0,1]. NOT the same quantity as `region_score`, which
-            rescales the identical operator as `1 - d` and spans [-1,1].
+            Read `orders_by.scale` on the stage for this quantity's RANGE. It is
+            not carried per row because it is a property of the act, identical
+            for every row of a stage.
           type: number
           format: float
         located_at:
           description: |
             WHERE in the resource the match was — the closest chunk's block.
 
-            THIS FIELD EXISTS ON THIS HIT TYPE AND NOWHERE ELSE, and that is a
-            statement about the two arms rather than an oversight.
+            **Filled only by the wide arm**, and its absence is DECLARED in
+            advance rather than discovered here: an act's `discloses` says
+            whether it can report a match location.
 
             The wide arm matches at chunk grain and already computes which chunk
-            was closest, then throws it away collapsing to a per-resource score.
-            Recovering it is an argmin beside an aggregate that already runs.
-
-            `find-exact` structurally cannot. Its index is one tsvector per
+            was closest, then discards it collapsing to a per-resource score;
+            recovering it is an argmin beside an aggregate that already runs.
+            `find-exact` structurally cannot — its index is one tsvector per
             RESOURCE, built by concatenating every chunk into a single blob, so
-            the block boundary is gone before the query is asked. Giving `FtsHit`
-            a `located_at` that is always null would say "no match location" where
-            the truth is "this act can never tell you."
-
-            Absent means the match was not localized, which for this act should
-            not happen.
+            the block boundary is gone before the query is asked. `follow-from`
+            and `survey` have no match position at all: one returns nodes reached
+            by walking, the other returns regions.
           type: object
           required: [block_id]
           properties:
@@ -1040,47 +1032,46 @@ components:
               description: The heading trail to that chunk, when it has one.
               type: [string, "null"]
             snippet:
-              description: The chunk's own text, or the part of it that matched.
-              type: [string, "null"]
-        # A NAMED REMAINDER, not a gap: `FtsHit` has no snippet either.
-        #
-        # A snippet for the exact arm IS possible without a new index —
-        # `ts_headline` over re-fetched text — but it is a per-row fetch of prose
-        # the query did not otherwise need, on a path that currently touches only
-        # the index. That is a cost question nobody has measured, and the retired
-        # `SearchResultRow` carried a `snippet` from the `unified_search` era
-        # whose cost was never isolated either. Filed rather than guessed.
+              description: |
+                The chunk's own text, or the part of it that matched.
 
-    GraphHit:
-      description: A neighbour, reached by walking. Produced by `follow-from`.
+                A snippet for the EXACT arm is a named remainder, not a gap: it is
+                possible without a new index via `ts_headline` over re-fetched
+                text, but that is a per-row fetch of prose the query did not
+                otherwise need, on a path that currently touches only the index.
+                Nobody has measured it, and the retired `SearchResultRow` carried
+                a snippet from the `unified_search` era whose cost was never
+                isolated either.
+              type: [string, "null"]
+
+    ResourceHit:
+      description: |
+        One resource that matched, however it matched.
+
+        `ResourceView` is the same projection `list`/`show`/`create`/`update`/
+        `annotate` and both search arms answer in — six near-identical
+        projections collapsed into one. A hit adds scoring and nothing else.
       type: object
-      required: [resource, graph_score]
+      required: [resource, scoring]
       properties:
         resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
-        graph_score:
-          description: |
-            UNBOUNDED. The walk multiplies `kb_edges.weight` at every hop, and
-            that column is `DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK
-            constraint. Today's values stay under 1 because nothing writes a
-            larger weight — a property of the DATA, not of the quantity.
-          type: number
-          format: float
+        scoring: { $ref: '#/components/schemas/Scoring' }
 
     RegionHit:
       description: A region of a cognitive map. Produced by `survey`.
       type: object
-      required: [region, region_score]
+      required: [region, scoring]
       properties:
         region:
           description: |
             The region itself, in the same shape `cogmap_shape` answers in.
 
-            NOTE IT CARRIES ITS OWN `salience`, beside this hit's `region_score`.
-            Two numbers on one row, and they are not rivals: `salience` is an
-            INPUT to `region_score` (which is `0.4·sal_norm + 0.6·query_cos`,
-            where `sal_norm` is a rank over salience). Order by `region_score`.
-            Ordering by `salience` answers "what does this map think is
-            prominent", which is a different question and not the one you asked.
+            NOTE IT CARRIES ITS OWN `salience`, beside this hit's score. Two
+            numbers on one row, and they are not rivals: `salience` is an INPUT
+            to `region_score` (which is `0.4·sal_norm + 0.6·query_cos`, where
+            `sal_norm` is a rank over salience). Order by the score. Ordering by
+            `salience` answers "what does this map think is prominent", which is
+            a different question and not the one you asked.
 
             `[decided — 2026-08-08, Pete]` A narrower region projection without
             `salience` was considered and refused. `ResourceView` exists because
@@ -1088,14 +1079,7 @@ components:
             divergent region shape immediately afterwards, to hide one field,
             would repeat the mistake that consolidation just paid to fix.
           $ref: '../../openapi.json#/components/schemas/CogmapRegionRow'
-        region_score:
-          description: |
-            Spans [-0.6, 1.0], NOT [0,1]. `0.4*sal_norm + 0.6*query_cos` where
-            `sal_norm` is a percent_rank in [0,1] but `query_cos = 1 - distance`
-            over a cosine distance spanning [0,2], so the similarity term spans
-            [-1,1]. Read `orders_by.scale` on the stage rather than assuming.
-          type: number
-          format: float
+        scoring: { $ref: '#/components/schemas/Scoring' }
 
     CompositionTrace:
       # TRANSCRIBED from trace.rs:76-79, EXCEPT the stage key — see `StageTrace`.

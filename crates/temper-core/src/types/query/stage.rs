@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::hits::{FtsHit, GraphHit, RegionHit, VecHit};
+use super::hits::{RegionHit, ResourceHit};
 use super::id_set::{IdKind, IdSet};
 
 /// A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the
@@ -156,44 +156,35 @@ impl StageInput {
     }
 }
 
-/// What a RETURNED stage produced, tagged by currency AND quantity.
+/// What a RETURNED stage produced, tagged by CURRENCY.
+///
+/// # Two variants, and the tag answers exactly one question
+///
+/// `[decided — 2026-08-09, Pete]` What was produced is resources, or regions. How they were scored
+/// is a different question, answered per row by [`super::hits::Scoring::score_kind`].
+///
+/// An earlier draft split this four ways — `fts_hits`, `vec_hits`, `graph_hits` — so that two acts'
+/// rows could not share a list type. That guard was real but the name was a misnomer: `vec_hits`
+/// describes the scoring, not what was produced, and it meant **a row could not be read without
+/// knowing which envelope carried it**. The quantity was the field name, so the envelope was load-
+/// bearing for interpreting the row. Now every hit is self-describing and there is one shape per
+/// currency instead of one per act.
+///
+/// What still prevents `unified_search`'s conflation is structural and unchanged: arms are keyed
+/// separately in the response, and there is no merged ordered list for two acts' rows to fall into.
+/// See the module note on [`super::hits`] for the full argument.
 ///
 /// # There is no `ids` variant
 ///
-/// `[decided — 2026-08-09, Pete]` A returned stage is always hydrated: resource hits or region
-/// hits, never a bare id set.
-///
-/// Ids remain the pipe's **internal** currency — the only value that crosses a stage boundary is
-/// membership, and an intermediate stage that merely feeds a downstream one is never hydrated at
-/// all. That is unchanged, and it is what keeps `no-cross-act-ranking` structural. What is gone is
-/// `ids` as a thing a caller can ASK to be given back.
-///
-/// Subselecting a result set is a client concern with a good answer already (`temper … | jq`), and
-/// the principled version is a known later door: GraphQL over this surface, where a caller opts
-/// into exactly the parts they want. Shipping one coarse "just ids" toggle now would occupy the
-/// space that door is for, and it would be the only variant whose shape a caller could not read off
-/// the act declarations.
-///
-/// # Why the quantity is in the tag, not just the row
-///
-/// `[decided during build — 2026-08-09]` The contract drafted this as one `resource_hits` variant
-/// holding a per-item union of the three hit types. Four flat variants instead, for two reasons:
-///
-/// * A union on the ARRAY ITEM permits a list holding an [`FtsHit`] beside a [`VecHit`], policed
-///   only by a sentence saying it must not. A stage runs ONE act and an act produces ONE quantity,
-///   so homogeneity is a property of the type here rather than of everyone remembering.
-///
-/// * It makes `/api/query/validate` self-sufficient. Told `resource_hits`, a caller still does not
-///   know whether to read `fts_norm` or `vec_norm` and must cross-reference `orders_by`. Told
-///   `vec_hits`, they know — and telling them the whole answer before they run anything is that
-///   route's entire purpose.
-///
-/// The tag is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and `orders_by`, which
-/// is what makes that possible: this union has no member an act cannot declare in advance.
+/// A returned stage is always hydrated. Ids remain the pipe's **internal** currency — the only
+/// value crossing a stage boundary is membership, and an intermediate stage that merely feeds a
+/// downstream one is never hydrated at all. What is gone is `ids` as a thing a caller can ASK to be
+/// given back: subselecting a result set is a client concern with a good answer already
+/// (`temper … | jq`), and the principled version is a known later door (GraphQL over this surface).
+/// Shipping one coarse "just ids" toggle now would occupy the space that door is for.
 ///
 /// Neither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and
-/// the quantities are floats.
-/// Tests compare the serialized form, which is the thing a client actually observes.
+/// scores are floats. Tests compare the serialized form, which is what a client observes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -201,14 +192,10 @@ impl StageInput {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "produced")]
 pub enum StageOutput {
-    /// Produced by `find-exact`.
-    FtsHits { hits: Vec<FtsHit> },
-    /// Produced by `find-about-anywhere` and `find-about-within`.
-    VecHits { hits: Vec<VecHit> },
-    /// Produced by `follow-from`.
-    GraphHits { hits: Vec<GraphHit> },
+    /// Produced by `find-exact`, both `find-about-*` acts, and `follow-from`.
+    Resources { hits: Vec<ResourceHit> },
     /// Produced by `survey`.
-    RegionHits { hits: Vec<RegionHit> },
+    Regions { hits: Vec<RegionHit> },
 }
 
 /// Which [`StageOutput`] variant a stage carries — the tag, as a value.
@@ -216,7 +203,7 @@ pub enum StageOutput {
 /// It exists so `/api/query/validate` can PROMISE a variant using the same type the response
 /// REPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from
 /// an actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a
-/// declaration, and a test asserts the two agree for every act.
+/// declaration, and a test asserts the two agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -224,20 +211,16 @@ pub enum StageOutput {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProducedVariant {
-    FtsHits,
-    VecHits,
-    GraphHits,
-    RegionHits,
+    Resources,
+    Regions,
 }
 
 impl StageOutput {
     /// Which variant this is — the same value `/api/query/validate` promised in advance.
     pub fn variant(&self) -> ProducedVariant {
         match self {
-            StageOutput::FtsHits { .. } => ProducedVariant::FtsHits,
-            StageOutput::VecHits { .. } => ProducedVariant::VecHits,
-            StageOutput::GraphHits { .. } => ProducedVariant::GraphHits,
-            StageOutput::RegionHits { .. } => ProducedVariant::RegionHits,
+            StageOutput::Resources { .. } => ProducedVariant::Resources,
+            StageOutput::Regions { .. } => ProducedVariant::Regions,
         }
     }
 
@@ -245,32 +228,33 @@ impl StageOutput {
     /// rows must not cost that comparison.
     pub fn kind(&self) -> IdKind {
         match self {
-            StageOutput::FtsHits { .. }
-            | StageOutput::VecHits { .. }
-            | StageOutput::GraphHits { .. } => IdKind::Resource,
-            StageOutput::RegionHits { .. } => IdKind::Region,
+            StageOutput::Resources { .. } => IdKind::Resource,
+            StageOutput::Regions { .. } => IdKind::Region,
         }
     }
 
-    /// The wire tag, which is also what `/api/query/validate` promises in advance.
+    /// Every score kind present in this output.
     ///
-    /// Derived through serde rather than a second match, so the value a caller is promised and the
-    /// value they receive cannot drift — two hand-written lists is the `ADMIN_EVENT_TYPES` failure.
-    pub fn produced_tag(&self) -> &'static str {
+    /// A stage runs ONE act and an act produces ONE quantity, so this holds exactly one kind for
+    /// any output the server built — which is what
+    /// `a_stage_is_homogeneous_in_its_score_kind` asserts. It returns a set rather than an
+    /// `Option` because the type no longer makes homogeneity impossible to violate, and a
+    /// silent wrong answer would be worse than a visible plural.
+    pub fn score_kinds(&self) -> std::collections::BTreeSet<&str> {
         match self {
-            StageOutput::FtsHits { .. } => "fts_hits",
-            StageOutput::VecHits { .. } => "vec_hits",
-            StageOutput::GraphHits { .. } => "graph_hits",
-            StageOutput::RegionHits { .. } => "region_hits",
+            StageOutput::Resources { hits } => {
+                hits.iter().map(|h| h.scoring.score_kind.as_str()).collect()
+            }
+            StageOutput::Regions { hits } => {
+                hits.iter().map(|h| h.scoring.score_kind.as_str()).collect()
+            }
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            StageOutput::FtsHits { hits } => hits.len(),
-            StageOutput::VecHits { hits } => hits.len(),
-            StageOutput::GraphHits { hits } => hits.len(),
-            StageOutput::RegionHits { hits } => hits.len(),
+            StageOutput::Resources { hits } => hits.len(),
+            StageOutput::Regions { hits } => hits.len(),
         }
     }
 
@@ -282,7 +266,54 @@ impl StageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::query::hits::{ScoreKind, Scoring};
     use crate::types::query::id_set::{IdKind, IdSet};
+
+    /// A hit whose only interesting property is its scoring.
+    ///
+    /// The `ResourceView` is built through the typed struct rather than from a JSON literal: it
+    /// carries twenty fields and a literal missing one fails at RUNTIME with a serde error, which
+    /// is a worse signal than a compile error and takes a test run to find. Learned the slow way.
+    fn resource_hit(score_kind: ScoreKind, score: f32) -> ResourceHit {
+        ResourceHit {
+            resource: inert_resource(),
+            scoring: Scoring {
+                score_kind,
+                score,
+                located_at: None,
+            },
+        }
+    }
+
+    fn inert_resource() -> crate::types::resource_view::ResourceView {
+        use crate::types::ids::{ProfileId, ResourceId};
+        crate::types::resource_view::ResourceView {
+            id: ResourceId::new(),
+            r#ref: "a-resource-019fe3d0".to_string(),
+            title: "a resource".to_string(),
+            origin_uri: String::new(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: None,
+            context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "session".to_string(),
+            owner_handle: "j-cole-taylor".to_string(),
+            owner_profile_id: ProfileId::new(),
+            originator_profile_id: ProfileId::new(),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: Default::default(),
+            open_meta: None,
+            content: None,
+        }
+    }
 
     #[test]
     fn a_stage_name_is_a_safe_sql_identifier_or_it_does_not_exist() {
@@ -405,61 +436,113 @@ mod tests {
     }
 
     #[test]
-    fn a_stage_output_is_tagged_and_the_tag_carries_the_quantity_too() {
-        // Tagging from day one is what made this reshape additive rather than breaking: the union
-        // grew from one member to four without a client having to learn a new envelope.
-        //
-        // The tag names the QUANTITY, not just the currency, and that is the load-bearing half.
-        // `resource_hits` would leave a caller unable to tell whether to read `fts_norm` or
-        // `vec_norm`; `vec_hits` tells them outright, which is what lets `/api/query/validate`
-        // answer completely before anything runs.
-        let o = StageOutput::VecHits { hits: vec![] };
+    fn the_envelope_tag_names_the_currency_and_nothing_about_scoring() {
+        // `[decided — 2026-08-09, Pete]` What was PRODUCED is resources, or regions. How they were
+        // scored is a different question, and putting it in this tag made the tag a misnomer —
+        // `vec_hits` describes the scoring, not the thing.
+        let o = StageOutput::Resources { hits: vec![] };
         let json = serde_json::to_value(&o).unwrap();
-        assert_eq!(json["produced"], "vec_hits");
+        assert_eq!(json["produced"], "resources");
+        assert_eq!(o.variant(), ProducedVariant::Resources);
         assert_eq!(o.kind(), IdKind::Resource);
         assert!(o.is_empty());
+
+        let r = StageOutput::Regions { hits: vec![] };
+        assert_eq!(serde_json::to_value(&r).unwrap()["produced"], "regions");
+        assert_eq!(r.kind(), IdKind::Region);
     }
 
     #[test]
-    fn two_acts_over_the_same_currency_still_land_in_different_variants() {
-        // `no-cross-act-ranking`, made structural one level further down. `find-exact` and
-        // `follow-from` both produce RESOURCES, so a single `resource_hits` variant would put
-        // `fts_norm` and `graph_score` rows in lists of the same type — and the only thing stopping
-        // someone concatenating them would be a comment. These cannot be concatenated: they are
-        // different variants holding different row types.
-        let fts = StageOutput::FtsHits { hits: vec![] };
-        let graph = StageOutput::GraphHits { hits: vec![] };
-        assert_eq!(fts.kind(), graph.kind(), "same currency");
+    fn a_hit_says_what_kind_of_score_it_carries_without_reference_to_its_envelope() {
+        // The property the four-variant draft gave up: a row had to be interpreted through the
+        // envelope, because the quantity WAS the field name. Now the kind travels with the number,
+        // so a row handed to a function on its own is still fully understood.
+        let hit = resource_hit(ScoreKind::VecNorm, 0.86);
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(json["scoring"]["score_kind"], "vec_norm");
+        // Compared with a tolerance, not for equality: these scores are `f32` (the column type),
+        // so 0.86 lands on the wire as 0.8600000143051147. That is pre-existing for `fts_norm` and
+        // `vec_norm` on `/api/search` and is not something this shape introduced — noted here so
+        // the next reader does not go looking for a rounding bug.
+        let score = json["scoring"]["score"].as_f64().expect("a number");
+        assert!((score - 0.86).abs() < 1e-6, "got: {score}");
+        // And the row alone is enough — nothing here needs the envelope to be read.
+        let alone: serde_json::Value = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(alone["scoring"]["score_kind"], "vec_norm");
+    }
+
+    #[test]
+    fn two_acts_over_the_same_currency_are_still_told_apart_by_their_score_kind() {
+        // `no-cross-act-ranking`, now expressed as DATA rather than as two struct types.
+        // `find-exact` and `follow-from` both produce RESOURCES and now share a row type — so what
+        // stops their numbers being summed is that the kinds visibly differ, and a client can
+        // CHECK that, which it could never do against a bare field name.
+        let exact = StageOutput::Resources {
+            hits: vec![resource_hit(ScoreKind::FtsNorm, 0.7)],
+        };
+        let walked = StageOutput::Resources {
+            hits: vec![resource_hit(ScoreKind::GraphScore, 0.72)],
+        };
+        assert_eq!(exact.variant(), walked.variant(), "same currency");
         assert_ne!(
-            fts.produced_tag(),
-            graph.produced_tag(),
-            "and still not the same shape"
+            exact.score_kinds(),
+            walked.score_kinds(),
+            "and still not the same quantity"
         );
+    }
+
+    #[test]
+    fn a_stage_is_homogeneous_in_its_score_kind() {
+        // A stage runs ONE act and an act produces ONE quantity, so every row of a real output
+        // shares a kind. The type no longer makes a mixed list impossible — that is the trade this
+        // shape accepts — so the invariant is asserted rather than structural, and `score_kinds`
+        // returns a SET so a violation is visible instead of silently taking the first.
+        let honest = StageOutput::Resources {
+            hits: vec![
+                resource_hit(ScoreKind::VecNorm, 0.9),
+                resource_hit(ScoreKind::VecNorm, 0.8),
+            ],
+        };
+        assert_eq!(honest.score_kinds().len(), 1);
+
+        let mixed = StageOutput::Resources {
+            hits: vec![
+                resource_hit(ScoreKind::VecNorm, 0.9),
+                resource_hit(ScoreKind::FtsNorm, 0.8),
+            ],
+        };
+        assert_eq!(
+            mixed.score_kinds().len(),
+            2,
+            "a mixed stage is constructible and must be VISIBLE, not silently read as its first row"
+        );
+    }
+
+    #[test]
+    fn an_unknown_score_kind_degrades_rather_than_failing_to_parse() {
+        // OPEN, like `ActName`: a new act brings a new quantity, and a closed vocabulary would make
+        // adding one breaking for every client. Safe because the operation on this value is
+        // EQUALITY — are these two the same kind? — never exhaustive enumeration.
+        let k: ScoreKind = serde_json::from_str("\"bm25_norm\"").expect("unknown kind parses");
+        assert_eq!(k, ScoreKind::Other("bm25_norm".to_string()));
+        assert!(!k.is_known());
+        assert!(ScoreKind::VecNorm.is_known());
+        // And it still compares unequal to a known kind, which is the whole job.
+        assert_ne!(k, ScoreKind::VecNorm);
     }
 
     #[test]
     fn there_is_no_returnable_bare_id_set() {
         // `[decided — 2026-08-09, Pete]` Ids stay the pipe's internal currency and are no longer
         // something a caller can ask to be handed back — subselection is `jq` today and a GraphQL
-        // door later. Every variant hydrates, asserted over the whole union so a fifth variant
-        // added later has to face this rule rather than slip past it.
+        // door later. Asserted over the whole union so a third variant added later faces this rule.
         for o in [
-            StageOutput::FtsHits { hits: vec![] },
-            StageOutput::VecHits { hits: vec![] },
-            StageOutput::GraphHits { hits: vec![] },
-            StageOutput::RegionHits { hits: vec![] },
+            StageOutput::Resources { hits: vec![] },
+            StageOutput::Regions { hits: vec![] },
         ] {
             let json = serde_json::to_value(&o).unwrap();
-            assert!(
-                json.get("hits").is_some(),
-                "{} must carry rows: {json}",
-                o.produced_tag()
-            );
-            assert!(
-                json.get("set").is_none(),
-                "{} must not carry a bare id set: {json}",
-                o.produced_tag()
-            );
+            assert!(json.get("hits").is_some(), "must carry rows: {json}");
+            assert!(json.get("set").is_none(), "never a bare id set: {json}");
         }
     }
 }

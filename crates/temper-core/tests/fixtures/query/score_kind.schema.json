@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "const": "fts_norm",
+      "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.",
+      "type": "string"
+    },
+    {
+      "const": "vec_norm",
+      "description": "pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.",
+      "type": "string"
+    },
+    {
+      "const": "graph_score",
+      "description": "Product of edge weights along the best path. UNBOUNDED. `follow-from`.",
+      "type": "string"
+    },
+    {
+      "const": "region_score",
+      "description": "`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.",
+      "type": "string"
+    },
+    {
+      "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
+      "type": "string"
+    }
+  ],
+  "description": "Which quantity a hit's score is, named so that combining two of different kinds reads as the\ncategory error it is.\n\nThe values are the DEPLOYED column names the serving functions emit — not names invented here —\nso a caller who greps the SQL for one finds it, and each equals the\n[`super::act::ActQuantity::field`] of the act that produced the row.\n\n**OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary\nwould make adding one a breaking change for every client. Openness costs nothing here because\nthe operation a client performs on this value is EQUALITY — *are these two scores the same\nkind?* — never exhaustive enumeration. Contrast\n[`super::disposition::StageDisposition`], which stays closed precisely because consumers match\nit exhaustively.\n\n**The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as\n`1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans\n`[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on\n[`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming\n`[0,1]`, which is the live mistake in this family, not a hypothetical one.",
+  "title": "ScoreKind"
+}

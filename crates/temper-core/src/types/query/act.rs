@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::filter::FilterField;
+use super::hits::ScoreKind;
 use super::id_set::IdKind;
 use super::scalars::BoundTerm;
 use super::stage::ProducedVariant;
@@ -336,34 +337,46 @@ pub struct ActDeclaration {
 }
 
 impl ActDeclaration {
-    /// Which [`super::stage::StageOutput`] variant a stage running this act will carry — computed
-    /// from the declaration, before anything runs.
+    /// Which [`super::stage::StageOutput`] variant a stage running this act will carry.
     ///
-    /// This is what makes `/api/query/validate` able to answer completely: hand it a composition
-    /// and it names the exact shape under each returned key, so a caller can write their parser
-    /// first. `None` for an act that selects nothing (`substantiate`, `admit`) — those are not
-    /// composable and never appear as a returned stage.
+    /// Now a straight read of `produces`, because the envelope tags CURRENCY and nothing else —
+    /// how the rows were scored travels per row as [`super::hits::Scoring::score_kind`]. An earlier
+    /// version had to consult `orders_by.field` here, which is what made `vec_hits` a possible tag
+    /// and the envelope load-bearing for reading a row.
     ///
-    /// **Derived from the two declared facts, never from a table keyed on the act name.** The
-    /// currency is `produces`; the quantity is `orders_by.field`, which is the DEPLOYED column name
-    /// the serving function emits — a caller who greps the SQL for it finds it. Keying on
-    /// `ActName` instead would be a second copy of the same relation, free to drift from the
-    /// declarations, which is the `ADMIN_EVENT_TYPES` failure this registry is written to avoid.
-    ///
-    /// The consequence worth knowing: renaming a scoring column without updating `orders_by.field`
-    /// makes this return `None`, and `every_selecting_act_predicts_a_response_shape` goes red. That
-    /// is the intended direction — the declaration is supposed to describe the deployed system.
+    /// `None` for an act that selects nothing (`substantiate`, `admit`) — those are not composable
+    /// and never appear as a returned stage.
     pub fn produced_variant(&self) -> Option<ProducedVariant> {
-        match (
-            self.produces.as_ref()?,
-            self.orders_by.as_ref()?.field.as_str(),
-        ) {
-            (IdKind::Resource, "fts_norm") => Some(ProducedVariant::FtsHits),
-            (IdKind::Resource, "vec_norm") => Some(ProducedVariant::VecHits),
-            (IdKind::Resource, "graph_score") => Some(ProducedVariant::GraphHits),
-            (IdKind::Region, "region_score") => Some(ProducedVariant::RegionHits),
-            _ => None,
+        match self.produces.as_ref()? {
+            IdKind::Resource => Some(ProducedVariant::Resources),
+            IdKind::Region => Some(ProducedVariant::Regions),
+            // `Cogmap` and `Context` are accepted as scopes and never produced; `Other` is a kind
+            // this binary does not know. Either way there is no hit shape, and saying so is better
+            // than picking the nearest variant — a wrong promise is worse than an absent one.
+            IdKind::Cogmap | IdKind::Context | IdKind::Other(_) => None,
         }
+    }
+
+    /// The score kind every row of this act's output will carry.
+    ///
+    /// Derived from `orders_by.field`, which is the DEPLOYED column name the serving function
+    /// emits — so this and [`super::hits::Scoring::score_kind`] are the same string by
+    /// construction, and a caller who greps the SQL for it finds it. Keying on `ActName` instead
+    /// would be a second copy of the relation, free to drift.
+    ///
+    /// `None` for an act that orders nothing. The consequence worth knowing: renaming a scoring
+    /// column without updating `orders_by.field` makes this return an unrecognized kind, and
+    /// `every_selecting_act_declares_a_known_score_kind` goes red. That is the intended direction —
+    /// the declaration is supposed to describe the deployed system.
+    pub fn score_kind(&self) -> Option<ScoreKind> {
+        let field = &self.orders_by.as_ref()?.field;
+        Some(match field.as_str() {
+            "fts_norm" => ScoreKind::FtsNorm,
+            "vec_norm" => ScoreKind::VecNorm,
+            "graph_score" => ScoreKind::GraphScore,
+            "region_score" => ScoreKind::RegionScore,
+            other => ScoreKind::Other(other.to_string()),
+        })
     }
 }
 

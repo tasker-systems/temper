@@ -62,42 +62,6 @@
       ],
       "type": "object"
     },
-    "FtsHit": {
-      "description": "A resource whose exact words matched. Produced by `find-exact`.",
-      "properties": {
-        "fts_norm": {
-          "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`.",
-          "format": "float",
-          "type": "number"
-        },
-        "resource": {
-          "$ref": "#/$defs/ResourceView"
-        }
-      },
-      "required": [
-        "resource",
-        "fts_norm"
-      ],
-      "type": "object"
-    },
-    "GraphHit": {
-      "description": "A neighbour, reached by walking. Produced by `follow-from`.",
-      "properties": {
-        "graph_score": {
-          "description": "**UNBOUNDED.** The walk multiplies `kb_edges.weight` at every hop, and that column is\n`DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK constraint. Today's values stay under\n1 because nothing writes a larger weight — a property of the DATA, not of the quantity.",
-          "format": "float",
-          "type": "number"
-        },
-        "resource": {
-          "$ref": "#/$defs/ResourceView"
-        }
-      },
-      "required": [
-        "resource",
-        "graph_score"
-      ],
-      "type": "object"
-    },
     "IngestState": {
       "description": "A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.",
       "oneOf": [
@@ -207,7 +171,7 @@
           ]
         },
         "snippet": {
-          "description": "The chunk's own text, or the part of it that matched.",
+          "description": "The chunk's own text, or the part of it that matched.\n\nA snippet for the EXACT arm is a named remainder rather than a gap: it is possible without a\nnew index via `ts_headline` over re-fetched text, but that is a per-row fetch of prose the\nquery did not otherwise need, on a path that currently touches only the index. Nobody has\nmeasured it, and the retired `SearchResultRow` carried a snippet from the `unified_search`\nera whose cost was never isolated either.",
           "type": [
             "string",
             "null"
@@ -220,21 +184,35 @@
       "type": "object"
     },
     "RegionHit": {
-      "description": "A region of a cognitive map. Produced by `survey`.",
+      "description": "One region of a cognitive map. Produced by `survey`.",
       "properties": {
         "region": {
           "$ref": "#/$defs/CogmapRegionRow",
-          "description": "The region itself, in the same shape `cogmap_shape` answers in.\n\n**It carries its own `salience`, beside this hit's `region_score`.** Two numbers on one row,\nand they are not rivals: `salience` is an INPUT to `region_score` (`0.4·sal_norm +\n0.6·query_cos`, where `sal_norm` is a rank over salience). Order by `region_score`; ordering\nby `salience` answers *\"what does this map think is prominent\"*, a different question.\n\n`[decided — 2026-08-08, Pete]` A narrower region projection without `salience` was\nconsidered and refused. [`ResourceView`] exists because six near-identical projections were\ncollapsed into one; minting a divergent region shape immediately afterwards, to hide one\nfield, would repeat the mistake that consolidation just paid to fix."
+          "description": "The region itself, in the same shape `cogmap_shape` answers in.\n\n**It carries its own `salience`, beside this hit's score.** Two numbers on one row, and they\nare not rivals: `salience` is an INPUT to `region_score` (`0.4·sal_norm + 0.6·query_cos`,\nwhere `sal_norm` is a rank over salience). Order by the score; ordering by `salience`\nanswers *\"what does this map think is prominent\"*, a different question.\n\n`[decided — 2026-08-08, Pete]` A narrower region projection without `salience` was\nconsidered and refused. [`ResourceView`] exists because six near-identical projections were\ncollapsed into one; minting a divergent region shape immediately afterwards, to hide one\nfield, would repeat the mistake that consolidation just paid to fix."
         },
-        "region_score": {
-          "description": "Spans `[-0.6, 1.0]`, **not** `[0,1]`. `0.4*sal_norm + 0.6*query_cos` where `sal_norm` is a\n`percent_rank` in `[0,1]` but `query_cos = 1 - distance` over a cosine distance spanning\n`[0,2]`, so the similarity term spans `[-1,1]`.\n\nRead `orders_by.scale` on the stage rather than assuming.",
-          "format": "float",
-          "type": "number"
+        "scoring": {
+          "$ref": "#/$defs/Scoring"
         }
       },
       "required": [
         "region",
-        "region_score"
+        "scoring"
+      ],
+      "type": "object"
+    },
+    "ResourceHit": {
+      "description": "One resource that matched, however it matched.\n\n[`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both\nsearch arms answer in — six near-identical projections collapsed into one. A hit adds scoring\nand nothing else.",
+      "properties": {
+        "resource": {
+          "$ref": "#/$defs/ResourceView"
+        },
+        "scoring": {
+          "$ref": "#/$defs/Scoring"
+        }
+      },
+      "required": [
+        "resource",
+        "scoring"
       ],
       "type": "object"
     },
@@ -394,8 +372,37 @@
       ],
       "type": "object"
     },
-    "VecHit": {
-      "description": "A resource that matched an idea rather than words. Produced by both `find-about-*` acts.",
+    "ScoreKind": {
+      "anyOf": [
+        {
+          "const": "fts_norm",
+          "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.",
+          "type": "string"
+        },
+        {
+          "const": "vec_norm",
+          "description": "pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.",
+          "type": "string"
+        },
+        {
+          "const": "graph_score",
+          "description": "Product of edge weights along the best path. UNBOUNDED. `follow-from`.",
+          "type": "string"
+        },
+        {
+          "const": "region_score",
+          "description": "`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.",
+          "type": "string"
+        },
+        {
+          "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "Which quantity a hit's score is, named so that combining two of different kinds reads as the\ncategory error it is.\n\nThe values are the DEPLOYED column names the serving functions emit — not names invented here —\nso a caller who greps the SQL for one finds it, and each equals the\n[`super::act::ActQuantity::field`] of the act that produced the row.\n\n**OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary\nwould make adding one a breaking change for every client. Openness costs nothing here because\nthe operation a client performs on this value is EQUALITY — *are these two scores the same\nkind?* — never exhaustive enumeration. Contrast\n[`super::disposition::StageDisposition`], which stays closed precisely because consumers match\nit exhaustively.\n\n**The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as\n`1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans\n`[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on\n[`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming\n`[0,1]`, which is the live mistake in this family, not a hypothetical one."
+    },
+    "Scoring": {
+      "description": "How one hit scored, and by what measure.\n\nThe kind travels WITH the number, which is what lets a row be understood on its own. Two hits\nwhose `score_kind` differs hold values that must never be added, averaged, or sorted into one\nlist — and unlike a bare field name, that is something a client can actually check.",
       "properties": {
         "located_at": {
           "anyOf": [
@@ -406,78 +413,38 @@
               "type": "null"
             }
           ],
-          "description": "Where in the resource the match was — the closest chunk's block.\n\n**This field exists on this hit type and nowhere else**, and that is a statement about the\ntwo arms rather than an oversight: the wide arm matches at CHUNK grain and already computes\nwhich chunk was closest, then discards it collapsing to a per-resource score. Recovering it\nis an argmin beside an aggregate that already runs.\n\nAbsent means the match was not localized, which for this act should not happen."
+          "description": "Where in the resource the match was — the closest chunk's block.\n\n**Filled only by the wide arm**, and its absence is declared in advance rather than\ndiscovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.\nThe wide arm matches at CHUNK grain and already computes which chunk was closest, then\ndiscards it collapsing to a per-resource score; recovering it is an argmin beside an\naggregate that already runs.\n\n`find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by\nconcatenating every chunk into a single blob, so the block boundary is gone before the query\nis asked. `follow-from` and `survey` have no match position at all — one returns nodes\nreached by walking, the other returns regions."
         },
-        "resource": {
-          "$ref": "#/$defs/ResourceView"
-        },
-        "vec_norm": {
-          "description": "The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.\n\nNOT the same quantity as [`RegionHit::region_score`], which rescales the identical operator\nas `1 - d` and spans `[-1,1]`.",
+        "score": {
+          "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.",
           "format": "float",
           "type": "number"
+        },
+        "score_kind": {
+          "$ref": "#/$defs/ScoreKind"
         }
       },
       "required": [
-        "resource",
-        "vec_norm"
+        "score_kind",
+        "score"
       ],
       "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "What a RETURNED stage produced, tagged by currency AND quantity.\n\n# There is no `ids` variant\n\n`[decided — 2026-08-09, Pete]` A returned stage is always hydrated: resource hits or region\nhits, never a bare id set.\n\nIds remain the pipe's **internal** currency — the only value that crosses a stage boundary is\nmembership, and an intermediate stage that merely feeds a downstream one is never hydrated at\nall. That is unchanged, and it is what keeps `no-cross-act-ranking` structural. What is gone is\n`ids` as a thing a caller can ASK to be given back.\n\nSubselecting a result set is a client concern with a good answer already (`temper … | jq`), and\nthe principled version is a known later door: GraphQL over this surface, where a caller opts\ninto exactly the parts they want. Shipping one coarse \"just ids\" toggle now would occupy the\nspace that door is for, and it would be the only variant whose shape a caller could not read off\nthe act declarations.\n\n# Why the quantity is in the tag, not just the row\n\n`[decided during build — 2026-08-09]` The contract drafted this as one `resource_hits` variant\nholding a per-item union of the three hit types. Four flat variants instead, for two reasons:\n\n* A union on the ARRAY ITEM permits a list holding an [`FtsHit`] beside a [`VecHit`], policed\n  only by a sentence saying it must not. A stage runs ONE act and an act produces ONE quantity,\n  so homogeneity is a property of the type here rather than of everyone remembering.\n\n* It makes `/api/query/validate` self-sufficient. Told `resource_hits`, a caller still does not\n  know whether to read `fts_norm` or `vec_norm` and must cross-reference `orders_by`. Told\n  `vec_hits`, they know — and telling them the whole answer before they run anything is that\n  route's entire purpose.\n\nThe tag is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and `orders_by`, which\nis what makes that possible: this union has no member an act cannot declare in advance.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nthe quantities are floats.\nTests compare the serialized form, which is the thing a client actually observes.",
+  "description": "What a RETURNED stage produced, tagged by CURRENCY.\n\n# Two variants, and the tag answers exactly one question\n\n`[decided — 2026-08-09, Pete]` What was produced is resources, or regions. How they were scored\nis a different question, answered per row by [`super::hits::Scoring::score_kind`].\n\nAn earlier draft split this four ways — `fts_hits`, `vec_hits`, `graph_hits` — so that two acts'\nrows could not share a list type. That guard was real but the name was a misnomer: `vec_hits`\ndescribes the scoring, not what was produced, and it meant **a row could not be read without\nknowing which envelope carried it**. The quantity was the field name, so the envelope was load-\nbearing for interpreting the row. Now every hit is self-describing and there is one shape per\ncurrency instead of one per act.\n\nWhat still prevents `unified_search`'s conflation is structural and unchanged: arms are keyed\nseparately in the response, and there is no merged ordered list for two acts' rows to fall into.\nSee the module note on [`super::hits`] for the full argument.\n\n# There is no `ids` variant\n\nA returned stage is always hydrated. Ids remain the pipe's **internal** currency — the only\nvalue crossing a stage boundary is membership, and an intermediate stage that merely feeds a\ndownstream one is never hydrated at all. What is gone is `ids` as a thing a caller can ASK to be\ngiven back: subselecting a result set is a client concern with a good answer already\n(`temper … | jq`), and the principled version is a known later door (GraphQL over this surface).\nShipping one coarse \"just ids\" toggle now would occupy the space that door is for.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nscores are floats. Tests compare the serialized form, which is what a client observes.",
   "oneOf": [
     {
-      "description": "Produced by `find-exact`.",
+      "description": "Produced by `find-exact`, both `find-about-*` acts, and `follow-from`.",
       "properties": {
         "hits": {
           "items": {
-            "$ref": "#/$defs/FtsHit"
+            "$ref": "#/$defs/ResourceHit"
           },
           "type": "array"
         },
         "produced": {
-          "const": "fts_hits",
-          "type": "string"
-        }
-      },
-      "required": [
-        "produced",
-        "hits"
-      ],
-      "type": "object"
-    },
-    {
-      "description": "Produced by `find-about-anywhere` and `find-about-within`.",
-      "properties": {
-        "hits": {
-          "items": {
-            "$ref": "#/$defs/VecHit"
-          },
-          "type": "array"
-        },
-        "produced": {
-          "const": "vec_hits",
-          "type": "string"
-        }
-      },
-      "required": [
-        "produced",
-        "hits"
-      ],
-      "type": "object"
-    },
-    {
-      "description": "Produced by `follow-from`.",
-      "properties": {
-        "hits": {
-          "items": {
-            "$ref": "#/$defs/GraphHit"
-          },
-          "type": "array"
-        },
-        "produced": {
-          "const": "graph_hits",
+          "const": "resources",
           "type": "string"
         }
       },
@@ -497,7 +464,7 @@
           "type": "array"
         },
         "produced": {
-          "const": "region_hits",
+          "const": "regions",
           "type": "string"
         }
       },

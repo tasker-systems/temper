@@ -304,26 +304,6 @@ export type FacetPredicate = { key: string, value: string, };
 export type FilterField = "resource" | "edge";
 
 /**
- * A resource whose exact words matched. Produced by `find-exact`.
- */
-export type FtsHit = { resource: ResourceView, 
-/**
- * `ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`.
- */
-fts_norm: number, };
-
-/**
- * A neighbour, reached by walking. Produced by `follow-from`.
- */
-export type GraphHit = { resource: ResourceView, 
-/**
- * **UNBOUNDED.** The walk multiplies `kb_edges.weight` at every hop, and that column is
- * `DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK constraint. Today's values stay under
- * 1 because nothing writes a larger weight — a property of the DATA, not of the quantity.
- */
-graph_score: number, };
-
-/**
  * What an [`IdSet`]'s ids name.
  *
  * OPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can
@@ -395,6 +375,12 @@ block_id: BlockId,
 header_path: string | null, 
 /**
  * The chunk's own text, or the part of it that matched.
+ *
+ * A snippet for the EXACT arm is a named remainder rather than a gap: it is possible without a
+ * new index via `ts_headline` over re-fetched text, but that is a per-row fetch of prose the
+ * query did not otherwise need, on a path that currently touches only the index. Nobody has
+ * measured it, and the retired `SearchResultRow` carried a snippet from the `unified_search`
+ * era whose cost was never isolated either.
  */
 snippet: string | null, };
 
@@ -458,9 +444,9 @@ detail: string, };
  * It exists so `/api/query/validate` can PROMISE a variant using the same type the response
  * REPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from
  * an actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a
- * declaration, and a test asserts the two agree for every act.
+ * declaration, and a test asserts the two agree.
  */
-export type ProducedVariant = "fts_hits" | "vec_hits" | "graph_hits" | "region_hits";
+export type ProducedVariant = "resources" | "regions";
 
 /**
  * A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
@@ -514,31 +500,23 @@ export type QuantityScale = { "scale": "unit_interval" } | { "scale": "other_ran
 export type RefusalReason = "unsupported_bound_kind" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | string;
 
 /**
- * A region of a cognitive map. Produced by `survey`.
+ * One region of a cognitive map. Produced by `survey`.
  */
 export type RegionHit = { 
 /**
  * The region itself, in the same shape `cogmap_shape` answers in.
  *
- * **It carries its own `salience`, beside this hit's `region_score`.** Two numbers on one row,
- * and they are not rivals: `salience` is an INPUT to `region_score` (`0.4·sal_norm +
- * 0.6·query_cos`, where `sal_norm` is a rank over salience). Order by `region_score`; ordering
- * by `salience` answers *"what does this map think is prominent"*, a different question.
+ * **It carries its own `salience`, beside this hit's score.** Two numbers on one row, and they
+ * are not rivals: `salience` is an INPUT to `region_score` (`0.4·sal_norm + 0.6·query_cos`,
+ * where `sal_norm` is a rank over salience). Order by the score; ordering by `salience`
+ * answers *"what does this map think is prominent"*, a different question.
  *
  * `[decided — 2026-08-08, Pete]` A narrower region projection without `salience` was
  * considered and refused. [`ResourceView`] exists because six near-identical projections were
  * collapsed into one; minting a divergent region shape immediately afterwards, to hide one
  * field, would repeat the mistake that consolidation just paid to fix.
  */
-region: CogmapRegionRow, 
-/**
- * Spans `[-0.6, 1.0]`, **not** `[0,1]`. `0.4*sal_norm + 0.6*query_cos` where `sal_norm` is a
- * `percent_rank` in `[0,1]` but `query_cos = 1 - distance` over a cosine distance spanning
- * `[0,2]`, so the similarity term spans `[-1,1]`.
- *
- * Read `orders_by.scale` on the stage rather than assuming.
- */
-region_score: number, };
+region: CogmapRegionRow, scoring: Scoring, };
 
 /**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
@@ -562,6 +540,15 @@ tags: Array<string>,
 facets: Array<FacetPredicate>, stage: string | null, status: string | null, owner: string | null, title_contains: string | null, };
 
 /**
+ * One resource that matched, however it matched.
+ *
+ * [`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both
+ * search arms answer in — six near-identical projections collapsed into one. A hit adds scoring
+ * and nothing else.
+ */
+export type ResourceHit = { resource: ResourceView, scoring: Scoring, };
+
+/**
  * One stage whose rows come back, and how much of each row.
  */
 export type ReturnSpec = { stage: StageName, 
@@ -579,6 +566,58 @@ export type ReturnSpec = { stage: StageName,
  * of them in a deserializer's vocabulary.
  */
 with: Array<ResourceSection>, };
+
+/**
+ * Which quantity a hit's score is, named so that combining two of different kinds reads as the
+ * category error it is.
+ *
+ * The values are the DEPLOYED column names the serving functions emit — not names invented here —
+ * so a caller who greps the SQL for one finds it, and each equals the
+ * [`super::act::ActQuantity::field`] of the act that produced the row.
+ *
+ * **OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary
+ * would make adding one a breaking change for every client. Openness costs nothing here because
+ * the operation a client performs on this value is EQUALITY — *are these two scores the same
+ * kind?* — never exhaustive enumeration. Contrast
+ * [`super::disposition::StageDisposition`], which stays closed precisely because consumers match
+ * it exhaustively.
+ *
+ * **The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as
+ * `1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans
+ * `[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on
+ * [`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming
+ * `[0,1]`, which is the live mistake in this family, not a hypothetical one.
+ */
+export type ScoreKind = "fts_norm" | "vec_norm" | "graph_score" | "region_score" | string;
+
+/**
+ * How one hit scored, and by what measure.
+ *
+ * The kind travels WITH the number, which is what lets a row be understood on its own. Two hits
+ * whose `score_kind` differs hold values that must never be added, averaged, or sorted into one
+ * list — and unlike a bare field name, that is something a client can actually check.
+ */
+export type Scoring = { score_kind: ScoreKind, 
+/**
+ * Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
+ * carried per row because it is a property of the act, identical for every row of a stage.
+ */
+score: number, 
+/**
+ * Where in the resource the match was — the closest chunk's block.
+ *
+ * **Filled only by the wide arm**, and its absence is declared in advance rather than
+ * discovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.
+ * The wide arm matches at CHUNK grain and already computes which chunk was closest, then
+ * discards it collapsing to a per-resource score; recovering it is an argmin beside an
+ * aggregate that already runs.
+ *
+ * `find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by
+ * concatenating every chunk into a single blob, so the block boundary is gone before the query
+ * is asked. `follow-from` and `survey` have no match position at all — one returns nodes
+ * reached by walking, the other returns regions.
+ */
+located_at: MatchLocation | null, };
 
 /**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
@@ -614,46 +653,37 @@ export type StageName = string;
 export type StageNode = ActInvocation | CombineNode;
 
 /**
- * What a RETURNED stage produced, tagged by currency AND quantity.
+ * What a RETURNED stage produced, tagged by CURRENCY.
+ *
+ * # Two variants, and the tag answers exactly one question
+ *
+ * `[decided — 2026-08-09, Pete]` What was produced is resources, or regions. How they were scored
+ * is a different question, answered per row by [`super::hits::Scoring::score_kind`].
+ *
+ * An earlier draft split this four ways — `fts_hits`, `vec_hits`, `graph_hits` — so that two acts'
+ * rows could not share a list type. That guard was real but the name was a misnomer: `vec_hits`
+ * describes the scoring, not what was produced, and it meant **a row could not be read without
+ * knowing which envelope carried it**. The quantity was the field name, so the envelope was load-
+ * bearing for interpreting the row. Now every hit is self-describing and there is one shape per
+ * currency instead of one per act.
+ *
+ * What still prevents `unified_search`'s conflation is structural and unchanged: arms are keyed
+ * separately in the response, and there is no merged ordered list for two acts' rows to fall into.
+ * See the module note on [`super::hits`] for the full argument.
  *
  * # There is no `ids` variant
  *
- * `[decided — 2026-08-09, Pete]` A returned stage is always hydrated: resource hits or region
- * hits, never a bare id set.
- *
- * Ids remain the pipe's **internal** currency — the only value that crosses a stage boundary is
- * membership, and an intermediate stage that merely feeds a downstream one is never hydrated at
- * all. That is unchanged, and it is what keeps `no-cross-act-ranking` structural. What is gone is
- * `ids` as a thing a caller can ASK to be given back.
- *
- * Subselecting a result set is a client concern with a good answer already (`temper … | jq`), and
- * the principled version is a known later door: GraphQL over this surface, where a caller opts
- * into exactly the parts they want. Shipping one coarse "just ids" toggle now would occupy the
- * space that door is for, and it would be the only variant whose shape a caller could not read off
- * the act declarations.
- *
- * # Why the quantity is in the tag, not just the row
- *
- * `[decided during build — 2026-08-09]` The contract drafted this as one `resource_hits` variant
- * holding a per-item union of the three hit types. Four flat variants instead, for two reasons:
- *
- * * A union on the ARRAY ITEM permits a list holding an [`FtsHit`] beside a [`VecHit`], policed
- *   only by a sentence saying it must not. A stage runs ONE act and an act produces ONE quantity,
- *   so homogeneity is a property of the type here rather than of everyone remembering.
- *
- * * It makes `/api/query/validate` self-sufficient. Told `resource_hits`, a caller still does not
- *   know whether to read `fts_norm` or `vec_norm` and must cross-reference `orders_by`. Told
- *   `vec_hits`, they know — and telling them the whole answer before they run anything is that
- *   route's entire purpose.
- *
- * The tag is DERIVABLE BEFORE EXECUTION from the act's declared `produces` and `orders_by`, which
- * is what makes that possible: this union has no member an act cannot declare in advance.
+ * A returned stage is always hydrated. Ids remain the pipe's **internal** currency — the only
+ * value crossing a stage boundary is membership, and an intermediate stage that merely feeds a
+ * downstream one is never hydrated at all. What is gone is `ids` as a thing a caller can ASK to be
+ * given back: subselecting a result set is a client concern with a good answer already
+ * (`temper … | jq`), and the principled version is a known later door (GraphQL over this surface).
+ * Shipping one coarse "just ids" toggle now would occupy the space that door is for.
  *
  * Neither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and
- * the quantities are floats.
- * Tests compare the serialized form, which is the thing a client actually observes.
+ * scores are floats. Tests compare the serialized form, which is what a client observes.
  */
-export type StageOutput = { "produced": "fts_hits", hits: Array<FtsHit>, } | { "produced": "vec_hits", hits: Array<VecHit>, } | { "produced": "graph_hits", hits: Array<GraphHit>, } | { "produced": "region_hits", hits: Array<RegionHit>, };
+export type StageOutput = { "produced": "resources", hits: Array<ResourceHit>, } | { "produced": "regions", hits: Array<RegionHit>, };
 
 /**
  * What the receiving act does with the set it was handed.
@@ -835,29 +865,6 @@ order: Array<StageName>,
 will_return: { [key in StageName]?: WillReturn }, };
 
 /**
- * A resource that matched an idea rather than words. Produced by both `find-about-*` acts.
- */
-export type VecHit = { resource: ResourceView, 
-/**
- * The pgvector cosine DISTANCE (span `[0,2]`) rescaled as `1 - d/2`, landing in `[0,1]`.
- *
- * NOT the same quantity as [`RegionHit::region_score`], which rescales the identical operator
- * as `1 - d` and spans `[-1,1]`.
- */
-vec_norm: number, 
-/**
- * Where in the resource the match was — the closest chunk's block.
- *
- * **This field exists on this hit type and nowhere else**, and that is a statement about the
- * two arms rather than an oversight: the wide arm matches at CHUNK grain and already computes
- * which chunk was closest, then discards it collapsing to a per-resource score. Recovering it
- * is an argmin beside an aggregate that already runs.
- *
- * Absent means the match was not localized, which for this act should not happen.
- */
-located_at: MatchLocation | null, };
-
-/**
  * Where the principal constraint applies to **the fragment that produces this act's ordering** —
  * not to its serving function as a whole.
  *
@@ -880,10 +887,17 @@ export type VisibilityProfile = "principal-agnostic" | "agnostic-in-value-relati
  */
 export type WillReturn = { act: ActName, 
 /**
- * Which `StageOutput` variant this stage will carry — the whole answer, including which
- * quantity field its rows hold, so a caller can write their parser before running anything.
+ * Which `StageOutput` variant this stage will carry: resources, or regions.
  */
 produced: ProducedVariant, 
+/**
+ * The score kind every row of this stage will carry, typed exactly as the rows carry it.
+ *
+ * The envelope tags currency only, so `produced` alone does not distinguish two acts that
+ * both return resources — this is what completes the answer, and it is the SAME type a hit
+ * holds, so a caller compares it directly rather than across a translation.
+ */
+score_kind: ScoreKind | null, 
 /**
  * The quantity its rows will be ordered by, with its range. Absent for an act that orders
  * nothing — which, since every returnable act orders something, does not happen today.

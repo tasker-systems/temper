@@ -144,8 +144,9 @@ mod tests {
     use crate::types::cognitive_maps::CogmapRegionRow;
     use crate::types::ids::{LensId, RegionId};
     use crate::types::query::disposition::StageDisposition;
-    use crate::types::query::hits::RegionHit;
+    use crate::types::query::hits::{RegionHit, ScoreKind, Scoring};
     use crate::types::query::id_set::IdKind;
+    use crate::types::query::stage::ProducedVariant;
     use std::collections::BTreeMap;
 
     fn region_hit() -> RegionHit {
@@ -161,7 +162,11 @@ mod tests {
                 label: Some("composable search".to_string()),
                 member_count: 4,
             },
-            region_score: 0.42,
+            scoring: Scoring {
+                score_kind: ScoreKind::RegionScore,
+                score: 0.42,
+                located_at: None,
+            },
         }
     }
 
@@ -170,7 +175,7 @@ mod tests {
             act: ActName::Survey,
             disposition: StageDisposition::Answered,
             orders_by: None,
-            produced: StageOutput::RegionHits {
+            produced: StageOutput::Regions {
                 hits: vec![region_hit()],
             },
             extent: Extent::Complete,
@@ -207,7 +212,7 @@ mod tests {
         // the kind is still machine-checkable, now via `StageOutput::kind` rather than a bare field.
         let r = result(vec![], 0);
         assert_eq!(r.produced.kind(), IdKind::Region);
-        assert_eq!(r.produced.produced_tag(), "region_hits");
+        assert_eq!(r.produced.variant(), ProducedVariant::Regions);
         assert_eq!(r.produced.len(), 1);
     }
 
@@ -218,19 +223,23 @@ mod tests {
         // absence of a variant, because the variant being gone is a compile-time fact this test
         // cannot restate — what a client observes is that every returned stage carries rows.
         let json = serde_json::to_value(result(vec![], 0).produced).unwrap();
-        assert_eq!(json["produced"], "region_hits");
+        assert_eq!(json["produced"], "regions");
         assert!(json.get("hits").is_some(), "a returned stage carries rows");
         assert!(json.get("set").is_none(), "and never a bare id set: {json}");
     }
 
     #[test]
-    fn the_produced_tag_is_the_one_validate_promises_in_advance() {
-        // `/api/query/validate` tells a caller which variant a stage will carry before they run
-        // anything. That promise and this value must be the same string — two hand-written lists
-        // would be the ADMIN_EVENT_TYPES failure, so the tag is read off the serialized form.
-        let o = result(vec![], 0).produced;
-        let json = serde_json::to_value(&o).unwrap();
-        assert_eq!(json["produced"].as_str().unwrap(), o.produced_tag());
+    fn the_score_kind_a_row_carries_is_the_one_its_act_declared() {
+        // The row is self-describing AND consistent with the declaration. `score_kind` is the
+        // deployed column name, which is exactly what `orders_by.field` carries — so a caller can
+        // read the kind off a row and look up its RANGE on the stage without a translation table.
+        let r = result(vec![], 0);
+        let kinds = r.produced.score_kinds();
+        assert_eq!(kinds.len(), 1);
+        let declared = crate::types::query::declaration(&ActName::Survey)
+            .and_then(|d| d.score_kind())
+            .expect("survey orders by something");
+        assert!(kinds.contains(declared.as_str()), "got: {kinds:?}");
     }
 
     #[test]

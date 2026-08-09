@@ -632,19 +632,40 @@ mod tests {
 
     /// Every act that SELECTS something predicts a response shape.
     ///
-    /// `produced_variant` derives from `produces` plus the deployed column name in
-    /// `orders_by.field`, rather than from a table keyed on the act name — so this is what catches
-    /// a scoring column renamed without its declaration following, and a new selecting act whose
-    /// quantity nobody taught the response side about. Either would otherwise surface as
-    /// `/api/query/validate` silently omitting a key it was asked about.
+    /// Catches a new selecting act whose currency the response side has no hit type for — which
+    /// would otherwise surface as `/api/query/validate` silently omitting a key it was asked about.
     #[test]
     fn every_selecting_act_predicts_a_response_shape() {
         for d in search_family() {
             if d.produces.is_some() {
                 assert!(
                     d.produced_variant().is_some(),
-                    "{:?} selects but predicts no response shape — its `orders_by.field` \
-                     ({:?}) is not one the response side knows",
+                    "{:?} selects but predicts no response shape — it produces {:?}, which has \
+                     no hit type",
+                    d.name,
+                    d.produces
+                );
+            }
+        }
+    }
+
+    /// Every selecting act declares a score kind the response side RECOGNIZES.
+    ///
+    /// `score_kind` derives from `orders_by.field` — the deployed column name — rather than from a
+    /// table keyed on the act name, so this is what catches a scoring column renamed without its
+    /// declaration following. The failure would otherwise be quiet and late: the promise and the
+    /// rows would agree with each other (both read the same field) while both named a quantity no
+    /// client has ever heard of.
+    #[test]
+    fn every_selecting_act_declares_a_known_score_kind() {
+        for d in search_family() {
+            if d.produces.is_some() {
+                let kind = d.score_kind();
+                assert!(
+                    kind.as_ref()
+                        .is_some_and(super::super::hits::ScoreKind::is_known),
+                    "{:?} orders by {:?}, which the response side does not recognize as a score \
+                     kind — rename the column here too, or teach `ScoreKind` about it",
                     d.name,
                     d.orders_by.as_ref().map(|q| q.field.as_str())
                 );

@@ -20,6 +20,7 @@ use super::composition::{Composition, ReturnSpec, StageNode};
 use super::disposition::RefusalReason;
 use super::envelope::ActInvocation;
 use super::filter::{FilterField, PropertyOp, PropertySubject};
+use super::hits::ScoreKind;
 use super::id_set::IdKind;
 use super::registry::declaration;
 use super::stage::{ProducedVariant, StageInput, StageName, StageRelation};
@@ -400,9 +401,15 @@ pub struct ValidationOutcome {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct WillReturn {
     pub act: ActName,
-    /// Which `StageOutput` variant this stage will carry — the whole answer, including which
-    /// quantity field its rows hold, so a caller can write their parser before running anything.
+    /// Which `StageOutput` variant this stage will carry: resources, or regions.
     pub produced: ProducedVariant,
+    /// The score kind every row of this stage will carry, typed exactly as the rows carry it.
+    ///
+    /// The envelope tags currency only, so `produced` alone does not distinguish two acts that
+    /// both return resources — this is what completes the answer, and it is the SAME type a hit
+    /// holds, so a caller compares it directly rather than across a translation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score_kind: Option<ScoreKind>,
     /// The quantity its rows will be ordered by, with its range. Absent for an act that orders
     /// nothing — which, since every returnable act orders something, does not happen today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -453,6 +460,7 @@ impl ValidationOutcome {
                     WillReturn {
                         act: inv.act.clone(),
                         produced: decl.produced_variant()?,
+                        score_kind: decl.score_kind(),
                         orders_by: decl.orders_by.clone(),
                         discloses: decl.discloses.clone(),
                     },
@@ -1203,11 +1211,13 @@ mod tests {
     // ---- What validate PROMISES about the response ------------------------------------------
 
     #[test]
-    fn the_outcome_names_the_exact_variant_each_returned_stage_will_carry() {
+    fn the_outcome_names_the_currency_and_the_score_kind_of_each_returned_stage() {
         // The thing OpenAPI cannot state: `returned` is an open map whose keys are the caller's own
-        // stage names and whose value shape depends on which act each stage runs. Told
-        // `resource_hits`, a caller still would not know whether to read `fts_norm` or `vec_norm`;
-        // told `vec_hits`, they can write their parser before running anything.
+        // stage names and whose value shape depends on which act each stage runs.
+        //
+        // With the envelope tagging CURRENCY only, `produced` alone no longer separates two acts
+        // that both return resources — which is exactly why the promise carries `score_kind` too.
+        // Told "resources" plus "vec_norm", a caller can write their parser and stop thinking.
         let mut c = plan(
             vec![
                 act("wide", ActName::FindAboutAnywhere, None),
@@ -1219,23 +1229,52 @@ mod tests {
             query: "composable fragments".to_string(),
             embedded: true,
         });
-        let v = validate(&c).expect("plan is legal");
-        let out = ValidationOutcome::of(&v);
+        let out = ValidationOutcome::of(&validate(&c).expect("plan is legal"));
+        let wide = &out.will_return[&StageName::parse("wide").unwrap()];
+        let quoted = &out.will_return[&StageName::parse("quoted").unwrap()];
 
+        assert_eq!(wide.produced, ProducedVariant::Resources);
+        assert_eq!(quoted.produced, ProducedVariant::Resources);
         assert_eq!(
-            out.will_return[&StageName::parse("wide").unwrap()].produced,
-            ProducedVariant::VecHits
+            wide.produced, quoted.produced,
+            "same currency, which the envelope now says and nothing more"
         );
-        assert_eq!(
-            out.will_return[&StageName::parse("quoted").unwrap()].produced,
-            ProducedVariant::FtsHits
-        );
-        // Two acts, same CURRENCY (both produce resources), different shapes — which is the whole
-        // reason the quantity is in the tag rather than only in `orders_by`.
+        assert_eq!(wide.score_kind, Some(ScoreKind::VecNorm));
+        assert_eq!(quoted.score_kind, Some(ScoreKind::FtsNorm));
         assert_ne!(
-            out.will_return[&StageName::parse("wide").unwrap()].produced,
-            out.will_return[&StageName::parse("quoted").unwrap()].produced
+            wide.score_kind, quoted.score_kind,
+            "and the quantity is what tells them apart"
         );
+    }
+
+    #[test]
+    fn the_promised_score_kind_and_the_promised_range_name_the_same_quantity() {
+        // Two facts about one quantity, and they must not drift: `score_kind` is what a ROW will
+        // carry, `orders_by` is where its RANGE lives (which cannot sensibly ride per row). Both
+        // derive from `orders_by.field`, and this is what holds them together — a caller reads the
+        // kind off a hit and looks up its range on the stage, so a mismatch would send them to the
+        // wrong scale.
+        let c = plan(
+            vec![act(
+                "shape",
+                ActName::Survey,
+                Some(caller_ids(IdKind::Cogmap)),
+            )],
+            vec!["shape"],
+        );
+        let out = ValidationOutcome::of(&validate(&c).expect("legal"));
+        let shape = &out.will_return[&StageName::parse("shape").unwrap()];
+
+        assert_eq!(shape.produced, ProducedVariant::Regions);
+        assert_eq!(
+            shape.score_kind.as_ref().map(ScoreKind::as_str),
+            shape.orders_by.as_ref().map(|q| q.field.as_str())
+        );
+        // And the range is carried, because region_score is NOT [0,1] and its name does not say so.
+        assert!(matches!(
+            shape.orders_by.as_ref().map(|q| &q.scale),
+            Some(crate::types::query::QuantityScale::OtherRange { .. })
+        ));
     }
 
     #[test]
@@ -1292,18 +1331,17 @@ mod tests {
         let out = ValidationOutcome::of(&validate(&c).expect("legal"));
         let near = &out.will_return[&StageName::parse("near").unwrap()];
 
-        assert_eq!(near.produced, ProducedVariant::GraphHits);
+        assert_eq!(near.produced, ProducedVariant::Resources);
+        assert_eq!(near.score_kind, Some(ScoreKind::GraphScore));
         assert!(
             near.discloses.is_empty(),
             "follow-from declares neither disclosure; got: {:?}",
             near.discloses
         );
-        // And the quantity's RANGE rides along, because assuming [0,1] is the live mistake in this
-        // family — `graph_score` is unbounded.
-        assert_eq!(
-            near.orders_by.as_ref().map(|q| q.field.as_str()),
-            Some("graph_score")
-        );
+        // So a caller also knows `located_at` will be absent on every row, before asking.
+        assert!(!near
+            .discloses
+            .contains(&crate::types::query::Disclosure::MatchLocation));
     }
 
     #[test]
@@ -1344,27 +1382,19 @@ mod tests {
 
     #[test]
     fn the_promised_variant_is_the_one_a_real_output_reports() {
-        // The two halves of the contract meeting: `ActDeclaration::produced_variant` PREDICTS from
-        // a declaration, `StageOutput::variant` REPORTS from an actual output. If they were
-        // separate enums, or one were a hand-kept table, they could disagree — and a caller who
-        // parsed against the promise would break on the response.
+        // The two halves meeting: `ActDeclaration::produced_variant` PREDICTS from a declaration,
+        // `StageOutput::variant` REPORTS from an actual output. Separate enums, or one hand-kept
+        // table, could disagree — and a caller who parsed against the promise would break on the
+        // response.
         use crate::types::query::stage::StageOutput;
         for (variant, actual) in [
             (
-                ProducedVariant::FtsHits,
-                StageOutput::FtsHits { hits: vec![] },
+                ProducedVariant::Resources,
+                StageOutput::Resources { hits: vec![] },
             ),
             (
-                ProducedVariant::VecHits,
-                StageOutput::VecHits { hits: vec![] },
-            ),
-            (
-                ProducedVariant::GraphHits,
-                StageOutput::GraphHits { hits: vec![] },
-            ),
-            (
-                ProducedVariant::RegionHits,
-                StageOutput::RegionHits { hits: vec![] },
+                ProducedVariant::Regions,
+                StageOutput::Regions { hits: vec![] },
             ),
         ] {
             assert_eq!(variant, actual.variant());
