@@ -335,12 +335,40 @@ not of materializing at all, which is what §9's narrowing turns on.
   DAG. Precedent for the exact shape: `20260807000010`, declared `additive` for *"one new function
   plus CREATE OR REPLACE on two existing ones at unchanged signatures, no DROP."*
 
-  **The one figure that decides it is unmeasured: what share of gate cost the closure actually is.**
-  If 10%, this buys little; if 70%, it changes this design. Owned by
-  [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b), which names arm contribution as *"the biggest
-  single unknown"* — the arm empty in community is the one enterprise runs on. **Nothing in this
-  design may assume the narrowing lands**, and if it does land, §5 and §6 become unnecessary rather
-  than wrong.
+  ~~**The one figure that decides it is unmeasured: what share of gate cost the closure actually
+  is.**~~ **MEASURED `[2026-08-09]` — and the answer is NEITHER branch.** Research
+  [Spec §9 measured](./019fe7f9-7d40-7c30-aff5-7eaadb3ab6dd).
+
+  The closure is **1.0–1.9%** of gate cost at this deployment's topology (depth 2, ≤2 memberships —
+  and note the team-anchored grant arm that returns zero rows in community has **4,800 rows** here,
+  so this is not the corpus §9 was worried about). Across synthetic plausible tenants it rises to
+  **~40%**, crossing 10% at roughly 8 memberships / depth 5 / 100 teams. It never approaches 70% at
+  any shape a tenant plausibly has; 70%+ required 32–64 memberships over **disjoint** chains, which
+  is a worst case rather than an org.
+
+  **So §5 and §6 do NOT become unnecessary.** That conclusion required the closure to be the
+  dominant cost. Removing it entirely would make the gate ~1.02× faster here and ~1.7× faster at the
+  largest plausible tenant; the remaining 60–98% is the six-arm `UNION` over the visible corpus,
+  which is precisely what §5 and §6 address. The trigger-maintained closure table stays a legitimate
+  **second-order** optimization — worth doing, never the lever this paragraph hoped for.
+
+  Three things the measurement found that were not predicted, and that change what to gather:
+
+  - **Reachable-team cardinality does not predict cost.** Shared reach 39 costs 4.14 ms; disjoint
+    reach 32 costs 0.55 ms — 7.5× apart at nearly equal reach. The `CROSS JOIN LATERAL` walks once
+    per MEMBERSHIP and the `DISTINCT` collapses only the output, so cost tracks **memberships ×
+    depth**, modulated by team-table size. [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)
+    question 3 asks for the cardinality; it should ask for the walk-steps.
+  - **The tenant's total team count matters, not just the principal's position.** 16 memberships at
+    depth 4 in a 500-team org costs more than 16 at depth 6 in a 200-team org. A per-principal probe
+    cannot predict a principal's own exposure.
+  - **Cost is superlinear** — a 4× topology is a 12× cost.
+
+  Still true and unchanged: **nothing in this design may assume the narrowing lands**, and arm
+  contribution remains
+  [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)'s *"biggest single unknown"* — this figure does
+  not answer it, and does not touch the hoist rule. Every number above is from an ad-hoc `EXPLAIN`,
+  i.e. a **custom** plan; production prepares its statements and runs **generic** ones.
 
 - **`survey` has two fragment arguments with no declared slot** — `p_lens uuid` and `p_emb vector`.
   Query and embedding reach a stage via `Composition.intention`; nothing carries a lens. Beat C task
