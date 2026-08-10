@@ -165,6 +165,45 @@
 #   * MatchLocation redeclaration awaits the wide fragments carrying the
 #     winning chunk's identity out (the argmin); `located_at` fills then.
 #
+# ── ABSENT VERSUS NULL — one rule, and it decides every optional field ───────
+#
+# `[ruled — 2026-08-10, Pete]` Two spellings of "no value", and they are NOT
+# interchangeable:
+#
+#   the key is PRESENT and null   this COULD apply here, and did not
+#   the key is ABSENT             this does not apply here at all
+#
+# Read the pair as applicability, not as emptiness. A nullable key advertises
+# that the field is meaningful for this shape and simply has no value this time;
+# an absent key says the question was never on the table.
+#
+# It decides all four optional fields on this wire, which is what makes it a
+# rule rather than a patch:
+#
+#   `ResourceHit.located_at`   PRESENT, null. A resource match could have a
+#                              location. `RegionHit` has no such key at all —
+#                              a region is not somewhere inside a resource.
+#                              (This is what ⟨4⟩/8e was reaching for; the rule
+#                              states it better than that ruling did.)
+#   `NarrowedBy.admitted`      ABSENT when the act cannot compute counts. An
+#   `NarrowedBy.excluded`      act that CAN declares `filter_counts` and then
+#                              computes them for every filter it applied, so a
+#                              number always arrives and the null case does not
+#                              occur.
+#   `StageResult.refusal`      ABSENT on a stage that answered — refusal does
+#                              not apply to it.
+#   `StageResult.total`        ABSENT when the act cannot produce one without a
+#                              second query.
+#
+# THE BOUNDARY IT DRAWS, so the next case is decidable in advance rather than
+# argued: the day an act CAN produce a disclosure but genuinely has none for a
+# particular row, that field wants PRESENT-and-null. Nothing today is in that
+# position; when something is, the rule already says what to do.
+#
+# Consistency for its own sake is not the goal here and would have hidden this:
+# one wire spelling for both cases would collapse "cannot" and "none", which is
+# the ambiguity `Disclosure` exists to remove.
+#
 # ── THE ONE THING THIS SPEC REQUIRES THAT DOES NOT EXIST YET ─────────────────
 #
 # `[stale — resolved before 2026-08-09]` This block is now HISTORY: `discloses`
@@ -1384,13 +1423,9 @@ components:
         # `admitted === null` (never true), or worse `admitted ?? 0`, which
         # renders the very zero the rule below forbids.
         #
-        # NAMED OPEN QUESTION, deliberately not settled here: `located_at` is
-        # governed by the SAME `Disclosure` vocabulary (`filter_counts` beside
-        # `match_location`) and was ruled the other way — always present,
-        # explicitly null — precisely so "cannot" is unambiguous. One vocabulary
-        # should probably not be served by two wire rules. Settling it is a
-        # ruling, not a conformance fix, so this pass makes the contract honest
-        # about what ships rather than changing what ships.
+        # The apparent inconsistency with `located_at` — which IS present and
+        # explicitly null — is SETTLED and principled. See "ABSENT VERSUS NULL"
+        # in the header.
         admitted:
           description: |
             How many rows this filter let through, when the act happened to
