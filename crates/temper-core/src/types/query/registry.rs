@@ -39,6 +39,12 @@ use super::scalars::BoundTerm;
 /// only because `build_state` has no runtime consumer — nothing branches on it; it is a wire and
 /// codegen marker — so a dangling host misleads a reader of the contract and misroutes no call.
 ///
+/// **The door half of the remainder is no longer held in a comment.** `[ruled — 2026-08-10, Pete]`
+/// Both acts now declare [`DoorReach::Absent`] at all three doors, which is what the deployed system
+/// is: a declaration describes the DEPLOYED system, and `unified_doors(vec![])` on an act nothing
+/// reaches was the same defect that retracted `MatchLocation` and `input_contributed`. Only
+/// `build_state` stays provisional here.
+///
 /// `[provisional — 2026-08-05; resolve in phase 4]`
 fn provisionally_unexpressed() -> BuildState {
     BuildState::Fused {
@@ -47,40 +53,54 @@ fn provisionally_unexpressed() -> BuildState {
 }
 
 /// The `/api/search` door shape: all three doors present and serving, differing only in which bound
-/// terms a door cannot supply. Five declarations write it.
+/// terms a door cannot supply. **Three declarations write it** — the `find` acts, and only them.
 ///
-/// The name is historical — it was minted when those five acts were fused into one host. The host is
-/// gone (retired 2026-08-06) and the doors did not move with it, which is why this helper is
-/// unchanged: the three doors are `temper search`
-/// `[verified — crates/temper-cli/src/cli.rs:286]`, `POST /api/search`
-/// `[verified — crates/temper-api/src/routes.rs:164]`, and the MCP `search` tool
-/// `[verified — crates/temper-mcp/src/service.rs:351-360]`.
+/// The name is historical — it was minted when five acts were fused into one host. The host is gone
+/// (retired 2026-08-06) and the doors did not move with it, which is why the shape survives it: the
+/// three doors are `temper search`, `POST /api/search`, and the MCP `search` tool.
 ///
-/// Two of the five — `follow-from` and `survey` — carry this shape while
-/// [`provisionally_unexpressed`] records that no door in fact reaches their mechanic. That tension is
-/// stated there, and `/api/query` is what resolves it; it is not resolved by editing this map.
+/// `follow-from` and `survey` used to carry this shape too, while [`provisionally_unexpressed`]
+/// recorded in prose that no door in fact reaches their mechanic. That tension is **over**
+/// `[ruled — 2026-08-10, Pete]`: both now declare [`DoorReach::Absent`] at every door, written out
+/// rather than routed through here, because a declaration describes the DEPLOYED system and holding
+/// a known-false `Serves` until `/api/query` arrives is the defect this whole field exists against.
+/// They restore to `Serves` when that door lands, which is additive.
+///
+/// `bounds_unreachable` is the same at all three doors and so is passed once. That is not a
+/// simplification — the shortfall genuinely is door-independent: the shipped arms hard-bind `NULL`
+/// for bound-ids, so no caller anywhere can supply a resource bound. A door-varying shortfall would
+/// need the per-door literal these acts no longer share.
 ///
 /// The MCP tool takes the whole [`crate::types::api::SearchParams`] as its `Parameters`, so every
 /// wire field is reachable from it — worth stating because grepping the `temper-mcp` crate for a
 /// param name finds nothing and reads as absence.
-fn unified_doors(cli_unreachable: Vec<BoundTerm>) -> BTreeMap<Door, DoorReach> {
+fn unified_doors(
+    cli_unreachable: Vec<BoundTerm>,
+    bounds_unreachable: Vec<IdKind>,
+) -> BTreeMap<Door, DoorReach> {
     BTreeMap::from([
         (
             Door::Cli,
             DoorReach::Serves {
                 terms_unreachable: cli_unreachable,
+                bounds_unreachable: bounds_unreachable.clone(),
+                filters_unapplied: vec![],
             },
         ),
         (
             Door::Api,
             DoorReach::Serves {
                 terms_unreachable: vec![],
+                bounds_unreachable: bounds_unreachable.clone(),
+                filters_unapplied: vec![],
             },
         ),
         (
             Door::Mcp,
             DoorReach::Serves {
                 terms_unreachable: vec![],
+                bounds_unreachable,
+                filters_unapplied: vec![],
             },
         ),
     ])
@@ -97,9 +117,8 @@ fn vec_norm_quantity() -> ActQuantity {
                 that resource's chunk mean by the number of draws — framed per resource, so it \
                 does not move with who is asking"
             .to_string(),
-        // `1.0 - shrunk_distance / 2.0`, and `<=>` cosine distance spans [0,2]
-        // `[verified — migrations/20260801000010:186-189, :211-214]`. Contrast `region_score`,
-        // which rescales the same operator's output as `1 - d` and lands in [-1,1].
+        // `1.0 - shrunk_distance / 2.0`, and `<=>` cosine distance spans [0,2]. Contrast
+        // `region_score`, which rescales the same operator's output as `1 - d` and lands in [-1,1].
         scale: QuantityScale::UnitInterval,
     }
 }
@@ -139,21 +158,28 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // to fill, it is a question its index cannot answer. (`InputContribution` was removed
             // from the vocabulary with its field — ratification ⟨6⟩/9d.)
             discloses: vec![],
-            // The CLI's `search` command has no `--offset` — the flag list runs query, context,
-            // cogmap, wayfind, lens, regions, doc_type, limit, text_only, seed, edge-type, depth,
-            // no_graph, seed-only and stops `[verified — crates/temper-cli/src/cli.rs:286-336]`.
-            // So the CLI can only ever read page 1, and this act's declared `Offset` term is
-            // unreachable from it. Fused, reachable from every door, and still door-partial — the
-            // case a `BuildState` variant could not have carried.
-            door_coverage: unified_doors(vec![BoundTerm::Offset]),
+            // The CLI's `search` command has no `--offset` — beside the positional query it takes
+            // `--context`, `--cogmap`, `--doc-type`, `--limit` and `--text-only`, and stops. So the
+            // CLI can only ever read page 1, and this act's declared `Offset` term is unreachable
+            // from it. Served, reachable from every door, and still door-partial — the case a
+            // `BuildState` variant could not have carried.
+            //
+            // `bounds_unreachable` at ALL THREE doors is the second half of that case, and the
+            // sharper one: this act declares `accepts_bounds: [Resource, Context, Cogmap]` and NO
+            // door can supply the first. `SearchParams` carries `context_ref`, `cogmap_id` and
+            // `cogmap_ids` — so `Context` and `Cogmap` really are reachable — and carries no
+            // resource-id slot at all, while the shipped arms hard-bind `NULL` for bound-ids. The
+            // act's acceptance is true of the FRAGMENT (`p_bound_ids uuid[]` is right there) and
+            // unreachable from every caller, which is exactly the gap `Serves {}` could not state
+            // before this axis existed.
+            door_coverage: unified_doors(vec![BoundTerm::Offset], vec![IdKind::Resource]),
             orders_by: Some(ActQuantity {
                 field: "fts_norm".to_string(),
                 means: "postgres ts_rank of the query against the resource's own search vector — \
                         document-local, so it does not move with who is asking"
                     .to_string(),
-                // Flag 33 = 1 | 32, and flag 32 is `rank / (rank + 1)`
-                // `[verified — migrations/20260801000010:129]`. The `_norm` in the column name is
-                // earned, unlike `origin`'s claim to name the producing arm.
+                // Flag 33 = 1 | 32, and flag 32 is `rank / (rank + 1)`. The `_norm` in the column
+                // name is earned, unlike `origin`'s claim to name the producing arm.
                 scale: QuantityScale::UnitInterval,
             }),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
@@ -177,7 +203,10 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // matches at CHUNK grain and already computes which chunk was closest, then discards
             // it collapsing to a per-resource score; redeclaring is additive when the argmin ships.
             discloses: vec![],
-            door_coverage: unified_doors(vec![BoundTerm::Offset]),
+            // No `bounds_unreachable`, and it is the empty list that carries the statement: this
+            // act accepts NO bounds by definition, so there is no kind for a door to fall short on.
+            // The find acts either side of it both declare `Resource` unreachable.
+            door_coverage: unified_doors(vec![BoundTerm::Offset], vec![]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2, // best-of-N shrunk toward the chunk mean, 20260801000010
@@ -197,7 +226,12 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // undeclared until the fragments carry the winning chunk out
             // `[ruled — 2026-08-10, Pete, ⟨4⟩/8e]`.
             discloses: vec![],
-            door_coverage: unified_doors(vec![BoundTerm::Offset]),
+            // The bound is the whole point of this act — "a concept, plus a set to search inside" —
+            // and `Resource`, the one kind a caller most obviously holds a set of (40 hits from a
+            // previous search), is the kind no door can supply. `Context` and `Cogmap` reach it
+            // through `context_ref` / `cogmap_id`. Same shortfall as `find-exact`, and the same
+            // cause: no door's params carry a resource-id list.
+            door_coverage: unified_doors(vec![BoundTerm::Offset], vec![IdKind::Resource]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2,
@@ -218,9 +252,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             produces: Some(IdKind::Resource),
             // No location: it returns nodes reached by walking, not chunks matched by a query, so
             // there is no match position for it to have. (Its walk also discards seed provenance —
-            // `SELECT node, MAX(score) FROM walk WHERE hop > 0 GROUP BY node`
-            // `[verified — migrations/20260711000030:57-60]` — which is the fact behind the retired
-            // `InputContribution` disclosure's "returns when a walk carries its origin" clause.)
+            // `SELECT node, MAX(score) FROM walk WHERE hop > 0 GROUP BY node` — which is the fact
+            // behind the retired `InputContribution` disclosure's "returns when a walk carries its
+            // origin" clause.)
             discloses: vec![],
             // CORRECTED 2026-08-05 (was PrincipalRelative). `graph_score` is `MAX(score) GROUP BY
             // node` over `walk`, whose `adj` admits an edge only when BOTH endpoints are visible —
@@ -232,21 +266,37 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // No `scoring_revision` bump: the body did not change, only what we correctly say
             // about it. A revision records a change in the scale or meaning of the quantity.
             //
-            // `Limit` only, and the CLI has one — so no shortfall here.
-            door_coverage: unified_doors(vec![]),
+            // ABSENT AT EVERY DOOR `[ruled — 2026-08-10, Pete, ADJ-9a]`. This said
+            // `unified_doors(vec![])` — full reach at CLI, API and MCP — and no door reaches this
+            // act at all: `/api/search` calls only the two find fragments, and nothing outside
+            // temper-substrate's tests calls `search_graph_expand`. The mechanic is live and
+            // stranded, which `build_state` records; `door_coverage` answers a different question,
+            // and the answer is none. A declaration describes the DEPLOYED system — the same
+            // principle that retracted `MatchLocation` and `input_contributed` rather than holding
+            // them until their fragments caught up. This restores to `Serves` when `/api/query`
+            // gives the act a door, which is additive.
+            //
+            // Note what goes with it. The `Limit` term and the `Edge` filter this act declares are
+            // now shortfalls with nowhere to be declared, because `Absent` carries no lists — which
+            // is correct: a door that cannot invoke the act at all falls short on nothing in
+            // particular. The `accepts_filters: [Edge]` that today's validator refuses outright is
+            // recorded there, in `validate`'s FilterNotApplicable arm, not here.
+            door_coverage: BTreeMap::from([
+                (Door::Cli, DoorReach::Absent),
+                (Door::Api, DoorReach::Absent),
+                (Door::Mcp, DoorReach::Absent),
+            ]),
             orders_by: Some(ActQuantity {
                 field: "graph_score".to_string(),
                 means: "the best decayed path from any seed to this node — \
                         MAX(gamma^hop * product of edge weights) over walks of at least one hop"
                     .to_string(),
                 // NOT [0,1], and not merely un-normalized: `kb_edges.weight` is
-                // `DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK constraint
-                // `[verified — migrations/20260624000001_canonical_schema.sql:637]`. The walk
-                // multiplies weights `[verified — migrations/20260711000030:45]`, so any edge
-                // written with a weight above 1 lifts this above 1. Today's corpus stays under it
-                // because nothing writes such a weight — which is a property of the DATA, not of
-                // the quantity, and declaring `UnitInterval` would claim the schema enforces
-                // something it does not.
+                // `DOUBLE PRECISION NOT NULL DEFAULT 1.0` with NO CHECK constraint, and the walk
+                // multiplies weights at every hop — so any edge written with a weight above 1 lifts
+                // this above 1. Today's corpus stays under it because nothing writes such a weight,
+                // which is a property of the DATA, not of the quantity; declaring `UnitInterval`
+                // would claim the schema enforces something it does not.
                 scale: QuantityScale::Unbounded,
             }),
             visibility_profile: Some(VisibilityProfile::AgnosticInValueRelativeInDomain),
@@ -266,27 +316,43 @@ pub fn search_family() -> Vec<ActDeclaration> {
             produces: Some(IdKind::Region),
             // No location: it produces regions, and a region is not somewhere inside a resource.
             discloses: vec![],
-            // `--wayfind` and `--regions` are both CLI flags
-            // `[verified — crates/temper-cli/src/cli.rs:298, :305]`, and `survey` does not admit
-            // `Offset`, so the CLI's missing `--offset` costs this act nothing.
-            door_coverage: unified_doors(vec![]),
+            // ABSENT AT EVERY DOOR `[ruled — 2026-08-10, Pete, ADJ-9a]`, for the same reason and by
+            // the same principle as `follow-from` above: this said `unified_doors(vec![])` — full
+            // reach — while no door reaches `wayfind_region_scores` at all. `/api/search` no longer
+            // runs the region funnel, and nothing outside temper-substrate's tests calls the
+            // function. The comment this replaces cited `--wayfind` and `--regions` as CLI flags;
+            // `temper search` has neither, and had neither when that was written. Restores to
+            // `Serves` when `/api/query` gives the act a door — additive.
+            door_coverage: BTreeMap::from([
+                (Door::Cli, DoorReach::Absent),
+                (Door::Api, DoorReach::Absent),
+                (Door::Mcp, DoorReach::Absent),
+            ]),
             orders_by: Some(ActQuantity {
                 field: "region_score".to_string(),
-                means: "0.4 * sal_norm + 0.6 * query_cos — the region's per-kind salience rank \
-                        blended with its centroid's similarity to the query"
+                means: "alpha * sal_norm + beta * query_cos + kappa * prior, with alpha 0.4, beta \
+                        0.6 and kappa 0.05 — the region's per-kind salience rank, blended with its \
+                        centroid's similarity to the query, plus an anchor-kind prior of 1.0 for a \
+                        region homed on a cogmap and 0.6 for one homed on a context"
                     .to_string(),
                 // The surprise, and the reason this variant exists. `sal_norm` is a `percent_rank`
                 // in [0,1], but `query_cos` is `1 - (centroid <=> p_emb)` and a cosine DISTANCE
-                // spans [0,2], so the similarity spans [-1,1]
-                // `[verified — migrations/20260731000050:114-121]`. The composite therefore spans
-                // [-0.6, 1.0] and CAN BE NEGATIVE. Every discussion of this number in the arc's
-                // research treats it as a [0,1] score.
+                // spans [0,2], so the similarity spans [-1,1]. The composite CAN BE NEGATIVE, and
+                // every discussion of this number in the arc's research treats it as a [0,1] score.
+                //
+                // `[corrected — 2026-08-10, ADJ-9e]` The declaration said `0.4*sal + 0.6*cos` over
+                // `[-0.6, 1.0]` and the deployed function has a THIRD term: the `kappa * prior`
+                // anchor-kind bonus. It is small and it is always present, so it moves both ends —
+                // the span is 0.4*[0,1] + 0.6*[-1,1] + 0.05*{0.6, 1.0}, i.e. [-0.57, 1.05], which
+                // exceeds 1. A declaration a caller normalises against must not be wrong about its
+                // own range, and this one was wrong at both ends and in the wrong direction at the
+                // top: it promised a value that could never exceed 1.0.
                 //
                 // Note what this is next to: `vec_norm` rescales the SAME `<=>` operator as
                 // `1 - d/2` into [0,1]. Two rescales of one distance, in one search family, with
                 // neither column name disclosing which it is.
                 scale: QuantityScale::OtherRange {
-                    bounds: "[-0.6, 1.0]".to_string(),
+                    bounds: "[-0.57, 1.05]".to_string(),
                 },
             }),
             visibility_profile: Some(VisibilityProfile::AgnosticInValueRelativeInDomain),
@@ -296,12 +362,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             name: ActName::Substantiate,
             asker_holds: "a claim; I want its defensibility".to_string(),
             // CORRECTED 2026-08-05 (was `None` / `Unbuilt`). This act SHIPS, and the declaration
-            // said no mechanic exists: `GET /api/resources/{id}/evidence`
-            // `[verified — crates/temper-api/src/routes.rs:63]` calls
-            // `evidential_standing_service::resource_evidence`
-            // `[verified — crates/temper-api/src/handlers/evidence.rs:24-31]`, which reads SQL
-            // `resource_standing_shape`. `temper resource evidence <ref>` is the CLI door
-            // `[verified — crates/temper-cli/src/cli.rs:615]`.
+            // said no mechanic exists: `GET /api/resources/{id}/evidence` calls
+            // `evidential_standing_service::resource_evidence`, which reads SQL
+            // `resource_standing_shape`. `temper resource evidence <ref>` is the CLI door.
             //
             // The function was never hidden — `VisibilityProfile`'s own doc comment cites
             // `resource_standing_shape` BY NAME as the worked gated-and-therefore-agnostic example,
@@ -333,22 +396,29 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // `produces: None` at the output end — and is served at its own door. An empty list
             // here is the same statement its other fields already make.
             discloses: vec![],
+            // Every shortfall list is empty and every one of them is a real statement: this act
+            // admits no bound terms, no bound kinds and no filters, so on all three axes there is
+            // nothing for the two doors that serve it to fall short on.
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,
                     DoorReach::Serves {
                         terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
                     },
                 ),
                 (
                     Door::Api,
                     DoorReach::Serves {
                         terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
                     },
                 ),
                 // Absent from MCP, which is the door agents use — so the substantiate act is
                 // thinnest exactly where it is most needed. Nothing in `crates/temper-mcp` reads
-                // standing `[verified — 2026-08-05]`; T1 columns 1-3 §6.2 recorded the same.
+                // standing; T1 columns 1-3 §6.2 recorded the same.
                 (Door::Mcp, DoorReach::Absent),
             ]),
             // Standing is THREE axes and a band, never one number — `citation_magnitude`,
@@ -410,21 +480,55 @@ pub fn search_family() -> Vec<ActDeclaration> {
 /// validation, and never reinterpreted to fit.
 ///
 /// A term with no ceiling passes through unchanged: absence here means *no ceiling*, not *zero*.
+///
+/// # An omitted `limit` DEFAULTS to the ceiling, and is reported
+///
+/// `[ruled — 2026-08-10, Pete, ADJ-11]` This used to iterate only the terms the caller REQUESTED,
+/// so an omitted `limit` never acquired a value at all: the compiler bound `NULL` and Postgres read
+/// `LIMIT NULL` as *unbounded* — the whole visible match set, per stage, for a caller who simply did
+/// not say how many they wanted. An act that publishes a ceiling of 50 and then returns everything
+/// on the one request shape agents send most is not a permissive default, it is a missing one.
+///
+/// **A default and a clamp are different events and both are honestly reported as "what ran".** The
+/// no-flag rationale above is about a clamp: a value the caller sent, reduced against a ceiling they
+/// could have read. A default is a value the caller never sent, so there is nothing to compare it
+/// against and nothing for them to have read wrong — but `terms_applied` means *the value actually
+/// used*, which is exactly what a default is. A response that cannot account for its own row count
+/// is the worse failure, so the default appears there beside the clamped values, indistinguishable
+/// from them on the wire and identical in meaning: this is the number the statement ran with.
+///
+/// Only `Limit` defaults, and only from a published ceiling. `Regions` deliberately does not:
+/// `wayfind_region_scores` has its own funnel default (3) beneath a ceiling of 20, and defaulting to
+/// the ceiling here would widen every unbounded survey sevenfold while claiming to describe the
+/// deployed system. `Offset` has no ceiling on any act, so there is nothing for it to default to —
+/// and page 1 is the right answer to a caller who named no page.
 pub fn applied_terms(
     requested: &std::collections::BTreeMap<super::scalars::BoundTerm, i64>,
     decl: &ActDeclaration,
 ) -> std::collections::BTreeMap<super::scalars::BoundTerm, i64> {
-    requested
+    let mut applied: std::collections::BTreeMap<super::scalars::BoundTerm, i64> = requested
         .iter()
         .filter(|(term, _)| decl.accepts_bound_terms.contains(term))
         .map(|(term, asked)| {
-            let applied = match decl.bound_ceilings.get(term) {
+            let value = match decl.bound_ceilings.get(term) {
                 Some(ceiling) => (*asked).min(*ceiling),
                 None => *asked,
             };
-            (*term, applied)
+            (*term, value)
         })
-        .collect()
+        .collect();
+
+    // The default is written HERE, in the one definition the compiler and the assembler both read,
+    // rather than in either of them. Computed twice it would eventually differ, and the difference
+    // would be a response reporting a page size the statement did not run with.
+    if decl.accepts_bound_terms.contains(&BoundTerm::Limit)
+        && !applied.contains_key(&BoundTerm::Limit)
+    {
+        if let Some(ceiling) = decl.bound_ceilings.get(&BoundTerm::Limit) {
+            applied.insert(BoundTerm::Limit, *ceiling);
+        }
+    }
+    applied
 }
 
 pub fn declaration(name: &ActName) -> Option<ActDeclaration> {
@@ -509,9 +613,19 @@ mod tests {
         // Mirrors `every_ceiling_is_published_for_a_term_the_act_admits`. A door cannot fall short
         // on a term the act never accepted — that is a contradiction, not a parity gap, and it
         // would put a term in the contract twice with two different meanings.
+        //
+        // `[widened — 2026-08-10, ADJ-9b]` The same guard now covers all three shortfall axes.
+        // Written as one loop over one destructuring rather than three tests, because the property
+        // is one property — *a shortfall names something the act admits* — and splitting it would
+        // let a fourth axis land guarded on two of three without anything saying so.
         for a in search_family() {
             for (door, reach) in &a.door_coverage {
-                let DoorReach::Serves { terms_unreachable } = reach else {
+                let DoorReach::Serves {
+                    terms_unreachable,
+                    bounds_unreachable,
+                    filters_unapplied,
+                } = reach
+                else {
                     continue;
                 };
                 for term in terms_unreachable {
@@ -521,6 +635,100 @@ mod tests {
                         a.name
                     );
                 }
+                for kind in bounds_unreachable {
+                    assert!(
+                        a.accepts_bounds.contains(kind),
+                        "{:?} claims {door:?} cannot supply a {kind:?} bound, which it does not \
+                         admit",
+                        a.name
+                    );
+                }
+                for field in filters_unapplied {
+                    assert!(
+                        a.accepts_filters.contains(field),
+                        "{:?} claims {door:?} leaves a {field:?} filter unapplied, which it does \
+                         not admit",
+                        a.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// No door supplies a resource bound to the acts that accept one, and that is declared.
+    ///
+    /// The shortfall `terms_unreachable` alone could not express, and the reason the axis exists.
+    /// `find-exact` and `find-about-within` both declare `accepts_bounds: [Resource, Context,
+    /// Cogmap]` — true of the FRAGMENTS, which take `p_bound_ids uuid[]` — while `SearchParams`
+    /// carries `context_ref`, `cogmap_id` and `cogmap_ids` and no resource-id slot at all. So the
+    /// one kind a caller most obviously holds a set of is the one no door can hand over.
+    ///
+    /// Asserted per door rather than once, because the claim is per door: an act reachable
+    /// everywhere and short in the same way everywhere is a different (and worse) statement than
+    /// one door lagging.
+    #[test]
+    fn no_door_can_supply_the_resource_bound_the_find_acts_accept() {
+        for name in [ActName::FindExact, ActName::FindAboutWithin] {
+            let a = declaration(&name).unwrap();
+            assert!(a.accepts_bounds.contains(&IdKind::Resource));
+            for door in Door::ALL {
+                let Some(DoorReach::Serves {
+                    bounds_unreachable, ..
+                }) = a.door_coverage.get(&door)
+                else {
+                    panic!("{name:?} must serve {door:?}");
+                };
+                assert_eq!(
+                    bounds_unreachable,
+                    &vec![IdKind::Resource],
+                    "{name:?} at {door:?} must declare the resource bound unreachable"
+                );
+            }
+        }
+        // And the act that accepts no bounds declares no shortfall — an empty list here is the
+        // statement that there is nothing to fall short on, not a door that was forgotten.
+        let anywhere = declaration(&ActName::FindAboutAnywhere).unwrap();
+        assert!(anywhere.accepts_bounds.is_empty());
+        for door in Door::ALL {
+            let Some(DoorReach::Serves {
+                bounds_unreachable, ..
+            }) = anywhere.door_coverage.get(&door)
+            else {
+                panic!("find-about-anywhere must serve {door:?}");
+            };
+            assert!(
+                bounds_unreachable.is_empty(),
+                "an act that accepts no bounds cannot have a bound a door falls short on"
+            );
+        }
+    }
+
+    /// The two acts nothing can invoke say so at every door.
+    ///
+    /// `[ruled — 2026-08-10, Pete, ADJ-9a]` Both declared `unified_doors(vec![])` — full reach at
+    /// CLI, API and MCP — while `/api/search` calls only the two find fragments and nothing outside
+    /// temper-substrate's tests calls `search_graph_expand` or `wayfind_region_scores`. Their
+    /// mechanics are live and stranded, which is `build_state`'s business; `door_coverage` answers
+    /// *can a caller standing here ask this*, and the answer was none the whole time.
+    ///
+    /// Kept as an EXACT set of doors rather than a `contains`, for the same reason
+    /// `the_served_set_…` is: an act acquiring a door must be a deliberate edit here, beside the
+    /// door actually existing.
+    #[test]
+    fn the_two_stranded_mechanics_declare_no_door_at_all() {
+        for name in [ActName::FollowFrom, ActName::Survey] {
+            let a = declaration(&name).unwrap();
+            assert!(
+                a.served_by.is_some(),
+                "{name:?} still names a live mechanic — that is what makes the absence worth \
+                 declaring"
+            );
+            for door in Door::ALL {
+                assert_eq!(
+                    a.door_coverage.get(&door),
+                    Some(&DoorReach::Absent),
+                    "{name:?} claims {door:?} reaches it; no door does"
+                );
             }
         }
     }
@@ -542,19 +750,27 @@ mod tests {
         ] {
             let a = declaration(&name).unwrap();
             assert_eq!(a.build_state, BuildState::Served);
+            // Read the term axis alone: this test is about `--offset`, and `..` keeps it from
+            // silently becoming a second assertion about the bound axis, which
+            // `no_door_can_supply_the_resource_bound_the_find_acts_accept` owns.
+            let Some(DoorReach::Serves {
+                terms_unreachable, ..
+            }) = a.door_coverage.get(&Door::Cli)
+            else {
+                panic!("{name:?} must serve the CLI");
+            };
             assert_eq!(
-                a.door_coverage.get(&Door::Cli),
-                Some(&DoorReach::Serves {
-                    terms_unreachable: vec![BoundTerm::Offset]
-                }),
+                terms_unreachable,
+                &vec![BoundTerm::Offset],
                 "{name:?} must declare the CLI's missing --offset"
             );
-            assert_eq!(
-                a.door_coverage.get(&Door::Api),
-                Some(&DoorReach::Serves {
-                    terms_unreachable: vec![]
-                })
-            );
+            let Some(DoorReach::Serves {
+                terms_unreachable, ..
+            }) = a.door_coverage.get(&Door::Api)
+            else {
+                panic!("{name:?} must serve the API");
+            };
+            assert!(terms_unreachable.is_empty());
         }
     }
 
@@ -889,10 +1105,20 @@ mod tests {
     fn the_two_quantities_built_from_one_cosine_distance_do_not_share_a_scale() {
         // The finding this field exists to carry. `vec_norm` and `region_score`'s `query_cos` are
         // both rescales of the SAME pgvector `<=>` cosine distance, and they disagree:
-        //   vec_norm  = 1.0 - d/2  -> [0,1]   (migrations/20260801000010:186-189)
-        //   query_cos = 1   - d    -> [-1,1]  (migrations/20260731000050:120)
-        // so `region_score` = 0.4*sal_norm + 0.6*query_cos spans [-0.6, 1.0] and CAN BE NEGATIVE,
-        // while every discussion of it in this arc's research treats it as a [0,1] score.
+        //   vec_norm  = 1.0 - d/2  -> [0,1]
+        //   query_cos = 1   - d    -> [-1,1]
+        // so `region_score` CAN BE NEGATIVE, while every discussion of it in this arc's research
+        // treats it as a [0,1] score.
+        //
+        // `[corrected — 2026-08-10, ADJ-9e]` The span asserted here was `[-0.6, 1.0]`, computed
+        // from a TWO-term expression the deployed function does not have. `wayfind_region_scores`
+        // is `alpha*sal_norm + beta*query_cos + kappa*prior` with alpha 0.4, beta 0.6, kappa 0.05
+        // and prior 1.0 (cogmap-homed) or 0.6 (context-homed), so:
+        //   min = 0.4*0    + 0.6*(-1) + 0.05*0.6 = -0.57
+        //   max = 0.4*1    + 0.6*( 1) + 0.05*1.0 =  1.05
+        // The old figure was wrong at BOTH ends, and wrong in the dangerous direction at the top:
+        // it promised a value that could never exceed 1.0, which is the promise a caller
+        // normalising against the declared range would rely on.
         //
         // Neither column name discloses which rescale it is. That is the incommensurability thesis
         // showing up one level below where the arc had been looking for it.
@@ -910,10 +1136,39 @@ mod tests {
         assert_eq!(
             region_scale,
             QuantityScale::OtherRange {
-                bounds: "[-0.6, 1.0]".to_string()
+                bounds: "[-0.57, 1.05]".to_string()
             }
         );
         assert_ne!(vec_scale, region_scale);
+    }
+
+    /// The declared range for `region_score` admits values above 1.0, and that is the point.
+    ///
+    /// A separate assertion because the string comparison above passes just as well against a
+    /// figure someone re-derives wrongly. This one names the property a caller depends on: the
+    /// quantity is not a similarity in disguise, and clamping or normalising it as though it were
+    /// would silently discard the anchor-kind prior at the top of the range.
+    #[test]
+    fn the_survey_quantity_declares_a_range_that_exceeds_one() {
+        let QuantityScale::OtherRange { bounds } = declaration(&ActName::Survey)
+            .unwrap()
+            .orders_by
+            .unwrap()
+            .scale
+        else {
+            panic!("region_score is not a unit interval and must not be declared as one");
+        };
+        let (lo, hi) = bounds
+            .trim_matches(['[', ']'])
+            .split_once(", ")
+            .expect("bounds render as `[lo, hi]`");
+        let lo: f64 = lo.parse().unwrap();
+        let hi: f64 = hi.parse().unwrap();
+        assert!(lo < 0.0, "the composite can be negative; got {lo}");
+        assert!(
+            hi > 1.0,
+            "the kappa*prior term lifts the top above 1.0; got {hi}"
+        );
     }
 
     #[test]
@@ -974,5 +1229,93 @@ mod tests {
                  declaring it relative-in-domain would claim a frame it does not have"
             );
         }
+    }
+
+    /// A caller who names no page size gets the act's published ceiling, not everything.
+    ///
+    /// `[ruled — 2026-08-10, Pete, ADJ-11]` The witness for the defect, not just the fix: before
+    /// this, `applied_terms` iterated only what the caller REQUESTED, so an omitted `limit` never
+    /// acquired a value, the compiler bound `NULL`, and `LIMIT NULL` returned the whole visible
+    /// match set per stage. The assertion is on the reported map because that map is the same one
+    /// the statement binds — a default that appeared in one and not the other would be a response
+    /// unable to account for its own row count.
+    #[test]
+    fn an_omitted_limit_defaults_to_the_published_ceiling_and_is_reported() {
+        for name in [
+            ActName::FindExact,
+            ActName::FindAboutAnywhere,
+            ActName::FindAboutWithin,
+        ] {
+            let d = declaration(&name).unwrap();
+            let applied = applied_terms(&BTreeMap::new(), &d);
+            assert_eq!(
+                applied.get(&BoundTerm::Limit),
+                Some(&50),
+                "{name:?} must default an omitted limit to its ceiling"
+            );
+            assert_eq!(
+                applied.get(&BoundTerm::Limit),
+                d.bound_ceilings.get(&BoundTerm::Limit),
+                "{name:?}'s default is the PUBLISHED ceiling, never a second copy of the number"
+            );
+        }
+    }
+
+    /// The default does not disturb the clamp, and the clamp still runs.
+    ///
+    /// The two are different events over the same term — a value the caller sent, reduced; and a
+    /// value the caller never sent, supplied — and both are reported identically as *what ran*.
+    #[test]
+    fn a_requested_limit_above_the_ceiling_still_clamps_to_it() {
+        let d = declaration(&ActName::FindExact).unwrap();
+        let over = applied_terms(&BTreeMap::from([(BoundTerm::Limit, 5_000)]), &d);
+        assert_eq!(over.get(&BoundTerm::Limit), Some(&50));
+        // And a value beneath the ceiling is honoured rather than raised to it — the default fires
+        // only on ABSENCE, which is the distinction a `max(asked, default)` would destroy.
+        let under = applied_terms(&BTreeMap::from([(BoundTerm::Limit, 3)]), &d);
+        assert_eq!(under.get(&BoundTerm::Limit), Some(&3));
+    }
+
+    /// `offset` gains nothing from the default rule.
+    ///
+    /// It has no published ceiling on any act, and page 1 is the right answer to a caller who named
+    /// no page. Asserted because the natural generalisation — *default every admitted term to its
+    /// ceiling* — is wrong for both other terms and would have been the tidier code.
+    #[test]
+    fn an_omitted_offset_stays_absent() {
+        let d = declaration(&ActName::FindExact).unwrap();
+        assert!(d.accepts_bound_terms.contains(&BoundTerm::Offset));
+        assert!(!d.bound_ceilings.contains_key(&BoundTerm::Offset));
+        let applied = applied_terms(&BTreeMap::new(), &d);
+        assert_eq!(applied.get(&BoundTerm::Offset), None);
+        assert_eq!(applied.len(), 1, "only the limit default was added");
+    }
+
+    /// An act that does not admit `Limit` gains nothing.
+    ///
+    /// `survey` is the case, and it is the reason the rule keys on `Limit` alone rather than on
+    /// "every admitted term with a ceiling": its `Regions` bound publishes a ceiling of 20 while
+    /// `wayfind_region_scores` defaults the funnel to 3, so defaulting to the ceiling would widen
+    /// every unbounded survey nearly sevenfold and call it the deployed behaviour. `substantiate`
+    /// and the anti-act admit no terms at all, so they can acquire nothing either.
+    #[test]
+    fn an_act_that_does_not_admit_limit_acquires_no_default() {
+        for name in [ActName::Survey, ActName::Substantiate, ActName::Admit] {
+            let d = declaration(&name).unwrap();
+            assert!(!d.accepts_bound_terms.contains(&BoundTerm::Limit));
+            let applied = applied_terms(&BTreeMap::new(), &d);
+            assert!(
+                applied.is_empty(),
+                "{name:?} acquired {applied:?} from a rule that does not apply to it"
+            );
+        }
+        // And `survey`'s own ceiling is not a default in disguise: asking for nothing leaves the
+        // funnel width to the fragment, which is where its default lives.
+        let survey = declaration(&ActName::Survey).unwrap();
+        assert_eq!(survey.bound_ceilings.get(&BoundTerm::Regions), Some(&20));
+        assert_eq!(
+            applied_terms(&BTreeMap::new(), &survey).get(&BoundTerm::Regions),
+            None
+        );
     }
 }

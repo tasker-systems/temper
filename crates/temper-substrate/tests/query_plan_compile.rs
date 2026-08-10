@@ -4,8 +4,8 @@
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
-    validate, ActInvocation, ActName, Composition, IdKind, IdSet, OutcomeDeclaration, ReturnSpec,
-    StageInput, StageName, StageNode, StageRelation, ValidatedComposition,
+    declaration, validate, ActInvocation, ActName, Composition, IdKind, IdSet, OutcomeDeclaration,
+    ReturnSpec, StageInput, StageName, StageNode, StageRelation, ValidatedComposition,
 };
 use temper_substrate::readback::query_plan::{compile, QueryBind};
 use uuid::Uuid;
@@ -865,14 +865,27 @@ fn a_term_below_its_ceiling_is_used_as_the_caller_asked() {
     assert!(c.binds.iter().any(|b| matches!(b, QueryBind::Int(7))));
 }
 
-/// Declared paging terms are BOUND, not dropped.
+/// Paging terms are BOUND, not dropped — whether the caller declared them or not.
 ///
 /// Emitting literal `NULL`/`0` means a plan declaring `limit: 10` compiles to the entire match set —
 /// the wide-then-hydrate cost `20260806000020` measured at 1,883 rows for a request asking for ten,
 /// and it leaves the declared `bound_ceilings` unenforced. Worse in a chain, where an unlimited
 /// upstream feeds every id into a bounded downstream stage.
+///
+/// `[re-pointed — 2026-08-10, ADJ-11]` The second half of this test asserted the opposite of what it
+/// now asserts, and the old expectation was not wrong so much as *superseded*: an undeclared limit
+/// used to emit literal `NULL`, which Postgres reads as unbounded. That is the SAME 1,883-row
+/// failure the first half exists to prevent, reached by omitting the term instead of by dropping it
+/// — and it was reachable from the request shape agents send most, the one that names no page size.
+/// `applied_terms` now defaults an omitted `limit` to the act's published ceiling, so the slot
+/// carries a bind here too. `NULL`-means-unbounded is still the rule for the **id array** (see
+/// `a_stage_downstream_of_a_refusal_is_bounded_to_nothing_rather_than_unbounded`); it is no longer
+/// the rule for the limit.
+///
+/// The test name moved with the property. It said `declared_limit_and_offset_…`, which was only ever
+/// true of the first half and is now false about the second.
 #[test]
-fn declared_limit_and_offset_reach_the_fragment_as_binds() {
+fn paging_terms_reach_the_fragment_as_binds_whether_declared_or_defaulted() {
     let mut node = find_stage("hits", ActName::FindExact, None);
     if let StageNode::Act(inv) = &mut node {
         inv.terms.insert(BoundTerm::Limit, 10);
@@ -894,15 +907,45 @@ fn declared_limit_and_offset_reach_the_fragment_as_binds() {
         "the declared limit and offset must be bound; got {:?}",
         c.binds
     );
-    // And a stage that declares neither still says "unbounded" rather than "zero rows".
+
+    // And a stage that declares NEITHER gets the act's published ceiling in the limit slot, bound
+    // the same way — not a literal `NULL` that would return the whole visible match set to a caller
+    // who simply did not say how many they wanted.
     let bare = build_with_intention(
         vec![find_stage("plain", ActName::FindExact, None)],
         vec!["plain"],
     );
     let cb = compile(&bare, test_profile(), None).expect("compiles");
+    let bare_ints: Vec<i64> = cb
+        .binds
+        .iter()
+        .filter_map(|b| match b {
+            QueryBind::Int(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    // Read the ceiling off the declaration rather than restating `50`. A second copy of the number
+    // would keep this test green through a ceiling change that moved the emitted SQL underneath it.
+    let ceiling = *declaration(&ActName::FindExact)
+        .expect("find-exact is declared")
+        .bound_ceilings
+        .get(&BoundTerm::Limit)
+        .expect("find-exact publishes a limit ceiling");
     assert!(
-        cb.sql.contains("NULL, 0)"),
-        "an undeclared limit is NULL (unbounded) and offset is 0; got:\n{}",
+        bare_ints.contains(&ceiling),
+        "an undeclared limit must bind the published ceiling {ceiling}; got {:?}",
+        cb.binds
+    );
+    assert!(
+        !cb.sql.contains("NULL, 0)"),
+        "an undeclared limit must not compile to unbounded; got:\n{}",
+        cb.sql
+    );
+    // Offset is untouched by the default rule — it has no published ceiling to default to, and page
+    // 1 is the right answer to a caller who named no page. It stays the literal `0`.
+    assert!(
+        cb.sql.contains(", 0)"),
+        "an undeclared offset is still the literal 0; got:\n{}",
         cb.sql
     );
 }

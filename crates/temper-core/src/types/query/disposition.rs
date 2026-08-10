@@ -103,9 +103,27 @@ pub enum RefusalReason {
     /// is worth more than a deserializer's "unknown variant". It also keeps the promise that every
     /// refusal comes back at once: serde failures short-circuit before validation runs.
     SectionNotAvailable,
-    /// A filter value outside a closed vocabulary — an unknown `doc_type`, `stage` or `status`.
-    /// Refused rather than returned as an empty page: a typo must never be reportable as an
-    /// absence, which is what four filters do today.
+    /// A filter value outside a genuinely CLOSED vocabulary. Refused rather than returned as an
+    /// empty page: a value that cannot possibly match must never be reportable as an absence.
+    ///
+    /// `[corrected — 2026-08-10, ADJ-10]` This said *"an unknown `doc_type`, `stage` or `status`"*
+    /// and was false about all three. This door raises it for exactly one thing: an unrecognized
+    /// **property subject** ([`super::filter::PropertySubject::Other`]). `stage` and `status` are
+    /// refused wholesale here as `FilterNotApplicable` and have **no closed vocabulary in Rust at
+    /// all** — both are free-form `Option<String>`, so there was never a set to be outside of.
+    /// `doc_type` IS admitted and applied, and is deliberately **not** checked.
+    ///
+    /// **The distinction the old wording collapsed** `[ruled — 2026-08-10, Pete]`: *"an unknown
+    /// value in a closed set"* and *"a string that may be perfectly legitimate but matches nothing
+    /// in the scope you asked about"* are different answers, and only the first is a refusal — the
+    /// second is an honest empty. A `doc_type` is a `kb_properties` row, not a forced commitment;
+    /// any resource may carry any value, and increasingly does over time. So this door checks the
+    /// types it natively supports and does not try to infer what the caller meant by the ones it
+    /// does not. Two facts hold that ruling in place rather than convenience: `DocType::ALL` lives
+    /// in `temper-workflow` and is unreachable from here (the dependency runs workflow → core), and
+    /// its own header records that a later task loosens the parse gate to an open tail — so
+    /// checking against it would bet against the direction of travel and buy a refusal that becomes
+    /// wrong.
     UnknownFilterValue,
     /// A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the
     /// reverse). Declined, never ignored.

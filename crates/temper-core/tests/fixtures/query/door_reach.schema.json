@@ -19,10 +19,36 @@
           "type": "string"
         }
       ]
+    },
+    "FilterField": {
+      "description": "Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.",
+      "enum": [
+        "resource",
+        "edge"
+      ],
+      "type": "string"
+    },
+    "IdKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "How much of an act one door can reach.\n\nTwo variants, not three: `Serves` with an empty shortfall IS full reach, so \"full\" needs no\nvariant of its own and cannot disagree with the lists beside it. An act absent from a door has\nno shortfall to state, which is why `Absent` carries nothing.\n\n**Absence is declared, never inferred from an omitted entry.** That is the whole point of the\nfield: goal `019fa618` (*surface parity — no door offers less than another without saying so*)\nhas no witnesses because no mechanical inventory of who-offers-what exists, and a declaration\nthat simply left a door out would reproduce exactly that hole in a new place.",
+  "description": "How much of an act one door can reach.\n\nTwo variants, not three: `Serves` with an empty shortfall IS full reach, so \"full\" needs no\nvariant of its own and cannot disagree with the lists beside it. An act absent from a door has\nno shortfall to state, which is why `Absent` carries nothing.\n\n**Absence is declared, never inferred from an omitted entry.** That is the whole point of the\nfield: goal `019fa618` (*surface parity — no door offers less than another without saying so*)\nhas no witnesses because no mechanical inventory of who-offers-what exists, and a declaration\nthat simply left a door out would reproduce exactly that hole in a new place.\n\n**Three shortfall axes, because a door falls short in three different ways and only one of them\nwas expressible.** `terms_unreachable` shipped alone, so `Serves {}` was a promise nobody could\nqualify: two real shortfalls had to be declared as full reach or not at all. A door can also be\nunable to supply a whole BOUND KIND — `SearchParams` carries `context_ref`, `cogmap_id` and\n`cogmap_ids` but no resource-id slot, so `find-exact`'s declared `Resource` bound is unsuppliable\nfrom every one of the three doors — and it can accept a FILTER SLOT the act declares and then\napply nothing, which is a silent substitution wearing a successful narrowing's costume. Each\nentry is guarded against the act's own `accepts_*` list (see the registry's tests): a door cannot\nfall short on something the act never admitted, in any of the three axes.",
   "oneOf": [
     {
       "description": "This door cannot invoke the act at all.",
@@ -40,6 +66,20 @@
     {
       "description": "This door invokes the act, minus whatever it lists as unreachable. Empty lists mean it\nreaches everything the act declares.",
       "properties": {
+        "bounds_unreachable": {
+          "description": "Bound KINDS the act admits that this door has no slot for. The live instance is the\n`find` acts' `Resource` bound: the shipped arms hard-bind `NULL` for bound-ids and no\ndoor's params carry a resource-id list, so the act accepts a narrowing every caller\nstanding at every door is unable to express. Same guard as `terms_unreachable` — every\nentry must appear in the act's `accepts_bounds`.",
+          "items": {
+            "$ref": "#/$defs/IdKind"
+          },
+          "type": "array"
+        },
+        "filters_unapplied": {
+          "description": "Filter slots the act admits that this door accepts and then does not apply. Distinct\nfrom a slot the act never admitted, which is refused outright\n([`super::disposition::RefusalReason::FilterNotApplicable`]) and needs no declaration:\nthis axis is for the worse case, where the act says yes and the door narrows nothing.\nEvery entry must appear in the act's `accepts_filters`.",
+          "items": {
+            "$ref": "#/$defs/FilterField"
+          },
+          "type": "array"
+        },
         "reach": {
           "const": "serves",
           "type": "string"

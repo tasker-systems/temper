@@ -23,6 +23,7 @@ use super::filter::{FilterField, PropertyOp, PropertySubject};
 use super::hits::ScoreKind;
 use super::id_set::IdKind;
 use super::registry::declaration;
+use super::scalars::BoundTerm;
 use super::stage::{ProducedVariant, StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
@@ -141,6 +142,19 @@ fn act_wire_name(act: &ActName) -> String {
     serde_json::to_string(act)
         .map(|s| s.trim_matches('"').to_string())
         .unwrap_or_else(|_| format!("{act:?}"))
+}
+
+/// A bound term as the caller wrote it, for a refusal to quote back.
+///
+/// Same reason and same mechanism as [`act_wire_name`], and the omission was the same shape: three
+/// refusal details rendered `{term:?}`, so a caller who sent `"regions": 200` was told about *the
+/// `Regions` bound term*, greps their own request for `Regions`, and finds nothing. `BoundTerm`
+/// carries `rename_all = "snake_case"`, so the Debug spelling is never the wire spelling for any
+/// member. One naming convention, held by going through serde rather than by remembering.
+fn term_wire_name(term: &BoundTerm) -> String {
+    serde_json::to_string(term)
+        .map(|s| s.trim_matches('"').to_string())
+        .unwrap_or_else(|_| format!("{term:?}"))
 }
 
 /// The kind an upstream node produces, walking a combinator to its first input. `None` for a
@@ -393,8 +407,9 @@ fn check_act(
                 Some(name),
                 RefusalReason::BoundTermNotApplicable,
                 format!(
-                    "the `{term:?}` bound term counts rows and cannot be negative; this stage \
-                     supplied {value}"
+                    "the `{}` bound term counts rows and cannot be negative; this stage \
+                     supplied {value}",
+                    term_wire_name(term)
                 ),
             ));
         } else if *value > i64::from(i32::MAX) {
@@ -405,8 +420,9 @@ fn check_act(
                 Some(name),
                 RefusalReason::BoundTermNotApplicable,
                 format!(
-                    "the `{term:?}` bound term is served by a 32-bit slot; {value} is outside the \
-                     range this act can express"
+                    "the `{}` bound term is served by a 32-bit slot; {value} is outside the \
+                     range this act can express",
+                    term_wire_name(term)
                 ),
             ));
         }
@@ -416,7 +432,10 @@ fn check_act(
             errs.push(refusal(
                 Some(name),
                 RefusalReason::BoundTermNotApplicable,
-                format!("act does not admit the `{term:?}` bound term"),
+                format!(
+                    "act does not admit the `{}` bound term",
+                    term_wire_name(term)
+                ),
             ));
         }
     }

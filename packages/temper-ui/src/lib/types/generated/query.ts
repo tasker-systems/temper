@@ -138,9 +138,8 @@ export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within"
  * carries its act's name and shape."* Arithmetic follows names: two fields called `score` invite
  * `a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked
  * failure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them
- * into `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is
- * the exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to
- * the migration that defined the body, which stays readable in history.
+ * into `combined_score`, which is the exact expression the frame register forbids. It was dropped
+ * on 2026-08-06; the body stays readable in the migration history.
  */
 export type ActQuantity = { 
 /**
@@ -182,10 +181,10 @@ export type BoundTerm = "limit" | "offset" | "regions";
  * [`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A
  * `served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and
  * CLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts
- * are **fused**, reachable from all three doors, and still door-partial — they declare
- * [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`
- * `[verified — crates/temper-cli/src/cli.rs:286-336]`. Door-partiality is finer-grained than the
- * act and orthogonal to whether a mechanic exists, so it cannot ride on this enum.
+ * are `Served`, reachable from all three doors, and still door-partial — they declare
+ * [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`.
+ * Door-partiality is finer-grained than the act and orthogonal to whether a mechanic exists, so it
+ * cannot ride on this enum.
  */
 export type BuildState = { "state": "served" } | { "state": "fused", host: string, } | { "state": "unbuilt" };
 
@@ -255,6 +254,16 @@ export type Door = "cli" | "api" | "mcp";
  * field: goal `019fa618` (*surface parity — no door offers less than another without saying so*)
  * has no witnesses because no mechanical inventory of who-offers-what exists, and a declaration
  * that simply left a door out would reproduce exactly that hole in a new place.
+ *
+ * **Three shortfall axes, because a door falls short in three different ways and only one of them
+ * was expressible.** `terms_unreachable` shipped alone, so `Serves {}` was a promise nobody could
+ * qualify: two real shortfalls had to be declared as full reach or not at all. A door can also be
+ * unable to supply a whole BOUND KIND — `SearchParams` carries `context_ref`, `cogmap_id` and
+ * `cogmap_ids` but no resource-id slot, so `find-exact`'s declared `Resource` bound is unsuppliable
+ * from every one of the three doors — and it can accept a FILTER SLOT the act declares and then
+ * apply nothing, which is a silent substitution wearing a successful narrowing's costume. Each
+ * entry is guarded against the act's own `accepts_*` list (see the registry's tests): a door cannot
+ * fall short on something the act never admitted, in any of the three axes.
  */
 export type DoorReach = { "reach": "absent" } | { "reach": "serves", 
 /**
@@ -262,7 +271,23 @@ export type DoorReach = { "reach": "absent" } | { "reach": "serves",
  * must be a term the act actually admits — an unreachable term the act never accepted is
  * a contradiction, not a gap.
  */
-terms_unreachable: Array<BoundTerm>, };
+terms_unreachable: Array<BoundTerm>, 
+/**
+ * Bound KINDS the act admits that this door has no slot for. The live instance is the
+ * `find` acts' `Resource` bound: the shipped arms hard-bind `NULL` for bound-ids and no
+ * door's params carry a resource-id list, so the act accepts a narrowing every caller
+ * standing at every door is unable to express. Same guard as `terms_unreachable` — every
+ * entry must appear in the act's `accepts_bounds`.
+ */
+bounds_unreachable: Array<IdKind>, 
+/**
+ * Filter slots the act admits that this door accepts and then does not apply. Distinct
+ * from a slot the act never admitted, which is refused outright
+ * ([`super::disposition::RefusalReason::FilterNotApplicable`]) and needs no declaration:
+ * this axis is for the worse case, where the act says yes and the door narrows nothing.
+ * Every entry must appear in the act's `accepts_filters`.
+ */
+filters_unapplied: Array<FilterField>, };
 
 /**
  * Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
@@ -456,10 +481,8 @@ export type PropertySubject = "resource" | "edge" | string;
  * The scale of an act's ordering quantity.
  *
  * Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
- * `search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`
- * `[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`
- * rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`
- * `[verified — migrations/20260731000050:120]`.
+ * `search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`, while
+ * `wayfind_region_scores` rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`.
  * Neither column name says so, and one of the two feeds a weighted sum everyone reads as a
  * `[0,1]` score.
  */
@@ -541,9 +564,17 @@ region: CogmapRegionRow, scoring: Scoring, };
 /**
  * Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
  *
- * An unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL
- * (`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four
- * filters that accept nonsense and return one.
+ * **No field here has a closed vocabulary, and none is checked against one.**
+ * `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed
+ * vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three
+ * is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as
+ * `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value
+ * for. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized
+ * [`PropertySubject`] — and its own doc carries the ruling.
+ *
+ * The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,
+ * because it can never match; *a string that may be perfectly legitimate and matches nothing in the
+ * scope you asked about* is an honest empty. `doc_type` is the second kind.
  */
 export type ResourceFilter = { 
 /**

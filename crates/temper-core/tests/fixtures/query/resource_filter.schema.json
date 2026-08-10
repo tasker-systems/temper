@@ -18,7 +18,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\nAn unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL\n(`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four\nfilters that accept nonsense and return one.",
+  "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized\n[`PropertySubject`] — and its own doc carries the ruling.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
   "properties": {
     "doc_type": {
       "description": "`kb_properties` where `property_key = 'doc_type'`.",
