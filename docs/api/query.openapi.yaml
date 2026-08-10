@@ -156,6 +156,12 @@
 #     `edge_filter` unconditionally — correctly, since nothing exists to apply
 #     one. When the mechanic lands, the unconditional arm retires in favour of
 #     the per-act check that already exists. `[ruled — 2026-08-10, ADJ-2]`
+#   * PROPERTY PREDICATES, the twin of the line above and missed by the first
+#     pass `[added — 2026-08-10, audit P2]`: validate.rs refuses EVERY non-empty
+#     `properties` array, on every act, for the identical reason — the compiler
+#     emits no slot, and a predicate that narrows nothing is a silent
+#     substitution. `PropertyPredicate`/`PropertyOp` below describe the target
+#     shape, not a live narrowing.
 #   * MatchLocation redeclaration awaits the wide fragments carrying the
 #     winning chunk's identity out (the argmin); `located_at` fills then.
 #
@@ -260,12 +266,23 @@ info:
 
     Two properties are structural rather than policed:
 
-    * **No cross-act ranking.** Each act's quantity carries its own literal field
-      name (`fts_norm`, `vec_norm`, `graph_score`, `region_score`). There is no
-      shared `score` field anywhere in this document, and no merged ordered list
-      into which two acts' rows could fall. `unified_search` is the worked
-      failure: it renamed `fts_norm`/`vec_norm` to `fts_score`/`vector_score` and
-      summed them into `combined_score`.
+    * **No cross-act ranking.** There is no merged ordered list anywhere into
+      which two acts' rows could fall: arms are keyed separately in `returned`,
+      by the caller's own stage names, so combining two acts' rows takes a
+      deliberate act by the caller. `unified_search` is the worked failure: it
+      renamed `fts_norm`/`vec_norm` to `fts_score`/`vector_score` and summed
+      them into `combined_score`.
+
+      `[corrected — 2026-08-10, audit P2]` This clause used to add "there is no
+      shared `score` field anywhere in this document". That was true of the
+      draft and is FALSE of the ratified design: `Scoring.score` is on every hit
+      of every act. The guard moved from the TYPE to the DATA on 2026-08-09 —
+      each hit carries `score_kind` beside its number, which is a
+      machine-checkable assertion that kinds exist and differ, where a bare
+      `fts_norm` required the reader to already know. The structural half — no
+      merged list — is what survives and is stated above. It mattered that this
+      was wrong: it is the first normative sentence a reader of this contract
+      meets, and it told them the thing `score_kind` exists to make them check.
 
     * **A quantity never crosses a stage boundary.** The only value that moves
       between stages is membership — an `IdSet`.
@@ -828,7 +845,10 @@ components:
           filter_counts       How many rows each filter admitted and excluded
                               (`NarrowedBy.admitted` / `.excluded`). Only acts
                               that compute them anyway; counting on demand costs
-                              a second query.
+                              a second query. TODAY NO ACT DECLARES IT EITHER —
+                              a measured absence, not an oversight, and stated
+                              here so both governed fields read alike
+                              `[corrected — 2026-08-10, audit P2]`.
 
         A third member, `input_contribution`, is REMOVED with its field
         (`input_contributed`) by ratification ⟨6⟩/9d: it was redundant where
@@ -920,7 +940,12 @@ components:
     StageResult:
       # DESIGNED, adapting `ActResult` (envelope.rs:72-100).
       type: object
-      required: [act, disposition, produced, extent, terms_applied, input_ids, input_unusable]
+      # `narrowed_by` added `[corrected — 2026-08-10, audit P2]`: the code emits
+      # it unconditionally (a plain `Vec`, no default, no skip), and `StageTrace`
+      # below already had it required — so the contract's own pair rule
+      # disagreed with itself.
+      required:
+        [act, disposition, produced, extent, terms_applied, narrowed_by, input_ids, input_unusable]
       properties:
         act: { $ref: '#/components/schemas/ActName' }
         disposition: { $ref: '#/components/schemas/StageDisposition' }
@@ -939,11 +964,7 @@ components:
             `detail` follows the same standing-aware discipline. Identical
             field on `StageTrace`, and the two must stay identical — the trace
             is the only record for an intermediate stage.
-          type: [object, "null"]
-          required: [reason, detail]
-          properties:
-            reason: { $ref: '#/components/schemas/RefusalReason' }
-            detail: { type: string }
+          $ref: '#/components/schemas/ActRefusal'
         orders_by:
           description: |
             Echoed from this act's declaration in `search_family()`. Present iff
@@ -954,7 +975,7 @@ components:
             this carries the range so a reader is not left to assume `[0,1]`.
             Assuming `[0,1]` is the LIVE mistake in this family, not a
             hypothetical one: `vec_norm` rescales a cosine distance as `1 - d/2`
-            into `[0,1]` while `region_score` spans `[-0.6, 1.0]`, and neither
+            into `[0,1]` while `region_score` spans `[-0.57, 1.05]`, and neither
             column name says so.
           $ref: '#/components/schemas/ActQuantity'
         produced: { $ref: '#/components/schemas/StageOutput' }
@@ -962,8 +983,8 @@ components:
         total:
           description: |
             Carried ONLY by acts that can produce one without a second query.
-            Never by a composition.
-          type: [integer, "null"]
+            Never by a composition. ABSENT — not null — when the act cannot.
+          type: integer
           format: int64
         terms_applied:
           description: |
@@ -1119,7 +1140,15 @@ components:
         on the stage rather than assuming `[0,1]`, which is the live mistake in
         this family: `vec_norm` rescales a cosine distance as `1 - d/2` into
         `[0,1]`, `region_score` rescales the identical operator as `1 - d` and
-        spans `[-0.6, 1.0]`, and `graph_score` is unbounded.
+        spans `[-0.57, 1.05]`, and `graph_score` is unbounded.
+
+        `[corrected — 2026-08-10, audit P2/9e]` `region_score` was stated here
+        and in the registry as `[-0.6, 1.0]` over a two-term formula. The
+        deployed function has a THIRD term — `alpha*sal_norm + beta*query_cos +
+        kappa*prior` — so the true span exceeds 1.0. Wrong at both ends, and
+        wrong in the dangerous direction at the top: it promised a ceiling a
+        real score can pass, which is exactly what a client normalising against
+        a declared range would break on.
 
         NOTE on `region_score` since the ⟨3⟩ redesign: it appears on RESOURCE
         rows (survey's members), where it is the score of the region that
@@ -1159,7 +1188,15 @@ components:
         `annotate` and both search arms answer in — six near-identical
         projections collapsed into one. A hit adds scoring and nothing else.
       type: object
-      required: [resource, scoring]
+      # `located_at` is REQUIRED and NULLABLE, which is the whole point of the
+      # ⟨4⟩/8e ruling: the key is always present and its null is the declaration
+      # that no act can fill it yet. An OMITTED key would be indistinguishable
+      # from a shape that has no such field — which is what the ruling closed.
+      # `[corrected — 2026-08-10, audit P2]` This block declared `type: object`
+      # and left the key optional, so every response containing any hit violated
+      # the published schema, on 100% of rows, while the prose below and the
+      # worked example both said `null`.
+      required: [resource, scoring, located_at]
       properties:
         resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
         scoring: { $ref: '#/components/schemas/Scoring' }
@@ -1183,7 +1220,7 @@ components:
             query is asked. `follow-from` has no match position (nodes reached
             by walking), and `survey`'s members are admitted by their region,
             not matched at a position.
-          type: object
+          type: [object, "null"]
           required: [block_id]
           properties:
             block_id:
@@ -1298,11 +1335,7 @@ components:
             Present iff `disposition` is `refused` — see `StageResult.refusal`.
             Identical there and here, and the trace's copy is the ONLY refusal
             record for an intermediate stage. `[ruled — 2026-08-10, Pete, ADJ-3]`
-          type: [object, "null"]
-          required: [reason, detail]
-          properties:
-            reason: { $ref: '#/components/schemas/RefusalReason' }
-            detail: { type: string }
+          $ref: '#/components/schemas/ActRefusal'
 
     InputSource:
       # TRANSCRIBED from trace.rs:17-33, RENAMED from `BoundsSource` — it reports
@@ -1345,16 +1378,29 @@ components:
       properties:
         key: { type: string }
         value: { type: string }
+        # `[corrected — 2026-08-10, audit P2]` These were spelled `[integer,
+        # "null"]`; the code OMITS the key. Both mean "not counted", but they
+        # are different bytes, and a client written from the old spelling does
+        # `admitted === null` (never true), or worse `admitted ?? 0`, which
+        # renders the very zero the rule below forbids.
+        #
+        # NAMED OPEN QUESTION, deliberately not settled here: `located_at` is
+        # governed by the SAME `Disclosure` vocabulary (`filter_counts` beside
+        # `match_location`) and was ruled the other way — always present,
+        # explicitly null — precisely so "cannot" is unambiguous. One vocabulary
+        # should probably not be served by two wire rules. Settling it is a
+        # ruling, not a conformance fix, so this pass makes the contract honest
+        # about what ships rather than changing what ships.
         admitted:
           description: |
             How many rows this filter let through, when the act happened to
-            compute it anyway. Null means not counted, never zero — counting on
-            demand would cost a second query.
-          type: [integer, "null"]
+            compute it anyway. ABSENT means not counted, never zero — counting
+            on demand would cost a second query.
+          type: integer
           format: int64
         excluded:
-          description: How many it removed. Null means not counted, never zero.
-          type: [integer, "null"]
+          description: How many it removed. Absent means not counted, never zero.
+          type: integer
           format: int64
 
     # =========================================================================
@@ -1466,19 +1512,41 @@ components:
         travels in the typed `refusal` field (ADJ-3), so the extent reason here
         stays generic. (An earlier revision of this block said no act was known
         to emit `indeterminate` — wrong about the refused arm, caught in audit.)
+
+        ── THE ENCODING: INTERNALLY TAGGED, LIKE EVERY OTHER UNION HERE ─────────
+
+        `[ruled — 2026-08-10, Pete, ADJ-8]` This block previously declared a
+        bare string OR an externally-tagged `{indeterminate: {reason}}`, and the
+        worked example printed the bare string — THREE spellings for one type,
+        none matching the code, which is and was internally tagged.
+
+        The contract moved, not the code, and provenance is why: `Extent` is
+        marked TRANSCRIBED — copied from merged Rust, never designed — so a
+        transcription that disagrees with its source is a mis-copy, not a
+        choice. Nobody ever ruled for the mixed form. And the convention is 5
+        of 5: `StageOutput`, `StageInput`, `InputSource`, `QuantityScale` and
+        `PropertyOp` are all internally tagged with an explicit discriminator,
+        and external tagging appears nowhere in this surface. The `extent.extent`
+        stutter is the cost, and it is already precedent — the worked example
+        below prints `"produced": {"produced": "resources"}`.
       oneOf:
-        - type: string
-          enum: [complete, partial]
         - type: object
-          required: [indeterminate]
+          required: [extent]
           properties:
-            indeterminate:
-              type: object
-              required: [reason]
-              properties:
-                reason:
-                  description: Why the question has no answer for this act.
-                  type: string
+            extent: { type: string, enum: [complete] }
+        - type: object
+          required: [extent]
+          properties:
+            extent: { type: string, enum: [partial] }
+        - type: object
+          required: [extent, reason]
+          properties:
+            extent: { type: string, enum: [indeterminate] }
+            reason:
+              description: Why the question has no answer for this stage.
+              type: string
+      discriminator:
+        propertyName: extent
 
     StageDisposition:
       description: |
@@ -1501,6 +1569,31 @@ components:
         disposition, and learn whether that id exists.
       type: string
       enum: [answered, empty, withheld, refused]
+
+    ActRefusal:
+      # TRANSCRIBED from disposition.rs's `ActRefusal`.
+      #
+      # `[extracted — 2026-08-10, audit P2]` This shape was INLINED twice — once
+      # on `StageResult.refusal`, once on `StageTrace.refusal` — in a document
+      # whose own governing quotation is *"Encoding it twice would be the
+      # ADMIN_EVENT_TYPES failure — a second copy that drifts from the first."*
+      # Two hand-maintained copies of a shape whose SAMENESS is a stated
+      # invariant is that hazard exactly. One definition, two `$ref`s.
+      description: |
+        Why a stage refused, carried on the stage that refused. Distinct from
+        `PlanRefusal`: this one needs no `stage` field — you are already on it —
+        and it rides a 200, because the composition ran and one stage could not
+        answer. Today `embedding_unavailable` is the only reason that reaches
+        it; `RefusalReason` is open, and the ⟨2⟩ argument for one behaviour
+        rests on this field existing, so a second runtime reason costs no
+        client change.
+      type: object
+      required: [reason, detail]
+      properties:
+        reason: { $ref: '#/components/schemas/RefusalReason' }
+        detail:
+          description: Human-readable, at the depth your standing allows.
+          type: string
 
     PlanRefusal:
       # TRANSCRIBED from validate.rs:76-81.
@@ -1832,7 +1925,7 @@ components:
 #             "located_at": null }
 #         ]
 #       },
-#       "extent": "partial",
+#       "extent": { "extent": "partial" },
 #       "terms_applied": { "limit": 10 },
 #       "narrowed_by": [ { "key": "doc_type", "value": "session" } ],
 #       "input_ids": 0, "input_unusable": 0
@@ -1846,7 +1939,7 @@ components:
 #       "produced": { "produced": "resources",
 #                     "hits": [ { "resource": { "…": "…" },
 #                                 "scoring": { "score_kind": "graph_score", "score": 0.72 } } ] },
-#       "extent": "complete",
+#       "extent": { "extent": "complete" },
 #       "terms_applied": {},
 #       "narrowed_by": [],
 #       "input_ids": 10, "input_unusable": 2
