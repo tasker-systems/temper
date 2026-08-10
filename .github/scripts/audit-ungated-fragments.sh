@@ -75,10 +75,11 @@ PREFIX='__temper_ungated_'
 # REVIEWED 2026-08-08 (composable find fragments, plan Task 9) — the two founding members.
 #   __temper_ungated_find_exact / __temper_ungated_find_wide (migrations/20260808000030)
 #   Each is the deployed arm's body with its `resources_visible_to(p_principal)` join replaced by
-#   `JOIN unnest(p_visible_ids)`. They keep the cogmap-anchor readability check, which the id set
-#   cannot express — "may this principal use this map as a scope" is one boolean per call and a
-#   property of no row — and take `p_anchor_reader` for it rather than a caller-asserted boolean, so
-#   the core cannot be lied to about that authorization.
+#   `JOIN unnest(p_visible_ids)`. They keep the anchor readability check for BOTH anchor kinds —
+#   cogmap and context, via `anchor_readable_by_profile` since migration 20260810000010 — which the
+#   id set cannot express: "may this principal use this map or context as a scope" is one boolean per
+#   call and a property of no row. They take `p_anchor_reader` for it rather than a caller-asserted
+#   boolean, so the core cannot be lied to about that authorization.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_wide

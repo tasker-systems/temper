@@ -138,8 +138,11 @@ const VISIBLE_IDS: &str = "(SELECT ids FROM __temper_vis)";
 const NO_UNUSABLE: &str = "0::bigint";
 
 /// The principal, always `$1` — `compile` pushes it first, before any per-stage bind. The cores read
-/// it ONLY for cogmap-anchor readability, which is one boolean per call and a property of no row, so
-/// it cannot ride in `VISIBLE_IDS`. It is not a visibility gate.
+/// it for **anchor readability, both kinds** — cogmap and context, decided by
+/// `anchor_readable_by_profile` since migration `20260810000010_anchor_readability_both_kinds.sql`
+/// (ADJ-1 `[2026-08-10, Pete]`). That is one boolean per call and a property of no row, so it cannot
+/// ride in `VISIBLE_IDS`. It is not a visibility gate: this parameter exists for anchor readability
+/// only, and must never gain another use.
 const PRINCIPAL_BIND: &str = "$1";
 
 /// The ANN candidate width handed to the wide core. Carried over from `/api/search`'s own draw and

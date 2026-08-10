@@ -120,6 +120,8 @@ pub(crate) const CONTEXT_REFUSAL: &str = "context not found or not readable";
 /// Error taxonomy:
 /// - `Id`/`Handle`/profile-context miss → `NotFound`
 /// - Team non-membership → `Forbidden` (existence of team/context not leaked)
+/// - Soft-deleted team → `NotFound`, byte-identical to a team that never existed (a soft-deleted
+///   team is not a team you are being refused; it is not a team)
 pub async fn resolve_context_ref(
     pool: &PgPool,
     principal: ProfileId,
@@ -171,16 +173,35 @@ pub async fn resolve_context_ref(
                 Ok(cid)
             }
             ContextOwnerRef::Team(team_slug) => {
-                let team_id =
-                    sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", team_slug)
-                        .fetch_optional(pool)
-                        .await?
-                        .ok_or_else(|| {
-                            ApiError::NotFound(format!(
-                                "team {team_slug} not found or not readable"
-                            ))
-                        })?;
+                // `AND t.is_active` is the invariant `20260703000001_team_metadata_soft_delete.sql`
+                // declares at chokepoint 1: *"a soft-deleted team is not an effective membership …
+                // membership in a soft-deleted team confers nothing anywhere."* Every SQL read path
+                // honours it (`profile_effective_teams` → `profile_reachable_teams` →
+                // `contexts_readable_by` / `resources_visible_to`); this arm resolves the team in
+                // Rust and so has to state it itself, or a member of a dead team could still use
+                // `+that-team/ctx` as a scope — which is exactly the membership conferring
+                // something.
+                //
+                // A soft-deleted team refuses as `NotFound`, byte-identical to a team that never
+                // existed, and deliberately NOT as the `Forbidden` below: `Forbidden` says "this
+                // team exists and you are not in it", which both discloses its existence and is
+                // false — the caller IS in it. There is no team here to be refused access to.
+                let team_id = sqlx::query_scalar!(
+                    "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+                    team_slug
+                )
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("team {team_slug} not found or not readable"))
+                })?;
                 // Membership gate — non-member gets Forbidden, not NotFound.
+                //
+                // No `is_active` filter here, and that is not an omission: an inactive team never
+                // reaches this line, so the only rows this can match already belong to an active
+                // team. `profile_effective_teams`'s own filter lives on the team side for the same
+                // reason. Adding a second copy would state the invariant in a place that cannot be
+                // reached to violate it, and imply the lookup above were optional.
                 let is_member = sqlx::query_scalar!(
                     r#"SELECT EXISTS(
                          SELECT 1 FROM kb_team_members

@@ -58,6 +58,18 @@ async fn insert_team_owned_context(pool: &PgPool, team_slug: &str, ctx_slug: &st
     (team_id, ctx_id)
 }
 
+/// Soft-delete a team, the way `DELETE /api/teams/{id}` does: flip `is_active`, preserve every
+/// row hanging off it (members, contexts, shares). Written as a bare UPDATE deliberately — the
+/// point of the assertion is what the *read* path does with the flag, so the test must not be
+/// able to pass because some service helper also cleaned up the membership.
+async fn soft_delete_team(pool: &PgPool, team_id: Uuid) {
+    sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+        .bind(team_id)
+        .execute(pool)
+        .await
+        .expect("soft-delete team");
+}
+
 /// Add a profile as a `member` of a team.
 async fn add_team_member(pool: &PgPool, team_id: Uuid, profile_id: Uuid) {
     sqlx::query(
@@ -189,5 +201,66 @@ async fn team_slug_path_still_correct(pool: PgPool) {
     assert!(
         matches!(err, ApiError::Forbidden),
         "expected Forbidden for non-member +team/slug, got {err:?}"
+    );
+}
+
+// ─── Test 5: a soft-deleted team confers nothing — ADJ-7b ─────────────────────
+//
+// `20260703000001_team_metadata_soft_delete.sql` declares at chokepoint 1 that "membership in a
+// soft-deleted team confers nothing anywhere". Every SQL read path honours it via
+// `profile_effective_teams`; `resolve_context_ref`'s team arm resolves the team in Rust and did
+// not, so a member of a dead team could still use `+that-team/ctx` as a scope.
+//
+// The refusal must be the NOT-FOUND one and must read exactly like a team that never existed.
+// `Forbidden` would be wrong twice: it discloses that the slug names something, and it is false —
+// this caller IS a member. There is no team here to be refused access to.
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn soft_deleted_team_ref_is_not_found_for_its_own_member(pool: PgPool) {
+    let email = format!("to-sd-{}@example.com", Uuid::new_v4());
+    let (member_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let member = ProfileId::from(member_id);
+
+    let team_slug = format!("to-sd-team-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (team_id, context_id) = insert_team_owned_context(&pool, &team_slug, "plans").await;
+    add_team_member(&pool, team_id, member_id).await;
+
+    let ref_str = format!("+{team_slug}/plans");
+    let r = parse_context_ref(&ref_str).expect("valid team ref");
+
+    // (a) While the team is ACTIVE the member resolves it — the before half of the pair, so a
+    //     later regression cannot make this test pass by breaking resolution outright.
+    let resolved = context_service::resolve_context_ref(&pool, member, &r)
+        .await
+        .expect("member of an active team should resolve +team/slug");
+    assert_eq!(
+        *resolved, context_id,
+        "+team/slug must resolve while the team is active"
+    );
+
+    // (b) Soft-delete the team. Membership row, context row and share rows all survive — the only
+    //     thing that changed is `is_active`.
+    soft_delete_team(&pool, team_id).await;
+
+    let err = context_service::resolve_context_ref(&pool, member, &r)
+        .await
+        .expect_err("a soft-deleted team must confer no scope, even to its own member");
+    let ApiError::NotFound(msg) = err else {
+        panic!("expected NotFound for a soft-deleted team, got {err:?} (Forbidden would both leak the team's existence and be false — this caller is a member)");
+    };
+
+    // And it must be indistinguishable from a team that was never created at all.
+    let absent_slug = format!("to-sd-absent-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let absent = parse_context_ref(&format!("+{absent_slug}/plans")).expect("valid team ref");
+    let absent_err = context_service::resolve_context_ref(&pool, member, &absent)
+        .await
+        .expect_err("a nonexistent team must not resolve");
+    let ApiError::NotFound(absent_msg) = absent_err else {
+        panic!("expected NotFound for a nonexistent team, got {absent_err:?}");
+    };
+    assert_eq!(
+        msg.replace(&team_slug, "<slug>"),
+        absent_msg.replace(&absent_slug, "<slug>"),
+        "a soft-deleted team must refuse in the same words as one that never existed"
     );
 }
