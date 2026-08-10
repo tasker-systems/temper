@@ -2592,3 +2592,194 @@ async fn a_wide_call_with_no_embedding_does_not_expand_the_visibility_gate(pool:
         "a wide call with no embedding returns nothing; got {rows:?}"
     );
 }
+
+/// **Anchor readability now covers BOTH anchor kinds (ADJ-1, 2026-08-10).**
+///
+/// The cores shipped checking anchor readability for cogmaps only: the exact core's disjunct was
+/// unconditionally true for `kb_contexts`, and the wide core's early RETURN tested
+/// `p_anchor_table = 'kb_cogmaps'` before asking anything. So a caller could bound a stage by a
+/// CONTEXT it cannot read and learn its membership — no resource leaks (every row still comes from
+/// the asserted visible set), but which resources are homed where is itself a disclosure, and it is
+/// exactly the one `the_ungated_cores_still_refuse_an_unreadable_cogmap_anchor` pins for the
+/// sibling kind. Migration `20260810000010` routes both cores through
+/// `anchor_readable_by_profile`, which dispatches on the table and fails closed.
+///
+/// Asserted in both directions against ONE fixture: the stranger's anchored call scopes to nothing,
+/// and the owner's — the reader `contexts_readable_by` admits — scopes to the homed rows. Without
+/// the second half a core that refused EVERY context anchor would pass, which is a different (and
+/// broken) function. An unreadable anchor renders as an empty stage, never an error — the
+/// existence-oracle rule.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ungated_cores_now_refuse_an_unreadable_context_anchor_symmetrically_with_cogmaps(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    // A personal context: readable by its owner through `contexts_readable_by`'s first arm, and by
+    // nobody else — the stranger has no membership, no share, no grant.
+    let sealed = ctx(&pool, owner, "sealed-ctx").await;
+    let stranger = ProfileId::from(common::insert_profile(&pool, "ctx-anchor-stranger").await);
+
+    let homed = mk(
+        &pool,
+        sealed,
+        owner,
+        emitter,
+        "Sealed",
+        "The gyrfalcon is distilled here.",
+    )
+    .await;
+    let homed_wide = mk_embedded(
+        &pool,
+        AnchorRef::context(sealed),
+        owner,
+        emitter,
+        "Sealed Wide",
+        unit(0),
+    )
+    .await;
+
+    // Preconditions on the predicate itself, so a refusal below is readability's and not a fixture
+    // that never distinguished the two principals.
+    let stranger_reads: bool = sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
+        .bind(stranger.uuid())
+        .bind(sealed.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !stranger_reads,
+        "precondition: the stranger must not read the context, or the refusal proves nothing"
+    );
+    let owner_reads: bool = sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
+        .bind(owner.uuid())
+        .bind(sealed.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        owner_reads,
+        "precondition: the owner must read their own context, or the admission proves nothing"
+    );
+
+    let ctx_anchor = ("kb_contexts", sealed.uuid());
+
+    let scoped = ungated_exact(
+        &pool,
+        Some(vec![homed]),
+        "gyrfalcon",
+        Some(ctx_anchor),
+        Some(stranger),
+    )
+    .await;
+    assert!(
+        scoped.is_empty(),
+        "the exact core must scope to nothing through a context its reader cannot read — the \
+         cogmap-only guard admitted this unconditionally; got {scoped:?}"
+    );
+
+    let admitted = ungated_exact(
+        &pool,
+        Some(vec![homed]),
+        "gyrfalcon",
+        Some(ctx_anchor),
+        Some(owner),
+    )
+    .await;
+    assert_eq!(
+        admitted,
+        vec![homed],
+        "a READABLE context anchor still scopes to its homed rows — refusing every context anchor \
+         would pass the assertion above while breaking the feature"
+    );
+
+    let scoped_wide = ungated_wide(
+        &pool,
+        Some(vec![homed_wide]),
+        &unit(0),
+        10,
+        Some(ctx_anchor),
+        Some(stranger),
+    )
+    .await;
+    assert!(
+        scoped_wide.is_empty(),
+        "the wide core must refuse the same anchor; got {scoped_wide:?}"
+    );
+
+    let admitted_wide = ungated_wide(
+        &pool,
+        Some(vec![homed_wide]),
+        &unit(0),
+        10,
+        Some(ctx_anchor),
+        Some(owner),
+    )
+    .await;
+    assert_eq!(
+        admitted_wide,
+        vec![homed_wide],
+        "the wide core must admit the readable context anchor's homed rows"
+    );
+}
+
+/// **An exact call with no query must not expand the visibility gate (ADJ-6).**
+///
+/// The wide wrapper's twin: `__temper_ungated_find_exact`'s first qual
+/// (`p_query IS NOT NULL AND p_query <> ''`) makes a NULL/empty-query call guaranteed-empty the
+/// same way `p_emb IS NULL` does on the wide arm, and a function's arguments are evaluated before
+/// its body — so an unconditional `ARRAY(SELECT … FROM resources_visible_to(…))` in
+/// `query_find_exact` would materialize the principal's whole visible set for a body that returns
+/// zero rows anyway. Task 6 cleared the array path against a query that RETURNS ROWS and never
+/// measured this arm's guaranteed-empty call; the guard is ruled symmetric with the wide one
+/// (ADJ-6, `20260810000010`) rather than freshly measured.
+///
+/// Like its wide sibling, this pins the SHAPE: `EXPLAIN` of a call cannot see inside the wrapper,
+/// and a timing assertion would be flaky, so the witness reads the shipped body — same genre as the
+/// `proconfig` assertions — and then checks the behaviour the guard preserves.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_exact_call_with_no_query_does_not_expand_the_visibility_gate(pool: sqlx::PgPool) {
+    let src: String = sqlx::query_scalar(
+        "SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = 'query_find_exact'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        src.contains("CASE WHEN p_query IS NULL OR p_query = ''"),
+        "the gated exact wrapper must skip building the visible-set array when there is no query; \
+         without the guard every query-less call pays a full gate expansion for an arm that \
+         returns nothing. Body was:\n{src}"
+    );
+
+    // And the behaviour the guard preserves: still zero rows, reached without the work. Both
+    // guaranteed-empty spellings — NULL and '' — because the guard names both and the core's first
+    // qual refuses both.
+    let none: Option<String> = None;
+    let rows: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT resource_id FROM query_find_exact($1, $2, NULL, NULL, NULL, NULL, NULL, 0)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(none)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        rows.is_empty(),
+        "an exact call with a NULL query returns nothing; got {rows:?}"
+    );
+
+    let rows_empty: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT resource_id FROM query_find_exact($1, '', NULL, NULL, NULL, NULL, NULL, 0)",
+    )
+    .bind(Uuid::now_v7())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        rows_empty.is_empty(),
+        "an exact call with an empty query returns nothing; got {rows_empty:?}"
+    );
+}

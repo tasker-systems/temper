@@ -126,8 +126,15 @@ sql_files_current() {
 # REVIEWED 2026-08-08 — the defining migration, plus the gated wrappers it re-points, are all in one
 # file. `scripts/measure/gate-shape-comparison.sql` also names the prefix but is not a migration and
 # is not scanned; it is a read-only measurement harness that defines and calls nothing.
+#
+# REVIEWED 2026-08-10 (ADJ-1/ADJ-6) — `20260810000010` is CREATE OR REPLACE at byte-identical
+# signatures on the SAME two cores (the anchor guard now covers both anchor kinds via
+# `anchor_readable_by_profile`) plus `query_find_exact` (the wide wrapper's guaranteed-empty CASE,
+# applied symmetrically). No new ungated function, no new caller — the function-name set above is
+# unchanged; only the file set grows.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
+20260810000010_anchor_readability_both_kinds.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
