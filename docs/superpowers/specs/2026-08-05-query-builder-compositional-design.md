@@ -16,7 +16,7 @@
 > | `OutcomeDeclaration.description` is required | removed — register discipline in a wire contract |
 > | `ReturnSpec.fields: [String]` subselects | `with: [open-meta]`; `body` refused, `edges` dropped |
 > | `bounds_mode` sits on the invocation | `StageInput.as`, so "input without a relation" cannot be expressed |
-> | `on_stage_refusal` is required | removed — every `RefusalReason` is static, so it had no trigger |
+> | `on_stage_refusal` is required | removed — all but one `RefusalReason` are static; `embedding_unavailable` is the single runtime refusal, and the field's two settings were observationally indistinguishable for that one case |
 > | a stage with no intention refuses | the server embeds, and a FAILED embed is the one runtime refusal |
 > | the trace keys stages by ordinal | keyed by `StageName` — the caller's own vocabulary |
 >
@@ -126,6 +126,12 @@ one stage's quantity to order everything, which produces a partially-ordered res
 **Per-arm arrays are taken**, and the deciding reason is that it makes `/api/query`'s answer the same
 shape `/api/search` is becoming under phase 1 (`{ exact: [...], wide: [...] }`), so the two surfaces
 teach one lesson rather than two.
+
+> `[superseded — 2026-08-10]` The whole section below — `survey` producing `IdKind::Region`, the
+> region row and `region_score`, `survey` as `Indeterminate`, and the region-row projection — is
+> superseded by ratification ⟨3⟩ (2026-08-09): `survey` produces the member **resources** of its
+> salience-matched regions; regions are trace disclosure, not a returnable currency. See the
+> RATIFICATION block in [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml).
 
 ### v1 already needs two kinds, so this is not future-proofing
 

@@ -377,26 +377,18 @@ not of materializing at all, which is what §9's narrowing turns on.
 
   Still true and unchanged: **nothing in this design may assume the narrowing lands**, and arm
   contribution remains [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)'s *"biggest single
-  unknown"* — this figure does not answer it and does not touch the hoist rule. Custom and generic
-  plans were both measured and agree to within 0.2pp, so that caveat is closed rather than carried.
+  unknown"* — this figure does not answer it and does not touch the hoist rule. `[amended —
+  2026-08-10]` The custom/generic-plan agreement (within 0.2pp) holds for the **corpus timing
+  only**: the committed harness (`scripts/visibility-cost/closure_share.py`) can force a generic
+  plan for its `corpus` subcommand alone, as its own `--generic` help states. The ~40% band, the
+  10% marker, and the superlinearity finding come from `sweep`/`shapes`/`plausible`, which cannot
+  force a generic plan — for those figures the custom-plan caveat still applies and is carried,
+  not closed.
 
-  Three things the measurement found that were not predicted, and that change what to gather:
-
-  - **Reachable-team cardinality does not predict cost.** Shared reach 39 costs 4.14 ms; disjoint
-    reach 32 costs 0.55 ms — 7.5× apart at nearly equal reach. The `CROSS JOIN LATERAL` walks once
-    per MEMBERSHIP and the `DISTINCT` collapses only the output, so cost tracks **memberships ×
-    depth**, modulated by team-table size. [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)
-    question 3 asks for the cardinality; it should ask for the walk-steps.
-  - **The tenant's total team count matters, not just the principal's position.** 16 memberships at
-    depth 4 in a 500-team org costs more than 16 at depth 6 in a 200-team org. A per-principal probe
-    cannot predict a principal's own exposure.
-  - **Cost is superlinear** — a 4× topology is a 12× cost.
-
-  Still true and unchanged: **nothing in this design may assume the narrowing lands**, and arm
-  contribution remains
-  [019fddc6](./019fddc6-aace-7db0-a14d-5c610bc6506b)'s *"biggest single unknown"* — this figure does
-  not answer it, and does not touch the hoist rule. Every number above is from an ad-hoc `EXPLAIN`,
-  i.e. a **custom** plan; production prepares its statements and runs **generic** ones.
+  The figures in this section are attested by session note
+  [019fe7f9-7d40-7c30-aff5-7eaadb3ab6dd](./019fe7f9-7d40-7c30-aff5-7eaadb3ab6dd) — the measurement
+  session. The committed harness is the instrument, not the record; no committed output file
+  exists.
 
 - **`survey` has two fragment arguments with no declared slot** — `p_lens uuid` and `p_emb vector`.
   Query and embedding reach a stage via `Composition.intention`; nothing carries a lens. Beat C task

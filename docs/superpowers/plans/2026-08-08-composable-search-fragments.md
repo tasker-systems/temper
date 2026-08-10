@@ -27,11 +27,16 @@
 >   — and `SearchParams.query` is optional, with `search_params_deserializes_embedding_only` proving a
 >   query-less search is expressible.
 > - `p_anchor_reader` appears nowhere in the spec or this plan. The "ungated" core takes a principal
->   after all, so anchor readability is still checked per call.
+>   after all, so anchor readability is still checked per call. `[adjudicated — 2026-08-10, P4/ADJ-1]`
+>   The parameter is now authorized with a stated charter: it exists for anchor readability only,
+>   covering BOTH anchor kinds (cogmap and context), and must never gain another use.
 > - `p_visible_ids` NULL means *admit nothing* while `p_bound_ids` NULL means *unbounded* — two
 >   same-typed parameters on one function with opposite NULL semantics.
-> - Spec §9's trigger-maintained `profile_reachable_teams` closure table — the thing that would make
->   Tasks 7–9 unnecessary rather than wrong — remains unmeasured and unbuilt.
+> - Spec §9's trigger-maintained `profile_reachable_teams` closure table was **measured on
+>   2026-08-09** `[amended — 2026-08-10]` — spec §9 now carries the result: the closure's share of
+>   gate cost is second-order at current scale (1.0–1.9% here, ~40% at a large synthetic tenant),
+>   and §9's measured conclusion is that Tasks 7–9 do **not** become unnecessary. The table remains
+>   unbuilt, deferred on current need.
 
 **Goal:** Give `/api/query` find-act fragments that can be bounded by an upstream id set, by extracting the deployed arms' shared interiority and building composable twins beside them — without changing either deployed signature.
 
@@ -58,8 +63,7 @@ Verbatim from the spec and `CLAUDE.md`. Every task's requirements implicitly inc
 
 **Created:**
 - `migrations/20260808000020_search_arm_shared_interiority.sql` — the two views, `shrunk_best_of_n`, and both incumbents refactored onto them.
-- `migrations/20260808000030_composable_find_fragments.sql` — `query_find_exact` / `query_find_wide`; incumbents become delegating wrappers.
-- `migrations/20260808000030_composable_find_family.sql` — **conditional on Task 6.** The gated-wrapper / ungated-core split.
+- `migrations/20260808000030_composable_find_family.sql` — `query_find_exact` / `query_find_wide` with incumbents as delegating wrappers, plus the gated-wrapper / ungated-core split (**conditional on Task 6**). (A separate `20260808000030_composable_find_fragments.sql` was planned but never shipped — it was folded into this family migration.)
 - `.github/scripts/audit-ungated-fragments.sh` — **conditional on Task 6.** Derived-set tripwire.
 
 **Modified:**
@@ -247,7 +251,7 @@ git commit -m "Extract the search arms' shared interiority into views, not funct
 **GD-3: CONFORM** — the load-bearing constraint is that Task 1 changed no plan. Spec §2.2.
 
 **Files:**
-- Create: `docs/superpowers/plans/evidence/2026-08-08-task1-plan-identity.txt` (recorded output)
+- Create: `docs/superpowers/plans/evidence/2026-08-08-task1-plan-identity.md` (recorded output)
 
 - [ ] **Step 1: Capture the incumbent plans BEFORE the refactor**
 
@@ -277,7 +281,7 @@ If any plan lost an index path, STOP and report BLOCKED. Do not proceed to Task 
 - [ ] **Step 5: Commit the evidence**
 
 ```bash
-git add docs/superpowers/plans/evidence/2026-08-08-task1-plan-identity.txt
+git add docs/superpowers/plans/evidence/2026-08-08-task1-plan-identity.md
 git commit -m "Evidence: the interiority extraction is plan-identical on all three arm shapes"
 ```
 
@@ -468,8 +472,13 @@ git commit -m "A declaration describes its mechanic: find-exact's bound kinds ar
 
 **This task can abort the remaining tasks. That is its purpose.**
 
+> `[noted — 2026-08-10]` The gate ran and returned PROCEED (see
+> `evidence/2026-08-08-task6-gate-shape.md`). A falsifier not on its list later fired and was
+> patched — see the header block at the top of this plan and the evidence doc's amendment. The
+> step checkboxes below were never ticked and are left as-is.
+
 **Files:**
-- Create: `docs/superpowers/plans/evidence/2026-08-08-task6-gate-shape.txt`
+- Create: `docs/superpowers/plans/evidence/2026-08-08-task6-gate-shape.md`
 
 - [ ] **Step 1: Read spec §5's final paragraph and §7's fallback**
 
@@ -490,7 +499,7 @@ If the `unnest` form is within noise of the join, proceed to Task 7. If it regre
 - [ ] **Step 5: Commit the evidence either way**
 
 ```bash
-git add docs/superpowers/plans/evidence/2026-08-08-task6-gate-shape.txt
+git add docs/superpowers/plans/evidence/2026-08-08-task6-gate-shape.md
 git commit -m "Evidence: whether the ungated core's array path regresses /api/search"
 ```
 
@@ -623,4 +632,4 @@ Named so the next reader does not look for it:
 - **`follow-from` and `survey` are not bound.** They keep `__temper_unbound_act`. Their fragments have unmodeled arguments (`p_lens`, `p_depth`, `p_gamma` — spec §9) and binding them needs those answered first.
 - **No answer-quality witness is taken.** The arc's standing caution holds; every clause of the frame register remains declared-uncovered.
 - **The hoist rule is not adopted.** Task 6 measures one plan comparison. Materialize-vs-inline remains `019fddc6`'s.
-- **The `profile_reachable_teams` materialization is not built** (spec §9). If it lands later, Tasks 7–9 become unnecessary rather than wrong.
+- **The `profile_reachable_teams` materialization is not built** (spec §9). `[amended — 2026-08-10]` It was measured on 2026-08-09, and §9's measured conclusion is that Tasks 7–9 do **not** become unnecessary if it lands: the closure's share of gate cost is second-order at current scale (1.0–1.9% here, ~40% at a large synthetic tenant). It remains unbuilt, deferred on current need.

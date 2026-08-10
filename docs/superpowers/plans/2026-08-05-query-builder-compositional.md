@@ -7,10 +7,12 @@
 > `crates/temper-core/src/types/query/` — and the contract amends six of those shapes. So the plan's
 > completed tasks are not a description of what should now exist.
 >
-> Concretely, anything in this plan touching `OutcomeDeclaration.description`, `ReturnSpec.fields`,
-> `ActInvocation.bounds_mode`, `Composition.on_stage_refusal`, the refuse-on-absent-intention rule,
-> or an ordinal-keyed trace describes a shape that has been superseded. The contract's header lists
-> all six with their reasoning.
+> `[amended — 2026-08-10]` Concretely: everything in this plan touching response shape, output
+> currency, `survey`'s produced kind, `bounds_*`/`terms_*` field naming, `ActResult`,
+> `StageOutput::Ids`, `meta_detail`/`meta_truncated`, or the validate route is superseded by
+> [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) (ratified 2026-08-09, amended
+> through 2026-08-10). The contract is authoritative; this plan is history, and its code sketches
+> must not be built from.
 >
 > **This plan has not been re-sequenced against the contract.** That is the next piece of work, and
 > until it is done, treat a task here as a hypothesis about the old shape rather than an instruction.

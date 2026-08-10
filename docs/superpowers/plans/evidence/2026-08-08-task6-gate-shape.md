@@ -1,5 +1,16 @@
 # Evidence: the ungated core's array path does not regress `/api/search`
 
+`[amended — 2026-08-10]` A fifth falsifier, not in the list below, fired after this gate returned
+PROCEED: a call whose body is guaranteed to return zero rows still paid the full visibility-gate
+expansion (~1.2 ms → ~4.1 ms on text-only queries, measured on the 4802-resource corpus). It was
+patched with a `CASE` guard in `query_find_wide` (`migrations/20260808000030_composable_find_family.sql`,
+the block explaining the split), and adjudication ADJ-6 (2026-08-10) extended the same guard
+symmetrically to `query_find_exact`. Two scope corrections this document owes its readers: the
+PROCEED verdict was established against a query that returns rows and stands as re-scoped, not as
+originally stated; and the deciding comparison (b) below is not reproducible from the committed
+harness — `scripts/measure/gate-shape-comparison.sql` contains shapes A and B only, so comparison
+(b)'s figures are attested by this document alone.
+
 `[measured — 2026-08-08]` Task 6 of
 `docs/superpowers/plans/2026-08-08-composable-search-fragments.md` — the decision gate that can
 cancel Tasks 7–9.
