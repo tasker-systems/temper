@@ -44,6 +44,18 @@ fn team_slug(parent_ref: &str) -> &str {
 ///
 /// `pub(crate)` so sibling services (e.g. `context_service`'s team-owned-context
 /// gate) reuse the one role check rather than duplicating the authz.
+///
+/// **Deliberately `is_active`-blind.** It answers *"is there a membership row?"*, not *"is this
+/// team effective?"* — `20260703000001_team_metadata_soft_delete.sql`'s invariant
+/// (*"membership in a soft-deleted team confers nothing anywhere"*) belongs on the **team**, which
+/// is where the SQL chokepoints put it too (`profile_effective_teams` filters `kb_teams`, not
+/// `kb_team_members`). A caller that must not act on a dead team states it on its own team lookup:
+/// `… WHERE slug = $1 AND is_active` in `create_team`'s parent resolution and in
+/// `context_service::{resolve_context_ref, resolve_create_owner}`, the EXISTS in
+/// `reassign_service::reassign_team_resources`. Filtering here instead would restate it where it
+/// cannot be violated, imply those gates were optional, and silently change `delete_team` /
+/// `update_team`, which need the blind answer to tell an already-deleted team from a non-member.
+/// So the rule for a new call site is: gate the team there, not here.
 pub(crate) async fn role_on_team(
     pool: &PgPool,
     team_id: Uuid,

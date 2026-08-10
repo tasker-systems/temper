@@ -360,9 +360,9 @@ async fn next_unique_context_slug(
 ///
 /// - `None` / `Me` → the caller's own profile (`kb_profiles`), preserving the
 ///   pre-Chunk-3 default.
-/// - `Team(slug)` → the team (must exist, else `NotFound`); the caller must be
-///   `owner`/`maintainer` on it (reuses `team_service`'s role check — no
-///   duplicated authz), else `Forbidden`.
+/// - `Team(slug)` → the team (must exist **and be active**, else `NotFound`); the
+///   caller must be `owner`/`maintainer` on it (reuses `team_service`'s role check
+///   — no duplicated authz), else `Forbidden`.
 /// - `Handle(_)` → `BadRequest`: a profile cannot create a context owned by
 ///   another profile.
 pub async fn resolve_create_owner(
@@ -373,12 +373,27 @@ pub async fn resolve_create_owner(
     match owner {
         None | Some(ContextOwnerRef::Me) => Ok(("kb_profiles".to_owned(), *caller)),
         Some(ContextOwnerRef::Team(slug)) => {
-            let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
-                .fetch_optional(pool)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::NotFound(format!("team {slug} not found or not readable"))
-                })?;
+            // `AND is_active` is the invariant `20260703000001_team_metadata_soft_delete.sql`
+            // declares in its own header: *"membership in a soft-deleted team confers nothing
+            // anywhere."* This is the write-side twin of the read-side arm in
+            // [`resolve_context_ref`], which carries the full argument. Without it an
+            // owner/maintainer of a dead team can mint a context OWNED by it — state the read
+            // paths then refuse to show anyone, this one included.
+            //
+            // `NotFound`, not the `Forbidden` below, and byte-identical to a team that never
+            // existed: `Forbidden` would disclose that the slug names something and would be false,
+            // since the caller genuinely is a member. There is no team here to be refused.
+            let team_id = sqlx::query_scalar!(
+                "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+                slug
+            )
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("team {slug} not found or not readable")))?;
+            // The role check deliberately gains no filter of its own: an inactive team can no
+            // longer reach this line, and `role_on_team` is `is_active`-blind by design (see its
+            // doc). The gate belongs on the team lookup above; a second copy here would state the
+            // invariant where it cannot be violated and imply that one were optional.
             match team_service::role_on_team(pool, team_id, caller).await? {
                 Some(role) if team_service::can_manage(role) => {}
                 _ => return Err(ApiError::Forbidden),
