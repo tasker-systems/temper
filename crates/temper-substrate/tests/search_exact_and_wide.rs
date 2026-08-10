@@ -40,11 +40,13 @@
 
 mod common;
 
-use temper_substrate::content::{PreparedBlock, PreparedChunk};
-use temper_substrate::events::{fire, SeedAction};
-use temper_substrate::ids::{
-    BlockId, ChunkId, CogmapId, ContextId, EntityId, ProfileId, ResourceId,
-};
+// The embedded-corpus fixtures now live in `common/` — `query_plan_execute.rs` needs the same
+// corpus to witness the compiled wide-arm call, and two copies of "what a near resource is" would
+// be free to disagree about exactly the thing both files compare. Lifted verbatim; every call site
+// below is unchanged.
+use crate::common::{at_cos, mk_chunked, mk_embedded, unit};
+
+use temper_substrate::ids::{CogmapId, ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes;
@@ -193,78 +195,6 @@ async fn exact(
         .collect()
 }
 
-/// A resource with one chunk per entry of `embs` — `None` meaning that chunk carries NO vector.
-///
-/// `None` is not a synthetic state: it is what `prepare_block_deferred` emits on every chunk of an
-/// async-embedded create, and `content.rs:31-36` documents it mapping to a NULL
-/// `kb_chunks.embedding` until the backfill runs (issue #299). Every resource passes through it.
-/// A MIXED slice is the partially-drained case — some chunks embedded, some not yet.
-async fn mk_chunked(
-    pool: &sqlx::PgPool,
-    home: AnchorRef,
-    owner: ProfileId,
-    emitter: EntityId,
-    title: &str,
-    embs: Vec<Option<Vec<f32>>>,
-) -> Uuid {
-    let blocks = vec![PreparedBlock {
-        incorporated: vec![],
-        raw_text: None,
-        block_id: BlockId::from(Uuid::now_v7()),
-        seq: 0,
-        role: None,
-        chunks: embs
-            .into_iter()
-            .enumerate()
-            .map(|(i, emb)| PreparedChunk {
-                chunk_id: ChunkId::from(Uuid::now_v7()),
-                chunk_index: i as i32,
-                content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
-                content: title.to_string(),
-                embedding: emb,
-                embedded_with: None,
-                header_path: None,
-                heading_depth: None,
-            })
-            .collect(),
-    }];
-    let mut tx = pool.begin().await.unwrap();
-    let id = fire(
-        &mut tx,
-        SeedAction::ResourceCreate {
-            title,
-            origin_uri: &format!("test://{title}"),
-            resource_id: None,
-            home,
-            owner,
-            originator: None,
-            blocks: &blocks,
-            doc_type: Some("concept"),
-            emitter,
-            segmented: false,
-        },
-    )
-    .await
-    .unwrap()
-    .resource()
-    .unwrap();
-    tx.commit().await.unwrap();
-    id.uuid()
-}
-
-/// A single-chunk resource carrying `emb`. The wide arm scores chunks, so these need embeddings
-/// where the exact arm's needed only a body. Shorthand for [`mk_chunked`].
-async fn mk_embedded(
-    pool: &sqlx::PgPool,
-    home: AnchorRef,
-    owner: ProfileId,
-    emitter: EntityId,
-    title: &str,
-    emb: Vec<f32>,
-) -> Uuid {
-    mk_chunked(pool, home, owner, emitter, title, vec![Some(emb)]).await
-}
-
 /// A single-chunk resource created but NOT yet embedded — [`mk_chunked`] with no vector.
 async fn mk_unembedded(
     pool: &sqlx::PgPool,
@@ -280,23 +210,6 @@ async fn mk_unembedded(
 fn vlit(v: &[f32]) -> String {
     let parts: Vec<String> = v.iter().map(f32::to_string).collect();
     format!("[{}]", parts.join(","))
-}
-
-/// A 768-dim unit vector along one axis. Two distinct axes are orthogonal, which makes "near" and
-/// "far" unambiguous without depending on a real embedding model.
-fn unit(dim: usize) -> Vec<f32> {
-    let mut e = vec![0.0_f32; 768];
-    e[dim] = 1.0;
-    e
-}
-
-/// A unit vector whose cosine similarity to [`unit(0)`] is exactly `c` (so `<=>` distance is
-/// `1 - c`). Lets a fixture name the distance it wants instead of solving for a vector.
-fn at_cos(c: f32) -> Vec<f32> {
-    let mut e = vec![0.0_f32; 768];
-    e[0] = c;
-    e[1] = (1.0 - c * c).sqrt();
-    e
 }
 
 /// Rows from `search_wide`, as (id, vec_norm).

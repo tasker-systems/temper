@@ -386,5 +386,105 @@ pub async fn telos_default_readout_signature(pool: &sqlx::PgPool, cogmap: uuid::
         .unwrap()
 }
 
+// ─── Embedded-corpus fixtures for the vector arm ────────────────────────────────────────────────
+//
+// Lifted out of `search_exact_and_wide.rs` (unchanged in behaviour) when `query_plan_execute.rs`
+// needed the same corpus to witness the compiled wide-arm call. Two copies of "what a near
+// resource is" would be free to disagree about the very thing the tests compare.
+
+/// A resource with one chunk per entry of `embs` — `None` meaning that chunk carries NO vector.
+///
+/// `None` is not a synthetic state: it is what `prepare_block_deferred` emits on every chunk of an
+/// async-embedded create, and `content.rs:31-36` documents it mapping to a NULL
+/// `kb_chunks.embedding` until the backfill runs (issue #299). Every resource passes through it.
+/// A MIXED slice is the partially-drained case — some chunks embedded, some not yet.
+pub async fn mk_chunked(
+    pool: &sqlx::PgPool,
+    home: temper_substrate::payloads::AnchorRef,
+    owner: temper_substrate::ids::ProfileId,
+    emitter: temper_substrate::ids::EntityId,
+    title: &str,
+    embs: Vec<Option<Vec<f32>>>,
+) -> uuid::Uuid {
+    use temper_substrate::content::{PreparedBlock, PreparedChunk};
+    use temper_substrate::events::{fire, SeedAction};
+    use temper_substrate::ids::{BlockId, ChunkId};
+    use uuid::Uuid;
+
+    let blocks = vec![PreparedBlock {
+        incorporated: vec![],
+        raw_text: None,
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq: 0,
+        role: None,
+        chunks: embs
+            .into_iter()
+            .enumerate()
+            .map(|(i, emb)| PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
+                chunk_index: i as i32,
+                content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+                content: title.to_string(),
+                embedding: emb,
+                embedded_with: None,
+                header_path: None,
+                heading_depth: None,
+            })
+            .collect(),
+    }];
+    let mut tx = pool.begin().await.unwrap();
+    let id = fire(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title,
+            origin_uri: &format!("test://{title}"),
+            resource_id: None,
+            home,
+            owner,
+            originator: None,
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter,
+            segmented: false,
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap();
+    tx.commit().await.unwrap();
+    id.uuid()
+}
+
+/// A single-chunk resource carrying `emb`. The wide arm scores chunks, so these need embeddings
+/// where the exact arm's needed only a body. Shorthand for [`mk_chunked`].
+pub async fn mk_embedded(
+    pool: &sqlx::PgPool,
+    home: temper_substrate::payloads::AnchorRef,
+    owner: temper_substrate::ids::ProfileId,
+    emitter: temper_substrate::ids::EntityId,
+    title: &str,
+    emb: Vec<f32>,
+) -> uuid::Uuid {
+    mk_chunked(pool, home, owner, emitter, title, vec![Some(emb)]).await
+}
+
+/// A 768-dim unit vector along one axis. Two distinct axes are orthogonal, which makes "near" and
+/// "far" unambiguous without depending on a real embedding model.
+pub fn unit(dim: usize) -> Vec<f32> {
+    let mut e = vec![0.0_f32; 768];
+    e[dim] = 1.0;
+    e
+}
+
+/// A unit vector whose cosine similarity to [`unit`]`(0)` is exactly `c` (so `<=>` distance is
+/// `1 - c`). Lets a fixture name the distance it wants instead of solving for a vector.
+pub fn at_cos(c: f32) -> Vec<f32> {
+    let mut e = vec![0.0_f32; 768];
+    e[0] = c;
+    e[1] = (1.0 - c * c).sqrt();
+    e
+}
+
 /// A real, embedded context to materialize regions over — shared by the telos + two-clock tests.
 pub mod context_fixture;
