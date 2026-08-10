@@ -1077,6 +1077,45 @@ mod tests {
         );
     }
 
+    /// The MCP `search` tool takes the same type the API door does — which is what lets one test
+    /// speak for two doors.
+    ///
+    /// `door_coverage`'s term axis is checked for the API and MCP doors by a single assertion in
+    /// temper-core (`act_door_coverage_reachability.rs`), against `SearchParams`' wire slots. That
+    /// check is only legitimate while both doors really take `SearchParams`: `temper-api`'s handler
+    /// takes `Json<SearchParams>` and this one takes `Parameters<SearchParams>`. If MCP's tool ever
+    /// took a wrapper, a subset, or a hand-rolled twin, that test would keep passing while silently
+    /// describing a door it no longer reads — the same shape as a declaration checked against its
+    /// own literal.
+    ///
+    /// Asserted against the ROUTER's advertised schema rather than against the handler signature,
+    /// because the schema is what a caller standing at this door actually sees. The sibling table in
+    /// `tests/steward_skill_recipe_test.rs` pairs `"search"` with `schema_for!(SearchParams)` too,
+    /// but that table is hand-written and validates the skill doc — it could drift from the router
+    /// without anything noticing, which is the drift this closes.
+    #[test]
+    fn the_search_tool_advertises_exactly_the_shared_search_params_schema() {
+        let advertised = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "search")
+            .expect("the router advertises a `search` tool")
+            .input_schema;
+
+        let shared =
+            serde_json::to_value(schemars::schema_for!(temper_core::types::api::SearchParams))
+                .expect("SearchParams schema serializes");
+
+        assert_eq!(
+            serde_json::to_value(&*advertised).expect("advertised schema serializes"),
+            shared,
+            "the MCP search tool no longer advertises `SearchParams`. temper-core's \
+             `the_shared_params_doors_declare_exactly_the_terms_that_type_carries` checks the API \
+             and MCP doors together on the premise that they share this type — fix that test's \
+             reach before changing this one."
+        );
+    }
+
     /// **Every tool the shipped MCP skill tells an agent to call must actually exist.**
     ///
     /// This closes the half of the skill-drift gate that gate cannot reach. That gate re-emits the
