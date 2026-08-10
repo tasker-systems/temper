@@ -560,6 +560,16 @@ mod tests {
             "a region cannot have a position inside a resource: {region}"
         );
 
+        // A resource hit with no location carries an EXPLICIT null (F4, ruled): the contract's
+        // prose is load-bearing on the null meaning "not declared", so the key must be present —
+        // omission would make this shape indistinguishable from the region one above, which is
+        // the distinction under test.
+        let unlocated = serde_json::to_value(resource_hit(ScoreKind::VecNorm, 0.9)).unwrap();
+        assert!(
+            unlocated.get("located_at").is_some() && unlocated["located_at"].is_null(),
+            "a resource hit's absent location is an explicit null, never a missing key: {unlocated}"
+        );
+
         // And a resource hit can carry one.
         let mut hit = resource_hit(ScoreKind::VecNorm, 0.9);
         hit.located_at = Some(MatchLocation {

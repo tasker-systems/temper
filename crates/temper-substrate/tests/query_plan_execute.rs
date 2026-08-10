@@ -110,8 +110,6 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
             query: query.to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![
             stage("hits", None),
             stage(
@@ -276,8 +274,6 @@ fn one_find_exact(query: &str, bound: Option<Vec<Uuid>>) -> ValidatedComposition
             query: query.to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
@@ -312,8 +308,6 @@ fn find_exact_paged(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompo
             query: query.to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
@@ -582,8 +576,6 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
                 query: "kestrel".to_string(),
                 embedded: false,
             }),
-            meta_detail: Default::default(),
-            bounds: Default::default(),
             stages: vec![
                 stage(&up, None),
                 stage(
@@ -681,8 +673,6 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
             query: "kestrel".to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![
             find(&all, None),
             // Bounded to Kestrel alone, so this stage produces a strict subset of `all_hits`.

@@ -90,7 +90,8 @@ fn query_contract_schemas_match_snapshots() {
     // rather than beside it, so the input is snapshotted too — the nesting IS the contract change.
     c.check::<q::StageRelation>("stage_relation");
     c.check::<q::StageInput>("stage_input");
-    c.check::<q::MetaDetail>("meta_detail");
+    // `meta_detail` is gone with the metadata-budget concept (ADJ-4, 2026-08-10), alongside
+    // `meta_truncated` below.
     c.check::<q::StageDisposition>("disposition");
     c.check::<q::ActRefusal>("refusal");
     c.check::<q::PlanRefusal>("plan_refusal");
@@ -113,7 +114,6 @@ fn query_contract_schemas_match_snapshots() {
     c.check::<q::StageOutput>("stage_output");
     c.check::<q::StageResult>("stage_result");
     c.check::<q::InputSource>("input_source");
-    c.check::<q::MetaTruncated>("meta_truncated");
     c.check::<q::StageTrace>("stage_trace");
     c.check::<q::CompositionTrace>("composition_trace");
     c.check::<q::Intention>("intention");

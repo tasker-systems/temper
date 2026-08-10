@@ -172,7 +172,13 @@ pub struct ResourceHit {
     ///
     /// It sits on this type rather than on [`Scoring`] because `Scoring` is shared with
     /// [`RegionHit`], and a region is not somewhere inside a resource.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// **`None` serializes as an explicit `"located_at": null`** (F4, ruled): the contract's prose
+    /// is load-bearing on the null — every `located_at` is null today and the null unambiguously
+    /// means *not declared* — and omitting the key made the resource-hit null indistinguishable
+    /// from a shape with no such field, which is exactly the distinction [`RegionHit`] exists to
+    /// draw.
+    #[serde(default)]
     pub located_at: Option<MatchLocation>,
 }
 

@@ -127,13 +127,14 @@ const VISIBLE_IDS: &str = "(SELECT ids FROM __temper_vis)";
 /// fragment returned, so every id in it was usable by construction, and re-checking would cost a
 /// gate call to confirm a known answer.
 ///
-/// For an ANCHOR it is a **named under-report**. Whether a cogmap or context anchor was readable is
-/// decided inside the fragment against `p_anchor_reader`, and finding out here would mean calling
-/// `contexts_readable_by` — a second recursive team closure, which is the exact cost the `vis`
-/// hoist exists to avoid. An unreadable anchor therefore comes back as an `empty` stage rather than
-/// as one unusable id. That is the disposition the contract prescribes for it anyway (an id YOU
-/// supplied that you cannot see is `empty`, never `withheld`, or the trace becomes a single-probe
-/// existence oracle), so the loss is one counter, not the disclosure.
+/// For an ANCHOR it is a **named under-report**. Anchor readability for BOTH kinds — cogmap and
+/// context — is decided inside the fragment against `p_anchor_reader` (`anchor_readable_by_profile`),
+/// per ADJ-1 `[2026-08-10, Pete]`; finding out here instead would mean a second recursive team
+/// closure, which is the exact cost the `vis` hoist exists to avoid. An unreadable anchor comes
+/// back as an `empty` stage rather than as one unusable id — the disposition the existence-oracle
+/// rule prescribes anyway (an id YOU supplied that you cannot see is `empty`, never `withheld`) —
+/// and the unusable tally deliberately does not count it: the loss is one counter, not the
+/// disclosure, and the vis-hoist cost argument stands.
 const NO_UNUSABLE: &str = "0::bigint";
 
 /// The principal, always `$1` — `compile` pushes it first, before any per-stage bind. The cores read

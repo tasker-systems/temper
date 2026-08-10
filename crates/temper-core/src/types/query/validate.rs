@@ -547,9 +547,9 @@ pub struct WillReturn {
     pub orders_by: Option<ActQuantity>,
     /// Which optional fields will be FILLED rather than null, for this act.
     ///
-    /// Read it and you know in advance whether asking for `input_contributed` or `located_at` is
-    /// worth doing — rather than discovering a null in a response and having to guess whether it
-    /// means *cannot* or *none*.
+    /// Read it and you know in advance whether asking for `located_at` is worth doing — rather
+    /// than discovering a null in a response and having to guess whether it means *cannot* or
+    /// *none*.
     pub discloses: Vec<Disclosure>,
 }
 
@@ -637,6 +637,18 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
             None,
             RefusalReason::Other("no-stages".to_string()),
             "a composition must declare at least one stage; this one asks nothing",
+        ));
+    }
+
+    // **A composition with no returns answers nothing.** `[added — 2026-08-10]` The contract
+    // declares `returns: minItems 1` and nothing enforced it: an empty `returns` compiled and ran,
+    // answering 200 where the contract says 400 (audit finding F6). Composition-level, like
+    // `no-stages` — the omission belongs to no stage.
+    if c.outcome.returns.is_empty() {
+        errs.push(refusal(
+            None,
+            RefusalReason::Other("no-returns".to_string()),
+            "a composition must return at least one stage; this one answers nothing",
         ));
     }
 
@@ -869,8 +881,6 @@ mod tests {
         Composition {
             outcome: OutcomeDeclaration { returns },
             intention: None,
-            meta_detail: Default::default(),
-            bounds: BTreeMap::new(),
             stages,
         }
     }
@@ -1219,8 +1229,6 @@ mod tests {
                 query: "q".to_string(),
                 embedded: false,
             }),
-            meta_detail: Default::default(),
-            bounds: Default::default(),
             stages: vec![act("hits", ActName::FindExact, None)],
         };
         let errs = validate(&c).unwrap_err();
@@ -1238,8 +1246,6 @@ mod tests {
         let c = Composition {
             outcome: OutcomeDeclaration { returns: vec![] },
             intention: None,
-            meta_detail: Default::default(),
-            bounds: Default::default(),
             stages: vec![],
         };
         let errs = validate(&c).unwrap_err();
@@ -1248,6 +1254,40 @@ mod tests {
                 .any(|e| e.reason == RefusalReason::Other("no-stages".to_string())),
             "got: {errs:?}"
         );
+    }
+
+    /// A composition with no returns answers nothing — the contract's `returns: minItems 1`,
+    /// enforced rather than assumed (audit finding F6: an empty `returns` compiled and ran,
+    /// answering 200 where the contract says 400).
+    #[test]
+    fn a_composition_with_no_returns_is_refused() {
+        let c = plan(
+            vec![act(
+                "near",
+                ActName::FollowFrom,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec![],
+        );
+        let errs = validate(&c).unwrap_err();
+        let no_returns = RefusalReason::Other("no-returns".to_string());
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == no_returns && e.stage.is_none()),
+            "composition-level, like no-stages — the omission belongs to no stage; got: {errs:?}"
+        );
+
+        // And a one-return composition does not get it — the refusal is about the empty list, not
+        // about returns generally.
+        let ok = plan(
+            vec![act(
+                "near",
+                ActName::FollowFrom,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec!["near"],
+        );
+        assert!(validate(&ok).is_ok(), "got: {:?}", validate(&ok).err());
     }
 
     #[test]
@@ -1844,9 +1884,9 @@ mod tests {
 
     #[test]
     fn the_outcome_tells_a_caller_which_optional_fields_will_be_null() {
-        // The reason `discloses` exists at all. `follow-from` cannot report input contribution —
-        // its walk discards path origin — and a caller learns that HERE rather than by finding a
-        // null in a response and guessing whether it means "cannot" or "none".
+        // The reason `discloses` exists at all: a caller learns which optional fields will be
+        // filled HERE rather than by finding a null in a response and guessing whether it means
+        // "cannot" or "none". `follow-from` declares nothing — it has no match position to report.
         let c = plan(
             vec![act(
                 "near",

@@ -289,26 +289,6 @@
       ],
       "type": "object"
     },
-    "MetaDetail": {
-      "description": "How much per-resource meta the trace retains (design §4.4, tier 2).",
-      "oneOf": [
-        {
-          "const": "surviving",
-          "description": "Per-resource meta only for ids in the final result set. Bounded by the caller's own limit.",
-          "type": "string"
-        },
-        {
-          "const": "full",
-          "description": "Every id at every stage, including ids dropped mid-composition. The diagnostic mode.",
-          "type": "string"
-        },
-        {
-          "const": "none",
-          "description": "Tier 1 only.",
-          "type": "string"
-        }
-      ]
-    },
     "OutcomeDeclaration": {
       "description": "Which stages come back, and how much of each row.",
       "properties": {
@@ -570,14 +550,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "A composition, declared before execution.",
   "properties": {
-    "bounds": {
-      "additionalProperties": {
-        "format": "int64",
-        "type": "integer"
-      },
-      "description": "The SECOND bound layer: over the composition's own output, distinct from the act-level\nterms on each stage. A composition never carries a total — with each stage's output the\nnext stage's domain, a full-composition total is not well-defined.",
-      "type": "object"
-    },
     "intention": {
       "anyOf": [
         {
@@ -587,10 +559,6 @@
           "type": "null"
         }
       ]
-    },
-    "meta_detail": {
-      "$ref": "#/$defs/MetaDetail",
-      "default": "surviving"
     },
     "outcome": {
       "$ref": "#/$defs/OutcomeDeclaration"

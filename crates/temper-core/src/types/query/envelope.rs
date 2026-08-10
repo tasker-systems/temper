@@ -86,6 +86,18 @@ pub struct NarrowedBy {
 pub struct StageResult {
     pub act: ActName,
     pub disposition: super::disposition::StageDisposition,
+    /// Present iff `disposition` is `refused` — the reason and standing-aware detail of the
+    /// runtime refusal (`embedding_unavailable` is the only current case; the vocabulary is open).
+    /// Ruled ADJ-3 `[2026-08-10, Pete]`: the contract's "one behaviour" promise requires the
+    /// reason to reach the reader, so [`super::disposition::ActRefusal`] is resurrected from
+    /// declared-unreachable to the carrier.
+    ///
+    /// **The pair rule**: [`super::trace::StageTrace`] carries an identical field, and the two must
+    /// stay identical for the same reason as the input numbers — the trace covers every stage and
+    /// the results only the returned ones, so disagreeing copies would leave a reader with no way
+    /// to tell which was right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<super::disposition::ActRefusal>,
     /// Echoed from this act's declaration. Present iff the act orders anything.
     ///
     /// **Once per stage, rather than once per row.** The row keeps a literal field name so two
@@ -114,15 +126,11 @@ pub struct StageResult {
     pub narrowed_by: Vec<NarrowedBy>,
     /// How many ids this stage was handed. Zero for a stage with no input.
     pub input_ids: i64,
-    /// How many of the usable ids actually contributed to what came back.
-    ///
-    /// The reading depends on the relation and both are honest: for a `bound`, how many of your
-    /// ids are in the output; for a `seed`, how many led to something in the output.
-    ///
-    /// **NULL MEANS THIS ACT CANNOT REPORT IT — never zero.** Which acts can is DECLARED in
-    /// [`super::act::ActDeclaration::discloses`], so it is knowable before the query runs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_contributed: Option<i64>,
+    // `input_contributed` used to sit here. Removed by ratification ⟨6⟩/9d `[2026-08-09, Pete]` —
+    // redundant where filled (a bound's contributed count equals its produced count by
+    // construction: the same fact twice, free to disagree) and null where interesting (the only
+    // seeder's walk discards origin, so the informative case could not occur). Returns additively,
+    // with its null-never-means-zero semantics, when a walk carries its origin.
     /// How many did not — for ANY reason, deliberately conflated.
     ///
     /// Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
@@ -215,6 +223,7 @@ mod tests {
         StageResult {
             act: ActName::Survey,
             disposition: StageDisposition::Answered,
+            refusal: None,
             orders_by: None,
             produced: StageOutput::Regions {
                 hits: vec![region_hit()],
@@ -224,7 +233,6 @@ mod tests {
             terms_applied: BTreeMap::from([(BoundTerm::Regions, 3)]),
             narrowed_by,
             input_ids,
-            input_contributed: None,
             input_unusable: 0,
         }
     }
@@ -301,6 +309,29 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_stage_carries_its_reason_and_an_answered_stage_omits_the_field() {
+        // The pair rule's result half: `refusal` is present iff the disposition is `refused`, so a
+        // reader is never handed a bare `refused` with the reason stripped — the "one behaviour"
+        // promise requires the reason to reach them (ADJ-3, 2026-08-10).
+        use crate::types::query::disposition::{ActRefusal, RefusalReason};
+        let mut refused = result(vec![], 0);
+        refused.disposition = StageDisposition::Refused;
+        refused.refusal = Some(ActRefusal {
+            reason: RefusalReason::EmbeddingUnavailable,
+            detail: "the server could not compute one".to_string(),
+        });
+        let json = serde_json::to_string(&refused).unwrap();
+        assert!(json.contains("embedding_unavailable"), "got: {json}");
+
+        let answered = result(vec![], 0);
+        let json = serde_json::to_string(&answered).unwrap();
+        assert!(
+            !json.contains("refusal"),
+            "an answered stage has no refusal to carry: {json}"
+        );
+    }
+
+    #[test]
     fn a_narrowing_echoes_back_without_requiring_counts() {
         // Counts ride only where the act computes them for free — requiring them would reintroduce
         // the second query `Extent` exists to avoid. Absent is not zero.
@@ -325,10 +356,7 @@ mod tests {
         // `StageName` amendment already removed one layer up.
         let response = QueryResponse {
             returned: BTreeMap::from([(StageName::parse("seeds").unwrap(), result(vec![], 0))]),
-            trace: CompositionTrace {
-                meta_detail: crate::types::query::scalars::MetaDetail::Surviving,
-                stages: vec![],
-            },
+            trace: CompositionTrace { stages: vec![] },
         };
         let json = serde_json::to_value(&response).unwrap();
         assert!(
@@ -351,10 +379,7 @@ mod tests {
                 (StageName::parse("a").unwrap(), result(vec![], 0)),
                 (StageName::parse("b").unwrap(), regions),
             ]),
-            trace: CompositionTrace {
-                meta_detail: crate::types::query::scalars::MetaDetail::Surviving,
-                stages: vec![],
-            },
+            trace: CompositionTrace { stages: vec![] },
         };
         let json = serde_json::to_value(&response).unwrap();
 

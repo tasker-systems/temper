@@ -230,13 +230,15 @@ pub enum VisibilityProfile {
 
 /// One optional piece of per-stage disclosure that some acts can produce and others cannot.
 ///
-/// **One class with three members, not three special cases.** Each names a response field that is
+/// **One class with two members, not two special cases.** Each names a response field that is
 /// filled for some acts and null for others, and in every case a null means *not declared*, never
-/// zero — which is the whole reason the class exists.
+/// zero — which is the whole reason the class exists. Note that `match_location` is currently
+/// declared by NO act (see the registry): a declaration describes the DEPLOYED system, and the
+/// executor hard-codes `located_at: None` today.
 ///
 /// CLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the
 /// reason they always do here: a consumer branches exhaustively on which disclosures an act offers,
-/// whereas it must tolerate a refusal reason it has never seen. A fourth disclosure is a breaking
+/// whereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking
 /// change, and should be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -245,12 +247,9 @@ pub enum VisibilityProfile {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Disclosure {
-    /// How many of the caller's ids contributed — `StageResult.input_contributed`.
-    ///
-    /// The reading depends on the relation and both are honest: for a `bound`, how many of your
-    /// ids are in the output; for a `seed`, how many led to something in the output.
-    InputContribution,
-    /// Where in the resource the match was — `VecHit.located_at`.
+    // `InputContribution` used to lead this enum. Removed with its `input_contributed` field
+    // (ratification ⟨6⟩/9d `[2026-08-09, Pete]`); returns when a walk carries origin.
+    /// Where in the resource the match was — `ResourceHit.located_at`.
     MatchLocation,
     /// How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.
     ///
@@ -293,23 +292,16 @@ pub struct ActDeclaration {
     pub produces: Option<IdKind>,
     /// Which optional per-stage disclosures this act's mechanic **can** produce.
     ///
-    /// Three response fields are filled for some acts and null for others, and a null in any of
-    /// them is otherwise ambiguous between *this act cannot* and *the answer is none* — which are
-    /// opposite answers. This is what disambiguates them, and what `/api/query/validate` reads to
-    /// tell a caller in advance rather than leaving them to discover it in a response.
+    /// The response fields [`Disclosure`] names are filled for some acts and null for others, and
+    /// a null in any of them is otherwise ambiguous between *this act cannot* and *the answer is
+    /// none* — which are opposite answers. This is what disambiguates them, and what
+    /// `/api/query/validate` reads to tell a caller in advance rather than leaving them to
+    /// discover it in a response.
     ///
     /// **Absence from this list is the declaration, not silence** — the same rule
-    /// [`ActDeclaration::door_coverage`] follows.
-    ///
-    /// # It is a statement about the MECHANIC, and nothing fills these yet
-    ///
-    /// A value here says the serving function is *capable* of the disclosure — `follow-from`
-    /// structurally cannot report input contribution because its walk discards path origin before
-    /// returning. It does **not** say the response currently carries it: there is no executor, so
-    /// today every one of these fields is unfilled for every act. That is a **declared hole**, not
-    /// a filed task, and it is named here rather than left for a reader to infer from an empty
-    /// response. The capability claim is the durable half and is verifiable against the SQL now;
-    /// the filling is the executor's, and whoever writes it owes these fields.
+    /// [`ActDeclaration::door_coverage`] follows. Today every act's list is empty: a declaration
+    /// describes the DEPLOYED system, and no deployed fragment carries either remaining
+    /// disclosure out (see the registry's per-site rulings).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discloses: Vec<Disclosure>,
     /// Which surfaces reach this act, and how much of it. **Every [`Door`] carries an entry** —
@@ -449,7 +441,7 @@ mod tests {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
-            discloses: vec![Disclosure::InputContribution],
+            discloses: vec![],
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,

@@ -62,8 +62,6 @@ fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
                 .collect(),
         },
         intention: None,
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages,
     };
     validate(&c).expect("plan is valid")
@@ -427,8 +425,6 @@ fn build_with_intention(stages: Vec<StageNode>, returns: Vec<&str>) -> Validated
             query: "salience".to_string(),
             embedded: true,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages,
     };
     validate(&c).expect("plan is valid")
@@ -680,8 +676,6 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
             }],
         },
         intention: None,
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![find_stage("quoted", ActName::FindExact, None)],
     };
     let refusals = validate(&c).expect_err("no intention is refused statically");
@@ -798,8 +792,6 @@ fn a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it() {
             query: "salience".to_string(),
             embedded: true,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![find_stage(
             "hits",
             ActName::FindExact,

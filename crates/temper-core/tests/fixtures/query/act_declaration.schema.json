@@ -134,16 +134,11 @@
       ]
     },
     "Disclosure": {
-      "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with three members, not three special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A fourth disclosure is a breaking\nchange, and should be.",
+      "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with two members, not two special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists. Note that `match_location` is currently\ndeclared by NO act (see the registry): a declaration describes the DEPLOYED system, and the\nexecutor hard-codes `located_at: None` today.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking\nchange, and should be.",
       "oneOf": [
         {
-          "const": "input_contribution",
-          "description": "How many of the caller's ids contributed — `StageResult.input_contributed`.\n\nThe reading depends on the relation and both are honest: for a `bound`, how many of your\nids are in the output; for a `seed`, how many led to something in the output.",
-          "type": "string"
-        },
-        {
           "const": "match_location",
-          "description": "Where in the resource the match was — `VecHit.located_at`.",
+          "description": "Where in the resource the match was — `ResourceHit.located_at`.",
           "type": "string"
         },
         {
@@ -328,7 +323,7 @@
       "$ref": "#/$defs/BuildState"
     },
     "discloses": {
-      "description": "Which optional per-stage disclosures this act's mechanic **can** produce.\n\nThree response fields are filled for some acts and null for others, and a null in any of\nthem is otherwise ambiguous between *this act cannot* and *the answer is none* — which are\nopposite answers. This is what disambiguates them, and what `/api/query/validate` reads to\ntell a caller in advance rather than leaving them to discover it in a response.\n\n**Absence from this list is the declaration, not silence** — the same rule\n[`ActDeclaration::door_coverage`] follows.\n\n# It is a statement about the MECHANIC, and nothing fills these yet\n\nA value here says the serving function is *capable* of the disclosure — `follow-from`\nstructurally cannot report input contribution because its walk discards path origin before\nreturning. It does **not** say the response currently carries it: there is no executor, so\ntoday every one of these fields is unfilled for every act. That is a **declared hole**, not\na filed task, and it is named here rather than left for a reader to infer from an empty\nresponse. The capability claim is the durable half and is verifiable against the SQL now;\nthe filling is the executor's, and whoever writes it owes these fields.",
+      "description": "Which optional per-stage disclosures this act's mechanic **can** produce.\n\nThe response fields [`Disclosure`] names are filled for some acts and null for others, and\na null in any of them is otherwise ambiguous between *this act cannot* and *the answer is\nnone* — which are opposite answers. This is what disambiguates them, and what\n`/api/query/validate` reads to tell a caller in advance rather than leaving them to\ndiscover it in a response.\n\n**Absence from this list is the declaration, not silence** — the same rule\n[`ActDeclaration::door_coverage`] follows. Today every act's list is empty: a declaration\ndescribes the DEPLOYED system, and no deployed fragment carries either remaining\ndisclosure out (see the registry's per-site rulings).",
       "items": {
         "$ref": "#/$defs/Disclosure"
       },

@@ -6,10 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use std::collections::BTreeMap;
-
 use super::envelope::ActInvocation;
-use super::scalars::{BoundTerm, MetaDetail};
 use super::stage::StageName;
 use crate::types::resource_view::ResourceSection;
 
@@ -195,13 +192,16 @@ pub struct Composition {
     //
     // If a later runtime refusal genuinely wants a choice, the field returns as an OPTIONAL
     // addition, which is additive rather than breaking. `[decided — 2026-08-08, Pete]`
-    #[serde(default)]
-    pub meta_detail: MetaDetail,
-    /// The SECOND bound layer: over the composition's own output, distinct from the act-level
-    /// terms on each stage. A composition never carries a total — with each stage's output the
-    /// next stage's domain, a full-composition total is not well-defined.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub bounds: BTreeMap<BoundTerm, i64>,
+    //
+    // There is also no `meta_detail`. It selected how much per-resource meta the trace would
+    // retain — a metadata-budget concept whose job nobody could state (YAGNI); nothing ever
+    // honoured it. Removed by ADJ-4 `[2026-08-10, Pete]`.
+    //
+    // And no `bounds`. A composition cannot meaningfully have bounds: its output is nothing but
+    // the returned stages' outputs, each already bounded by its own `terms`, and a cross-stage
+    // budget would be a different, undesigned feature. Removed by ADJ-4 `[2026-08-10, Pete]`, per
+    // the `on_stage_refusal` remove-and-tolerate precedent: an unknown `bounds` key is ignored
+    // like any unknown field — pinned by the legacy-payload test below.
     /// The DAG's nodes. Each references its inputs explicitly by stage name — there is no
     /// prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological
     /// sort derives the order; there is deliberately no `act_sequence` method, which would be a
@@ -238,8 +238,6 @@ mod tests {
         Composition {
             outcome: outcome(vec![]),
             intention: None,
-            meta_detail: Default::default(),
-            bounds: BTreeMap::new(),
             stages,
         }
     }
@@ -270,6 +268,23 @@ mod tests {
         // silently turning an ignored legacy field into a hard 400.
         let legacy = r#"{"outcome":{"returns":[]},"on_stage_refusal":"halt","stages":[]}"#;
         assert!(serde_json::from_str::<Composition>(legacy).is_ok());
+    }
+
+    #[test]
+    fn a_composition_that_still_carries_bounds_or_meta_detail_is_accepted_and_both_ignored() {
+        // Same precedent as `on_stage_refusal` above: `bounds` and `meta_detail` were removed by
+        // ADJ-4 `[2026-08-10, Pete]`, nothing ships against this contract yet, and serde's default
+        // is to ignore unknown fields rather than reject them. Pinned so that a later
+        // `deny_unknown_fields` sees this decision rather than silently turning an ignored legacy
+        // field into a hard 400 — and so the removal is visibly remove-and-tolerate, not a parse
+        // hazard.
+        let legacy = r#"{"outcome":{"returns":[]},"meta_detail":"surviving","bounds":{"limit":10},"stages":[]}"#;
+        let parsed = serde_json::from_str::<Composition>(legacy).expect("legacy fields parse");
+        assert_eq!(
+            parsed,
+            composition(vec![]),
+            "and neither influences anything"
+        );
     }
 
     #[test]

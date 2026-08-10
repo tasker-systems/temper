@@ -141,14 +141,17 @@ pub enum RefusalReason {
     ///
     /// `[corrected — 2026-08-09]` This said "Never constructed by this crate — only by
     /// deserializing a producer newer than this consumer." **That is false**, and was when it was
-    /// written: `validate` constructs it for nine topology and vocabulary refusals (`"cycle"`,
+    /// written: `validate` constructs it for twelve topology and vocabulary refusals (`"cycle"`,
     /// `"dangling-reference"`, `"duplicate-stage-name"`, `"combinator-arity"`,
     /// `"unknown-return-stage"`, `"duplicate-return-stage"`, `"combinator-not-returnable"`,
-    /// `"unknown-act"`, `"empty-property-key"`, `"empty-contains"`). So the server emits reasons
-    /// its own [`RefusalReason::is_known`] answers `false` to, and those nine are kebab-case while
-    /// every declared variant is snake_case — a client's vocabulary is two conventions. Found in
-    /// review; recorded rather than repaired, because promoting nine strings to variants is a wire
-    /// change and belongs with the door, not ahead of it.
+    /// `"unknown-act"`, `"empty-property-key"`, `"empty-contains"`, `"no-stages"`,
+    /// `"no-returns"`). So the server emits reasons its own [`RefusalReason::is_known`] answers
+    /// `false` to, and those twelve are kebab-case while every declared variant is snake_case — a
+    /// client's vocabulary is two conventions. Found in review; recorded rather than repaired,
+    /// because promoting twelve strings to variants is a wire change and belongs with the door,
+    /// not ahead of it. `[recounted — 2026-08-10]` An earlier count here said nine while listing
+    /// ten and omitting `"no-stages"`; the list is now held to
+    /// `grep -o 'RefusalReason::Other("[a-z-]*"' validate.rs | sort -u`.
     #[serde(untagged)]
     Other(String),
 }

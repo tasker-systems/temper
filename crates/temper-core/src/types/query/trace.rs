@@ -3,9 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::act::ActName;
-use super::disposition::StageDisposition;
+use super::disposition::{ActRefusal, StageDisposition};
 use super::envelope::NarrowedBy;
-use super::scalars::MetaDetail;
 use super::stage::{StageName, StageRelation};
 
 /// Where a stage's input set came from: an earlier stage, or the caller.
@@ -43,17 +42,9 @@ pub enum InputSource {
     Caller,
 }
 
-/// A per-resource meta budget that bit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct MetaTruncated {
-    pub stage: StageName,
-    pub retained: i64,
-    pub dropped: i64,
-}
+// `MetaTruncated` used to live here. Removed with `meta_detail` by ADJ-4 `[2026-08-10, Pete]` —
+// it existed only to serve the metadata-budget concept, whose job nobody could state (YAGNI). If a
+// metadata budget ever materializes it returns designed, additively.
 
 /// One stage's mandatory disclosure. Exists whether or not the stage produced a result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +56,12 @@ pub struct StageTrace {
     pub stage: StageName,
     pub act: ActName,
     pub disposition: StageDisposition,
+    /// Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace
+    /// covers every stage while results cover only returned ones, so this is the ONLY refusal
+    /// record for an intermediate stage. **The pair rule**: identical to
+    /// [`super::envelope::StageResult::refusal`], for the same reason as the input numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<ActRefusal>,
     /// Whether this stage NARROWED or REACHED, echoed back.
     ///
     /// A reader of the trace can then tell without knowing the act vocabulary — *"did stage 3
@@ -77,25 +74,14 @@ pub struct StageTrace {
     pub input_source: Option<InputSource>,
     /// How many ids this stage was handed. Zero for a stage with no input.
     pub input_ids: i64,
-    /// How many of the usable ids actually contributed to what came back.
-    ///
-    /// **NULL MEANS THIS ACT CANNOT REPORT IT. It never means zero.** Which acts can is DECLARED —
-    /// [`super::act::ActDeclaration::discloses`] — so it is knowable before running the query
-    /// rather than discovered here.
-    ///
-    /// `follow-from` is the act that cannot: its walk discards seed provenance before returning,
-    /// and the obvious fallback is worse than null, because a seed never appears in its own output
-    /// and the `bound` reading would print 0 of 10 on a stage that returned forty neighbours.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_contributed: Option<i64>,
+    // `input_contributed` used to sit here — removed by ratification ⟨6⟩/9d `[2026-08-09, Pete]`,
+    // see the tombstone on [`super::envelope::StageResult`].
     /// How many of them this stage could not use at all — invisible, nonexistent, or malformed.
     ///
     /// Conflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].
     /// Naming the invisible case alone would make the trace a single-probe existence oracle.
     pub input_unusable: i64,
     pub narrowed_by: Vec<NarrowedBy>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meta_truncated: Option<MetaTruncated>,
 }
 
 /// The whole composition's disclosure: an ordered per-stage record array.
@@ -105,7 +91,9 @@ pub struct StageTrace {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct CompositionTrace {
-    pub meta_detail: MetaDetail,
+    // `meta_detail` used to sit here, echoed from the request. Removed with the request field by
+    // ADJ-4 `[2026-08-10, Pete]` — the metadata-budget concept it served had a job nobody could
+    // state, and nothing ever honoured it.
     pub stages: Vec<StageTrace>,
 }
 
@@ -123,13 +111,12 @@ mod tests {
             stage: name(stage),
             act,
             disposition,
+            refusal: None,
             relation: None,
             input_source: None,
             input_ids: 0,
-            input_contributed: None,
             input_unusable: 0,
             narrowed_by: vec![],
-            meta_truncated: None,
         }
     }
 
@@ -147,7 +134,6 @@ mod tests {
             stage: name("hits"),
         });
         t.input_ids = 40;
-        t.input_contributed = Some(0);
         assert_eq!(t.disposition, StageDisposition::Refused);
         assert_eq!(
             serde_json::from_str::<StageTrace>(&serde_json::to_string(&t).unwrap()).unwrap(),
@@ -198,34 +184,31 @@ mod tests {
     }
 
     #[test]
-    fn a_null_contribution_is_distinguishable_from_a_zero_one() {
-        // THE reason this field is an Option. Null means the act cannot report it; zero means it
-        // reported none. `follow-from` is the act that cannot — its walk discards seed provenance
-        // — and printing 0 there, on a stage that returned forty neighbours, would be plausible,
-        // quiet and false.
-        let cannot = trace(
-            "neighbours",
-            ActName::FollowFrom,
-            StageDisposition::Answered,
+    fn a_refused_trace_entry_carries_its_reason_and_an_answered_one_omits_the_key() {
+        // The pair rule's trace half (ADJ-3, 2026-08-10). The trace covers every stage while
+        // results cover only returned ones, so this is the ONLY refusal record for an intermediate
+        // stage — a `refused` entry with the reason stripped would leave the reader knowing a stage
+        // declined and nothing about why.
+        use crate::types::query::disposition::{ActRefusal, RefusalReason};
+        let mut refused = trace(
+            "wide",
+            ActName::FindAboutAnywhere,
+            StageDisposition::Refused,
         );
-        let mut none_did = trace(
-            "narrowed",
-            ActName::FindAboutWithin,
-            StageDisposition::Empty,
-        );
-        none_did.input_contributed = Some(0);
+        refused.refusal = Some(ActRefusal {
+            reason: RefusalReason::EmbeddingUnavailable,
+            detail: "the server could not compute one".to_string(),
+        });
+        let json = serde_json::to_string(&refused).unwrap();
+        assert!(json.contains("embedding_unavailable"), "got: {json}");
+        assert_eq!(serde_json::from_str::<StageTrace>(&json).unwrap(), refused);
 
-        let a = serde_json::to_string(&cannot).unwrap();
-        let b = serde_json::to_string(&none_did).unwrap();
+        let answered = trace("hits", ActName::FindExact, StageDisposition::Answered);
+        let json = serde_json::to_string(&answered).unwrap();
         assert!(
-            !a.contains("input_contributed"),
-            "cannot-report omits it: {a}"
+            !json.contains("refusal"),
+            "an answered entry has no refusal to carry: {json}"
         );
-        assert!(
-            b.contains(r#""input_contributed":0"#),
-            "reported-none carries it: {b}"
-        );
-        assert_ne!(a, b);
     }
 
     #[test]
@@ -255,27 +238,16 @@ mod tests {
     }
 
     #[test]
-    fn a_truncated_meta_budget_is_always_disclosed() {
-        // ORPHAN_LIMIT = 50 truncates with no response flag and no server log. The contract may
-        // decline to carry detail; it may never do so silently.
-        let mut t = trace("near", ActName::FollowFrom, StageDisposition::Answered);
-        t.meta_truncated = Some(MetaTruncated {
-            stage: name("near"),
-            retained: 50,
-            dropped: 412,
-        });
-        let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("meta_truncated"));
-        assert_eq!(serde_json::from_str::<StageTrace>(&json).unwrap(), t);
-    }
-
-    #[test]
-    fn a_composition_trace_is_ordered_and_carries_its_detail_level() {
+    fn a_composition_trace_round_trips() {
+        // It used to also carry a `meta_detail` level; that went with the metadata-budget concept
+        // (ADJ-4, 2026-08-10). What remains is the ordered per-stage record array.
         let c = CompositionTrace {
-            meta_detail: MetaDetail::Surviving,
-            stages: vec![],
+            stages: vec![trace(
+                "hits",
+                ActName::FindExact,
+                StageDisposition::Answered,
+            )],
         };
-        assert_eq!(c.meta_detail, MetaDetail::Surviving);
         assert_eq!(
             serde_json::from_str::<CompositionTrace>(&serde_json::to_string(&c).unwrap()).unwrap(),
             c

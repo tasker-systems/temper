@@ -127,8 +127,6 @@ fn one_find(
             query: query.to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
@@ -353,8 +351,6 @@ fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
             query: "composable".to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
@@ -427,8 +423,6 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
             query: "composable".to_string(),
             embedded: false,
         }),
-        meta_detail: Default::default(),
-        bounds: Default::default(),
         stages: vec![stage(&asked), stage(&silent)],
     };
     let v = validate(&c).expect("plan is valid");

@@ -10,14 +10,11 @@
 //!
 //! Most of a `StageResult` is not a row. `act`, `orders_by`, `relation`, `input_source` and
 //! `terms_applied` are properties of the PLAN and its declarations; only the rows, the counts and
-//! the refusals come back from Postgres. Two of the disclosure numbers are derived rather than
-//! measured, and each is exact rather than approximate:
-//!
-//! * `input_ids` for an upstream-fed stage is the upstream stage's own produced tally. Asking again
-//!   would be asking the same statement the same question twice.
-//! * `input_contributed` for a **bound** is the produced count, because a bound narrows *within* the
-//!   set it was handed — output ⊆ input by construction, so *"how many of your ids are in the
-//!   output"* is just *"how many came out"*.
+//! the refusals come back from Postgres. One disclosure number is derived rather than measured,
+//! and it is exact rather than approximate: `input_ids` for an upstream-fed stage is the upstream
+//! stage's own produced tally — asking again would be asking the same statement the same question
+//! twice. (`input_contributed` was a second derived number until ratification ⟨6⟩/9d removed the
+//! field — see the tombstone on `StageResult`.)
 
 use std::collections::HashMap;
 
@@ -28,7 +25,7 @@ use crate::backend::substrate_read::{embed_query_text, QueryEmbed};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
-    applied_terms, declaration, ActName, Disclosure, Extent, NarrowedBy, PlanRefusal,
+    applied_terms, declaration, ActName, ActRefusal, Extent, NarrowedBy, PlanRefusal,
     QueryResponse, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode,
     StageOutput, StageRelation, StageResult, StageTrace, ValidatedComposition,
 };
@@ -215,10 +212,7 @@ fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> 
 
     QueryResponse {
         returned,
-        trace: CompositionTrace {
-            meta_detail: v.composition().meta_detail,
-            stages,
-        },
+        trace: CompositionTrace { stages },
     }
 }
 
@@ -231,9 +225,11 @@ fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> 
 /// another would have no way to tell which was right.
 struct StageNumbers {
     disposition: StageDisposition,
+    /// Present iff the stage refused — the ONE construction both the result and the trace carry
+    /// (the pair rule), built from the per-stage refusal `compile` recorded.
+    refusal: Option<ActRefusal>,
     input_ids: i64,
     input_unusable: i64,
-    input_contributed: Option<i64>,
     relation: Option<StageRelation>,
     input_source: Option<InputSource>,
 }
@@ -273,80 +269,38 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
         ),
     };
 
+    // The ONE construction of the refusal both carriers share — built here so `StageResult.refusal`
+    // and `StageTrace.refusal` cannot disagree, the same way this struct already shares the input
+    // numbers. `compile` recorded the per-stage refusal; this is where it becomes the wire's.
+    let refusal = rows.refusal(name).map(|r| ActRefusal {
+        reason: r.reason.clone(),
+        detail: r.detail.clone(),
+    });
+
     StageNumbers {
         // **A refusal outranks the row count, and that ordering is the whole point.** A refused
         // stage's CTE is `WHERE false`, so its tally is `produced = 0` — byte-identical to an honest
         // empty. Reading the tally first would render `embedding_unavailable` as *"asked, nothing
         // matched"*: a rephrase-and-retry suggestion for a question that was never asked.
-        disposition: if rows.refusal(name).is_some() {
+        disposition: if refusal.is_some() {
             StageDisposition::Refused
         } else if produced > 0 {
             StageDisposition::Answered
         } else {
             StageDisposition::Empty
         },
+        refusal,
         input_ids,
         input_unusable: tally.map(|t| t.unusable).unwrap_or(0),
-        input_contributed: input_contributed(node, relation.as_ref(), produced),
         relation,
         input_source,
     }
 }
 
-/// How many of the handed-in ids actually contributed — **or `None`, which never means zero**.
-///
-/// Three answers, in this order:
-///
-/// 1. The act does not declare [`Disclosure::InputContribution`] → `None`. `follow-from` is the
-///    case: its walk builds a path array that knows which seed reached which node and then discards
-///    it, so seed provenance is gone before the function returns. The obvious fallback is worse than
-///    null — `hop > 0` means a seed never appears in its own output, so the `bound` reading would
-///    report 0 contributed out of 10 on a stage that just returned forty good neighbours.
-/// 2. The input is an ANCHOR (a cogmap or context id) → `None`. An anchor id can never appear in a
-///    resource output, so the literal answer is a permanent 0 on a stage that may have returned
-///    fifty rows. `[decided — 2026-08-09, Pete]` Kept as null rather than reported as zero; the cost
-///    is that "knowable in advance from `discloses`" now has an input-shape caveat, and whether the
-///    declaration model should express that is an OPEN question — the real one being what signal a
-///    caller can actually act on.
-/// 3. A `bound` over resource ids → the produced count, exactly. A bound narrows *within* the set it
-///    was handed, so output ⊆ input by construction and "how many of yours are in the output" is
-///    "how many came out". Not an estimate.
-fn input_contributed(
-    node: &StageNode,
-    relation: Option<&StageRelation>,
-    produced: i64,
-) -> Option<i64> {
-    let StageNode::Act(inv) = node else {
-        return None;
-    };
-    let decl = declaration(&inv.act)?;
-    if !decl.discloses.contains(&Disclosure::InputContribution) {
-        return None;
-    }
-    match &inv.input {
-        // 0 of 0 is honest, and is why `find-about-anywhere` declares the disclosure despite
-        // accepting no input at all: omitting it would claim "cannot", the word reserved for an act
-        // whose mechanic destroys the answer.
-        None => Some(0),
-        Some(StageInput::Caller { ids, .. })
-            if matches!(
-                ids.kind,
-                temper_core::types::query::IdKind::Cogmap
-                    | temper_core::types::query::IdKind::Context
-            ) =>
-        {
-            None
-        }
-        Some(_) => match relation {
-            Some(StageRelation::Bound) => Some(produced),
-            // A seed's contribution is not derivable from counts — reaching beyond the set means
-            // the output is not a subset of it, so nothing here can say how many seeds led
-            // somewhere. Unreachable today (no seeding act declares the disclosure) and answered
-            // honestly rather than plausibly.
-            _ => None,
-        },
-    }
-}
+// `input_contributed` used to be derived here — the act-declaration gate, the anchor-input null,
+// and the bound-equals-produced arm. Removed by ratification ⟨6⟩/9d `[2026-08-09, Pete]` with the
+// field it fed: redundant where filled (the bound arm restated the produced count) and null where
+// interesting. Returns with the field when a walk carries its origin.
 
 fn stage_result(
     node: &StageNode,
@@ -415,6 +369,7 @@ fn stage_result(
     StageResult {
         act,
         disposition: n.disposition,
+        refusal: n.refusal,
         orders_by: decl.as_ref().and_then(|d| d.orders_by.clone()),
         produced,
         extent: extent_of(node, rows, &terms),
@@ -424,7 +379,6 @@ fn stage_result(
         terms_applied: terms,
         narrowed_by: narrowed_by(node),
         input_ids: n.input_ids,
-        input_contributed: n.input_contributed,
         input_unusable: n.input_unusable,
     }
 }
@@ -454,19 +408,12 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         stage: node.name().clone(),
         act: act_of(node),
         disposition: n.disposition,
+        refusal: n.refusal,
         relation: n.relation,
         input_source: n.input_source,
         input_ids: n.input_ids,
-        input_contributed: n.input_contributed,
         input_unusable: n.input_unusable,
         narrowed_by: narrowed_by(node),
-        // Set only where the per-resource meta budget bit. **Nothing truncates, and nothing HONOURS
-        // `meta_detail` either** — it is echoed into the trace and read nowhere else, so `full` and
-        // `none` behave exactly like `surviving`. `[corrected — 2026-08-09]` This comment claimed it
-        // was "threaded and honoured"; only the first half was true. Absent is still the truthful
-        // value for this field — a zeroed pair would claim nothing was dropped, which is a claim no
-        // budget was ever consulted to make.
-        meta_truncated: None,
     })
 }
 
@@ -550,8 +497,8 @@ fn act_of(node: &StageNode) -> ActName {
 mod tests {
     use super::*;
     use temper_core::types::query::{
-        validate, ActInvocation, Composition, IdKind, IdSet, Intention, OutcomeDeclaration,
-        RefusalReason, ResourceFilter, ReturnSpec, StageName,
+        validate, ActInvocation, Composition, Intention, OutcomeDeclaration, RefusalReason,
+        ResourceFilter, ReturnSpec, StageName,
     };
     use temper_substrate::readback::query_exec::{HitRow, TallyRow};
 
@@ -586,8 +533,6 @@ mod tests {
                 query: "composable".to_string(),
                 embedded: false,
             }),
-            meta_detail: Default::default(),
-            bounds: Default::default(),
             stages,
         };
         validate(&c).expect("plan is valid")
@@ -716,6 +661,23 @@ mod tests {
             StageDisposition::Refused
         );
         assert_eq!(r.trace.stages[0].disposition, StageDisposition::Refused);
+
+        // The pair rule (ADJ-3): the reason reaches the reader on BOTH carriers, identically —
+        // the trace is the only refusal record for an intermediate stage, and the result must not
+        // say less than the trace for a returned one.
+        let result_refusal = r.returned[&name("wide")]
+            .refusal
+            .as_ref()
+            .expect("a refused result carries its reason");
+        let trace_refusal = r.trace.stages[0]
+            .refusal
+            .as_ref()
+            .expect("a refused trace entry carries its reason");
+        assert_eq!(result_refusal.reason, RefusalReason::EmbeddingUnavailable);
+        assert_eq!(
+            result_refusal, trace_refusal,
+            "one construction, two carriers"
+        );
     }
 
     /// **A refusal is PER STAGE**, and one composition holding both is the only fixture that can
@@ -762,6 +724,17 @@ mod tests {
             "a refusal must not travel to a stage that ran — the composition did not refuse, one \
              stage did"
         );
+        // And the reason does not travel either: the answered stage's `refusal` is absent on both
+        // carriers, so `Some` here would be one stage wearing its neighbour's refusal.
+        assert!(r.returned[&name("exact")].refusal.is_none());
+        assert!(r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("exact"))
+            .expect("the exact stage is traced")
+            .refusal
+            .is_none());
         // And the same distinction in the trace, which is where a reader looks for it.
         let refused: Vec<&StageDisposition> = r
             .trace
@@ -875,67 +848,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_bounds_contribution_is_the_produced_count_because_output_is_a_subset_of_input() {
-        let v = plan(
-            vec![
-                act_node("hits", ActName::FindExact, None),
-                act_node(
-                    "narrowed",
-                    ActName::FindExact,
-                    Some(StageInput::Upstream {
-                        relation: StageRelation::Bound,
-                        stage: name("hits"),
-                    }),
-                ),
-            ],
-            vec!["narrowed"],
-        );
-        let rows = QueryRows {
-            hits: vec![],
-            tallies: vec![tally("hits", 12, 0), tally("narrowed", 4, 0)],
-            refusals: vec![],
-        };
-        let r = assemble(&v, &rows, &Hydrated::default());
-        assert_eq!(
-            r.returned[&name("narrowed")].input_contributed,
-            Some(4),
-            "a bound narrows WITHIN its input, so what came out is what contributed"
-        );
-    }
-
-    #[test]
-    fn an_act_that_cannot_report_a_contribution_says_null_and_never_zero() {
-        // `follow-from` declares no `InputContribution`: its walk discards seed provenance. Zero
-        // here would be plausible, quiet and false — a seed never appears in its own output, so the
-        // bound reading would print 0 on a stage that returned forty neighbours.
-        let v = plan(
-            vec![act_node(
-                "near",
-                ActName::FollowFrom,
-                Some(StageInput::Caller {
-                    relation: StageRelation::Seed,
-                    ids: IdSet {
-                        kind: IdKind::Resource,
-                        provenance: None,
-                        ids: vec![Uuid::now_v7(), Uuid::now_v7()],
-                    },
-                }),
-            )],
-            vec!["near"],
-        );
-        let rows = QueryRows {
-            hits: vec![],
-            tallies: vec![tally("near", 40, 0)],
-            refusals: vec![],
-        };
-        let r = assemble(&v, &rows, &Hydrated::default());
-        // One assertion, not two: `assert_ne!(…, Some(0))` after `assert_eq!(…, None)` cannot
-        // fail — it is implied by the line above it, and an assertion that cannot fail reads as
-        // protection that is not there. The name carries the "never zero" claim; the comment
-        // carries why it matters.
-        assert_eq!(r.returned[&name("near")].input_contributed, None);
-    }
+    // Five tests about `input_contributed` stood here — the bound-equals-produced derivation, the
+    // cannot-report null, the declaration gate, the anchor-input null, and its resource-bound
+    // contrast. Deleted with the field (ratification ⟨6⟩/9d, 2026-08-09); the refusal-pair
+    // assertions above are the field's replacement disclosure, and the derivation returns with the
+    // field when a walk carries its origin.
 
     /// A minimal hydrated view for a given id. Only `id` is load-bearing below — the assembler
     /// keys on it and copies the rest through.
@@ -1010,75 +927,6 @@ mod tests {
             }
             other => panic!("expected resources, got {other:?}"),
         }
-    }
-
-    /// **The `discloses` GATE, tested where it can actually be reached.**
-    ///
-    /// Review found both `None`-returning clauses of `input_contributed` uncovered: deleting either
-    /// left all eight tests green. The act-level one is unreachable through `assemble` — every act
-    /// that declares no `InputContribution` also accepts no bound, so the relation arm swallows it
-    /// first — so it is exercised against the function directly, the same level `narrowing_for`'s
-    /// tests use in the compiler.
-    #[test]
-    fn an_act_that_declares_no_contribution_is_gated_before_the_relation_is_consulted() {
-        // `follow-from` declares none. Hand it a BOUND anyway — a shape `validate` refuses, which is
-        // exactly why the guard cannot be reached from above and must be asserted here.
-        let node = act_node(
-            "n",
-            ActName::FollowFrom,
-            Some(StageInput::Upstream {
-                relation: StageRelation::Bound,
-                stage: name("up"),
-            }),
-        );
-        assert_eq!(
-            input_contributed(&node, Some(&StageRelation::Bound), 40),
-            None,
-            "the declaration decides before the relation does; 40 would be a plausible lie"
-        );
-    }
-
-    /// **An ANCHOR input reports null, not zero** — the clause the commit message dedicates a
-    /// decision to, and which no test reached until review said so.
-    #[test]
-    fn an_anchor_input_reports_null_because_its_ids_can_never_be_in_a_resource_output() {
-        let node = act_node(
-            "n",
-            ActName::FindAboutWithin,
-            Some(StageInput::Caller {
-                relation: StageRelation::Bound,
-                ids: IdSet {
-                    kind: IdKind::Cogmap,
-                    provenance: None,
-                    ids: vec![Uuid::now_v7()],
-                },
-            }),
-        );
-        // `find-about-within` DOES declare the disclosure, so the act-level gate passes and this is
-        // the anchor arm alone. Without it the answer would be `Some(50)` — "50 of your 1 id
-        // contributed" — which is the plausible-but-false number the decision exists to prevent.
-        assert_eq!(
-            input_contributed(&node, Some(&StageRelation::Bound), 50),
-            None
-        );
-    }
-
-    /// A resource bound on the same act DOES report, so the test above is about the anchor and not
-    /// about the act.
-    #[test]
-    fn a_resource_bound_on_the_same_act_still_reports_its_contribution() {
-        let node = act_node(
-            "n",
-            ActName::FindAboutWithin,
-            Some(StageInput::Upstream {
-                relation: StageRelation::Bound,
-                stage: name("up"),
-            }),
-        );
-        assert_eq!(
-            input_contributed(&node, Some(&StageRelation::Bound), 50),
-            Some(50)
-        );
     }
 
     /// **A refused stage cannot claim `complete`.** It never consulted the corpus, so it has nothing

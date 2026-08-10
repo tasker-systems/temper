@@ -43,23 +43,16 @@ bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null,
 /**
  * Which optional per-stage disclosures this act's mechanic **can** produce.
  *
- * Three response fields are filled for some acts and null for others, and a null in any of
- * them is otherwise ambiguous between *this act cannot* and *the answer is none* — which are
- * opposite answers. This is what disambiguates them, and what `/api/query/validate` reads to
- * tell a caller in advance rather than leaving them to discover it in a response.
+ * The response fields [`Disclosure`] names are filled for some acts and null for others, and
+ * a null in any of them is otherwise ambiguous between *this act cannot* and *the answer is
+ * none* — which are opposite answers. This is what disambiguates them, and what
+ * `/api/query/validate` reads to tell a caller in advance rather than leaving them to
+ * discover it in a response.
  *
  * **Absence from this list is the declaration, not silence** — the same rule
- * [`ActDeclaration::door_coverage`] follows.
- *
- * # It is a statement about the MECHANIC, and nothing fills these yet
- *
- * A value here says the serving function is *capable* of the disclosure — `follow-from`
- * structurally cannot report input contribution because its walk discards path origin before
- * returning. It does **not** say the response currently carries it: there is no executor, so
- * today every one of these fields is unfilled for every act. That is a **declared hole**, not
- * a filed task, and it is named here rather than left for a reader to infer from an empty
- * response. The capability claim is the durable half and is verifiable against the SQL now;
- * the filling is the executor's, and whoever writes it owes these fields.
+ * [`ActDeclaration::door_coverage`] follows. Today every act's list is empty: a declaration
+ * describes the DEPLOYED system, and no deployed fragment carries either remaining
+ * disclosure out (see the registry's per-site rulings).
  */
 discloses: Array<Disclosure>, 
 /**
@@ -215,13 +208,7 @@ export type CombineOp = "union" | "intersect";
 /**
  * A composition, declared before execution.
  */
-export type Composition = { outcome: OutcomeDeclaration, intention: Intention | null, meta_detail: MetaDetail, 
-/**
- * The SECOND bound layer: over the composition's own output, distinct from the act-level
- * terms on each stage. A composition never carries a total — with each stage's output the
- * next stage's domain, a full-composition total is not well-defined.
- */
-bounds: { [key in BoundTerm]?: bigint }, 
+export type Composition = { outcome: OutcomeDeclaration, intention: Intention | null, 
 /**
  * The DAG's nodes. Each references its inputs explicitly by stage name — there is no
  * prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological
@@ -233,21 +220,23 @@ stages: Array<StageNode>, };
 /**
  * The whole composition's disclosure: an ordered per-stage record array.
  */
-export type CompositionTrace = { meta_detail: MetaDetail, stages: Array<StageTrace>, };
+export type CompositionTrace = { stages: Array<StageTrace>, };
 
 /**
  * One optional piece of per-stage disclosure that some acts can produce and others cannot.
  *
- * **One class with three members, not three special cases.** Each names a response field that is
+ * **One class with two members, not two special cases.** Each names a response field that is
  * filled for some acts and null for others, and in every case a null means *not declared*, never
- * zero — which is the whole reason the class exists.
+ * zero — which is the whole reason the class exists. Note that `match_location` is currently
+ * declared by NO act (see the registry): a declaration describes the DEPLOYED system, and the
+ * executor hard-codes `located_at: None` today.
  *
  * CLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the
  * reason they always do here: a consumer branches exhaustively on which disclosures an act offers,
- * whereas it must tolerate a refusal reason it has never seen. A fourth disclosure is a breaking
+ * whereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking
  * change, and should be.
  */
-export type Disclosure = "input_contribution" | "match_location" | "filter_counts";
+export type Disclosure = "match_location" | "filter_counts";
 
 /**
  * One of Temper's three surfaces. Named as doors rather than as transports because the question
@@ -383,16 +372,6 @@ header_path: string | null,
  * era whose cost was never isolated either.
  */
 snippet: string | null, };
-
-/**
- * How much per-resource meta the trace retains (design §4.4, tier 2).
- */
-export type MetaDetail = "surviving" | "full" | "none";
-
-/**
- * A per-resource meta budget that bit.
- */
-export type MetaTruncated = { stage: StageName, retained: bigint, dropped: bigint, };
 
 /**
  * One act-specific threshold, and what applying it did.
@@ -603,6 +582,12 @@ export type ResourceHit = { resource: ResourceView, scoring: Scoring,
  *
  * It sits on this type rather than on [`Scoring`] because `Scoring` is shared with
  * [`RegionHit`], and a region is not somewhere inside a resource.
+ *
+ * **`None` serializes as an explicit `"located_at": null`** (F4, ruled): the contract's prose
+ * is load-bearing on the null — every `located_at` is null today and the null unambiguously
+ * means *not declared* — and omitting the key made the resource-hit null indistinguishable
+ * from a shape with no such field, which is exactly the distinction [`RegionHit`] exists to
+ * draw.
  */
 located_at: MatchLocation | null, };
 
@@ -782,6 +767,19 @@ export type StageRelation = "bound" | "seed";
  */
 export type StageResult = { act: ActName, disposition: StageDisposition, 
 /**
+ * Present iff `disposition` is `refused` — the reason and standing-aware detail of the
+ * runtime refusal (`embedding_unavailable` is the only current case; the vocabulary is open).
+ * Ruled ADJ-3 `[2026-08-10, Pete]`: the contract's "one behaviour" promise requires the
+ * reason to reach the reader, so [`super::disposition::ActRefusal`] is resurrected from
+ * declared-unreachable to the carrier.
+ *
+ * **The pair rule**: [`super::trace::StageTrace`] carries an identical field, and the two must
+ * stay identical for the same reason as the input numbers — the trace covers every stage and
+ * the results only the returned ones, so disagreeing copies would leave a reader with no way
+ * to tell which was right.
+ */
+refusal: ActRefusal | null, 
+/**
  * Echoed from this act's declaration. Present iff the act orders anything.
  *
  * **Once per stage, rather than once per row.** The row keeps a literal field name so two
@@ -819,16 +817,6 @@ terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>,
  */
 input_ids: bigint, 
 /**
- * How many of the usable ids actually contributed to what came back.
- *
- * The reading depends on the relation and both are honest: for a `bound`, how many of your
- * ids are in the output; for a `seed`, how many led to something in the output.
- *
- * **NULL MEANS THIS ACT CANNOT REPORT IT — never zero.** Which acts can is DECLARED in
- * [`super::act::ActDeclaration::discloses`], so it is knowable before the query runs.
- */
-input_contributed: bigint | null, 
-/**
  * How many did not — for ANY reason, deliberately conflated.
  *
  * Invisible, nonexistent and malformed are one number on purpose. Separating them, or naming
@@ -849,6 +837,13 @@ input_unusable: bigint, };
  */
 export type StageTrace = { stage: StageName, act: ActName, disposition: StageDisposition, 
 /**
+ * Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace
+ * covers every stage while results cover only returned ones, so this is the ONLY refusal
+ * record for an intermediate stage. **The pair rule**: identical to
+ * [`super::envelope::StageResult::refusal`], for the same reason as the input numbers.
+ */
+refusal: ActRefusal | null, 
+/**
  * Whether this stage NARROWED or REACHED, echoed back.
  *
  * A reader of the trace can then tell without knowing the act vocabulary — *"did stage 3
@@ -862,24 +857,12 @@ relation: StageRelation | null, input_source: InputSource | null,
  */
 input_ids: bigint, 
 /**
- * How many of the usable ids actually contributed to what came back.
- *
- * **NULL MEANS THIS ACT CANNOT REPORT IT. It never means zero.** Which acts can is DECLARED —
- * [`super::act::ActDeclaration::discloses`] — so it is knowable before running the query
- * rather than discovered here.
- *
- * `follow-from` is the act that cannot: its walk discards seed provenance before returning,
- * and the obvious fallback is worse than null, because a seed never appears in its own output
- * and the `bound` reading would print 0 of 10 on a stage that returned forty neighbours.
- */
-input_contributed: bigint | null, 
-/**
  * How many of them this stage could not use at all — invisible, nonexistent, or malformed.
  *
  * Conflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].
  * Naming the invisible case alone would make the trace a single-probe existence oracle.
  */
-input_unusable: bigint, narrowed_by: Array<NarrowedBy>, meta_truncated: MetaTruncated | null, };
+input_unusable: bigint, narrowed_by: Array<NarrowedBy>, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.
@@ -949,8 +932,8 @@ orders_by: ActQuantity | null,
 /**
  * Which optional fields will be FILLED rather than null, for this act.
  *
- * Read it and you know in advance whether asking for `input_contributed` or `located_at` is
- * worth doing — rather than discovering a null in a response and having to guess whether it
- * means *cannot* or *none*.
+ * Read it and you know in advance whether asking for `located_at` is worth doing — rather
+ * than discovering a null in a response and having to guess whether it means *cannot* or
+ * *none*.
  */
 discloses: Array<Disclosure>, };
