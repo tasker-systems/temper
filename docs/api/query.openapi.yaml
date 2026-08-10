@@ -137,22 +137,27 @@
 # and the input_contributed removal are applied in place, each leaving a
 # recording block where the old shape stood. THIS DOCUMENT IS THE TARGET.
 #
-# IMPLEMENTATION PENDING — the CODE (branch @ 8f615429) still carries the
-# pre-ratification shapes. Deliberate deltas, not drift; the conformance pass
-# must classify these as pending-implementation, never as disagreement:
+# IMPLEMENTATION PENDING — updated `[2026-08-10]` after the P4 audit's fix
+# pass implemented the cheap half (MatchLocation undeclared; input_contributed
+# and Disclosure::InputContribution removed; located_at now an explicit null;
+# bounds/meta_detail/meta_truncated removed; the `refusal` field added and
+# filled). Deliberate deltas remaining — pending-implementation, never drift:
 #
-#   * registry.rs — survey `produces: Region`, terms `[regions]` only; the
-#     contract says resources, `regions`+`limit`+`offset`. (The survey fragment
-#     was never built, so this is declaration work, not teardown.)
-#   * registry.rs — both `find-about-*` declare MatchLocation; the contract
-#     undeclares it until the wide fragments emit the winning chunk's identity.
-#   * envelope.rs / trace.rs / query_read.rs — `input_contributed` still typed
-#     and emitted; the contract removes it.
-#   * disposition.rs — `Disclosure::InputContribution` still a member;
-#     `MissingProvenance` still raised by the validator.
-#   * id_set.rs — region provenance still on the wire types.
-#   * StageTrace has no `regions_matched` yet — it arrives with the survey
-#     fragment.
+#   * THE SURVEY REDESIGN (⟨3⟩), one coherent work item with the fragment:
+#     registry.rs still says `produces: Region`, terms `[regions]` only;
+#     stage.rs/hits.rs still carry `StageOutput::Regions` / `RegionHit` /
+#     `ProducedVariant::Regions`; id_set.rs still carries region provenance and
+#     the validator still raises `missing_provenance`; `extent_of` still
+#     answers `indeterminate` for survey; `StageTrace.regions_matched` does
+#     not exist yet. All of it lands together when the survey fragment is
+#     built to the ratified semantics.
+#   * THE FOLLOW-FROM MECHANIC (P3 door work): `follow-from` compiles to the
+#     deliberately-nonexistent placeholder, and validate.rs refuses EVERY
+#     `edge_filter` unconditionally — correctly, since nothing exists to apply
+#     one. When the mechanic lands, the unconditional arm retires in favour of
+#     the per-act check that already exists. `[ruled — 2026-08-10, ADJ-2]`
+#   * MatchLocation redeclaration awaits the wide fragments carrying the
+#     winning chunk's identity out (the argmin); `located_at` fills then.
 #
 # ── THE ONE THING THIS SPEC REQUIRES THAT DOES NOT EXIST YET ─────────────────
 #
@@ -402,20 +407,20 @@ components:
             `Intention.embedded` two schemas below. That sentence was leftover
             transcription from the merged types and is superseded here.
           $ref: '#/components/schemas/Intention'
-        meta_detail:
-          $ref: '#/components/schemas/MetaDetail'
-          default: surviving
-        bounds:
-          description: |
-            The SECOND bound layer — over the composition's own output, distinct
-            from the act-level `terms` on each stage.
-
-            A composition never carries a total. With each stage's output the
-            next stage's domain, a full-composition total is not well-defined.
-          type: object
-          propertyNames: { $ref: '#/components/schemas/BoundTerm' }
-          additionalProperties: { type: integer, format: int64 }
-          default: {}
+        # (`meta_detail` was declared here — removed with `bounds`, see below.)
+        # `bounds` was defined here — "the SECOND bound layer, over the
+        # composition's own output." REMOVED, ADJ-4 `[2026-08-10, Pete]`: a
+        # composition cannot meaningfully have bounds. Its output is nothing but
+        # the returned stages' outputs, each already bounded by its own `terms`
+        # — there is no residual thing for a composition-level bound to bound.
+        # (The field's own note half-knew: "a full-composition total is not
+        # well-defined"; the same argument, completed.) A cross-stage BUDGET
+        # would be a coherent different feature, undesigned and unasked-for.
+        # Removed per the `on_stage_refusal` remove-and-tolerate precedent: an
+        # unknown `bounds` key is ignored like any unknown field, test-pinned.
+        # `meta_detail` is removed by the same ruling — nobody could state the
+        # job it did (its `MetaTruncated` machinery goes with it); if a
+        # metadata budget ever materializes it returns designed, additively.
         stages:
           description: |
             The DAG's nodes. Each references its inputs explicitly BY NAME. There
@@ -598,9 +603,19 @@ components:
             makes meaningful). The funnel and the page are different bounds,
             each declared. But send `regions` to `find-exact` — an act with no
             funnel — and it is REFUSED: a different question, not a smaller one.
+
+            A third outcome, previously enforced and undocumented
+            `[documented — 2026-08-10, audit F2]`: an admitted term whose VALUE
+            is out of range — negative, or beyond the 32-bit slot the serving
+            functions bind — is refused as `bound_term_not_applicable`, not
+            clamped. The bounds below are the published rule.
           type: object
           propertyNames: { $ref: '#/components/schemas/BoundTerm' }
-          additionalProperties: { type: integer, format: int64 }
+          additionalProperties:
+            type: integer
+            format: int64
+            minimum: 0
+            maximum: 2147483647
           default: {}
         resource_filter:
           description: |
@@ -909,6 +924,26 @@ components:
       properties:
         act: { $ref: '#/components/schemas/ActName' }
         disposition: { $ref: '#/components/schemas/StageDisposition' }
+        refusal:
+          description: |
+            Present iff `disposition` is `refused`: the reason and its
+            standing-aware detail. `[ruled — 2026-08-10, Pete, ADJ-3]`
+
+            The ⟨2⟩ behaviour — "reports `refused` with reason
+            `embedding_unavailable`, where the reader is already looking" —
+            requires the reason to REACH the reader. Before this field, neither
+            this schema nor the code carried one: the promise was prose only,
+            and a second runtime refusal would have collapsed two different
+            answers into one word. The carrier is the same `{reason, detail}`
+            shape `PlanRefusal` uses, minus the stage (you are already on it);
+            `detail` follows the same standing-aware discipline. Identical
+            field on `StageTrace`, and the two must stay identical — the trace
+            is the only record for an intermediate stage.
+          type: [object, "null"]
+          required: [reason, detail]
+          properties:
+            reason: { $ref: '#/components/schemas/RefusalReason' }
+            detail: { type: string }
         orders_by:
           description: |
             Echoed from this act's declaration in `search_family()`. Present iff
@@ -1175,10 +1210,12 @@ components:
 
     CompositionTrace:
       # TRANSCRIBED from trace.rs:76-79, EXCEPT the stage key — see `StageTrace`.
+      # `meta_detail` was required here (the request echo) — removed with the
+      # field, ADJ-4 `[2026-08-10, Pete]`. The echo was the worse half: it made
+      # the trace appear to confirm a budget that nothing applied.
       type: object
-      required: [meta_detail, stages]
+      required: [stages]
       properties:
-        meta_detail: { $ref: '#/components/schemas/MetaDetail' }
         stages:
           description: Ordered topologically. Every stage, never truncated.
           type: array
@@ -1250,16 +1287,22 @@ components:
               region_id: { type: string, format: uuid }
               salience: { type: number, format: float }
               region_score: { type: number, format: float }
-        meta_truncated:
+        # `meta_truncated` (and the `MetaTruncated` shape) were defined here —
+        # removed with `meta_detail`, ADJ-4 `[2026-08-10, Pete]`: they existed
+        # only to serve the metadata-budget concept, whose job nobody could
+        # state. If a metadata budget ever materializes, both return designed,
+        # additively. (Item 5's keying ratification is untouched — the
+        # names-not-ordinals rule loses one application site, not the rule.)
+        refusal:
           description: |
-            Set only when `meta_detail` asked for more per-resource metadata than
-            the budget allowed, saying how much was kept and how much was dropped.
-            Absent means nothing was truncated.
-          type: object
-          required: [retained, dropped]
+            Present iff `disposition` is `refused` — see `StageResult.refusal`.
+            Identical there and here, and the trace's copy is the ONLY refusal
+            record for an intermediate stage. `[ruled — 2026-08-10, Pete, ADJ-3]`
+          type: [object, "null"]
+          required: [reason, detail]
           properties:
-            retained: { type: integer, format: int64 }
-            dropped: { type: integer, format: int64 }
+            reason: { $ref: '#/components/schemas/RefusalReason' }
+            detail: { type: string }
 
     InputSource:
       # TRANSCRIBED from trace.rs:17-33, RENAMED from `BoundsSource` — it reports
@@ -1336,8 +1379,16 @@ components:
 
         `substantiate` and `admit` are declared members of the vocabulary and are
         NOT composable — see the header.
+
+        SPELLED AS `examples`, NOT `enum` `[corrected — 2026-08-10, audit F9]`:
+        the Rust side is open (`Other(String)` degrades gracefully), and a
+        closed schema enum makes an unknown act a DESERIALIZER rejection at any
+        conformance-checking client — the same short-circuit the
+        `ReturnSpec.with` argument exists to avoid. Unknown values are refused
+        at validation, in contract vocabulary. `ScoreKind` was already spelled
+        this way; `IdKind` and `RefusalReason` are corrected with this one.
       type: string
-      enum:
+      examples:
         - find-exact             # I can quote the exact words.
         - find-about-anywhere    # A concept, no exact words; search everything I can see.
         - find-about-within      # A concept, plus a set to search inside.
@@ -1357,8 +1408,11 @@ components:
         a caller's region set into a serde failure that short-circuits the
         all-refusals-at-once promise. Kept deserializable, refused in contract
         vocabulary alongside everything else. `[ratified — 2026-08-09, Pete]`
+
+        Spelled as `examples` per audit F9 — the Rust side is open; see
+        `ActName`.
       type: string
-      enum: [resource, region, cogmap, context]
+      examples: [resource, region, cogmap, context]
 
     IdSet:
       description: The one value that crosses a stage boundary. Membership, never rank.
@@ -1387,10 +1441,8 @@ components:
       type: string
       enum: [limit, offset, regions]
 
-    MetaDetail:
-      type: string
-      enum: [surviving, full, none]
-      default: surviving
+    # `MetaDetail` was defined here (`surviving | full | none`) — removed with
+    # its field, ADJ-4 `[2026-08-10, Pete]`.
 
     Extent:
       description: |
@@ -1406,8 +1458,14 @@ components:
         regions, so "is there more?" is answerable by counting members, and
         survey answers `complete`/`partial` like everything else. The
         `indeterminate` variant stays in the vocabulary (it is transcribed,
-        pre-contract) for any act that genuinely cannot answer; which acts emit
-        it is implementation-determined, and none is currently known to.
+        pre-contract), and it has one DOCUMENTED emitter today:
+        `[ruled — 2026-08-10, Pete, ADJ-5]` a REFUSED stage's extent is
+        `indeterminate` — nothing was asked of the corpus, so "is there more?"
+        has no answer; `complete` would read as an honest zero, which is the
+        empty/refused conflation ⟨2⟩ exists to prevent. The refusal's REASON
+        travels in the typed `refusal` field (ADJ-3), so the extent reason here
+        stays generic. (An earlier revision of this block said no act was known
+        to emit `indeterminate` — wrong about the refused arm, caught in audit.)
       oneOf:
         - type: string
           enum: [complete, partial]
@@ -1476,8 +1534,11 @@ components:
         The exception is `embedding_unavailable`, and it is the ONLY refusal that
         can happen mid-run, and it is not a disposition anyone declares — see the
         block below.
+
+        Spelled as `examples` per audit F9 — the description already said OPEN;
+        the closed `enum` spelling contradicted it. See `ActName`.
       type: string
-      enum:
+      examples:
         - unsupported_bound_kind     # this act does not narrow on that kind of id
         - anchor_takes_one_id        # see below — a cogmap/context bound carrying anything but one
         - unsupported_seed_kind      # this act does not grow from that kind of id
@@ -1492,7 +1553,12 @@ components:
         - section_not_available      # `with` named a hydration section this door does not offer
         - unknown_filter_value       # a typo must never come back as an honest empty
         - filter_not_applicable      # a filter slot this act does not admit
-        - bound_term_not_applicable  # e.g. `limit` to `survey`, which bounds a funnel not rows
+        - bound_term_not_applicable  # e.g. `regions` to `find-exact`, an act with no funnel.
+                                     # (This example was `limit` to `survey` — retracted by the
+                                     # ⟨3⟩ redesign, which admits limit/offset on survey. Also
+                                     # raised for an admitted term whose VALUE is out of range —
+                                     # negative, or beyond the 32-bit slot; see
+                                     # `ActInvocation.terms`.)
         - not_separably_reachable    # the act exists; this surface cannot call its mechanic yet
         - embedding_unavailable      # RUNTIME. see below.
 
@@ -1697,6 +1763,20 @@ components:
 # WORKED EXAMPLE — the canonical pipe
 # =============================================================================
 #
+# ── THIS EXAMPLE IS THE RATIFIED TARGET, AND TODAY'S VALIDATOR REFUSES IT ────
+#
+# `[ruled — 2026-08-10, Pete, ADJ-2]` Submitted verbatim today, this
+# composition answers 400: the `neighbours` stage carries an `edge_filter`,
+# and validate.rs refuses every `edge_filter` unconditionally — CORRECTLY,
+# because `follow-from` compiles to a deliberately-nonexistent placeholder, so
+# admitting the filter would mean accepting a narrowing and silently dropping
+# it. (Even without the filter, the stage would fail loudly at Postgres — the
+# placeholder is designed to.) The example stays as written because it is the
+# best demonstration of the seed relation, per-kind scoring, and the trace;
+# what it demonstrates becomes runnable when the follow-from mechanic lands —
+# see IMPLEMENTATION PENDING in the header. A client copying it today should
+# expect `filter_not_applicable` on `neighbours`, all refusals at once.
+#
 # "Find the sessions about composable search fragments, then find what they lead
 #  to, and give me both."
 #
@@ -1710,7 +1790,6 @@ components:
 #     ]
 #   },
 #   "intention": { "query": "composable search fragments", "embedded": true },
-#   "meta_detail": "surviving",
 #   "stages": [
 #     { "name": "seeds",
 #       "act": "find-about-anywhere",
@@ -1774,7 +1853,6 @@ components:
 #     }
 #   },
 #   "trace": {
-#     "meta_detail": "surviving",
 #     "stages": [
 #       { "stage": "seeds", "act": "find-about-anywhere", "disposition": "answered",
 #         "narrowed_by": [ { "key": "doc_type", "value": "session" } ],
