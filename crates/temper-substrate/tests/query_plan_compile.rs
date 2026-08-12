@@ -14,13 +14,19 @@ fn test_profile() -> ProfileId {
     ProfileId::new()
 }
 
-/// A `follow-from` root fed a caller resource set — reachable, and valid at the end of beat B.
-fn ff_root(name: &str, ids: Vec<Uuid>) -> StageNode {
+/// A `find-exact` root bounded by a caller resource set.
+///
+/// `[was `ff_root`, a `follow-from` root — 2026-08-12]` `follow-from` and `survey` left
+/// `CALLABLE_FRAGMENTS`, so `validate` now refuses them and no plan built from one can reach
+/// `compile` at all. The structural properties below — every value bound, ids only across a
+/// boundary, one visibility relation, dependency order — are about the STATEMENT and not about
+/// which act produced it, so they move onto a reachable act unchanged.
+fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
     StageNode::Act(ActInvocation {
         name: StageName::parse(name).unwrap(),
-        act: ActName::FollowFrom,
+        act: ActName::FindExact,
         input: Some(StageInput::Caller {
-            relation: StageRelation::Seed,
+            relation: StageRelation::Bound,
             ids: IdSet {
                 kind: IdKind::Resource,
                 provenance: None,
@@ -34,13 +40,17 @@ fn ff_root(name: &str, ids: Vec<Uuid>) -> StageNode {
     })
 }
 
-/// A `follow-from` stage seeded on an upstream stage.
-fn ff_from(name: &str, upstream: &str) -> StageNode {
+/// A `find-exact` stage bounded by an upstream stage.
+///
+/// `find-exact` rather than `find-about-within` for the downstream half deliberately: the wide arm
+/// needs an embedding, and a stage the compiler refuses for want of one emits a refused body
+/// instead of the bound this file's assertions read.
+fn find_from(name: &str, upstream: &str) -> StageNode {
     StageNode::Act(ActInvocation {
         name: StageName::parse(name).unwrap(),
-        act: ActName::FollowFrom,
+        act: ActName::FindExact,
         input: Some(StageInput::Upstream {
-            relation: StageRelation::Seed,
+            relation: StageRelation::Bound,
             stage: StageName::parse(upstream).unwrap(),
         }),
         terms: Default::default(),
@@ -50,6 +60,12 @@ fn ff_from(name: &str, upstream: &str) -> StageNode {
     })
 }
 
+/// A validated composition with the question threaded — which every find act requires, and which is
+/// now every act this surface can emit.
+///
+/// `[merged with `build_with_intention` — 2026-08-12]` The two builders differed only in whether
+/// they threaded an intention, and the intention-free one existed for `follow-from` plans. There are
+/// none left, and two identical builders are two things that can drift.
 fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
     let c = Composition {
         outcome: OutcomeDeclaration {
@@ -61,7 +77,10 @@ fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
                 })
                 .collect(),
         },
-        intention: None,
+        intention: Some(Intention {
+            query: "salience".to_string(),
+            embedded: true,
+        }),
         stages,
     };
     validate(&c).expect("plan is valid")
@@ -69,14 +88,17 @@ fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
 
 fn plan_with_caller_ids() -> (ValidatedComposition, Vec<Uuid>) {
     let ids = vec![Uuid::now_v7(), Uuid::now_v7()];
-    (build(vec![ff_root("hits", ids.clone())], vec!["hits"]), ids)
+    (
+        build(vec![find_root("hits", ids.clone())], vec!["hits"]),
+        ids,
+    )
 }
 
 fn plan_two_stages(root: &str, downstream: &str) -> ValidatedComposition {
     build(
         vec![
-            ff_root(root, vec![Uuid::now_v7()]),
-            ff_from(downstream, root),
+            find_root(root, vec![Uuid::now_v7()]),
+            find_from(downstream, root),
         ],
         vec![downstream],
     )
@@ -87,28 +109,35 @@ fn plan_two_stages_declared_backwards(root: &str, downstream: &str) -> Validated
     // root before it, and the compiler must emit in that order.
     build(
         vec![
-            ff_from(downstream, root),
-            ff_root(root, vec![Uuid::now_v7()]),
+            find_from(downstream, root),
+            find_root(root, vec![Uuid::now_v7()]),
         ],
         vec![downstream],
     )
 }
 
 fn plan_one_stage() -> ValidatedComposition {
-    build(vec![ff_root("hits", vec![Uuid::now_v7()])], vec!["hits"])
+    build(vec![find_root("hits", vec![Uuid::now_v7()])], vec!["hits"])
 }
 
-/// One `find-exact` stage — an act that reaches a real fragment, which the compute-once property
-/// needs: a `follow-from` stage still emits the placeholder and consults no visibility relation at
-/// all, so a plan built from those could satisfy the assertion while proving nothing.
+/// One `find-exact` stage with NO input — the unbounded shape.
+///
+/// Post-flip this differs from [`plan_one_stage`] only by that input, and the honest reason both
+/// survive is that they have different consumers: the compute-once test takes this one and
+/// `no_stage_can_be_named_after_the_hoisted_visibility_relation` takes the other. **Not** a claimed
+/// coverage relationship — nothing here asserts the compute-once property over the bounded shape,
+/// and the earlier version of this comment said otherwise. Before the flip the distinction was
+/// load-bearing (`plan_one_stage` was a `follow-from` plan that emitted the placeholder and
+/// consulted no visibility relation, so counting gate calls over it proved nothing); it is not
+/// load-bearing now, and either helper would serve either test.
 fn plan_one_find() -> ValidatedComposition {
-    build_with_intention(vec![find_stage("a", ActName::FindExact, None)], vec!["a"])
+    build(vec![find_stage("a", ActName::FindExact, None)], vec!["a"])
 }
 
 /// Three chained `find-exact` stages. `find-exact` throughout rather than a `find-about-*` mix so
 /// the plan compiles with no embedding; the property under test is about the gate, not the arm.
 fn plan_three_finds() -> ValidatedComposition {
-    build_with_intention(
+    build(
         vec![
             find_stage("a", ActName::FindExact, None),
             find_stage(
@@ -132,11 +161,12 @@ fn plan_three_finds() -> ValidatedComposition {
     )
 }
 
-// `plan_three_stages` (three chained `follow-from` stages) lived here and is deleted rather than
-// `#[allow(dead_code)]`d. Its only consumer was the compute-once test, which now needs
-// `plan_three_finds`: a `follow-from` stage emits the placeholder and consults no visibility
-// relation at all, so a three-stage plan built from those would satisfy the assertion while proving
-// nothing. Rust noticing it went unused is the check working.
+// `plan_three_stages` (three chained `follow-from` stages) lived here and was deleted rather than
+// `#[allow(dead_code)]`d when its only consumer, the compute-once test, moved to `plan_three_finds`:
+// a `follow-from` stage emitted the placeholder and consulted no visibility relation at all, so a
+// three-stage plan built from those satisfied the assertion while proving nothing. Rust noticing it
+// went unused is the check working. (`follow-from` no longer validates at all, so that plan is not
+// merely unhelpful now — it is unbuildable.)
 
 #[test]
 fn every_caller_value_is_bound_and_none_is_interpolated() {
@@ -342,8 +372,8 @@ fn an_upstream_fed_stage_tallies_zero_unusable_rather_than_re_gating_it() {
 fn a_combinator_projects_membership_only_and_never_a_quantity() {
     let v = build(
         vec![
-            ff_root("a", vec![Uuid::now_v7()]),
-            ff_root("b", vec![Uuid::now_v7()]),
+            find_root("a", vec![Uuid::now_v7()]),
+            find_root("b", vec![Uuid::now_v7()]),
             StageNode::Combine(temper_core::types::query::CombineNode {
                 name: StageName::parse("merged").unwrap(),
                 op: temper_core::types::query::CombineOp::Intersect,
@@ -409,27 +439,6 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
     })
 }
 
-/// `build`, plus a threaded intention — which the find acts require.
-fn build_with_intention(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
-    let c = Composition {
-        outcome: OutcomeDeclaration {
-            returns: returns
-                .into_iter()
-                .map(|s| ReturnSpec {
-                    stage: StageName::parse(s).unwrap(),
-                    with: vec![],
-                })
-                .collect(),
-        },
-        intention: Some(Intention {
-            query: "salience".to_string(),
-            embedded: true,
-        }),
-        stages,
-    };
-    validate(&c).expect("plan is valid")
-}
-
 fn an_embedding() -> Vec<f32> {
     vec![0.25_f32; 768]
 }
@@ -441,9 +450,9 @@ fn an_embedding() -> Vec<f32> {
 /// `search_wide` — which has no `p_bound_ids` and so cannot express this at all.
 #[test]
 fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstream() {
-    let v = build_with_intention(
+    let v = build(
         vec![
-            ff_root("seeds", vec![Uuid::now_v7()]),
+            find_root("seeds", vec![Uuid::now_v7()]),
             find_stage(
                 "narrowed",
                 ActName::FindAboutWithin,
@@ -483,7 +492,7 @@ fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstre
 /// The exact arm likewise, and its query text is BOUND rather than interpolated.
 #[test]
 fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_core() {
-    let v = build_with_intention(
+    let v = build(
         vec![find_stage("hits", ActName::FindExact, None)],
         vec!["hits"],
     );
@@ -540,7 +549,7 @@ fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_core() {
 /// query. The property under test is unchanged: a missing vector refuses rather than binding NULL.
 #[test]
 fn a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_callers() {
-    let v = build_with_intention(
+    let v = build(
         vec![find_stage("wide", ActName::FindAboutAnywhere, None)],
         vec!["wide"],
     );
@@ -579,7 +588,7 @@ fn a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_calle
 /// two independent questions and got one unanswerable vector must still be given the other answer.
 #[test]
 fn one_stage_refusing_for_want_of_an_embedding_does_not_refuse_the_others() {
-    let v = build_with_intention(
+    let v = build(
         vec![
             find_stage("exact", ActName::FindExact, None),
             find_stage("wide", ActName::FindAboutAnywhere, None),
@@ -611,7 +620,7 @@ fn one_stage_refusing_for_want_of_an_embedding_does_not_refuse_the_others() {
 /// while `NULL` is what they read as unbounded.
 #[test]
 fn a_stage_downstream_of_a_refusal_is_bounded_to_nothing_rather_than_unbounded() {
-    let v = build_with_intention(
+    let v = build(
         vec![
             find_stage("wide", ActName::FindAboutAnywhere, None),
             find_stage(
@@ -690,22 +699,48 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
     );
 }
 
-/// `follow-from` and `survey` keep the deliberately-absent placeholder.
+/// `follow-from` and `survey` are refused BEFORE the compiler ever sees them.
 ///
-/// Their fragments take arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), so emitting a
-/// real call would mean inventing a value. A function that does not exist fails loudly instead.
+/// **`[re-pointed — 2026-08-12]`** This asserted that both acts compile to the deliberately-absent
+/// placeholder — a statement that cannot silently return wrong rows, but also one that fails at
+/// EXECUTION, which is invisible until a door ships. Their fragments take arguments no slot supplies
+/// (`p_depth`/`p_gamma`, `p_lens`), so they left `CALLABLE_FRAGMENTS` and now refuse statically.
+///
+/// Re-pointed rather than deleted, for the reason this file has re-pointed several times before
+/// (`[2026-08-08]`, `[2026-08-09]` twice, `[2026-08-10]`): the property still needs a witness, and
+/// it is now the honest one — an act that cannot answer refuses instead of compiling to a function
+/// that does not exist.
+///
+/// **What it asserts is narrower than "the compiler never sees this", exactly as
+/// `a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it` is.** It calls `validate`
+/// and never `compile`; that the placeholder arm in `emit_act_body` is therefore unreachable is an
+/// INFERENCE from `ValidatedComposition` being parse-don't-validate, not something this test
+/// carries. The arm survives as an unreachable drift guard, which is why it is still emitted for a
+/// hypothetical eighth act that declared itself into the family without a fragment.
 #[test]
-fn the_unmodelled_acts_still_emit_the_absent_placeholder() {
-    let c = compile(&plan_one_stage(), test_profile(), None).expect("compiles");
-    assert!(
-        c.sql.contains("__temper_unbound_act("),
-        "follow-from has no modelled fragment and must keep the loud placeholder; got:\n{}",
-        c.sql
-    );
-    assert!(
-        !c.sql.contains("query_find_"),
-        "and must not be given a find twin, which is not its mechanic"
-    );
+fn the_unmodelled_acts_are_refused_before_the_compiler_ever_sees_them() {
+    for act in [ActName::FollowFrom, ActName::Survey] {
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: StageName::parse("s").unwrap(),
+                    with: vec![],
+                }],
+            },
+            intention: Some(Intention {
+                query: "salience".to_string(),
+                embedded: true,
+            }),
+            stages: vec![find_stage("s", act.clone(), None)],
+        };
+        let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
+            "{act:?} must refuse as unreachable rather than compile to `__temper_unbound_act`; \
+             got {errs:?}"
+        );
+    }
 }
 
 // ─── Post-review fixes ──────────────────────────────────────────────────────────────────────────
@@ -729,7 +764,7 @@ fn caller_set(kind: IdKind, ids: Vec<Uuid>) -> StageInput {
 #[test]
 fn a_cogmap_bound_is_emitted_as_the_anchor_pair_not_as_a_resource_id_array() {
     let cogmap = Uuid::now_v7();
-    let v = build_with_intention(
+    let v = build(
         vec![find_stage(
             "hits",
             ActName::FindExact,
@@ -831,7 +866,7 @@ fn a_term_above_its_published_ceiling_is_clamped_to_the_ceiling_that_was_publish
     if let StageNode::Act(a) = &mut node {
         a.terms.insert(BoundTerm::Limit, 500);
     }
-    let v = build_with_intention(vec![node], vec!["hits"]);
+    let v = build(vec![node], vec!["hits"]);
     let c = compile(&v, test_profile(), None).expect("compiles");
 
     let ints: Vec<i64> = c
@@ -860,7 +895,7 @@ fn a_term_below_its_ceiling_is_used_as_the_caller_asked() {
     if let StageNode::Act(a) = &mut node {
         a.terms.insert(BoundTerm::Limit, 7);
     }
-    let v = build_with_intention(vec![node], vec!["hits"]);
+    let v = build(vec![node], vec!["hits"]);
     let c = compile(&v, test_profile(), None).expect("compiles");
     assert!(c.binds.iter().any(|b| matches!(b, QueryBind::Int(7))));
 }
@@ -891,7 +926,7 @@ fn paging_terms_reach_the_fragment_as_binds_whether_declared_or_defaulted() {
         inv.terms.insert(BoundTerm::Limit, 10);
         inv.terms.insert(BoundTerm::Offset, 20);
     }
-    let v = build_with_intention(vec![node], vec!["hits"]);
+    let v = build(vec![node], vec!["hits"]);
     let c = compile(&v, test_profile(), None).expect("compiles");
 
     let ints: Vec<i64> = c
@@ -911,7 +946,7 @@ fn paging_terms_reach_the_fragment_as_binds_whether_declared_or_defaulted() {
     // And a stage that declares NEITHER gets the act's published ceiling in the limit slot, bound
     // the same way — not a literal `NULL` that would return the whole visible match set to a caller
     // who simply did not say how many they wanted.
-    let bare = build_with_intention(
+    let bare = build(
         vec![find_stage("plain", ActName::FindExact, None)],
         vec!["plain"],
     );
@@ -983,7 +1018,7 @@ fn ungated_core_calls(sql: &str) -> Vec<String> {
 /// as the BOUND and never as the visible set.
 #[test]
 fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_else() {
-    let v = build_with_intention(
+    let v = build(
         vec![
             find_stage("hits", ActName::FindExact, None),
             find_stage(

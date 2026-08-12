@@ -65,12 +65,38 @@ questions that were being answered by one function:
   alone. Cannot change under the caller's feet.
 - **Capability** — the shape is fine, and this server has not built it yet. Moves with every beat.
 
+`[corrected against the shipped code — 2026-08-12]` The block below was drafted before the split
+landed and was false in three ways: there is no `validate_capability`, capability does not take
+`&[ActDeclaration]`, and the composition is not a concatenation of two whole passes.
+
 ```
-query::validate::shape        fn validate_shape(&Composition) -> Vec<PlanRefusal>
+query::validate::shape        fn validate_shape_indexed(&Composition)
+                                  -> (Vec<PlanRefusal>, Option<Vec<StageNode>>)
                               the module does NOT `use super::registry`
-query::validate::capability   fn validate_capability(&Composition, &[ActDeclaration]) -> Vec<PlanRefusal>
-query::validate               fn validate(&Composition)  =  shape ++ capability(search_family())
+                              the order rides out so `validate` and `shape` cannot sort differently
+
+query::validate::capability   fn validate_stages(&Composition,
+                                                 &BTreeMap<&str, &StageNode>,
+                                                 &mut Vec<PlanRefusal>)      (capability.rs:60)
+                              fn validate_returns(&Composition,
+                                                  &mut Vec<PlanRefusal>)     (capability.rs:79)
+                              it imports `declaration` directly (capability.rs:34) rather than
+                              taking `&[ActDeclaration]` — nothing supplies a family per call
+
+query::validate               fn validate(&Composition)
+                                  -> Result<ValidatedComposition, Vec<PlanRefusal>>
+query::validate               fn validate_shape(&Composition) -> Vec<PlanRefusal>
+                                  the public expressibility-only entry point; PR C's first caller
 ```
+
+**Capability's two halves are gated differently, and that was a ruling rather than an
+implementation detail.** `[decided — 2026-08-12, Pete]` `validate_stages` reads the stage graph, so
+`validate` runs it only over a plan that topologically sorts. `validate_returns` compares each
+entry's `with` against a constant and never looks a stage up, so it runs **whatever the plan's
+shape** — gating it on the topology would take a refusal away from a cyclic plan that used to
+receive it, against this module's own rule that `validate` returns every refusal rather than the
+first. The refusals accumulate into ONE `Vec` by `&mut`, which is why neither pass's findings can
+outrank the other's.
 
 **The import is a necessary guard, not a sufficient one.** `[corrected — 2026-08-12, during plan
 grounding]` A pass that cannot reach `declaration()` cannot raise `NotSeparablyReachable`, and that
@@ -80,36 +106,62 @@ deploy"* means a released CLI carries a `search_family()` older than the server'
 keep widening.
 
 But "reads the declaration" and "is a capability refusal" **come apart**, and they come apart on
-exactly the refusals that move. Five sites read no declaration at all and are nonetheless pure door
-capability — their own detail strings say so: `validate.rs:381` (*"this door does not **yet** apply
-property predicates"*), `:389` (*"the only act that admits one still compiles to the absent
-placeholder"*), `:355`, `:370`, and `:777`'s `SectionNotAvailable`, which reads
-`ReturnSpec::ADMITTED_SECTIONS`. Task 10b makes the first work; a widened `ADMITTED_SECTIONS` makes
-the last work. An import scan would let all five sit in the shape pass, and a stale client would
-then refuse plans a newer server runs — the failure this seam exists to prevent.
+exactly the refusals that move. Six sites read no declaration at all and are nonetheless pure door
+capability. `[corrected — 2026-08-12, Task 2]` An earlier draft of this paragraph said *"their own
+detail strings say so"* and then quoted two of them. Only two say it outright; the rest are
+capability for a reason that has to be argued rather than read off:
+
+| Site | Detail string | Why it is capability |
+|---|---|---|
+| `validate.rs:381` | *"this door does not **yet** apply property predicates"* | says so — Task 10b retires it |
+| `:389` | *"this door does not **yet** apply edge filters"* | says so — Task 11 retires it |
+| `:355` | *"this door does not apply the `{field}` narrowing"* | a compiler slot that does not exist yet, not a permanent property |
+| `:370` | *"this door's doc-type narrowing holds exactly one value"* | a fragment's parameter shape, which a later fragment can widen |
+| `:777` | *"`{section}` is not a section this door hydrates"* | reads `ReturnSpec::ADMITTED_SECTIONS`, which can widen |
+| `:311`, more than one | *"the anchor pair … holds exactly one id"* | `[added — 2026-08-12]` the same class as `:370` and a different parameter: the fragments' `(anchor_table, anchor_id)` pair, retired by an `anchor_ids uuid[]` |
+
+The distinction matters because four of the six read like permanent structural facts and are not.
+An import scan would let all six sit in the shape pass, and a stale client would then refuse plans
+a newer server runs — the failure this seam exists to prevent.
 
 **So the rule is stated positively, and guarded twice.** The shape pass may raise only refusals that
 cannot change without a change to the published wire contract. Guard one: the shape module does not
-import `registry` (source scan). Guard two: the set of `RefusalReason`s the shape pass can emit is
-**pinned by a test**, in the family of `the_cells_tier_one_cannot_discriminate_are_exactly_these` —
-because the classification of the five sites above is a judgment, and a judgment needs a pin, not an
-inference.
+import `registry` (source scan). Guard two: **how many times the shape pass emits each
+`RefusalReason` is pinned by a test** — a table of reason → count, in the family of
+`the_cells_tier_one_cannot_discriminate_are_exactly_these` — because the classification of the sites
+above is a judgment, and a judgment needs a pin, not an inference.
 
-The classification, derived by reading every refusal site rather than by shape:
+`[corrected — 2026-08-12, final review]` This said *"the **set** of `RefusalReason`s the shape pass
+can emit"*, which is the formulation the implementation proved insufficient and then abandoned; the
+plan, the module header and the test itself were all moved to counts and this sentence was not. Two
+variants are emitted from BOTH passes (below), so over a set a capability site migrating into shape
+changes nothing — the reason is in the set already, and the guard sits green through exactly the
+defect it exists to catch. Over counts, shape's tally for that reason goes 1 → 2 and it fails.
 
 The classification below is **per site**, derived by reading each one — not per variant, because two
 variants straddle the seam.
+
+**Every bare `validate.rs:NNN` coordinate in this document — both tables in this section, and the
+citations in ⟨2⟩ and in Non-goals — is a PRE-SPLIT coordinate, and is retained deliberately.**
+`[noted — 2026-08-12]` The table IS the classification's evidence, and it was derived by reading the
+2,045-line `validate.rs` that PR A deletes; renumbering
+it against the successor files would silently restate the evidence as something it was not. No
+reader can open `validate.rs:311` today — the module directory that replaced it is
+`crates/temper-core/src/types/query/validate/`, whose `mod.rs`, `shape.rs` and `capability.rs`
+carry every site below, each under a header that argues its own side of the seam. Read the row for
+the classification and the module for the code.
 
 | Site | Reason | Class |
 |---|---|---|
 | `validate.rs:657, :669, :684, :696, :705, :729, :754, :765, :796` | the nine topology `Other(_)` strings | shape |
 | `:504`, `:512` | `Other("empty-property-key")`, `Other("empty-contains")` | shape |
-| `:227` | `Other("unknown-act")` | shape — **rewritten** as `matches!(inv.act, ActName::Other(_))`; `ActName` is open (`act.rs:45-46`), so this is caller-reachable and answerable from the type alone |
+| `:227` | `Other("unknown-act")` | shape — **rewritten** as `matches!(inv.act, ActName::Other(_))`; `ActName` is open (`act.rs:45-46`), so this is caller-reachable. **Kept in shape with a declared remainder, the costlier of two — see below** |
 | `:488` | `MissingIntention` | shape — hardcoded `matches!` on three act names, never consults `search_family()` |
 | `:272` | `MissingProvenance` | shape — `kind == Region && provenance.is_none()`, pure plan inspection |
-| `:311` | `AnchorTakesOneId` | shape — `ids.ids.len() != 1`, pure plan inspection |
+| `:311`, zero ids | `AnchorTakesOneId` | shape — **on direction of failure, not impossibility**: admitting it today silently WIDENS the question, which is a correctness problem; refusing it costs a stale client only an empty answer. See the straddle bullet below |
+| `:311`, more than one | `AnchorTakesOneId` | capability — **`[split — 2026-08-12, Pete]`**, see below |
 | `:497` | `UnknownFilterValue` | shape — `PropertySubject::Other(_)`, a closed vocabulary in the schema |
-| `:408` | `BoundTermNotApplicable`, negative value | shape — a row count below zero is malformed whatever the act |
+| `:408` | `BoundTermNotApplicable`, negative value | shape — a count below zero is malformed whatever the act. Said as *"a row count"* until `[2026-08-12]`, which is false of `BoundTerm::Regions`, a funnel width (`scalars.rs:47`) |
 | `:238`, `:246` | `NotImplemented`, `NotSeparablyReachable` | capability |
 | `:284`, `:295` | `UnsupportedSeedKind`, `UnsupportedBoundKind` | capability |
 | `:421`, `:434` | `BoundTermNotApplicable`, 32-bit slot / not admitted | capability |
@@ -118,10 +170,74 @@ variants straddle the seam.
 | `:777` | `SectionNotAvailable` | capability — reads `ReturnSpec::ADMITTED_SECTIONS`, which can widen |
 | runtime | `EmbeddingUnavailable` | neither, by design |
 
-**Two variants straddle the seam**, which is why the pinned set is over sites rather than variants:
-`BoundTermNotApplicable` (negative is shape; range and admission are capability) and
-`FilterNotApplicable` (four "not yet" sites and two "act does not admit" sites, all capability, but
-for different reasons).
+**Exactly two variants straddle the seam**, and that is why the pin is over sites rather than
+variants:
+
+- **`BoundTermNotApplicable`** — its negative-value site is shape; its 32-bit-range and
+  not-admitted sites are capability.
+- **`AnchorTakesOneId`** — its zero-id site is shape; its more-than-one site is capability.
+  `[split — 2026-08-12, Pete]` One site used to refuse `ids.len() != 1` and so conflated two
+  claims. *Supplied several* is refused only because today's fragments take an
+  `(anchor_table, anchor_id)` PAIR; an `anchor_ids uuid[]` retires it. That is structurally the
+  same check as `f.doc_type.len() > 1`, which this table already classifies capability as *"a
+  fragment's parameter shape, which a later fragment can widen"* — and the variant's doc already
+  called the mismatch *"an open cardinality gap"*, i.e. explicitly not-yet. Both arms keep the same
+  `RefusalReason` and both stay refusals of `validate`; what moves is only which pass raises them.
+
+  **The zero arm's reason is DIRECTION OF FAILURE, not impossibility.** `[corrected —
+  2026-08-12, re-review]` The two arms fail opposite ways. Admitting a zero anchor *today* would
+  drop the scope and answer a **wider** question than the caller asked — a silent widening, which is
+  a correctness problem rather than a capability one. Refusing it costs a stale client nothing,
+  because the plan it refuses would have returned nothing anyway. The many case is the reverse:
+  refusing it is what costs, the moment a fragment can take the set.
+
+  The first draft of this bullet argued impossibility instead — *"an anchor has no `'{}'`/`NULL`
+  pair, so no fragment change retires it, and the variant's own doc says so"* — and that is **false
+  in two ways**, recorded so it is not re-derived. `disposition.rs:74-77` makes that statement about
+  today's `(anchor_table, anchor_id)`, not about all fragment futures, so it does not argue what it
+  was cited for. And the widening invoked one paragraph up falsifies it directly: an
+  `anchor_ids uuid[]` gives an empty anchor exactly the `'{}'` = bounded-to-nothing meaning
+  `IdKind::Resource` already carries — `query_plan.rs` binds a caller resource array unrefused at
+  any length, zero included, and `query.openapi.yaml`'s `IdSet.ids` sets no `minItems`. **Under that
+  widening both arms retire, not one.**
+
+`[corrected — 2026-08-12, Task 2 re-review]` An earlier draft also said *two*, but pairing
+`BoundTermNotApplicable` with `FilterNotApplicable` — which straddles a **different** axis. All six
+of that one's sites are capability; what differs between them is whether the limitation is permanent
+or not-yet, which is a distinction about retirement, not about which pass may raise it. That
+conflation is how the guard nearly got specified as a set: "two variants straddle" sounds like a
+statement about the seam and, said of `FilterNotApplicable`, is not.
+
+**Guard two's expected table does not move when a variant is split this way**, and the reason is
+worth stating because it looks like an omission. The table pins what SHAPE emits, per reason. Shape
+emitted `AnchorTakesOneId` from one site before the split (the `!= 1` arm) and from one site after
+it (the zero arm), so its count stays 1 and the entry is unchanged. Run rather than assumed: the
+three guards were green on the split without touching the table. What the guard therefore CANNOT see
+is which of the two arms shape holds, so
+`shape_refuses_an_empty_anchor_and_leaves_the_multi_id_one_to_capability` in `validate/mod.rs` pins
+that directly — it asserts `validate_shape` alone raises the empty case and does NOT raise the
+many-id one, while `validate` still refuses both.
+
+**`UnknownAct` stays in shape, and carries the costlier of the seam's two declared remainders.**
+`[widened from "the one" — 2026-08-12, re-review]` Correcting the zero-anchor arm's reason from
+impossibility to cost-asymmetry (above) means that arm can *also*, in principle, fire against a
+widened server — so "one remainder" became false the moment the true reason was written, and the
+count is restated rather than left to be rediscovered. **The two are not equivalent, and the
+difference is why both are tolerable:** `UnknownAct` refuses a plan the newer server would have
+**answered**; the zero anchor refuses one that would have returned **nothing**. Blast radius, not
+kind, is what separates them.
+
+`[decided — 2026-08-12, Pete]` `ActName` is open and grows with `search_family()`, so the direction that bites is
+GROWTH: when an eighth act is declared, a released CLI whose binary predates it deserializes that
+name into `ActName::Other` and `validate_shape` refuses `unknown_act` for a plan the current server
+would run — the exact failure this seam exists to prevent, inside the pass that is supposed to be
+immune to it. It stays anyway, because catching a **misspelled act name** offline is worth more than
+the rare stale-binary case, and because the two are textually indistinguishable: nothing at that site
+can tell `find-abuot-within` from an act that shipped last week. So the refusal's detail names both
+readings instead of asserting the wrong one — *"`{raw}` is not an act this binary knows — check the
+spelling, or update if your server is newer than it"* — and `shape.rs` carries the remainder in
+prose beside the check. Moving it to capability is the alternative, and was declined rather than
+missed.
 
 **A correction recorded so it is not re-derived.** It was claimed in-session that
 `FilterNotApplicable` is split *within one variant* and so cannot be classified. That confused two
@@ -148,7 +264,8 @@ variants is a wire change and **belongs with the door, not ahead of it.**"*
 
 ### ⟨5⟩ The placeholder flip is what keeps `door_coverage` honest
 
-`CALLABLE_FRAGMENTS` (`validate.rs:60-65`) maps `search_graph_expand` and `wayfind_region_scores` to
+`CALLABLE_FRAGMENTS` (`validate/mod.rs:75-78` since the split; `validate.rs:60-65` when this was
+written) maps `search_graph_expand` and `wayfind_region_scores` to
 `__temper_unbound_act`, a function that deliberately does not exist. So `follow-from` and `survey`
 **validate clean and then fail at execution** — today that is invisible, because nothing executes a
 composition outside its own tests.
@@ -268,6 +385,16 @@ implemented and does not try.
 The recorded lag: the canonical worked example is now a `400` (it uses `edge_filter`); `Extent` and
 `IdProvenance` transcribed with the wrong tagging; `located_at` promised and structurally
 unfillable; `Composition.bounds` read by nothing; one header block contradicting a later one.
+
+**Sixth, added by PR A `[2026-08-12]`:** two places say `follow-from` *"compiles to the
+deliberately-nonexistent placeholder"* — `query.openapi.yaml:154-158` (the IMPLEMENTATION PENDING
+header) and `:1897-1903` (the worked example's ADJ-2 note) — and `:1901` adds *"even without the
+filter, the stage would fail loudly at Postgres."* ⟨5⟩'s flip makes all of that false: `follow-from`
+and `survey` left `CALLABLE_FRAGMENTS`, so they now refuse **statically** as
+`not_separably_reachable` and never reach Postgres at all. The yaml is deliberately **not edited by
+PR A** — the contract is provisional and D owns it — so the correction is recorded here rather than
+applied. Note it changes what a client copying the example should expect: `filter_not_applicable`
+**and** `not_separably_reachable` on `neighbours`, all refusals at once.
 
 Per the standing ruling the contract is **provisional** and alignment is bidirectional, so D
 adjudicates case by case rather than conforming code to the yaml.

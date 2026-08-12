@@ -50,12 +50,25 @@
 //! dangerous direction here: it would make the gate demand that a true declaration be downgraded.
 //!
 //! The scan is `FROM <name>(` rather than a bare name because the loose forms are all wrong in a way
-//! that was checked, not guessed. A plain name match hits doc comments (`substrate_read.rs:938`
-//! discusses `wayfind_region_scores` in prose) and the validator's identifier allowlist
-//! (`validate.rs:63` carries `"search_graph_expand"` as a string). Requiring a call shape excludes
-//! both; requiring the SQL `FROM` form additionally excludes the Rust wrapper *definitions* that
-//! share their SQL function's name (`pub async fn search_exact(`), which are declarations rather
-//! than invocations and could in principle sit there unused.
+//! that was checked, not guessed. A plain name match hits two classes of non-invocation, both with
+//! live instances in production `src/` today:
+//!
+//! - **prose** — `temper-services/src/backend/substrate_read.rs:938` discusses
+//!   `wayfind_region_scores` in a doc comment about the T7 NaN trap;
+//! - **string literals** — `registry.rs:246` carries `served_by: Some("search_graph_expand"…)`,
+//!   which is the declaration of the mechanic rather than a call to it, and is precisely the field
+//!   whose truth this file is checking.
+//!
+//! `[re-cited — 2026-08-12]` The second bullet used to cite *"the validator's identifier allowlist
+//! (`validate.rs:63` carries `"search_graph_expand"` as a string)"*, and both halves of that are now
+//! dead: `validate.rs` was split into `validate/{shape,capability,mod}.rs`, and
+//! `search_graph_expand` left `CALLABLE_FRAGMENTS` when `follow-from` was flipped to refuse
+//! statically. The ARGUMENT survives the citation — a `served_by` literal is the same class of
+//! false positive, and a nearer one.
+//!
+//! Requiring a call shape excludes both; requiring the SQL `FROM` form additionally excludes the
+//! Rust wrapper *definitions* that share their SQL function's name (`pub async fn search_exact(`),
+//! which are declarations rather than invocations and could in principle sit there unused.
 //!
 //! # What this file checks, and what it structurally cannot
 //!
