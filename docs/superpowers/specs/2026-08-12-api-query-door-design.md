@@ -281,11 +281,51 @@ tests pin"* — and that reason is now spent.
 
 ---
 
-## The cut: five PRs, each with one story
+### ⟨6⟩ `/api/search` accepts a resource bound, and the door-varying shortfall never happens
+
+`[decided — 2026-08-12, Pete]` Planning PR B surfaced what looked like a structural first: `/api/query`
+would be the only door able to supply a resource-id set, so `bounds_unreachable: [IdKind::Resource]`
+would go empty at Api and Cli while staying true at Mcp, and `unified_doors` — which passes that axis
+once for all three doors — would need a per-door literal.
+
+**The premise was false, and it was an assertion rather than a finding.** This document said
+`/api/search` *"cannot take a resource bound and will not"*; the second half described no invariant.
+Measured instead:
+
+| Function | `p_bound_ids`? | Gated? | Called by |
+|---|---|---|---|
+| `search_exact` (7 args) | no | yes | `/api/search` |
+| `search_wide` (8 args) | no | yes | `/api/search` |
+| **`query_find_exact`** (8 args) | **yes** | **yes** | nothing |
+| `__temper_ungated_find_exact` | yes | no | `/api/query`'s compiler |
+| `__temper_ungated_find_wide` | yes | no | `/api/query`'s compiler |
+
+`query_find_exact` shipped in `20260810000010` — gated, bound-accepting, and **uncalled**. So the
+exact arm needs no SQL at all, only a repointed call site. The wide arm's twin was never written; it
+is the same eight-line wrapper, and `__temper_ungated_find_wide` already branches
+`IF p_anchor_id IS NULL AND p_bound_ids IS NULL THEN <top-k> ELSE <exhaustive>`, so a bound routes to
+the exhaustive path on its own — the correctness rule is already served and no new semantics are
+needed.
+
+**So the axis goes empty at all three doors at once** (MCP takes the whole `SearchParams`, so it
+gains the capability with it), `unified_doors` never grows a third argument, and the
+`Door`-is-a-surface-not-a-route ambiguity never has an instance. The question is dissolved rather
+than managed.
+
+This does not blur ⟨*Search splits in two*⟩. A resource-id bound is a filter on **one act** —
+`accepts_bounds: [Resource]` is the act's own declared affordance — not a composition. `/api/search`
+gets the act's full narrowing surface; `/api/query` gets composition. That is a sharper split, not a
+muddier one.
+
+**It lands as its own PR before B**, mirroring A0: independent of the door, closing a declared
+shortfall, and leaving B's `door_coverage` untouched.
+
+## The cut: six PRs, each with one story
 
 | | Story | Touches | DB |
 |---|---|---|---|
 | **A0** | `temper search` can page | `temper-cli`, `registry.rs` | no |
+| **A1** | `/api/search` accepts a resource bound | `migrations/`, `temper-substrate`, `temper-core`, `temper-cli` | yes |
 | **A** | The refusal vocabulary becomes two vocabularies, and the placeholder stops lying | `temper-core` | no |
 | **B** | The door opens, end to end | `temper-api`, `temper-cli`, `temper-client`, e2e | yes |
 | **C** | The CLI can check a plan offline | `temper-cli` | no |
@@ -361,16 +401,20 @@ Output is `QueryResponse` through the existing `--format json|toon` machinery. *
 rides**, never behind a flag: `composition-is-legible` is the property the door exists to deliver,
 and a trace you have to ask for is one most callers will not have.
 
-**`door_coverage`, the axis that genuinely moves.** `find-exact` and `find-about-within` declare
-`bounds_unreachable: [IdKind::Resource]`, commented *"unreachable from every caller … no door's
-params carry a resource-id list."* `POST /api/query` is a door whose params carry a resource-id list
-— that is what `StageInput` and `p_bound_ids uuid[]` are. So the entry becomes false at Api and Cli
-and stays true at Mcp, which ⟨2⟩ defers.
+**`door_coverage` is untouched here — A1 is what moves it.** `[superseded — 2026-08-12 by ⟨6⟩]`
+This section used to say the bounds axis moves in B: `POST /api/query` is a door whose params carry
+a resource-id list, so `bounds_unreachable: [IdKind::Resource]` would go false at Api and Cli while
+staying true at Mcp, and `unified_doors` would need a per-door third argument.
 
-That breaks `unified_doors()`'s shape exactly as its own comment predicted: *"`bounds_unreachable`
-is the same at all three doors and so is passed once… A door-varying shortfall would need the
-per-door literal these acts no longer share."* B gives the helper a third argument; three call
-sites, and it still earns its keep on the terms axis.
+That is no longer what happens, because A1 gives `/api/search` the same bound first. The axis empties
+at all three doors before B opens, `unified_doors` keeps its shape, and B declares nothing new — the
+find acts are already reachable at every door it touches. The prediction in `unified_doors`' own
+comment (*"a door-varying shortfall would need the per-door literal these acts no longer share"*)
+stands as written and simply never gets its instance.
+
+**What B must still check:** that `no_door_can_supply_the_resource_bound_the_find_acts_accept` — or
+whatever A1 renames it to — is still true after the door lands. A1 empties the axis on the strength
+of `/api/search`; B adds a second route that also supplies it. Same declaration, one more reason.
 
 **e2e** drives CLI → API → DB in one test. That is why API and CLI are one PR.
 
