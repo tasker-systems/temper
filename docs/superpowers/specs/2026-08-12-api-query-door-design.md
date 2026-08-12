@@ -72,32 +72,62 @@ query::validate::capability   fn validate_capability(&Composition, &[ActDeclarat
 query::validate               fn validate(&Composition)  =  shape ++ capability(search_family())
 ```
 
-**The seam is the import, not a convention.** A pass that cannot reach `declaration()` cannot raise
-`NotSeparablyReachable`, so a client running `validate_shape` against a newer server structurally
-cannot refuse a plan that server would run. This matters because version skew is structural in this
-project, not hypothetical: CLAUDE.md's *"Release ≠ deploy"* means a released CLI binary carries a
-`search_family()` older than the server's, and `CALLABLE_FRAGMENTS` — which decides
-`NotSeparablyReachable` — is precisely what beats D, 10b and 11 keep widening.
+**The import is a necessary guard, not a sufficient one.** `[corrected — 2026-08-12, during plan
+grounding]` A pass that cannot reach `declaration()` cannot raise `NotSeparablyReachable`, and that
+much matters: version skew is structural here, not hypothetical, since CLAUDE.md's *"Release ≠
+deploy"* means a released CLI carries a `search_family()` older than the server's, and
+`CALLABLE_FRAGMENTS` — which decides `NotSeparablyReachable` — is precisely what beats D, 10b and 11
+keep widening.
+
+But "reads the declaration" and "is a capability refusal" **come apart**, and they come apart on
+exactly the refusals that move. Five sites read no declaration at all and are nonetheless pure door
+capability — their own detail strings say so: `validate.rs:381` (*"this door does not **yet** apply
+property predicates"*), `:389` (*"the only act that admits one still compiles to the absent
+placeholder"*), `:355`, `:370`, and `:777`'s `SectionNotAvailable`, which reads
+`ReturnSpec::ADMITTED_SECTIONS`. Task 10b makes the first work; a widened `ADMITTED_SECTIONS` makes
+the last work. An import scan would let all five sit in the shape pass, and a stale client would
+then refuse plans a newer server runs — the failure this seam exists to prevent.
+
+**So the rule is stated positively, and guarded twice.** The shape pass may raise only refusals that
+cannot change without a change to the published wire contract. Guard one: the shape module does not
+import `registry` (source scan). Guard two: the set of `RefusalReason`s the shape pass can emit is
+**pinned by a test**, in the family of `the_cells_tier_one_cannot_discriminate_are_exactly_these` —
+because the classification of the five sites above is a judgment, and a judgment needs a pin, not an
+inference.
 
 The classification, derived by reading every refusal site rather than by shape:
 
-| Class | Reasons |
-|---|---|
-| **Expressibility** | the twelve `Other(_)` strings — `cycle`, `dangling-reference`, `duplicate-stage-name`, `combinator-arity`, `unknown-return-stage`, `duplicate-return-stage`, `combinator-not-returnable`, `unknown-act`, `empty-property-key`, `empty-contains`, `no-stages`, `no-returns` — **plus `MissingIntention`** |
-| **Capability** | `NotSeparablyReachable`, `NotImplemented`, `FilterNotApplicable` (all four sites), `BoundTermNotApplicable`, `UnsupportedBoundKind`, `UnsupportedSeedKind`, `MissingProvenance`, `AnchorTakesOneId`, `SectionNotAvailable`, `UnknownFilterValue` |
-| **Runtime** | `EmbeddingUnavailable`, alone, by design |
+The classification below is **per site**, derived by reading each one — not per variant, because two
+variants straddle the seam.
 
-`Other(_)` ⊂ expressibility but is **not equal to it**: `MissingIntention` is raised by a hardcoded
-`matches!` on three act names at `validate.rs:471-489` and never consults `search_family()`, so it
-belongs to the shape pass despite being a declared variant.
+| Site | Reason | Class |
+|---|---|---|
+| `validate.rs:657, :669, :684, :696, :705, :729, :754, :765, :796` | the nine topology `Other(_)` strings | shape |
+| `:504`, `:512` | `Other("empty-property-key")`, `Other("empty-contains")` | shape |
+| `:227` | `Other("unknown-act")` | shape — **rewritten** as `matches!(inv.act, ActName::Other(_))`; `ActName` is open (`act.rs:45-46`), so this is caller-reachable and answerable from the type alone |
+| `:488` | `MissingIntention` | shape — hardcoded `matches!` on three act names, never consults `search_family()` |
+| `:272` | `MissingProvenance` | shape — `kind == Region && provenance.is_none()`, pure plan inspection |
+| `:311` | `AnchorTakesOneId` | shape — `ids.ids.len() != 1`, pure plan inspection |
+| `:497` | `UnknownFilterValue` | shape — `PropertySubject::Other(_)`, a closed vocabulary in the schema |
+| `:408` | `BoundTermNotApplicable`, negative value | shape — a row count below zero is malformed whatever the act |
+| `:238`, `:246` | `NotImplemented`, `NotSeparablyReachable` | capability |
+| `:284`, `:295` | `UnsupportedSeedKind`, `UnsupportedBoundKind` | capability |
+| `:421`, `:434` | `BoundTermNotApplicable`, 32-bit slot / not admitted | capability |
+| `:447`, `:454` | `FilterNotApplicable`, act does not admit the slot | capability |
+| `:355`, `:370`, `:381`, `:389` | `FilterNotApplicable`, **this door does not yet apply** | capability — reads no declaration |
+| `:777` | `SectionNotAvailable` | capability — reads `ReturnSpec::ADMITTED_SECTIONS`, which can widen |
+| runtime | `EmbeddingUnavailable` | neither, by design |
 
-**A correction made in-session and recorded so it is not re-derived.** It was claimed that
+**Two variants straddle the seam**, which is why the pinned set is over sites rather than variants:
+`BoundTermNotApplicable` (negative is shape; range and admission are capability) and
+`FilterNotApplicable` (four "not yet" sites and two "act does not admit" sites, all capability, but
+for different reasons).
+
+**A correction recorded so it is not re-derived.** It was claimed in-session that
 `FilterNotApplicable` is split *within one variant* and so cannot be classified. That confused two
-axes. On the permanent-versus-not-yet axis it is genuinely split (`:355`/`:447` are
-declaration-driven; `:378`/`:386` are wholesale *"this door does not yet apply"*). On the
-shape/capability axis all four sites are cleanly capability. Splitting the variant is therefore
-**not required by this seam** and is out of scope — it can earn its way in when a caller is
-confused by it.
+axes: on the permanent-versus-not-yet axis it is genuinely split, but on the shape/capability axis
+all six of its sites are capability. Splitting the variant is **not required by this seam** and stays
+out of scope — it can earn its way in when a caller is confused by it.
 
 ### ⟨4⟩ The twelve string refusals are promoted, and the timing is forced
 
