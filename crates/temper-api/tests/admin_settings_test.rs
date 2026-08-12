@@ -169,6 +169,167 @@ async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
     ));
 }
 
+// ─── a soft-deleted gating team confers nothing ──────────────────────────────
+//
+// `20260703000001_team_metadata_soft_delete.sql` declares in its header that "membership in a
+// soft-deleted team confers nothing anywhere". `promote_admin`'s default branch and
+// `create_join_request` both resolve the gating team by slug in Rust rather than through the SQL
+// chokepoints, so each has to state the filter itself — otherwise a promotion mints an `owner` row
+// on a dead team, and a join request is filed against (and later approved into) one.
+//
+// Each keeps its own incumbent refusal, and a soft-deleted gating team is indistinguishable from a
+// slug naming no team at all: from the caller's side both are the settings row pointing at nothing.
+
+/// Soft-delete a team the way `DELETE /api/teams/{id}` does — a bare `is_active` flip that leaves
+/// every membership row intact, so these tests cannot pass because something also tidied up.
+async fn soft_delete_team(pool: &sqlx::PgPool, team_id: Uuid) {
+    sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+        .bind(team_id)
+        .execute(pool)
+        .await
+        .expect("soft-delete team");
+}
+
+/// Insert a gating team and point `kb_system_settings` at it. Raw SQL, not
+/// `update_system_settings`, so the slug can later be pointed at an absent team for the
+/// "indistinguishable from never existed" half (that service call guards existence).
+async fn configure_gating(pool: &sqlx::PgPool, slug: &str) -> Uuid {
+    let team_id: Uuid =
+        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .expect("gating team");
+    point_gating_at(pool, slug).await;
+    team_id
+}
+
+/// Point the settings row's `gating_team_slug` at `slug`, whether or not a team carries it.
+async fn point_gating_at(pool: &sqlx::PgPool, slug: &str) {
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+        .bind(slug)
+        .execute(pool)
+        .await
+        .expect("set gating slug");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn promote_admin_refuses_a_soft_deleted_gating_team(pool: sqlx::PgPool) {
+    reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
+    let team_id = configure_gating(&pool, "sd-gating-promote").await;
+
+    // (a) While the gating team is ACTIVE the promotion lands — the before half, so a regression
+    //     cannot make this test pass by breaking promotion outright.
+    let first =
+        common::fixtures::create_test_profile(&pool, "sd-promotee-1@test.example.com").await;
+    let row = access_service::promote_admin(&pool, &admin, first, None)
+        .await
+        .expect("promotion onto an ACTIVE gating team should land");
+    assert_eq!(row.team_id, team_id);
+
+    // (b) Soft-delete it. Every membership row survives, so the refusal can only be `is_active`.
+    soft_delete_team(&pool, team_id).await;
+
+    let second =
+        common::fixtures::create_test_profile(&pool, "sd-promotee-2@test.example.com").await;
+    let err = access_service::promote_admin(&pool, &admin, second, None)
+        .await
+        .expect_err("a soft-deleted gating team is no promotion target");
+    let temper_services::error::ApiError::BadRequest(msg) = err else {
+        panic!("expected BadRequest for a soft-deleted gating team, got {err:?}");
+    };
+
+    // Indistinguishable from a gating slug that names no team at all.
+    point_gating_at(&pool, "sd-gating-absent").await;
+    let third =
+        common::fixtures::create_test_profile(&pool, "sd-promotee-3@test.example.com").await;
+    let absent_err = access_service::promote_admin(&pool, &admin, third, None)
+        .await
+        .expect_err("a gating slug naming no team is no promotion target either");
+    let temper_services::error::ApiError::BadRequest(absent_msg) = absent_err else {
+        panic!("expected BadRequest for an absent gating team, got {absent_err:?}");
+    };
+    assert_eq!(
+        msg.replace("sd-gating-promote", "<slug>"),
+        absent_msg.replace("sd-gating-absent", "<slug>"),
+        "a soft-deleted gating team must refuse in the same words as one that never existed"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn join_request_refuses_a_soft_deleted_gating_team(pool: sqlx::PgPool) {
+    reset_settings(&pool).await;
+    let team_id = configure_gating(&pool, "sd-gating-join").await;
+
+    // `create_test_profile` grants `approved` standing so its callers clear the front door, but
+    // `Request` is legal only from `denied` — so put each requester back where a provisioned
+    // principal starts. `denied` is a ROW, not an absent one: no standing at all is its own refusal
+    // ("not legal for a principal with no standing"), which would stop these arms in the standing
+    // machine before they ever reach the gating-team lookup this test is about.
+    async fn denied_profile(pool: &sqlx::PgPool, email: &str) -> Uuid {
+        let profile = common::fixtures::create_test_profile(pool, email).await;
+        sqlx::query(
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'denied')
+             ON CONFLICT (profile_id) DO UPDATE SET state = 'denied', updated = now()",
+        )
+        .bind(profile)
+        .execute(pool)
+        .await
+        .expect("set standing to denied");
+        profile
+    }
+
+    let request_for = |profile: Uuid| access_service::CreateJoinRequestParams {
+        profile_id: temper_core::types::ids::ProfileId::from(profile),
+        message: None,
+        source: "test".to_owned(),
+        accepted_terms_version: None,
+    };
+
+    // (a) ACTIVE gating team: the request is filed against it.
+    let first = denied_profile(&pool, "sd-joiner-1@test.example.com").await;
+    let req = access_service::create_join_request(&pool, request_for(first))
+        .await
+        .expect("a request against an ACTIVE gating team should be filed");
+    assert_eq!(req.team_id, team_id);
+
+    // (b) Soft-delete it. The refusal must arrive before the standing write, so the requester is
+    //     left where they started rather than stranded in `requested` with no request row.
+    soft_delete_team(&pool, team_id).await;
+
+    let second = denied_profile(&pool, "sd-joiner-2@test.example.com").await;
+    let err = access_service::create_join_request(&pool, request_for(second))
+        .await
+        .expect_err("a soft-deleted gating team must accept no join request");
+    let temper_services::error::ApiError::Internal(msg) = err else {
+        panic!("expected Internal for a soft-deleted gating team, got {err:?}");
+    };
+    let filed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM kb_join_requests WHERE requesting_profile_id = $1)",
+    )
+    .bind(second)
+    .fetch_one(&pool)
+    .await
+    .expect("check");
+    assert!(!filed, "the refusal must precede the request row");
+
+    // Indistinguishable from a gating slug that names no team at all.
+    point_gating_at(&pool, "sd-gating-absent").await;
+    let third = denied_profile(&pool, "sd-joiner-3@test.example.com").await;
+    let absent_err = access_service::create_join_request(&pool, request_for(third))
+        .await
+        .expect_err("a gating slug naming no team must accept no join request either");
+    let temper_services::error::ApiError::Internal(absent_msg) = absent_err else {
+        panic!("expected Internal for an absent gating team, got {absent_err:?}");
+    };
+    assert_eq!(
+        msg.replace("sd-gating-join", "<slug>"),
+        absent_msg.replace("sd-gating-absent", "<slug>"),
+        "a soft-deleted gating team must refuse in the same words as one that never existed"
+    );
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
     // Gating team = temper-system (auto_join_role watcher, seeded by migration).

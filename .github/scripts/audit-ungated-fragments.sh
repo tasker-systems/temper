@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# audit-ungated-fragments.sh — enumerate every `__temper_ungated_` fragment and every production
+# site that names one, and fail if either set has grown without review.
+#
+# WHY THIS EXISTS
+# ---------------
+# An ungated fragment applies NO visibility gate. It is handed the RBAC verdict as
+# `p_visible_ids uuid[]` and trusts its caller absolutely. That exists because a CTE cannot be
+# passed to a function, and hoisting the gate is the only way a composition computes
+# `resources_visible_to` once rather than once per stage (migrations/20260808000030, spec §5).
+#
+# The invariant "every mechanic acts only on resources visible to the principal" is therefore no
+# longer a property of these bodies. It is held by structure and by this script — and by nothing
+# else. So a new call site, or a new ungated function, must be seen by a human.
+#
+# WHAT THIS CANNOT DO, AND IT IS THE LIKELIER FAILURE
+# ---------------------------------------------------
+# This pins *where* a core is called. It can never pin *what is passed*. The realistic bug is not a
+# rogue call site — it is an APPROVED site handing over an upstream stage's ids where the visible
+# set belongs: CI green, RBAC bypassed, every returned row still plausible.
+#
+# That failure is closed somewhere else, structurally: `query_plan.rs::emit_ungated_core_call` is
+# the only emitter of these calls, and the id source is NOT a parameter of it. There is no wrong set
+# to pass because there is no argument for it. See
+# `every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_else`.
+#
+# WHAT THIS IS NOT: A DATABASE PERMISSION
+# ---------------------------------------
+# The application connects as the owning role, so anyone holding a psql connection, the Neon
+# console, or the app credentials can call `__temper_ungated_find_exact` with an arbitrary `uuid[]`
+# and receive ungated rows. `REVOKE` buys nothing. This is source discipline. It is a real, accepted
+# residue of the split (spec §6), stated here so a reader does not mistake a green tick for a
+# capability boundary.
+#
+# DERIVED, NOT PINNED
+# -------------------
+# Both halves are DERIVED from the `__temper_ungated_` prefix rather than listed. The repo's own
+# lesson from `assert_every_compiled_in_doc_is_vetoed` is that a hand-maintained enumeration rots
+# while a derived set does not — that test greps for `include_str!` rather than trusting a list. The
+# baselines below are what the derivation currently yields, not the definition of what to look for.
+#
+# DECLARED SCOPE, so a narrowing is not mistaken for coverage
+# ----------------------------------------------------------
+# The Rust half scans `crates/**/src/**.rs` only. Test trees are DELIBERATELY out of scope: a test
+# calling a core directly is expected (that is how the cores' own witnesses prove they are ungated),
+# it ships in no binary, and it runs against an ephemeral database. Including them would make the
+# baseline churn on every new witness until nobody read it. Named as an exclusion rather than left
+# to be inferred — `audit-grant-sinks.sh`'s header records what happens when a guard's field of view
+# narrows and the number moves the reassuring way.
+#
+# USAGE
+#   .github/scripts/audit-ungated-fragments.sh            # verify against the baseline (CI mode)
+#   .github/scripts/audit-ungated-fragments.sh --list     # just print the current sets
+#   UPDATE_BASELINE=1 .github/scripts/audit-ungated-fragments.sh   # print blocks to paste, after review
+#
+# Exit 0 = both sets unchanged. Exit 1 = something was added/removed/moved — review required.
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Overridable so the test harness can point either scan at a fixture directory.
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
+CRATES_DIR="${CRATES_DIR:-crates}"
+
+PREFIX='__temper_ungated_'
+
+# The reviewed SQL baseline: the NAMES of ungated functions defined in migrations/.
+#
+# Keyed on function name, never on file or line — migrations are append-only and immutable, so a
+# shipped function is changed by a NEW migration redefining it. A per-file baseline would churn on
+# every routine redefinition and get rebaselined reflexively until it meant nothing. The set of
+# names changes only when a genuinely new ungated body appears, which is the event worth attention.
+#
+# REVIEWED 2026-08-08 (composable find fragments, plan Task 9) — the two founding members.
+#   __temper_ungated_find_exact / __temper_ungated_find_wide (migrations/20260808000030)
+#   Each is the deployed arm's body with its `resources_visible_to(p_principal)` join replaced by
+#   `JOIN unnest(p_visible_ids)`. They keep the anchor readability check for BOTH anchor kinds —
+#   cogmap and context, via `anchor_readable_by_profile` since migration 20260810000010 — which the
+#   id set cannot express: "may this principal use this map or context as a scope" is one boolean per
+#   call and a property of no row. They take `p_anchor_reader` for it rather than a caller-asserted
+#   boolean, so the core cannot be lied to about that authorization.
+read -r -d '' SQL_BASELINE <<'EOF' || true
+__temper_ungated_find_exact
+__temper_ungated_find_wide
+EOF
+
+# The reviewed Rust baseline: <count> <path>, sorted by path. Every production file that NAMES an
+# ungated fragment, comment lines excluded.
+#
+# REVIEWED 2026-08-08 (composable find fragments, plan Task 9).
+#   temper-core/src/types/query/validate.rs — `CALLABLE_FRAGMENTS`, the map from a declared mechanic
+#     to the fragment `/api/query` emits. Naming a core here does NOT call one: this crate has no
+#     database access and the map only decides which acts are reachable from this surface.
+#   temper-substrate/src/readback/query_plan.rs — the compiler, at 2: the two `EMIT_FIND_*`
+#     constants and nothing else. The match arms that emit these calls go through the constants, so
+#     they do not name the prefix — which is why a count of 2 rather than 4 is the correct reading
+#     and not a scan that is missing half the file. `emit_ungated_core_call` is the sole emitter and
+#     the place the visible set and the principal are fixed rather than passed.
+read -r -d '' RUST_BASELINE <<'EOF' || true
+2 crates/temper-core/src/types/query/validate.rs
+2 crates/temper-substrate/src/readback/query_plan.rs
+EOF
+
+# The SQL half: ungated functions DEFINED in migrations. A definition is what creates the hazard; a
+# call from inside another SQL function is caught by the same scan, since it would have to name the
+# prefix somewhere the Rust half does not look — see the CALLERS check below.
+sql_current() {
+  grep -rhoE \
+    "CREATE([[:space:]]+OR[[:space:]]+REPLACE)?[[:space:]]+FUNCTION[[:space:]]+${PREFIX}[a-z0-9_]+" \
+    "$MIGRATIONS_DIR"/*.sql 2>/dev/null \
+  | sed -E 's/.*[Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][[:space:]]+//' \
+  | sort -u \
+  || true
+}
+
+# Every migration file that MENTIONS the prefix, so a new SQL-side caller is visible even when it
+# defines nothing. Keyed on basename: migrations are immutable, so this set only ever grows by a
+# genuinely new file.
+sql_files_current() {
+  grep -rlE "$PREFIX" "$MIGRATIONS_DIR"/*.sql 2>/dev/null \
+  | sed -E 's|.*/||' \
+  | sort -u \
+  || true
+}
+
+# REVIEWED 2026-08-08 — the defining migration, plus the gated wrappers it re-points, are all in one
+# file. `scripts/measure/gate-shape-comparison.sql` also names the prefix but is not a migration and
+# is not scanned; it is a read-only measurement harness that defines and calls nothing.
+#
+# REVIEWED 2026-08-10 (ADJ-1/ADJ-6) — `20260810000010` is CREATE OR REPLACE at byte-identical
+# signatures on the SAME two cores (the anchor guard now covers both anchor kinds via
+# `anchor_readable_by_profile`) plus `query_find_exact` (the wide wrapper's guaranteed-empty CASE,
+# applied symmetrically). No new ungated function, no new caller — the function-name set above is
+# unchanged; only the file set grows.
+read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
+20260808000030_composable_find_family.sql
+20260810000010_anchor_readability_both_kinds.sql
+EOF
+
+# The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
+# so prose about the hazard does not move the count — the same treatment audit-grant-sinks.sh gives
+# its own definition lines.
+rust_current() {
+  grep -rnE --include='*.rs' "$PREFIX" "$CRATES_DIR" 2>/dev/null \
+  | grep -E '^[^:]*/src/[^:]*\.rs:' \
+  | grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' \
+  | awk -F: '{print $1}' \
+  | sort | uniq -c \
+  | awk '{printf "%s %s\n", $1, $2}' \
+  | sort -k2 \
+  || true
+}
+
+SQL_CURRENT="$(sql_current)"
+SQL_FILES_CURRENT="$(sql_files_current)"
+RUST_CURRENT="$(rust_current)"
+
+if [[ "${1:-}" == "--list" ]]; then
+  echo "--- SQL functions:"; echo "$SQL_CURRENT"
+  echo "--- SQL files:";     echo "$SQL_FILES_CURRENT"
+  echo "--- Rust sites:";    echo "$RUST_CURRENT"
+  exit 0
+fi
+
+if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then
+  echo "--- SQL functions:"; echo "$SQL_CURRENT"
+  echo "--- SQL files:";     echo "$SQL_FILES_CURRENT"
+  echo "--- Rust sites:";    echo "$RUST_CURRENT"
+  echo "^^^ copy the blocks above into SQL_BASELINE / SQL_FILES_BASELINE / RUST_BASELINE, only" >&2
+  echo "    after reviewing each new site for who supplies its RBAC verdict." >&2
+  exit 0
+fi
+
+fail=0
+
+# A scan that finds NOTHING must fail, not pass. An empty set diffs clean against an empty baseline
+# while asserting nothing at all, and the failure mode is mundane — a renamed directory, a changed
+# CREATE spelling. This is the guard `audit-grant-sinks.sh` learned to add after its SQL half
+# silently stopped covering the authoritative write.
+for pair in "SQL functions:$SQL_CURRENT" "SQL files:$SQL_FILES_CURRENT" "Rust sites:$RUST_CURRENT"; do
+  label="${pair%%:*}"
+  value="${pair#*:}"
+  if [[ -z "$value" ]]; then
+    echo "audit-ungated-fragments: FAIL — the $label scan found NOTHING." >&2
+    echo "  The cores exist (migrations/20260808000030) and the compiler emits them, so zero means" >&2
+    echo "  the scan broke rather than that the hazard is gone. MIGRATIONS_DIR=$MIGRATIONS_DIR" >&2
+    echo "  CRATES_DIR=$CRATES_DIR" >&2
+    fail=1
+  fi
+done
+
+check() {
+  local label="$1" baseline="$2" current="$3" sort_key="$4"
+  local norm
+  norm="$(printf '%s\n' "$baseline" | sort $sort_key)"
+  if ! diff <(printf '%s\n' "$norm") <(printf '%s\n' "$current") >"/tmp/ungated-$label.diff" 2>&1; then
+    echo "audit-ungated-fragments: FAIL — the set of $label changed." >&2
+    echo "diff (baseline -> current):" >&2
+    cat "/tmp/ungated-$label.diff" >&2
+    echo >&2
+    fail=1
+  fi
+}
+
+check "sqlfns"   "$SQL_BASELINE"       "$SQL_CURRENT"       "-u"
+check "sqlfiles" "$SQL_FILES_BASELINE" "$SQL_FILES_CURRENT" "-u"
+check "rust"     "$RUST_BASELINE"      "$RUST_CURRENT"      "-k2"
+
+if [[ "$fail" == "0" ]]; then
+  echo "audit-ungated-fragments: OK — $(printf '%s\n' "$SQL_CURRENT" | grep -c .) ungated function(s), $(printf '%s\n' "$RUST_CURRENT" | grep -c .) production file(s) naming one."
+  exit 0
+fi
+
+cat >&2 <<'MSG'
+audit-ungated-fragments: FAIL — the ungated-fragment surface changed.
+
+An ungated fragment applies NO visibility gate; it trusts its caller's `p_visible_ids` absolutely.
+Before accepting this change, confirm for each new/changed site:
+  1. VERDICT   — who computes the visible set it is handed, and is that the caller's own gate?
+  2. EMITTER   — does the call go through the single emitter that fixes the id source, rather than
+                 taking a set as an argument? (query_plan.rs::emit_ungated_core_call)
+  3. RESIDUE   — nothing here is a database permission. The app connects as the owning role.
+See migrations/20260808000030_composable_find_family.sql and spec §6.
+MSG
+echo "If the change is reviewed and correct: UPDATE_BASELINE=1 .github/scripts/audit-ungated-fragments.sh" >&2
+exit 1

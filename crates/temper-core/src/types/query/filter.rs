@@ -43,9 +43,17 @@ pub struct FacetPredicate {
 
 /// Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.
 ///
-/// An unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL
-/// (`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four
-/// filters that accept nonsense and return one.
+/// **No field here has a closed vocabulary, and none is checked against one.**
+/// `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed
+/// vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three
+/// is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as
+/// `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value
+/// for. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized
+/// [`PropertySubject`] — and its own doc carries the ruling.
+///
+/// The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,
+/// because it can never match; *a string that may be perfectly legitimate and matches nothing in the
+/// scope you asked about* is an honest empty. `doc_type` is the second kind.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

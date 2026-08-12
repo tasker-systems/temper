@@ -48,39 +48,14 @@ pub enum BoundTerm {
     Regions,
 }
 
-/// How a receiving act consumes the `IdSet` it was handed.
-///
-/// Declared at the CONSUMING stage, never the producing one — the producer emits membership and
-/// has no opinion about what the next act does with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum BoundsMode {
-    /// Narrow to within this set.
-    Bound,
-    /// Grow from this set.
-    Seed,
-}
+// `BoundsMode` used to live here. It is now `StageRelation`, in `stage.rs` beside `StageInput`,
+// because the relation is a property of the EDGE rather than of the stage — carrying it here, as a
+// base-envelope scalar, is what made an `Option` on the invocation look reasonable.
 
-/// How much per-resource meta the trace retains (design §4.4, tier 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum MetaDetail {
-    /// Per-resource meta only for ids in the final result set. Bounded by the caller's own limit.
-    #[default]
-    Surviving,
-    /// Every id at every stage, including ids dropped mid-composition. The diagnostic mode.
-    Full,
-    /// Tier 1 only.
-    None,
-}
+// `MetaDetail` used to live here (design §4.4, tier 2). Removed with `Composition.meta_detail`
+// and `MetaTruncated` by ADJ-4 `[2026-08-10, Pete]` — it existed only to serve the metadata-budget
+// concept, whose job nobody could state (YAGNI); nothing ever honoured it. If a metadata budget
+// ever materializes it returns designed, additively.
 
 #[cfg(test)]
 mod tests {
@@ -142,20 +117,7 @@ mod tests {
         assert!(serde_json::from_str::<BoundTerm>("\"page_size\"").is_err());
     }
 
-    #[test]
-    fn bounds_mode_round_trips_both_directions() {
-        assert_eq!(
-            serde_json::to_string(&BoundsMode::Bound).unwrap(),
-            "\"bound\""
-        );
-        assert_eq!(
-            serde_json::to_string(&BoundsMode::Seed).unwrap(),
-            "\"seed\""
-        );
-    }
-
-    #[test]
-    fn meta_detail_defaults_to_surviving() {
-        assert_eq!(MetaDetail::default(), MetaDetail::Surviving);
-    }
+    // `bounds_mode_round_trips_both_directions` moved with the type — see
+    // `stage::tests::the_relation_rides_the_wire_as_the_edge_word_callers_write`, which pins the
+    // same two spellings plus the `as` position the round-trip alone could not see.
 }

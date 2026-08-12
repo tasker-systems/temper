@@ -1,0 +1,157 @@
+{
+  "$defs": {
+    "IdKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "resource",
+            "region",
+            "cogmap",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+    },
+    "IdProvenance": {
+      "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
+      "oneOf": [
+        {
+          "properties": {
+            "anchor": {
+              "const": "cogmap",
+              "type": "string"
+            },
+            "id": {
+              "description": "A `kb_cogmaps.id` value — a cognitive map.",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "anchor": {
+              "const": "context",
+              "type": "string"
+            },
+            "id": {
+              "description": "A `kb_contexts.id` value.",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "anchor",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IdSet": {
+      "description": "The one value that crosses a stage boundary. Membership, never rank.",
+      "properties": {
+        "ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/IdKind"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IdProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required for `region`; absent for every other kind today."
+        }
+      },
+      "required": [
+        "kind",
+        "ids"
+      ],
+      "type": "object"
+    },
+    "StageRelation": {
+      "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+      "oneOf": [
+        {
+          "const": "bound",
+          "description": "Narrow to within this set.",
+          "type": "string"
+        },
+        {
+          "const": "seed",
+          "description": "Grow from this set.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage.",
+  "oneOf": [
+    {
+      "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
+      "properties": {
+        "as": {
+          "$ref": "#/$defs/StageRelation"
+        },
+        "from": {
+          "const": "caller",
+          "type": "string"
+        },
+        "ids": {
+          "$ref": "#/$defs/IdSet"
+        }
+      },
+      "required": [
+        "from",
+        "as",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The `produced` set of an earlier stage, named rather than copied.",
+      "properties": {
+        "as": {
+          "$ref": "#/$defs/StageRelation"
+        },
+        "from": {
+          "const": "upstream",
+          "type": "string"
+        },
+        "stage": {
+          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "as",
+        "stage"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "StageInput"
+}

@@ -6,18 +6,23 @@
 
 use serde::{Deserialize, Serialize};
 
-use std::collections::BTreeMap;
-
-use super::disposition::RefusalDisposition;
 use super::envelope::ActInvocation;
-use super::scalars::{BoundTerm, MetaDetail};
 use super::stage::StageName;
+use crate::types::resource_view::ResourceSection;
 
 /// The question, computed once at composition start and threaded to every stage.
 ///
-/// Its ABSENCE is meaningful: a `find-about-*` stage with no intention refuses, rather than the
-/// server embedding on the caller's behalf. That is what makes "I chose not to embed" and
-/// "I cannot embed" different states instead of one ambiguous one.
+/// **Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no
+/// intention has no words to search for, so it comes back `MissingIntention`. That refusal is
+/// forced rather than chosen: `find-exact` sources its query *text* from here — it becomes
+/// `p_query` — and there is nowhere else to get it.
+///
+/// An absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby
+/// gem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want
+/// of a precomputed vector would deny this surface to every non-CLI client. The server embeds when
+/// none arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as
+/// [`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the
+/// contract. `[decided — 2026-08-08, Pete]`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -38,20 +43,47 @@ pub struct Intention {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ReturnSpec {
     pub stage: StageName,
-    /// Empty means the kind's default projection. Named fields subselect it.
+    /// Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show
+    /// --with` uses. Empty means the kind's default projection.
+    ///
+    /// Replaces `fields: Vec<String>`, which promised field-level subselection over a projection,
+    /// had nothing implementing it, and duplicated a vocabulary that already works.
+    ///
+    /// **This door admits a subset, and the rest are REFUSED rather than unsupported** — see
+    /// [`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization
+    /// on purpose: `/api/query` promises every refusal in one response, and a serde failure
+    /// short-circuits before validation runs, so a caller with four problems would learn about one
+    /// of them in a deserializer's vocabulary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fields: Vec<String>,
+    pub with: Vec<ResourceSection>,
 }
 
-/// A composition's pocket outcome register: what it is for, and which stages come back.
+impl ReturnSpec {
+    /// The hydration sections `/api/query` offers, and therefore the only ones it accepts.
+    ///
+    /// Per-door subsetting of one shared vocabulary, exactly as [`ResourceSection::LIST`] already
+    /// does for `list` — not a second enum. Adding a section later is a change to this const.
+    ///
+    /// [`ResourceSection::Body`] is refused rather than merely absent. `fill_sections` records
+    /// that the body arm "is an N+1 by construction" and that what keeps it honest is "the door,
+    /// not the loop"; `/api/query` is a new door and is narrow from its first line. Ask `show`.
+    ///
+    /// [`ResourceSection::Edges`] is refused because edge listing has its own commands, and
+    /// `follow-from` plus an `EdgeFilter` walk and filter on edges without returning them.
+    pub const ADMITTED_SECTIONS: [ResourceSection; 1] = [ResourceSection::OpenMeta];
+}
+
+/// Which stages come back, and how much of each row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct OutcomeDeclaration {
-    /// What being served looks like. NOT optional.
-    pub description: String,
+    // There is deliberately no `description`. It was a required prose string — "a composition's
+    // pocket outcome register" — which is goal-authoring discipline leaked into a wire contract.
+    // Nobody should have to write a sentence about what being served looks like in order to run a
+    // query. The register discipline belongs to goals, which are resources, not to request bodies.
     /// The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:
     /// inferring from out-degree zero makes returning an intermediate impossible without a dummy
     /// consumer, and means adding a downstream stage silently stops returning what you used to get
@@ -121,7 +153,7 @@ impl StageNode {
     pub fn upstream_names(&self) -> Vec<&StageName> {
         match self {
             StageNode::Act(a) => match &a.input {
-                Some(super::stage::StageInput::Upstream { stage }) => vec![stage],
+                Some(super::stage::StageInput::Upstream { stage, .. }) => vec![stage],
                 _ => vec![],
             },
             StageNode::Combine(c) => c.inputs.iter().collect(),
@@ -139,15 +171,37 @@ pub struct Composition {
     pub outcome: OutcomeDeclaration,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intention: Option<Intention>,
-    /// What happens when a stage refuses. Declared, never improvised.
-    pub on_stage_refusal: RefusalDisposition,
-    #[serde(default)]
-    pub meta_detail: MetaDetail,
-    /// The SECOND bound layer: over the composition's own output, distinct from the act-level
-    /// terms on each stage. A composition never carries a total — with each stage's output the
-    /// next stage's domain, a full-composition total is not well-defined.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub bounds: BTreeMap<BoundTerm, i64>,
+    // There is deliberately no `on_stage_refusal`. It was a required
+    // `RefusalDisposition {halt | degrade_and_disclose}` describing a case that cannot occur:
+    // every `RefusalReason` bar one is decidable statically, so a composition that could refuse
+    // never runs at all — it comes back 400 with all of its refusals.
+    //
+    // The single runtime refusal, `EmbeddingUnavailable`, does not want a caller-declared
+    // disposition either. Its two settings are observationally near-identical (both answer 200
+    // with a full trace; the only difference is whether downstream stages run against empty sets),
+    // and it is not per-stage — the intention is computed ONCE and threaded, so an embedding
+    // failure fails every find-about-* stage at the same instant. A per-composition disposition
+    // over a per-stage refusal is machinery for a shape that does not exist.
+    //
+    // ONE BEHAVIOUR: the refused stage reports `refused` with no rows, every other stage runs, and
+    // a stage downstream of a refusal receives an EMPTY set — never an absent one. Empty is
+    // bounded-to-nothing; absent is unbounded, and collapsing them turns a failed stage into a
+    // global search wearing a full page of plausible results. That distinction needs no new
+    // mechanism: the fragments already read `p_bound_ids = '{}'` as zero rows and
+    // `p_bound_ids IS NULL` as unbounded.
+    //
+    // If a later runtime refusal genuinely wants a choice, the field returns as an OPTIONAL
+    // addition, which is additive rather than breaking. `[decided — 2026-08-08, Pete]`
+    //
+    // There is also no `meta_detail`. It selected how much per-resource meta the trace would
+    // retain — a metadata-budget concept whose job nobody could state (YAGNI); nothing ever
+    // honoured it. Removed by ADJ-4 `[2026-08-10, Pete]`.
+    //
+    // And no `bounds`. A composition cannot meaningfully have bounds: its output is nothing but
+    // the returned stages' outputs, each already bounded by its own `terms`, and a cross-stage
+    // budget would be a different, undesigned feature. Removed by ADJ-4 `[2026-08-10, Pete]`, per
+    // the `on_stage_refusal` remove-and-tolerate precedent: an unknown `bounds` key is ignored
+    // like any unknown field — pinned by the legacy-payload test below.
     /// The DAG's nodes. Each references its inputs explicitly by stage name — there is no
     /// prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological
     /// sort derives the order; there is deliberately no `act_sequence` method, which would be a
@@ -159,10 +213,8 @@ pub struct Composition {
 mod tests {
     use super::*;
     use crate::types::query::act::ActName;
-    use crate::types::query::disposition::RefusalDisposition;
     use crate::types::query::envelope::ActInvocation;
-    use crate::types::query::scalars::BoundsMode;
-    use crate::types::query::stage::StageInput;
+    use crate::types::query::stage::{StageInput, StageRelation};
     use std::collections::BTreeMap;
 
     /// A minimal root act node named `s`.
@@ -171,7 +223,6 @@ mod tests {
             name: StageName::parse("s").unwrap(),
             act,
             input: None,
-            bounds_mode: None,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -179,24 +230,60 @@ mod tests {
         })
     }
 
-    #[test]
-    fn a_composition_declares_its_refusal_disposition_up_front() {
-        // Declared BEFORE execution; the executor never improvises it.
-        let c = Composition {
-            outcome: OutcomeDeclaration {
-                description: "bias-review over a curated corpus".to_string(),
-                returns: vec![],
-            },
+    fn outcome(returns: Vec<ReturnSpec>) -> OutcomeDeclaration {
+        OutcomeDeclaration { returns }
+    }
+
+    fn composition(stages: Vec<StageNode>) -> Composition {
+        Composition {
+            outcome: outcome(vec![]),
             intention: None,
-            on_stage_refusal: RefusalDisposition::Halt,
-            meta_detail: Default::default(),
-            bounds: BTreeMap::new(),
-            stages: vec![stage(ActName::FindExact)],
-        };
-        assert_eq!(c.on_stage_refusal, RefusalDisposition::Halt);
+            stages,
+        }
+    }
+
+    #[test]
+    fn a_composition_no_longer_declares_what_to_do_when_a_stage_refuses() {
+        // `on_stage_refusal` described a case that cannot occur: every refusal but one is static,
+        // so a composition that could refuse comes back 400 and never runs. The one runtime
+        // refusal is composition-wide (the intention is embedded ONCE), so a per-stage disposition
+        // would be machinery for a shape that does not exist.
+        //
+        // Asserting on the SERIALIZED form rather than the absence of a field: the field being
+        // gone is a compile-time fact this test cannot restate, but the wire not carrying it is
+        // what a client actually observes.
+        let c = composition(vec![stage(ActName::FindExact)]);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("on_stage_refusal"), "got: {json}");
+        assert!(!json.contains("halt"));
+        assert_eq!(serde_json::from_str::<Composition>(&json).unwrap(), c);
+    }
+
+    #[test]
+    fn a_composition_that_still_carries_on_stage_refusal_is_accepted_and_the_field_ignored() {
+        // Removing a required field is a breaking change for anyone who was sending it. Nothing
+        // ships against this contract yet — no route exists — so the removal is free, and serde's
+        // default is to ignore unknown fields rather than reject them. Pinned so that if someone
+        // later adds `deny_unknown_fields` for good reasons, they see this decision rather than
+        // silently turning an ignored legacy field into a hard 400.
+        let legacy = r#"{"outcome":{"returns":[]},"on_stage_refusal":"halt","stages":[]}"#;
+        assert!(serde_json::from_str::<Composition>(legacy).is_ok());
+    }
+
+    #[test]
+    fn a_composition_that_still_carries_bounds_or_meta_detail_is_accepted_and_both_ignored() {
+        // Same precedent as `on_stage_refusal` above: `bounds` and `meta_detail` were removed by
+        // ADJ-4 `[2026-08-10, Pete]`, nothing ships against this contract yet, and serde's default
+        // is to ignore unknown fields rather than reject them. Pinned so that a later
+        // `deny_unknown_fields` sees this decision rather than silently turning an ignored legacy
+        // field into a hard 400 — and so the removal is visibly remove-and-tolerate, not a parse
+        // hazard.
+        let legacy = r#"{"outcome":{"returns":[]},"meta_detail":"surviving","bounds":{"limit":10},"stages":[]}"#;
+        let parsed = serde_json::from_str::<Composition>(legacy).expect("legacy fields parse");
         assert_eq!(
-            serde_json::from_str::<Composition>(&serde_json::to_string(&c).unwrap()).unwrap(),
-            c
+            parsed,
+            composition(vec![]),
+            "and neither influences anything"
         );
     }
 
@@ -204,20 +291,11 @@ mod tests {
     fn the_intention_is_a_composition_level_field_not_a_per_stage_one() {
         // Computed ONCE at composition start and threaded, so every find-about-* stage provably
         // interrogates the same intention rather than re-embedding a mutated string.
-        let c = Composition {
-            outcome: OutcomeDeclaration {
-                description: "x".to_string(),
-                returns: vec![],
-            },
-            intention: Some(Intention {
-                query: "wayfind salience".to_string(),
-                embedded: true,
-            }),
-            on_stage_refusal: RefusalDisposition::DegradeAndDisclose,
-            meta_detail: Default::default(),
-            bounds: BTreeMap::new(),
-            stages: vec![stage(ActName::FindAboutAnywhere)],
-        };
+        let mut c = composition(vec![stage(ActName::FindAboutAnywhere)]);
+        c.intention = Some(Intention {
+            query: "wayfind salience".to_string(),
+            embedded: true,
+        });
         let json = serde_json::to_string(&c).unwrap();
         // One intention on the envelope; the stage carries none.
         assert_eq!(json.matches("\"intention\"").count(), 1);
@@ -226,22 +304,29 @@ mod tests {
 
     #[test]
     fn an_absent_intention_is_representable_so_a_stage_can_refuse_rather_than_substitute() {
-        // "I chose not to embed" and "I cannot embed" become distinguishable: with no intention
-        // on the envelope, a find-about-* stage refuses (RefusalReason::MissingIntention) rather
-        // than the server quietly embedding on the caller's behalf.
-        let c = Composition {
-            outcome: OutcomeDeclaration {
-                description: "lexical only".to_string(),
-                returns: vec![],
-            },
-            intention: None,
-            on_stage_refusal: RefusalDisposition::Halt,
-            meta_detail: Default::default(),
-            bounds: BTreeMap::new(),
-            stages: vec![stage(ActName::FindExact)],
-        };
+        // The absence that refuses is the QUESTION's, not the vector's. With no intention there is
+        // no query text, and `find-exact` has nowhere else to get its `p_query` — so the stage
+        // refuses `MissingIntention`. An absent EMBEDDING is a different absence entirely: the
+        // server computes one, because API callers cannot.
+        let c = composition(vec![stage(ActName::FindExact)]);
         assert!(c.intention.is_none());
         assert!(!serde_json::to_string(&c).unwrap().contains("intention"));
+    }
+
+    #[test]
+    fn an_intention_carries_the_fact_of_embedding_and_never_the_vector() {
+        // `embedded` is inspectable in the trace, which is what makes paraphrase-stability
+        // measurable from outside. The 768-float array reaches the compiler as a separate
+        // argument — putting it in the envelope would be a wire contract nobody asked for.
+        let i = Intention {
+            query: "composable search fragments".to_string(),
+            embedded: false,
+        };
+        let json = serde_json::to_string(&i).unwrap();
+        assert_eq!(
+            json,
+            r#"{"query":"composable search fragments","embedded":false}"#
+        );
     }
 
     #[test]
@@ -268,9 +353,9 @@ mod tests {
         let seeded = StageNode::Act(ActInvocation {
             name: StageName::parse("near").unwrap(),
             input: Some(StageInput::Upstream {
+                relation: StageRelation::Seed,
                 stage: StageName::parse("hits").unwrap(),
             }),
-            bounds_mode: Some(BoundsMode::Seed),
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -282,7 +367,6 @@ mod tests {
         let rooted = StageNode::Act(ActInvocation {
             name: StageName::parse("hits").unwrap(),
             input: None,
-            bounds_mode: None,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -296,44 +380,79 @@ mod tests {
     fn a_composition_carries_nodes_and_no_longer_claims_a_single_sequence() {
         // `act_sequence()` is gone on purpose: a DAG has no one order, and a method returning one
         // would be a false claim that reads as true. Beat B's topological order replaces it.
-        let c = Composition {
-            outcome: OutcomeDeclaration {
-                description: "exact hits and their neighbours".to_string(),
-                returns: vec![],
-            },
-            intention: None,
-            on_stage_refusal: RefusalDisposition::Halt,
-            meta_detail: Default::default(),
-            bounds: BTreeMap::new(),
-            stages: vec![],
-        };
-        assert!(c.stages.is_empty());
+        assert!(composition(vec![]).stages.is_empty());
     }
 
     #[test]
-    fn an_outcome_declares_which_stages_come_back() {
-        let o = OutcomeDeclaration {
-            description: "neighbours of my exact hits".to_string(),
-            returns: vec![ReturnSpec {
-                stage: StageName::parse("near").unwrap(),
-                fields: vec!["title".to_string(), "home".to_string()],
-            }],
-        };
+    fn an_outcome_declares_which_stages_come_back_and_nothing_about_why() {
+        // `description` is gone. It was a required prose string, which is goal-authoring
+        // discipline leaked into a wire contract — nobody should write a sentence about what
+        // being served looks like in order to run a query.
+        let o = outcome(vec![ReturnSpec {
+            stage: StageName::parse("near").unwrap(),
+            with: vec![],
+        }]);
+        let json = serde_json::to_string(&o).unwrap();
         assert_eq!(o.returns.len(), 1);
+        assert!(!json.contains("description"), "got: {json}");
         assert_eq!(
-            serde_json::from_str::<OutcomeDeclaration>(&serde_json::to_string(&o).unwrap())
-                .unwrap(),
+            serde_json::from_str::<OutcomeDeclaration>(&json).unwrap(),
             o
         );
     }
 
     #[test]
-    fn an_empty_field_list_means_the_default_projection_and_serializes_to_nothing() {
+    fn an_empty_section_list_means_the_default_projection_and_serializes_to_nothing() {
         let r = ReturnSpec {
             stage: StageName::parse("near").unwrap(),
-            fields: vec![],
+            with: vec![],
         };
-        assert!(!serde_json::to_string(&r).unwrap().contains("fields"));
+        assert!(!serde_json::to_string(&r).unwrap().contains("with"));
+    }
+
+    #[test]
+    fn hydration_sections_ride_the_wire_in_the_same_words_show_and_list_use() {
+        // ONE vocabulary, not a query-local copy. `open-meta` is kebab here because it is kebab
+        // everywhere a human or agent types it; a second spelling would be a second vocabulary
+        // wearing the first one's name.
+        let r = ReturnSpec {
+            stage: StageName::parse("near").unwrap(),
+            with: vec![ResourceSection::OpenMeta],
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""with":["open-meta"]"#), "got: {json}");
+        assert_eq!(serde_json::from_str::<ReturnSpec>(&json).unwrap(), r);
+    }
+
+    #[test]
+    fn a_section_this_door_refuses_still_deserializes_so_validation_can_refuse_it() {
+        // The load-bearing half of choosing ONE vocabulary over a narrow query-local enum. Were
+        // `with` a single-member enum, `body` would fail to DESERIALIZE — and serde
+        // short-circuits before validation runs, so a caller with four problems would learn about
+        // one, phrased by a deserializer rather than by this contract.
+        //
+        // So `body` parses here and is refused at validation, which is what lets it come back
+        // alongside every other refusal with an explanation that names `show`.
+        let parsed: ReturnSpec =
+            serde_json::from_str(r#"{"stage":"near","with":["body","edges"]}"#).unwrap();
+        assert_eq!(
+            parsed.with,
+            vec![ResourceSection::Body, ResourceSection::Edges]
+        );
+        assert!(!ReturnSpec::ADMITTED_SECTIONS.contains(&ResourceSection::Body));
+        assert!(!ReturnSpec::ADMITTED_SECTIONS.contains(&ResourceSection::Edges));
+    }
+
+    #[test]
+    fn the_admitted_sections_are_a_subset_of_the_shared_vocabulary_never_a_parallel_one() {
+        // The guard against this door quietly growing a word `show` and `list` do not know. If a
+        // section is ever added here, it has to be added to `ResourceSection` first.
+        for section in ReturnSpec::ADMITTED_SECTIONS {
+            assert!(
+                ResourceSection::ALL.contains(&section),
+                "{section:?} is not part of the shared section vocabulary"
+            );
+        }
     }
 
     #[test]
@@ -341,26 +460,8 @@ mod tests {
         // A resource arm beside a region arm has no single answer. `produces` was a field that
         // could only ever be right for a single-arm plan — it is derived from `returns` now, not
         // declared.
-        let json = serde_json::to_string(&OutcomeDeclaration {
-            description: "x".to_string(),
-            returns: vec![],
-        })
-        .unwrap();
-        assert!(!json.contains("produces"));
-    }
-
-    #[test]
-    fn an_outcome_declaration_cannot_omit_its_description() {
-        // The pocket outcome register: a named plan states its served-by. Not Option.
-        let o = OutcomeDeclaration {
-            description: "what being served looks like".to_string(),
-            returns: vec![],
-        };
-        assert!(!o.description.is_empty());
-        assert_eq!(
-            serde_json::from_str::<OutcomeDeclaration>(&serde_json::to_string(&o).unwrap())
-                .unwrap(),
-            o
-        );
+        assert!(!serde_json::to_string(&outcome(vec![]))
+            .unwrap()
+            .contains("produces"));
     }
 }

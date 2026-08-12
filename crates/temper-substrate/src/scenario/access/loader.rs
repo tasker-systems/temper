@@ -29,6 +29,18 @@ pub struct LoadedAccess {
 }
 
 pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
+    load_scaled(pool, world, 1).await
+}
+
+/// [`load`] with a multiplier applied to every `populations:` `count`.
+///
+/// The multiplier is a LOAD-time argument and deliberately not a fixture field: one declaration
+/// then describes one corpus *shape*, and a test can load it at the size a `#[sqlx::test]` can
+/// afford while the seeder binary loads the same shape at measurement size. Putting scale in the
+/// YAML would fork the shape into "the small one" and "the big one", which is exactly how the two
+/// drift. Hand-declared `resources:` are never scaled — they are named referents, and duplicating
+/// them would break the keys checks resolve through.
+pub async fn load_scaled(pool: &PgPool, world: &AccessWorld, scale: u32) -> Result<LoadedAccess> {
     let mut tx = pool.begin().await?;
 
     let mut teams: HashMap<String, Uuid> = HashMap::new();
@@ -71,6 +83,26 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
     )
     .await?;
 
+    // Generated bulk, before edges so a future population-homed edge has endpoints to resolve.
+    //
+    // Running AFTER the hand-declared resources is what makes shadowing POSSIBLE, not what prevents
+    // it — both write into one `resources` map, so a generated `<prefix>-0000` colliding with an
+    // `AccessResourceDef.key` would overwrite the named referent and every later `check:` would
+    // silently resolve to the generated row. `generate` refuses on collision rather than relying on
+    // ordering.
+    super::population::generate(
+        &mut tx,
+        world,
+        scale,
+        &profiles,
+        &entities,
+        &contexts,
+        &cogmaps,
+        &teams,
+        &mut resources,
+    )
+    .await?;
+
     let mut edges: HashMap<String, Uuid> = HashMap::new();
     insert_edges(
         &mut tx, world, &resources, &cogmaps, &contexts, &entities, &mut edges,
@@ -96,8 +128,16 @@ async fn insert_teams(
     teams: &mut HashMap<String, Uuid>,
 ) -> Result<()> {
     for t in &world.teams {
+        // Reconcile on slug rather than insert blind. Every access fixture must declare
+        // `temper-system` — the DAG parents reference it — but the L0 kernel migration
+        // (`20260625000001`) already creates that team, so a blind INSERT can only work on a
+        // schema that was reset first. That is true of every `#[sqlx::test]` here and false of any
+        // real migrated database, which is what made this loader unusable outside the test harness.
+        // ON CONFLICT resolves the declaration ONTO the incumbent row, so a fixture adopts the
+        // migration's root team instead of colliding with it.
         let id = sqlx::query_scalar!(
-            "INSERT INTO kb_teams (slug, name) VALUES ($1,$2) RETURNING id",
+            "INSERT INTO kb_teams (slug, name) VALUES ($1,$2) \
+             ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id",
             t.slug,
             t.name,
         )
@@ -447,38 +487,69 @@ async fn insert_resources(
         )
         .execute(&mut *tx)
         .await?;
-        for g in &r.grants {
-            let (ga_table, ga_id) = match &g.to {
-                GrantAnchor::Team { slug } => (
-                    "kb_teams",
-                    *teams.get(slug).with_context(|| {
-                        format!("grant on {} references unknown team {}", r.key, slug)
-                    })?,
-                ),
-                GrantAnchor::Profile { handle } => (
-                    "kb_profiles",
-                    *profiles.get(handle).with_context(|| {
-                        format!("grant on {} references unknown profile {}", r.key, handle)
-                    })?,
-                ),
-            };
-            sqlx::query!(
-                "INSERT INTO kb_access_grants \
-                 (subject_table, subject_id, principal_table, principal_id, can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
-                 VALUES ('kb_resources',$1,$2,$3,$4,$5,$6,$7,$8)",
-                rid,
-                ga_table,
-                ga_id,
-                g.can_read,
-                g.can_write,
-                g.can_delete,
-                g.can_grant,
-                owner,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+        insert_resource_grants(&mut *tx, rid, owner, &r.grants, &r.key, teams, profiles).await?;
         resources.insert(r.key.clone(), rid);
+    }
+    Ok(())
+}
+
+/// The ONE `kb_access_grants` write in this crate.
+///
+/// Extracted rather than copied when the population generator needed the same insert. Two reasons,
+/// and the second is the load-bearing one:
+///
+/// * A grant's shape (which caps, which granter) is exactly the kind of logic whose second copy
+///   drifts silently from its first.
+/// * `.github/scripts/audit-grant-sinks.sh` counts grant write-sites per file against a reviewed
+///   baseline, so a duplicate would have added a NEW sink and required a baseline bump. That
+///   script's own header records why that matters: absorbing a movement into the baseline "teaches
+///   the next reader that the number moves for cosmetic reasons, which is how a tripwire stops
+///   being read." Calling one helper keeps the count at one because there genuinely is one write.
+///
+/// AUTHORITY / ATTENUATION, the two questions the audit playbook asks: `granter` is the resource's
+/// owner, recorded as `granted_by_profile_id`, and a fixture's owner holds every capability on a
+/// resource it just created — so the conferred set is a subset by construction. This is fixture
+/// loading, not a request path; no gate is bypassed because no principal is acting.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn insert_resource_grants(
+    tx: &mut PgConnection,
+    resource: Uuid,
+    granter: Uuid,
+    grants: &[GrantDef],
+    subject_label: &str,
+    teams: &HashMap<String, Uuid>,
+    profiles: &HashMap<String, Uuid>,
+) -> Result<()> {
+    for g in grants {
+        let (ga_table, ga_id) = match &g.to {
+            GrantAnchor::Team { slug } => (
+                "kb_teams",
+                *teams.get(slug).with_context(|| {
+                    format!("grant on {subject_label} references unknown team {slug}")
+                })?,
+            ),
+            GrantAnchor::Profile { handle } => (
+                "kb_profiles",
+                *profiles.get(handle).with_context(|| {
+                    format!("grant on {subject_label} references unknown profile {handle}")
+                })?,
+            ),
+        };
+        sqlx::query!(
+            "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+             VALUES ('kb_resources',$1,$2,$3,$4,$5,$6,$7,$8)",
+            resource,
+            ga_table,
+            ga_id,
+            g.can_read,
+            g.can_write,
+            g.can_delete,
+            g.can_grant,
+            granter,
+        )
+        .execute(&mut *tx)
+        .await?;
     }
     Ok(())
 }
@@ -542,4 +613,68 @@ async fn insert_edges(
         }
     }
     Ok(())
+}
+
+/// What a seeded corpus actually looks like, read back from the database.
+///
+/// **In the library rather than the `seed-corpus` binary, and that placement is the point.**
+/// `cargo sqlx prepare --workspace` compiles lib targets only — measured: neither the plain
+/// invocation nor `--all-targets` emits a cache entry for a `query!` in a bin, so the same macro
+/// that verifies here fails an offline build there. The alternative was a per-crate cache for
+/// temper-substrate, which emits its whole dependency closure: 131 files to cover four reads, the
+/// trap `.claude/skills/sqlx-query-cache` records temper-api falling into at 255-against-11. So the
+/// reads live where the ritual reaches, and the binary prints what they return.
+///
+/// They stayed macros rather than becoming declared exceptions because none of
+/// `audit-sqlx-macro-exceptions.sh`'s four reasons fits a static `count(*)` — and that script's own
+/// rule is that no fitting reason IS the answer: it converts.
+#[derive(Debug, Clone)]
+pub struct CorpusMeasurement {
+    pub live_resources: i64,
+    pub embedded_chunks: i64,
+    /// `(handle, visible, owned)`, sorted by handle. `visible - owned` is what arrived through the
+    /// team/grant arms — the arms that are EMPTY on the deployment whose numbers this corpus exists
+    /// to replace, which is why the two are reported separately rather than as one total.
+    pub per_principal: Vec<(String, i64, i64)>,
+}
+
+/// Read back the corpus a load produced: its size, and the gate's discriminating power over it.
+pub async fn measure_corpus(pool: &PgPool, loaded: &LoadedAccess) -> Result<CorpusMeasurement> {
+    // `AS "n!"` because `count(*)` is nullable to the macro (an aggregate over an outer join can be
+    // NULL); it never is here, and the annotation says so rather than forcing an unwrap per site.
+    let live_resources: i64 =
+        sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM kb_resources WHERE is_active"#)
+            .fetch_one(pool)
+            .await?;
+    let embedded_chunks: i64 = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM kb_chunks WHERE is_current AND embedding IS NOT NULL"#
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let mut handles: Vec<&String> = loaded.profiles.keys().collect();
+    handles.sort();
+    let mut per_principal = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let id = loaded.profiles[handle];
+        let seen: i64 = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM resources_visible_to($1)"#,
+            id
+        )
+        .fetch_one(pool)
+        .await?;
+        let owned: i64 = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM kb_resource_homes WHERE owner_profile_id = $1"#,
+            id
+        )
+        .fetch_one(pool)
+        .await?;
+        per_principal.push((handle.clone(), seen, owned));
+    }
+
+    Ok(CorpusMeasurement {
+        live_resources,
+        embedded_chunks,
+        per_principal,
+    })
 }

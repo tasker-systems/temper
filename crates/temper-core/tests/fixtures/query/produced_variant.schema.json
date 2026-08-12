@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which [`StageOutput`] variant a stage carries — the tag, as a value.\n\nIt exists so `/api/query/validate` can PROMISE a variant using the same type the response\nREPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from\nan actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a\ndeclaration, and a test asserts the two agree.",
+  "enum": [
+    "resources",
+    "regions"
+  ],
+  "title": "ProducedVariant",
+  "type": "string"
+}

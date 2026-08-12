@@ -1,6 +1,21 @@
 # TemperQueryBuilder — Implementation Plan (beats A–C)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> ## `[STALE IN PART — 2026-08-08]` Do not execute a task from this plan without reading the wire contract first
+>
+> **[`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) is the committed target.** Beats A
+> and B of this plan are MERGED (PR #663) and produced the types in
+> `crates/temper-core/src/types/query/` — and the contract amends six of those shapes. So the plan's
+> completed tasks are not a description of what should now exist.
+>
+> `[amended — 2026-08-10]` Concretely: everything in this plan touching response shape, output
+> currency, `survey`'s produced kind, `bounds_*`/`terms_*` field naming, `ActResult`,
+> `StageOutput::Ids`, `meta_detail`/`meta_truncated`, or the validate route is superseded by
+> [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) (ratified 2026-08-09, amended
+> through 2026-08-10). The contract is authoritative; this plan is history, and its code sketches
+> must not be built from.
+>
+> **This plan has not been re-sequenced against the contract.** That is the next piece of work, and
+> until it is done, treat a task here as a hypothesis about the old shape rather than an instruction.
 
 **Goal:** A declared composition of acts — a named DAG — is validated statically and compiled into
 one SQL statement that executes over `survey` and `follow-from`, returning per-arm results with a

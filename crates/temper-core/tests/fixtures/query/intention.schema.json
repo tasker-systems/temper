@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The question, computed once at composition start and threaded to every stage.\n\nIts ABSENCE is meaningful: a `find-about-*` stage with no intention refuses, rather than the\nserver embedding on the caller's behalf. That is what makes \"I chose not to embed\" and\n\"I cannot embed\" different states instead of one ambiguous one.",
+  "description": "The question, computed once at composition start and threaded to every stage.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`",
   "properties": {
     "embedded": {
       "description": "Whether an embedding was computed for it. Inspectable in the trace, which is what makes\nparaphrase-stability measurable from outside.",

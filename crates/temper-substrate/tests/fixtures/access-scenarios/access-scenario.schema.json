@@ -342,6 +342,13 @@
             "$ref": "#/$defs/MembershipDef"
           }
         },
+        "populations": {
+          "description": "Generated bulk (see [`PopulationDef`]). Empty for every hand-authored access proof — those\nstate a topology small enough to reason about and assert exact verdicts over it. A\npopulation is for the opposite need: a corpus large and uneven enough that a *measurement*\nover it is not vacuous.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PopulationDef"
+          }
+        },
         "profiles": {
           "type": "array",
           "items": {
@@ -596,6 +603,86 @@
         "team",
         "profile",
         "role"
+      ]
+    },
+    "PopulationDef": {
+      "description": "A generated population of resources, declared as a distribution rather than enumerated.\n\n**Why this exists.** The numbers that decide `/api/query`'s compiler — plan identity, index\nselection, whether an ANN top-k genuinely binds, what the visibility gate costs — are all\nvacuous on a five-resource fixture, and the deployment we have real measurements from is\neffectively a single-user vault: the gate passes 97.6% of active resources and every team arm of\n`resources_visible_to` is empty. Neither shape can answer the questions, and enumerating\nthousands of `AccessResourceDef` entries by hand is not an option either.\n\nSo the *topology* above stays hand-authored — the team DAG, the memberships, the grants are\nexactly the part worth reasoning about — and the bulk is generated from this declaration.\n\n**Resources are created through the product write path**, not by direct insert:\n`SeedAction::ResourceCreate` fires a real `resource_created` event whose projector writes the\ncontent blocks, the chunks, the `doc_type` property and the FTS vector. What is synthetic is\nonly the *content*: the prose is generated from the topic name, and chunk vectors are drawn\naround a per-topic centroid instead of being embedded by ONNX. That is a deliberate split —\nevery measurement here depends on the distribution and cardinality of vectors, never on their\nsemantics, and 20k real bge embeddings would cost minutes to buy nothing. Synthetic vectors are\nstamped with a non-model `embedded_with` marker so they can never be mistaken for real ones and\nso the re-embed drain treats them as stale.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "How many resources, before any CLI scale multiplier.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "doc_types": {
+          "description": "`doc_type` values, assigned round-robin. Empty ⇒ no `doc_type` property is written, which\nmakes `p_doc_type` untestable against this population — deliberate only if intended.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "emitter": {
+          "description": "Entity name (from `world.entities`) to attribute the generated events to. Defaults to the\nworld's first declared entity.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "grants": {
+          "description": "Applied to every member. A grant on the ROOT team reaches every `vis(T)` by down-only\ninheritance and hands everyone everything — the degenerate shape a measurement corpus\nexists to escape.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GrantDef"
+          }
+        },
+        "homes": {
+          "description": "Home anchors, assigned round-robin. Non-empty.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HomeDef"
+          }
+        },
+        "key_prefix": {
+          "description": "Generated resources register as `<key_prefix>-<zero-padded index>`, so declarative checks\nand downstream tests can name an individual member (`plat-0000`).",
+          "type": "string"
+        },
+        "owners": {
+          "description": "Profile handles, assigned round-robin. Non-empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "topic_spread": {
+          "description": "Noise magnitude as a RATIO of the (unit) centroid's, before re-normalizing — not a\nper-dimension standard deviation. Larger ⇒ looser clusters. At 0 every member of a topic\nshares one vector and the ANN cannot order them; well above 1 the clusters dissolve into the\nuniform-random case, where 768-dimensional distances concentrate and top-k ranking becomes\narbitrary. See `population::fill_synthetic_vectors` for why it is a magnitude ratio: read as\na per-dimension sigma, 0.55 is fifteen times the signal and destroys the cluster silently.",
+          "type": "number",
+          "format": "double",
+          "default": 0.55
+        },
+        "topics": {
+          "description": "Topic names, assigned round-robin. A topic supplies both the FTS vocabulary (the name split\non `-`) and the vector centroid, so text and vector relevance agree the way they do in a\nreal corpus.\n\n**The centroid is derived from the topic NAME, never its position**, so the same topic named\nin two populations lands on the same cluster. That is what lets a query match across a\nvisibility boundary; keyed on position, the gate and the query would be correlated by\nconstruction and every measurement would flatter itself.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "words_per_resource": {
+          "description": "Approximate prose length per resource. The chunker decides the resulting chunk count — this\nknob does not claim to.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 220,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "key_prefix",
+        "count",
+        "owners",
+        "homes",
+        "topics"
       ]
     },
     "ProfileDef": {

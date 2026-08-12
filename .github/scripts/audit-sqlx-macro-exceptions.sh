@@ -103,6 +103,7 @@ ENUMERATOR="scripts/classify-sqlx-calls.py"
 read -r -d '' BASELINE <<'EOF' || true
 dynamic-order-by 1 crates/temper-services/src/backend/substrate_read.rs
 dynamic-sql 2 crates/temper-substrate/src/embed.rs
+dynamic-sql 1 crates/temper-substrate/src/readback/query_exec.rs
 dynamic-table 37 crates/temper-substrate/src/replay.rs
 vector-cast 2 crates/temper-substrate/src/embed.rs
 vector-cast 2 crates/temper-substrate/src/write.rs

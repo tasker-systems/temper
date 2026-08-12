@@ -53,6 +53,18 @@ async fn create_team(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
     .id
 }
 
+/// Soft-delete a team, the way `DELETE /api/teams/{id}` does: flip `is_active`, preserve every row
+/// hanging off it (members, contexts). A bare UPDATE deliberately — the assertion is about what the
+/// *create* path does with the flag, so the test must not be able to pass because a service helper
+/// also cleaned up the caller's membership.
+async fn soft_delete_team(pool: &PgPool, team_id: Uuid) {
+    sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+        .bind(team_id)
+        .execute(pool)
+        .await
+        .expect("soft-delete team");
+}
+
 /// Add `profile` to `team` at `role` (acting as `actor`, who must be owner/maintainer).
 async fn add_member(pool: &PgPool, actor: Uuid, team_id: Uuid, profile: Uuid, role: TeamRole) {
     team_service::add_member(
@@ -190,6 +202,72 @@ async fn unknown_team_is_not_found(pool: PgPool) {
     assert!(
         matches!(denied, Err(ApiError::NotFound(_))),
         "unknown team must be NotFound, got {denied:?}"
+    );
+}
+
+// ─── a soft-deleted team may not own a NEW context ───────────────────────────
+//
+// `20260703000001_team_metadata_soft_delete.sql` declares in its header that "membership in a
+// soft-deleted team confers nothing anywhere". The SQL read paths honour it at two chokepoints;
+// `resolve_create_owner` resolves the team in Rust and is the WRITE-side twin of
+// `resolve_context_ref`'s team arm — without the `is_active` filter an owner of a dead team could
+// mint a context OWNED by it, i.e. state every read path (this one included) then refuses to show
+// anyone, its creator among them.
+//
+// The refusal must be the NOT-FOUND one and must read exactly like a team that never existed.
+// `Forbidden` would be wrong twice over: it discloses that the slug names something, and it is
+// false — this caller is the team's owner.
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn soft_deleted_team_cannot_own_a_new_context(pool: PgPool) {
+    let owner = common::fixtures::create_test_profile(&pool, "sdc-owner@example.com").await;
+    let team_id = create_team(&pool, owner, "sdc-team").await;
+
+    // (a) While the team is ACTIVE its owner creates a team-owned context — the before half of the
+    //     pair, so a later regression cannot make this test pass by breaking create outright.
+    let row = create_for_owner(
+        &pool,
+        owner,
+        Some(ContextOwnerRef::Team("sdc-team".to_owned())),
+        "plans",
+    )
+    .await
+    .expect("owner of an active team may create a team-owned context");
+    assert_eq!(row.kb_owner_table, "kb_teams");
+    assert_eq!(row.kb_owner_id, team_id);
+
+    // (b) Soft-delete. The owner's `kb_team_members` row survives untouched, so the refusal below
+    //     can only be coming from `is_active`.
+    soft_delete_team(&pool, team_id).await;
+
+    let err = create_for_owner(
+        &pool,
+        owner,
+        Some(ContextOwnerRef::Team("sdc-team".to_owned())),
+        "more plans",
+    )
+    .await
+    .expect_err("a soft-deleted team must not be able to own a new context");
+    let ApiError::NotFound(msg) = err else {
+        panic!("expected NotFound for a soft-deleted team, got {err:?} (Forbidden would both leak the team's existence and be false — this caller is its owner)");
+    };
+
+    // And it must be indistinguishable from a team that was never created at all.
+    let absent = create_for_owner(
+        &pool,
+        owner,
+        Some(ContextOwnerRef::Team("sdc-absent".to_owned())),
+        "plans",
+    )
+    .await
+    .expect_err("a nonexistent team must not own a context");
+    let ApiError::NotFound(absent_msg) = absent else {
+        panic!("expected NotFound for a nonexistent team, got {absent:?}");
+    };
+    assert_eq!(
+        msg.replace("sdc-team", "<slug>"),
+        absent_msg.replace("sdc-absent", "<slug>"),
+        "a soft-deleted team must refuse in the same words as one that never existed"
     );
 }
 

@@ -154,6 +154,15 @@ jobs:
       - name: Security tripwire — credential types deriving Debug
         run: bash .github/scripts/audit-credential-debug.sh
 
+      # The `__temper_ungated_` find cores apply NO visibility gate — they are handed the RBAC
+      # verdict as `p_visible_ids uuid[]` so a composition computes it once instead of once per
+      # stage. For those bodies the invariant "every mechanic acts only on resources visible to the
+      # principal" is held by this script and by the single compiler emitter, and by nothing else.
+      # It is NOT a database permission: the app connects as the owning role, so psql can call one
+      # directly. Accepted residue, stated in the script's own header.
+      - name: Security tripwire — ungated find fragments and who names them
+        run: bash .github/scripts/audit-ungated-fragments.sh
+
       # Not a security tripwire — a COVERAGE one, and it sits here because it is the same shape:
       # a pinned set that makes an exception a declaration rather than a place to put things.
       #
@@ -260,6 +269,9 @@ jobs:
 
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
+
+      - name: Guard test — audit-ungated-fragments
+        run: bash .github/scripts/test-audit-ungated-fragments.sh
 
       # Spec §1's "silence is a failure" half. The checker itself lives in this job rather than in
       # rust-quality because it parses migrations/*.sql and needs no toolchain and no database —

@@ -1,0 +1,3214 @@
+{
+  "Alias": "kb_profiles",
+  "Async Capable": false,
+  "Disabled": false,
+  "Index Cond": "(kb_profiles.handle = 'ana'::text)",
+  "Index Name": "kb_profiles_handle_key",
+  "Node Type": "Index Scan",
+  "Output": [
+    "id"
+  ],
+  "Parallel Aware": false,
+  "Relation Name": "kb_profiles",
+  "Scan Direction": "Forward",
+  "Schema": "public"
+}
+{
+  "Alias": "kb_contexts",
+  "Async Capable": false,
+  "Disabled": false,
+  "Filter": "(kb_contexts.slug = 'platform-notes'::text)",
+  "Node Type": "Seq Scan",
+  "Output": [
+    "id"
+  ],
+  "Parallel Aware": false,
+  "Relation Name": "kb_contexts",
+  "Schema": "public"
+}
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Node Type": "Limit",
+  "Output": [
+    "((embedding)::text)",
+    "id"
+  ],
+  "Parallel Aware": false,
+  "Plans": [
+    {
+      "Alias": "kb_chunks",
+      "Async Capable": false,
+      "Disabled": false,
+      "Filter": "(kb_chunks.is_current AND (kb_chunks.embedding IS NOT NULL))",
+      "Index Name": "kb_chunks_pkey",
+      "Node Type": "Index Scan",
+      "Output": [
+        "(embedding)::text",
+        "id"
+      ],
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Relation Name": "kb_chunks",
+      "Scan Direction": "Forward",
+      "Schema": "public"
+    }
+  ]
+}
+################ SHAPE 1 — search_exact, with a doc_type filter ################
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Group Key": [
+    "c.id"
+  ],
+  "Node Type": "Aggregate",
+  "Output": [
+    "c.id"
+  ],
+  "Parallel Aware": false,
+  "Partial Mode": "Simple",
+  "Planned Partitions": 0,
+  "Plans": [
+    {
+      "Async Capable": false,
+      "Disabled": false,
+      "Node Type": "Append",
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Plans": [
+        {
+          "Alias": "c",
+          "Async Capable": false,
+          "Disabled": false,
+          "Index Cond": "(((c.owner_table)::text = 'kb_profiles'::text) AND (c.owner_id = '<uuid>'::uuid))",
+          "Index Name": "idx_kb_contexts_owner",
+          "Node Type": "Index Scan",
+          "Output": [
+            "c.id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Relation Name": "kb_contexts",
+          "Scan Direction": "Forward",
+          "Schema": "public"
+        },
+        {
+          "Alias": "c_1",
+          "Async Capable": false,
+          "Disabled": false,
+          "Index Cond": "(((c_1.owner_table)::text = 'kb_teams'::text) AND (c_1.owner_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[])))",
+          "Index Name": "idx_kb_contexts_owner",
+          "Node Type": "Index Scan",
+          "Output": [
+            "c_1.id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Relation Name": "kb_contexts",
+          "Scan Direction": "Forward",
+          "Schema": "public"
+        },
+        {
+          "Alias": "tc",
+          "Async Capable": false,
+          "Disabled": false,
+          "Node Type": "Bitmap Heap Scan",
+          "Output": [
+            "tc.context_id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Index Cond": "(tc.team_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))",
+              "Index Name": "idx_kb_team_contexts_team",
+              "Node Type": "Bitmap Index Scan",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer"
+            }
+          ],
+          "Recheck Cond": "(tc.team_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))",
+          "Relation Name": "kb_team_contexts",
+          "Schema": "public"
+        },
+        {
+          "Alias": "g",
+          "Async Capable": false,
+          "Disabled": false,
+          "Filter": "(g.can_read AND ((g.subject_table)::text = 'kb_contexts'::text))",
+          "Node Type": "Bitmap Heap Scan",
+          "Output": [
+            "g.subject_id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Node Type": "BitmapOr",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plans": [
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Index Cond": "(((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid))",
+                  "Index Name": "idx_kb_access_grants_principal",
+                  "Node Type": "Bitmap Index Scan",
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Member"
+                },
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Index Cond": "(((g.subject_table)::text = 'kb_contexts'::text) AND ((g.principal_table)::text = 'kb_teams'::text) AND (g.principal_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[])))",
+                  "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                  "Node Type": "Bitmap Index Scan",
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Member"
+                }
+              ]
+            }
+          ],
+          "Recheck Cond": "((((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid)) OR (((g.subject_table)::text = 'kb_contexts'::text) AND ((g.principal_table)::text = 'kb_teams'::text) AND (g.principal_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))))",
+          "Relation Name": "kb_access_grants",
+          "Schema": "public"
+        }
+      ],
+      "Subplans Removed": 0
+    }
+  ],
+  "Strategy": "Hashed"
+}
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Node Type": "Aggregate",
+  "Output": [
+    "count(*)"
+  ],
+  "Parallel Aware": false,
+  "Partial Mode": "Simple",
+  "Plans": [
+    {
+      "Async Capable": false,
+      "Disabled": false,
+      "Node Type": "Limit",
+      "Output": [
+        "r.id",
+        "(ts_rank(si.search_vector, '''postgr'''::tsquery, 33))"
+      ],
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Plans": [
+        {
+          "Async Capable": false,
+          "Disabled": false,
+          "Node Type": "Sort",
+          "Output": [
+            "r.id",
+            "(ts_rank(si.search_vector, '''postgr'''::tsquery, 33))"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Outer",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Inner Unique": true,
+              "Join Filter": "(si.resource_id = r.id)",
+              "Join Type": "Inner",
+              "Node Type": "Nested Loop",
+              "Output": [
+                "r.id",
+                "ts_rank(si.search_vector, '''postgr'''::tsquery, 33)"
+              ],
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plans": [
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Inner Unique": true,
+                  "Join Type": "Inner",
+                  "Node Type": "Nested Loop",
+                  "Output": [
+                    "si.search_vector",
+                    "si.resource_id",
+                    "h.resource_id"
+                  ],
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Outer",
+                  "Plans": [
+                    {
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Inner Unique": true,
+                      "Join Type": "Inner",
+                      "Node Type": "Nested Loop",
+                      "Output": [
+                        "h.resource_id"
+                      ],
+                      "Parallel Aware": false,
+                      "Parent Relationship": "Outer",
+                      "Plans": [
+                        {
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Group Key": [
+                            "up_1.team_id"
+                          ],
+                          "Node Type": "Aggregate",
+                          "Output": [
+                            "up_1.team_id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "InitPlan",
+                          "Partial Mode": "Simple",
+                          "Planned Partitions": 0,
+                          "Plans": [
+                            {
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Inner Unique": false,
+                              "Join Type": "Inner",
+                              "Node Type": "Nested Loop",
+                              "Output": [
+                                "up_1.team_id"
+                              ],
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Outer",
+                              "Plans": [
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Hash Cond": "(t_1.id = tm.team_id)",
+                                  "Inner Unique": true,
+                                  "Join Type": "Inner",
+                                  "Node Type": "Hash Join",
+                                  "Output": [
+                                    "tm.team_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Outer",
+                                  "Plans": [
+                                    {
+                                      "Alias": "t_1",
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Filter": "t_1.is_active",
+                                      "Node Type": "Seq Scan",
+                                      "Output": [
+                                        "t_1.id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Relation Name": "kb_teams",
+                                      "Schema": "public"
+                                    },
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Node Type": "Hash",
+                                      "Output": [
+                                        "tm.team_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Inner",
+                                      "Plans": [
+                                        {
+                                          "Alias": "tm",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Bitmap Heap Scan",
+                                          "Output": [
+                                            "tm.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Index Cond": "(tm.profile_id = '<uuid>'::uuid)",
+                                              "Index Name": "idx_kb_team_members_profile",
+                                              "Node Type": "Bitmap Index Scan",
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer"
+                                            }
+                                          ],
+                                          "Recheck Cond": "(tm.profile_id = '<uuid>'::uuid)",
+                                          "Relation Name": "kb_team_members",
+                                          "Schema": "public"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Alias": "up_1",
+                                  "Async Capable": false,
+                                  "CTE Name": "up",
+                                  "Disabled": false,
+                                  "Node Type": "CTE Scan",
+                                  "Output": [
+                                    "up_1.team_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Inner",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Node Type": "Recursive Union",
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "InitPlan",
+                                      "Plans": [
+                                        {
+                                          "Alias": "t",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Filter": "t.is_active",
+                                          "Index Cond": "(t.id = tm.team_id)",
+                                          "Index Name": "kb_teams_pkey",
+                                          "Node Type": "Index Scan",
+                                          "Output": [
+                                            "t.id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Relation Name": "kb_teams",
+                                          "Scan Direction": "Forward",
+                                          "Schema": "public"
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Inner Unique": true,
+                                          "Join Type": "Inner",
+                                          "Node Type": "Nested Loop",
+                                          "Output": [
+                                            "tp.parent_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Inner",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Hash Cond": "(tp.child_id = up.team_id)",
+                                              "Inner Unique": false,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Hash Join",
+                                              "Output": [
+                                                "tp.parent_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "tp",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Seq Scan",
+                                                  "Output": [
+                                                    "tp.child_id",
+                                                    "tp.parent_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Relation Name": "kb_teams_parents",
+                                                  "Schema": "public"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Hash",
+                                                  "Output": [
+                                                    "up.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "up",
+                                                      "Async Capable": false,
+                                                      "CTE Name": "up",
+                                                      "Disabled": false,
+                                                      "Node Type": "WorkTable Scan",
+                                                      "Output": [
+                                                        "up.team_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Alias": "pt",
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Filter": "pt.is_active",
+                                              "Index Cond": "(pt.id = tp.parent_id)",
+                                              "Index Name": "kb_teams_pkey",
+                                              "Node Type": "Index Scan",
+                                              "Output": [
+                                                "pt.id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Inner",
+                                              "Relation Name": "kb_teams",
+                                              "Scan Direction": "Forward",
+                                              "Schema": "public"
+                                            }
+                                          ]
+                                        }
+                                      ],
+                                      "Subplan Name": "CTE up"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "Strategy": "Hashed",
+                          "Subplan Name": "CTE reachable_teams"
+                        },
+                        {
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Node Type": "Unique",
+                          "Output": [
+                            "h.resource_id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Outer",
+                          "Plans": [
+                            {
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Node Type": "Merge Append",
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Outer",
+                              "Plans": [
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Sort",
+                                  "Output": [
+                                    "h.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Member",
+                                  "Plans": [
+                                    {
+                                      "Alias": "h",
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Index Cond": "(h.owner_profile_id = '<uuid>'::uuid)",
+                                      "Index Name": "idx_kb_resource_homes_owner_profile",
+                                      "Node Type": "Index Scan",
+                                      "Output": [
+                                        "h.resource_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Relation Name": "kb_resource_homes",
+                                      "Scan Direction": "Forward",
+                                      "Schema": "public"
+                                    }
+                                  ],
+                                  "Sort Key": [
+                                    "h.resource_id"
+                                  ]
+                                },
+                                {
+                                  "Alias": "g",
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Filter": "g.can_read",
+                                  "Index Cond": "(((g.subject_table)::text = 'kb_resources'::text) AND ((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid))",
+                                  "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                                  "Node Type": "Index Scan",
+                                  "Output": [
+                                    "g.subject_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Member",
+                                  "Relation Name": "kb_access_grants",
+                                  "Scan Direction": "Forward",
+                                  "Schema": "public"
+                                },
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Sort",
+                                  "Output": [
+                                    "g_1.subject_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Member",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Hash Cond": "(rt.team_id = g_1.principal_id)",
+                                      "Inner Unique": false,
+                                      "Join Type": "Inner",
+                                      "Node Type": "Hash Join",
+                                      "Output": [
+                                        "g_1.subject_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Alias": "rt",
+                                          "Async Capable": false,
+                                          "CTE Name": "reachable_teams",
+                                          "Disabled": false,
+                                          "Node Type": "CTE Scan",
+                                          "Output": [
+                                            "rt.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer"
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Hash",
+                                          "Output": [
+                                            "g_1.subject_id",
+                                            "g_1.principal_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Inner",
+                                          "Plans": [
+                                            {
+                                              "Alias": "g_1",
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Filter": "g_1.can_read",
+                                              "Index Cond": "(((g_1.subject_table)::text = 'kb_resources'::text) AND ((g_1.principal_table)::text = 'kb_teams'::text))",
+                                              "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                                              "Node Type": "Index Scan",
+                                              "Output": [
+                                                "g_1.subject_id",
+                                                "g_1.principal_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Relation Name": "kb_access_grants",
+                                              "Scan Direction": "Forward",
+                                              "Schema": "public"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "Sort Key": [
+                                    "g_1.subject_id"
+                                  ]
+                                },
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Sort",
+                                  "Output": [
+                                    "h_1.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Member",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Node Type": "Aggregate",
+                                      "Output": [
+                                        "array_agg(reachable_teams.team_id)"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "InitPlan",
+                                      "Partial Mode": "Simple",
+                                      "Plans": [
+                                        {
+                                          "Alias": "reachable_teams",
+                                          "Async Capable": false,
+                                          "CTE Name": "reachable_teams",
+                                          "Disabled": false,
+                                          "Node Type": "CTE Scan",
+                                          "Output": [
+                                            "reachable_teams.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer"
+                                        }
+                                      ],
+                                      "Strategy": "Plain",
+                                      "Subplan Name": "InitPlan 5"
+                                    },
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Hash Cond": "(rc.context_id = h_1.anchor_id)",
+                                      "Inner Unique": false,
+                                      "Join Type": "Inner",
+                                      "Node Type": "Hash Join",
+                                      "Output": [
+                                        "h_1.resource_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Alias": "rc",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Function Call": "contexts_readable_by_teams('<uuid>'::uuid, COALESCE((InitPlan 5).col1, '{}'::uuid[]))",
+                                          "Function Name": "contexts_readable_by_teams",
+                                          "Node Type": "Function Scan",
+                                          "Output": [
+                                            "rc.context_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Schema": "public"
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Hash",
+                                          "Output": [
+                                            "h_1.resource_id",
+                                            "h_1.anchor_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Inner",
+                                          "Plans": [
+                                            {
+                                              "Alias": "h_1",
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Index Cond": "((h_1.anchor_table)::text = 'kb_contexts'::text)",
+                                              "Index Name": "idx_kb_resource_homes_anchor",
+                                              "Node Type": "Index Scan",
+                                              "Output": [
+                                                "h_1.resource_id",
+                                                "h_1.anchor_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Relation Name": "kb_resource_homes",
+                                              "Scan Direction": "Forward",
+                                              "Schema": "public"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "Sort Key": [
+                                    "h_1.resource_id"
+                                  ]
+                                },
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Sort",
+                                  "Output": [
+                                    "h_2.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Member",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Hash Cond": "(rt_1.team_id = tc.team_id)",
+                                      "Inner Unique": false,
+                                      "Join Type": "Inner",
+                                      "Node Type": "Hash Join",
+                                      "Output": [
+                                        "h_2.resource_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Alias": "rt_1",
+                                          "Async Capable": false,
+                                          "CTE Name": "reachable_teams",
+                                          "Disabled": false,
+                                          "Node Type": "CTE Scan",
+                                          "Output": [
+                                            "rt_1.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer"
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Hash",
+                                          "Output": [
+                                            "tc.team_id",
+                                            "h_2.resource_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Inner",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Inner Unique": false,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Nested Loop",
+                                              "Output": [
+                                                "tc.team_id",
+                                                "h_2.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "h_2",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Index Cond": "((h_2.anchor_table)::text = 'kb_cogmaps'::text)",
+                                                  "Index Name": "idx_kb_resource_homes_anchor",
+                                                  "Node Type": "Index Scan",
+                                                  "Output": [
+                                                    "h_2.id",
+                                                    "h_2.resource_id",
+                                                    "h_2.anchor_table",
+                                                    "h_2.anchor_id",
+                                                    "h_2.originator_profile_id",
+                                                    "h_2.owner_profile_id",
+                                                    "h_2.created"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Relation Name": "kb_resource_homes",
+                                                  "Scan Direction": "Forward",
+                                                  "Schema": "public"
+                                                },
+                                                {
+                                                  "Alias": "tc",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Bitmap Heap Scan",
+                                                  "Output": [
+                                                    "tc.cogmap_id",
+                                                    "tc.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Index Cond": "(tc.cogmap_id = h_2.anchor_id)",
+                                                      "Index Name": "kb_team_cogmaps_pkey",
+                                                      "Node Type": "Bitmap Index Scan",
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer"
+                                                    }
+                                                  ],
+                                                  "Recheck Cond": "(tc.cogmap_id = h_2.anchor_id)",
+                                                  "Relation Name": "kb_team_cogmaps",
+                                                  "Schema": "public"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "Sort Key": [
+                                    "h_2.resource_id"
+                                  ]
+                                },
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Sort",
+                                  "Output": [
+                                    "h_3.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Member",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Inner Unique": false,
+                                      "Join Type": "Inner",
+                                      "Node Type": "Nested Loop",
+                                      "Output": [
+                                        "h_3.resource_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Alias": "h_3",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Index Cond": "((h_3.anchor_table)::text = 'kb_cogmaps'::text)",
+                                          "Index Name": "idx_kb_resource_homes_anchor",
+                                          "Node Type": "Index Scan",
+                                          "Output": [
+                                            "h_3.id",
+                                            "h_3.resource_id",
+                                            "h_3.anchor_table",
+                                            "h_3.anchor_id",
+                                            "h_3.originator_profile_id",
+                                            "h_3.owner_profile_id",
+                                            "h_3.created"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Relation Name": "kb_resource_homes",
+                                          "Scan Direction": "Forward",
+                                          "Schema": "public"
+                                        },
+                                        {
+                                          "Alias": "g_2",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Filter": "(g_2.can_read AND ((((g_2.principal_table)::text = 'kb_profiles'::text) AND (g_2.principal_id = '<uuid>'::uuid)) OR (((g_2.principal_table)::text = 'kb_teams'::text) AND (ANY (g_2.principal_id = (hashed SubPlan 6).col1)))))",
+                                          "Index Cond": "(((g_2.subject_table)::text = 'kb_cogmaps'::text) AND (g_2.subject_id = h_3.anchor_id))",
+                                          "Index Name": "idx_kb_access_grants_subject",
+                                          "Node Type": "Index Scan",
+                                          "Output": [
+                                            "g_2.id",
+                                            "g_2.subject_table",
+                                            "g_2.subject_id",
+                                            "g_2.principal_table",
+                                            "g_2.principal_id",
+                                            "g_2.can_read",
+                                            "g_2.can_write",
+                                            "g_2.can_delete",
+                                            "g_2.can_grant",
+                                            "g_2.granted_by_profile_id",
+                                            "g_2.granted_at"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Inner",
+                                          "Plans": [
+                                            {
+                                              "Alias": "reachable_teams_1",
+                                              "Async Capable": false,
+                                              "CTE Name": "reachable_teams",
+                                              "Disabled": false,
+                                              "Node Type": "CTE Scan",
+                                              "Output": [
+                                                "reachable_teams_1.team_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "SubPlan",
+                                              "Subplan Name": "SubPlan 6"
+                                            }
+                                          ],
+                                          "Relation Name": "kb_access_grants",
+                                          "Scan Direction": "Forward",
+                                          "Schema": "public"
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "Sort Key": [
+                                    "h_3.resource_id"
+                                  ]
+                                }
+                              ],
+                              "Sort Key": [
+                                "h.resource_id"
+                              ],
+                              "Subplans Removed": 0
+                            }
+                          ]
+                        },
+                        {
+                          "Alias": "r_1",
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Filter": "r_1.is_active",
+                          "Index Cond": "(r_1.id = h.resource_id)",
+                          "Index Name": "kb_resources_pkey",
+                          "Node Type": "Index Scan",
+                          "Output": [
+                            "r_1.id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Inner",
+                          "Relation Name": "kb_resources",
+                          "Scan Direction": "Forward",
+                          "Schema": "public"
+                        }
+                      ]
+                    },
+                    {
+                      "Alias": "si",
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Filter": "(si.search_vector @@ '''postgr'''::tsquery)",
+                      "Index Cond": "(si.resource_id = h.resource_id)",
+                      "Index Name": "kb_resource_search_index_pkey",
+                      "Node Type": "Index Scan",
+                      "Output": [
+                        "si.resource_id",
+                        "si.search_vector",
+                        "si.search_config",
+                        "si.updated"
+                      ],
+                      "Parallel Aware": false,
+                      "Parent Relationship": "Inner",
+                      "Relation Name": "kb_resource_search_index",
+                      "Scan Direction": "Forward",
+                      "Schema": "public"
+                    }
+                  ]
+                },
+                {
+                  "Alias": "r",
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Filter": "(r.is_active AND (r.ingest_state = 'complete'::text) AND (ANY (r.id = (hashed SubPlan 2).col1)))",
+                  "Index Cond": "(r.id = h.resource_id)",
+                  "Index Name": "kb_resources_pkey",
+                  "Node Type": "Index Scan",
+                  "Output": [
+                    "r.id"
+                  ],
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Inner",
+                  "Plans": [
+                    {
+                      "Alias": "p",
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Filter": "((p.property_value #>> '{}'::text[]) = 'note'::text)",
+                      "Index Cond": "((p.owner_table = 'kb_resources'::text) AND (p.property_key = 'doc_type'::text))",
+                      "Index Name": "uq_kb_properties_active",
+                      "Node Type": "Index Only Scan",
+                      "Output": [
+                        "p.owner_id"
+                      ],
+                      "Parallel Aware": false,
+                      "Parent Relationship": "SubPlan",
+                      "Relation Name": "kb_properties",
+                      "Scan Direction": "Forward",
+                      "Schema": "public",
+                      "Subplan Name": "SubPlan 2"
+                    }
+                  ],
+                  "Relation Name": "kb_resources",
+                  "Scan Direction": "Forward",
+                  "Schema": "public"
+                }
+              ]
+            }
+          ],
+          "Sort Key": [
+            "(ts_rank(si.search_vector, '''postgr'''::tsquery, 33)) DESC",
+            "r.id"
+          ]
+        }
+      ]
+    }
+  ],
+  "Strategy": "Plain"
+}
+################ SHAPE 2 — search_wide, UNSCOPED (the approximate top-k branch) ################
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Group Key": [
+    "c.id"
+  ],
+  "Node Type": "Aggregate",
+  "Output": [
+    "c.id"
+  ],
+  "Parallel Aware": false,
+  "Partial Mode": "Simple",
+  "Planned Partitions": 0,
+  "Plans": [
+    {
+      "Async Capable": false,
+      "Disabled": false,
+      "Node Type": "Append",
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Plans": [
+        {
+          "Alias": "c",
+          "Async Capable": false,
+          "Disabled": false,
+          "Index Cond": "(((c.owner_table)::text = 'kb_profiles'::text) AND (c.owner_id = '<uuid>'::uuid))",
+          "Index Name": "idx_kb_contexts_owner",
+          "Node Type": "Index Scan",
+          "Output": [
+            "c.id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Relation Name": "kb_contexts",
+          "Scan Direction": "Forward",
+          "Schema": "public"
+        },
+        {
+          "Alias": "c_1",
+          "Async Capable": false,
+          "Disabled": false,
+          "Index Cond": "(((c_1.owner_table)::text = 'kb_teams'::text) AND (c_1.owner_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[])))",
+          "Index Name": "idx_kb_contexts_owner",
+          "Node Type": "Index Scan",
+          "Output": [
+            "c_1.id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Relation Name": "kb_contexts",
+          "Scan Direction": "Forward",
+          "Schema": "public"
+        },
+        {
+          "Alias": "tc",
+          "Async Capable": false,
+          "Disabled": false,
+          "Node Type": "Bitmap Heap Scan",
+          "Output": [
+            "tc.context_id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Index Cond": "(tc.team_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))",
+              "Index Name": "idx_kb_team_contexts_team",
+              "Node Type": "Bitmap Index Scan",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer"
+            }
+          ],
+          "Recheck Cond": "(tc.team_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))",
+          "Relation Name": "kb_team_contexts",
+          "Schema": "public"
+        },
+        {
+          "Alias": "g",
+          "Async Capable": false,
+          "Disabled": false,
+          "Filter": "(g.can_read AND ((g.subject_table)::text = 'kb_contexts'::text))",
+          "Node Type": "Bitmap Heap Scan",
+          "Output": [
+            "g.subject_id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Node Type": "BitmapOr",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plans": [
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Index Cond": "(((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid))",
+                  "Index Name": "idx_kb_access_grants_principal",
+                  "Node Type": "Bitmap Index Scan",
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Member"
+                },
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Index Cond": "(((g.subject_table)::text = 'kb_contexts'::text) AND ((g.principal_table)::text = 'kb_teams'::text) AND (g.principal_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[])))",
+                  "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                  "Node Type": "Bitmap Index Scan",
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Member"
+                }
+              ]
+            }
+          ],
+          "Recheck Cond": "((((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid)) OR (((g.subject_table)::text = 'kb_contexts'::text) AND ((g.principal_table)::text = 'kb_teams'::text) AND (g.principal_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))))",
+          "Relation Name": "kb_access_grants",
+          "Schema": "public"
+        }
+      ],
+      "Subplans Removed": 0
+    }
+  ],
+  "Strategy": "Hashed"
+}
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Node Type": "Limit",
+  "Output": [
+    "a.resource_id",
+    "((('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real)"
+  ],
+  "Parallel Aware": false,
+  "Plans": [
+    {
+      "Async Capable": false,
+      "Disabled": false,
+      "Node Type": "Sort",
+      "Output": [
+        "a.resource_id",
+        "((('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real)"
+      ],
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Plans": [
+        {
+          "Async Capable": false,
+          "Disabled": false,
+          "Group Key": [
+            "a.resource_id"
+          ],
+          "Node Type": "Aggregate",
+          "Output": [
+            "a.resource_id",
+            "(('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Outer",
+          "Partial Mode": "Simple",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Inner Unique": false,
+              "Join Type": "Inner",
+              "Node Type": "Nested Loop",
+              "Output": [
+                "a.resource_id",
+                "c.embedding"
+              ],
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plans": [
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Node Type": "Unique",
+                  "Output": [
+                    "a.resource_id"
+                  ],
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Outer",
+                  "Plans": [
+                    {
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Inner Unique": true,
+                      "Join Type": "Inner",
+                      "Node Type": "Nested Loop",
+                      "Output": [
+                        "a.resource_id"
+                      ],
+                      "Parallel Aware": false,
+                      "Parent Relationship": "Outer",
+                      "Plans": [
+                        {
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Inner Unique": false,
+                          "Join Type": "Inner",
+                          "Merge Cond": "(a.resource_id = h.resource_id)",
+                          "Node Type": "Merge Join",
+                          "Output": [
+                            "a.resource_id",
+                            "h.resource_id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Outer",
+                          "Plans": [
+                            {
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Node Type": "Sort",
+                              "Output": [
+                                "a.resource_id"
+                              ],
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Outer",
+                              "Plans": [
+                                {
+                                  "Alias": "a",
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Subquery Scan",
+                                  "Output": [
+                                    "a.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Outer",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Node Type": "Limit",
+                                      "Output": [
+                                        "c_1.resource_id",
+                                        "((c_1.embedding <=> '<vector>'::vector))"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Subquery",
+                                      "Plans": [
+                                        {
+                                          "Alias": "c_1",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Filter": "(c_1.embedding IS NOT NULL)",
+                                          "Index Name": "idx_kb_chunks_embedding",
+                                          "Node Type": "Index Scan",
+                                          "Order By": "(c_1.embedding <=> '<vector>'::vector)",
+                                          "Output": [
+                                            "c_1.resource_id",
+                                            "(c_1.embedding <=> '<vector>'::vector)"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Relation Name": "kb_chunks",
+                                          "Scan Direction": "Forward",
+                                          "Schema": "public"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ],
+                              "Sort Key": [
+                                "a.resource_id"
+                              ]
+                            },
+                            {
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Node Type": "Sort",
+                              "Output": [
+                                "h.resource_id"
+                              ],
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Inner",
+                              "Plans": [
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Inner Unique": true,
+                                  "Join Type": "Inner",
+                                  "Node Type": "Nested Loop",
+                                  "Output": [
+                                    "h.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Outer",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Group Key": [
+                                        "up_1.team_id"
+                                      ],
+                                      "Node Type": "Aggregate",
+                                      "Output": [
+                                        "up_1.team_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "InitPlan",
+                                      "Partial Mode": "Simple",
+                                      "Planned Partitions": 0,
+                                      "Plans": [
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Inner Unique": false,
+                                          "Join Type": "Inner",
+                                          "Node Type": "Nested Loop",
+                                          "Output": [
+                                            "up_1.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Hash Cond": "(t_1.id = tm.team_id)",
+                                              "Inner Unique": true,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Hash Join",
+                                              "Output": [
+                                                "tm.team_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "t_1",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Filter": "t_1.is_active",
+                                                  "Node Type": "Seq Scan",
+                                                  "Output": [
+                                                    "t_1.id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Relation Name": "kb_teams",
+                                                  "Schema": "public"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Hash",
+                                                  "Output": [
+                                                    "tm.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "tm",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Node Type": "Bitmap Heap Scan",
+                                                      "Output": [
+                                                        "tm.team_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Plans": [
+                                                        {
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Index Cond": "(tm.profile_id = '<uuid>'::uuid)",
+                                                          "Index Name": "idx_kb_team_members_profile",
+                                                          "Node Type": "Bitmap Index Scan",
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer"
+                                                        }
+                                                      ],
+                                                      "Recheck Cond": "(tm.profile_id = '<uuid>'::uuid)",
+                                                      "Relation Name": "kb_team_members",
+                                                      "Schema": "public"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Alias": "up_1",
+                                              "Async Capable": false,
+                                              "CTE Name": "up",
+                                              "Disabled": false,
+                                              "Node Type": "CTE Scan",
+                                              "Output": [
+                                                "up_1.team_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Inner",
+                                              "Plans": [
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Recursive Union",
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "InitPlan",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "t",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Filter": "t.is_active",
+                                                      "Index Cond": "(t.id = tm.team_id)",
+                                                      "Index Name": "kb_teams_pkey",
+                                                      "Node Type": "Index Scan",
+                                                      "Output": [
+                                                        "t.id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Relation Name": "kb_teams",
+                                                      "Scan Direction": "Forward",
+                                                      "Schema": "public"
+                                                    },
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Inner Unique": true,
+                                                      "Join Type": "Inner",
+                                                      "Node Type": "Nested Loop",
+                                                      "Output": [
+                                                        "tp.parent_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Inner",
+                                                      "Plans": [
+                                                        {
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Hash Cond": "(tp.child_id = up.team_id)",
+                                                          "Inner Unique": false,
+                                                          "Join Type": "Inner",
+                                                          "Node Type": "Hash Join",
+                                                          "Output": [
+                                                            "tp.parent_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer",
+                                                          "Plans": [
+                                                            {
+                                                              "Alias": "tp",
+                                                              "Async Capable": false,
+                                                              "Disabled": false,
+                                                              "Node Type": "Seq Scan",
+                                                              "Output": [
+                                                                "tp.child_id",
+                                                                "tp.parent_id"
+                                                              ],
+                                                              "Parallel Aware": false,
+                                                              "Parent Relationship": "Outer",
+                                                              "Relation Name": "kb_teams_parents",
+                                                              "Schema": "public"
+                                                            },
+                                                            {
+                                                              "Async Capable": false,
+                                                              "Disabled": false,
+                                                              "Node Type": "Hash",
+                                                              "Output": [
+                                                                "up.team_id"
+                                                              ],
+                                                              "Parallel Aware": false,
+                                                              "Parent Relationship": "Inner",
+                                                              "Plans": [
+                                                                {
+                                                                  "Alias": "up",
+                                                                  "Async Capable": false,
+                                                                  "CTE Name": "up",
+                                                                  "Disabled": false,
+                                                                  "Node Type": "WorkTable Scan",
+                                                                  "Output": [
+                                                                    "up.team_id"
+                                                                  ],
+                                                                  "Parallel Aware": false,
+                                                                  "Parent Relationship": "Outer"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        {
+                                                          "Alias": "pt",
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Filter": "pt.is_active",
+                                                          "Index Cond": "(pt.id = tp.parent_id)",
+                                                          "Index Name": "kb_teams_pkey",
+                                                          "Node Type": "Index Scan",
+                                                          "Output": [
+                                                            "pt.id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Inner",
+                                                          "Relation Name": "kb_teams",
+                                                          "Scan Direction": "Forward",
+                                                          "Schema": "public"
+                                                        }
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "Subplan Name": "CTE up"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ],
+                                      "Strategy": "Hashed",
+                                      "Subplan Name": "CTE reachable_teams"
+                                    },
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Node Type": "Unique",
+                                      "Output": [
+                                        "h.resource_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Merge Append",
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Sort",
+                                              "Output": [
+                                                "h.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Member",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "h",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Index Cond": "(h.owner_profile_id = '<uuid>'::uuid)",
+                                                  "Index Name": "idx_kb_resource_homes_owner_profile",
+                                                  "Node Type": "Index Scan",
+                                                  "Output": [
+                                                    "h.resource_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Relation Name": "kb_resource_homes",
+                                                  "Scan Direction": "Forward",
+                                                  "Schema": "public"
+                                                }
+                                              ],
+                                              "Sort Key": [
+                                                "h.resource_id"
+                                              ]
+                                            },
+                                            {
+                                              "Alias": "g",
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Filter": "g.can_read",
+                                              "Index Cond": "(((g.subject_table)::text = 'kb_resources'::text) AND ((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid))",
+                                              "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                                              "Node Type": "Index Scan",
+                                              "Output": [
+                                                "g.subject_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Member",
+                                              "Relation Name": "kb_access_grants",
+                                              "Scan Direction": "Forward",
+                                              "Schema": "public"
+                                            },
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Sort",
+                                              "Output": [
+                                                "g_1.subject_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Member",
+                                              "Plans": [
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Hash Cond": "(rt.team_id = g_1.principal_id)",
+                                                  "Inner Unique": false,
+                                                  "Join Type": "Inner",
+                                                  "Node Type": "Hash Join",
+                                                  "Output": [
+                                                    "g_1.subject_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "rt",
+                                                      "Async Capable": false,
+                                                      "CTE Name": "reachable_teams",
+                                                      "Disabled": false,
+                                                      "Node Type": "CTE Scan",
+                                                      "Output": [
+                                                        "rt.team_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer"
+                                                    },
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Node Type": "Hash",
+                                                      "Output": [
+                                                        "g_1.subject_id",
+                                                        "g_1.principal_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Inner",
+                                                      "Plans": [
+                                                        {
+                                                          "Alias": "g_1",
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Filter": "g_1.can_read",
+                                                          "Index Cond": "(((g_1.subject_table)::text = 'kb_resources'::text) AND ((g_1.principal_table)::text = 'kb_teams'::text))",
+                                                          "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                                                          "Node Type": "Index Scan",
+                                                          "Output": [
+                                                            "g_1.subject_id",
+                                                            "g_1.principal_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer",
+                                                          "Relation Name": "kb_access_grants",
+                                                          "Scan Direction": "Forward",
+                                                          "Schema": "public"
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "Sort Key": [
+                                                "g_1.subject_id"
+                                              ]
+                                            },
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Sort",
+                                              "Output": [
+                                                "h_1.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Member",
+                                              "Plans": [
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Aggregate",
+                                                  "Output": [
+                                                    "array_agg(reachable_teams.team_id)"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "InitPlan",
+                                                  "Partial Mode": "Simple",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "reachable_teams",
+                                                      "Async Capable": false,
+                                                      "CTE Name": "reachable_teams",
+                                                      "Disabled": false,
+                                                      "Node Type": "CTE Scan",
+                                                      "Output": [
+                                                        "reachable_teams.team_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer"
+                                                    }
+                                                  ],
+                                                  "Strategy": "Plain",
+                                                  "Subplan Name": "InitPlan 3"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Hash Cond": "(rc.context_id = h_1.anchor_id)",
+                                                  "Inner Unique": false,
+                                                  "Join Type": "Inner",
+                                                  "Node Type": "Hash Join",
+                                                  "Output": [
+                                                    "h_1.resource_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "rc",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Function Call": "contexts_readable_by_teams('<uuid>'::uuid, COALESCE((InitPlan 3).col1, '{}'::uuid[]))",
+                                                      "Function Name": "contexts_readable_by_teams",
+                                                      "Node Type": "Function Scan",
+                                                      "Output": [
+                                                        "rc.context_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Schema": "public"
+                                                    },
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Node Type": "Hash",
+                                                      "Output": [
+                                                        "h_1.resource_id",
+                                                        "h_1.anchor_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Inner",
+                                                      "Plans": [
+                                                        {
+                                                          "Alias": "h_1",
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Index Cond": "((h_1.anchor_table)::text = 'kb_contexts'::text)",
+                                                          "Index Name": "idx_kb_resource_homes_anchor",
+                                                          "Node Type": "Index Scan",
+                                                          "Output": [
+                                                            "h_1.resource_id",
+                                                            "h_1.anchor_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer",
+                                                          "Relation Name": "kb_resource_homes",
+                                                          "Scan Direction": "Forward",
+                                                          "Schema": "public"
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "Sort Key": [
+                                                "h_1.resource_id"
+                                              ]
+                                            },
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Sort",
+                                              "Output": [
+                                                "h_2.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Member",
+                                              "Plans": [
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Hash Cond": "(rt_1.team_id = tc.team_id)",
+                                                  "Inner Unique": false,
+                                                  "Join Type": "Inner",
+                                                  "Node Type": "Hash Join",
+                                                  "Output": [
+                                                    "h_2.resource_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "rt_1",
+                                                      "Async Capable": false,
+                                                      "CTE Name": "reachable_teams",
+                                                      "Disabled": false,
+                                                      "Node Type": "CTE Scan",
+                                                      "Output": [
+                                                        "rt_1.team_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer"
+                                                    },
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Node Type": "Hash",
+                                                      "Output": [
+                                                        "tc.team_id",
+                                                        "h_2.resource_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Inner",
+                                                      "Plans": [
+                                                        {
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Inner Unique": false,
+                                                          "Join Type": "Inner",
+                                                          "Node Type": "Nested Loop",
+                                                          "Output": [
+                                                            "tc.team_id",
+                                                            "h_2.resource_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer",
+                                                          "Plans": [
+                                                            {
+                                                              "Alias": "h_2",
+                                                              "Async Capable": false,
+                                                              "Disabled": false,
+                                                              "Index Cond": "((h_2.anchor_table)::text = 'kb_cogmaps'::text)",
+                                                              "Index Name": "idx_kb_resource_homes_anchor",
+                                                              "Node Type": "Index Scan",
+                                                              "Output": [
+                                                                "h_2.id",
+                                                                "h_2.resource_id",
+                                                                "h_2.anchor_table",
+                                                                "h_2.anchor_id",
+                                                                "h_2.originator_profile_id",
+                                                                "h_2.owner_profile_id",
+                                                                "h_2.created"
+                                                              ],
+                                                              "Parallel Aware": false,
+                                                              "Parent Relationship": "Outer",
+                                                              "Relation Name": "kb_resource_homes",
+                                                              "Scan Direction": "Forward",
+                                                              "Schema": "public"
+                                                            },
+                                                            {
+                                                              "Alias": "tc",
+                                                              "Async Capable": false,
+                                                              "Disabled": false,
+                                                              "Node Type": "Bitmap Heap Scan",
+                                                              "Output": [
+                                                                "tc.cogmap_id",
+                                                                "tc.team_id"
+                                                              ],
+                                                              "Parallel Aware": false,
+                                                              "Parent Relationship": "Inner",
+                                                              "Plans": [
+                                                                {
+                                                                  "Async Capable": false,
+                                                                  "Disabled": false,
+                                                                  "Index Cond": "(tc.cogmap_id = h_2.anchor_id)",
+                                                                  "Index Name": "kb_team_cogmaps_pkey",
+                                                                  "Node Type": "Bitmap Index Scan",
+                                                                  "Parallel Aware": false,
+                                                                  "Parent Relationship": "Outer"
+                                                                }
+                                                              ],
+                                                              "Recheck Cond": "(tc.cogmap_id = h_2.anchor_id)",
+                                                              "Relation Name": "kb_team_cogmaps",
+                                                              "Schema": "public"
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "Sort Key": [
+                                                "h_2.resource_id"
+                                              ]
+                                            },
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Sort",
+                                              "Output": [
+                                                "h_3.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Member",
+                                              "Plans": [
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Inner Unique": false,
+                                                  "Join Type": "Inner",
+                                                  "Node Type": "Nested Loop",
+                                                  "Output": [
+                                                    "h_3.resource_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "h_3",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Index Cond": "((h_3.anchor_table)::text = 'kb_cogmaps'::text)",
+                                                      "Index Name": "idx_kb_resource_homes_anchor",
+                                                      "Node Type": "Index Scan",
+                                                      "Output": [
+                                                        "h_3.id",
+                                                        "h_3.resource_id",
+                                                        "h_3.anchor_table",
+                                                        "h_3.anchor_id",
+                                                        "h_3.originator_profile_id",
+                                                        "h_3.owner_profile_id",
+                                                        "h_3.created"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Relation Name": "kb_resource_homes",
+                                                      "Scan Direction": "Forward",
+                                                      "Schema": "public"
+                                                    },
+                                                    {
+                                                      "Alias": "g_2",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Filter": "(g_2.can_read AND ((((g_2.principal_table)::text = 'kb_profiles'::text) AND (g_2.principal_id = '<uuid>'::uuid)) OR (((g_2.principal_table)::text = 'kb_teams'::text) AND (ANY (g_2.principal_id = (hashed SubPlan 4).col1)))))",
+                                                      "Index Cond": "(((g_2.subject_table)::text = 'kb_cogmaps'::text) AND (g_2.subject_id = h_3.anchor_id))",
+                                                      "Index Name": "idx_kb_access_grants_subject",
+                                                      "Node Type": "Index Scan",
+                                                      "Output": [
+                                                        "g_2.id",
+                                                        "g_2.subject_table",
+                                                        "g_2.subject_id",
+                                                        "g_2.principal_table",
+                                                        "g_2.principal_id",
+                                                        "g_2.can_read",
+                                                        "g_2.can_write",
+                                                        "g_2.can_delete",
+                                                        "g_2.can_grant",
+                                                        "g_2.granted_by_profile_id",
+                                                        "g_2.granted_at"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Inner",
+                                                      "Plans": [
+                                                        {
+                                                          "Alias": "reachable_teams_1",
+                                                          "Async Capable": false,
+                                                          "CTE Name": "reachable_teams",
+                                                          "Disabled": false,
+                                                          "Node Type": "CTE Scan",
+                                                          "Output": [
+                                                            "reachable_teams_1.team_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "SubPlan",
+                                                          "Subplan Name": "SubPlan 4"
+                                                        }
+                                                      ],
+                                                      "Relation Name": "kb_access_grants",
+                                                      "Scan Direction": "Forward",
+                                                      "Schema": "public"
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "Sort Key": [
+                                                "h_3.resource_id"
+                                              ]
+                                            }
+                                          ],
+                                          "Sort Key": [
+                                            "h.resource_id"
+                                          ],
+                                          "Subplans Removed": 0
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "Alias": "r_1",
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Filter": "r_1.is_active",
+                                      "Index Cond": "(r_1.id = h.resource_id)",
+                                      "Index Name": "kb_resources_pkey",
+                                      "Node Type": "Index Scan",
+                                      "Output": [
+                                        "r_1.id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Inner",
+                                      "Relation Name": "kb_resources",
+                                      "Scan Direction": "Forward",
+                                      "Schema": "public"
+                                    }
+                                  ]
+                                }
+                              ],
+                              "Sort Key": [
+                                "h.resource_id"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Async Capable": false,
+                          "Cache Key": "a.resource_id",
+                          "Cache Mode": "logical",
+                          "Disabled": false,
+                          "Node Type": "Memoize",
+                          "Output": [
+                            "r.id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Inner",
+                          "Plans": [
+                            {
+                              "Alias": "r",
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Filter": "(r.is_active AND (r.ingest_state = 'complete'::text))",
+                              "Index Cond": "(r.id = a.resource_id)",
+                              "Index Name": "kb_resources_pkey",
+                              "Node Type": "Index Scan",
+                              "Output": [
+                                "r.id"
+                              ],
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Outer",
+                              "Relation Name": "kb_resources",
+                              "Scan Direction": "Forward",
+                              "Schema": "public"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Alias": "c",
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Filter": "(c.embedding IS NOT NULL)",
+                  "Node Type": "Bitmap Heap Scan",
+                  "Output": [
+                    "c.id",
+                    "c.block_id",
+                    "c.resource_id",
+                    "c.chunk_index",
+                    "c.version",
+                    "c.header_path",
+                    "c.heading_depth",
+                    "c.content_hash",
+                    "c.embedding",
+                    "c.is_current",
+                    "c.created",
+                    "c.embedded_with"
+                  ],
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Inner",
+                  "Plans": [
+                    {
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Index Cond": "(c.resource_id = a.resource_id)",
+                      "Index Name": "idx_kb_chunks_embed_provenance",
+                      "Node Type": "Bitmap Index Scan",
+                      "Parallel Aware": false,
+                      "Parent Relationship": "Outer"
+                    }
+                  ],
+                  "Recheck Cond": "((a.resource_id = c.resource_id) AND c.is_current)",
+                  "Relation Name": "kb_chunks",
+                  "Schema": "public"
+                }
+              ]
+            }
+          ],
+          "Strategy": "Sorted"
+        }
+      ],
+      "Sort Key": [
+        "((('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real) DESC",
+        "a.resource_id"
+      ]
+    }
+  ]
+}
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Node Type": "Aggregate",
+  "Output": [
+    "count(*)"
+  ],
+  "Parallel Aware": false,
+  "Partial Mode": "Simple",
+  "Plans": [
+    {
+      "Alias": "search_wide",
+      "Async Capable": false,
+      "Disabled": false,
+      "Function Call": "search_wide('<uuid>'::uuid, '<vector>'::vector, 100, NULL::character varying, NULL::uuid, NULL::text, 10, 0)",
+      "Function Name": "search_wide",
+      "Node Type": "Function Scan",
+      "Output": [
+        "resource_id",
+        "vec_norm"
+      ],
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Schema": "public"
+    }
+  ],
+  "Strategy": "Plain"
+}
+################ SHAPE 3 — search_wide, SCOPED (the exhaustive branch) ################
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Group Key": [
+    "c.id"
+  ],
+  "Node Type": "Aggregate",
+  "Output": [
+    "c.id"
+  ],
+  "Parallel Aware": false,
+  "Partial Mode": "Simple",
+  "Planned Partitions": 0,
+  "Plans": [
+    {
+      "Async Capable": false,
+      "Disabled": false,
+      "Node Type": "Append",
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Plans": [
+        {
+          "Alias": "c",
+          "Async Capable": false,
+          "Disabled": false,
+          "Index Cond": "(((c.owner_table)::text = 'kb_profiles'::text) AND (c.owner_id = '<uuid>'::uuid))",
+          "Index Name": "idx_kb_contexts_owner",
+          "Node Type": "Index Scan",
+          "Output": [
+            "c.id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Relation Name": "kb_contexts",
+          "Scan Direction": "Forward",
+          "Schema": "public"
+        },
+        {
+          "Alias": "c_1",
+          "Async Capable": false,
+          "Disabled": false,
+          "Index Cond": "(((c_1.owner_table)::text = 'kb_teams'::text) AND (c_1.owner_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[])))",
+          "Index Name": "idx_kb_contexts_owner",
+          "Node Type": "Index Scan",
+          "Output": [
+            "c_1.id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Relation Name": "kb_contexts",
+          "Scan Direction": "Forward",
+          "Schema": "public"
+        },
+        {
+          "Alias": "tc",
+          "Async Capable": false,
+          "Disabled": false,
+          "Node Type": "Bitmap Heap Scan",
+          "Output": [
+            "tc.context_id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Index Cond": "(tc.team_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))",
+              "Index Name": "idx_kb_team_contexts_team",
+              "Node Type": "Bitmap Index Scan",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer"
+            }
+          ],
+          "Recheck Cond": "(tc.team_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))",
+          "Relation Name": "kb_team_contexts",
+          "Schema": "public"
+        },
+        {
+          "Alias": "g",
+          "Async Capable": false,
+          "Disabled": false,
+          "Filter": "(g.can_read AND ((g.subject_table)::text = 'kb_contexts'::text))",
+          "Node Type": "Bitmap Heap Scan",
+          "Output": [
+            "g.subject_id"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Member",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Node Type": "BitmapOr",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plans": [
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Index Cond": "(((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid))",
+                  "Index Name": "idx_kb_access_grants_principal",
+                  "Node Type": "Bitmap Index Scan",
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Member"
+                },
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Index Cond": "(((g.subject_table)::text = 'kb_contexts'::text) AND ((g.principal_table)::text = 'kb_teams'::text) AND (g.principal_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[])))",
+                  "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                  "Node Type": "Bitmap Index Scan",
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Member"
+                }
+              ]
+            }
+          ],
+          "Recheck Cond": "((((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid)) OR (((g.subject_table)::text = 'kb_contexts'::text) AND ((g.principal_table)::text = 'kb_teams'::text) AND (g.principal_id = ANY ('{<uuid>,<uuid>,<uuid>,<uuid>}'::uuid[]))))",
+          "Relation Name": "kb_access_grants",
+          "Schema": "public"
+        }
+      ],
+      "Subplans Removed": 0
+    }
+  ],
+  "Strategy": "Hashed"
+}
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Node Type": "Limit",
+  "Output": [
+    "c.resource_id",
+    "((('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real)"
+  ],
+  "Parallel Aware": false,
+  "Plans": [
+    {
+      "Async Capable": false,
+      "Disabled": false,
+      "Node Type": "Sort",
+      "Output": [
+        "c.resource_id",
+        "((('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real)"
+      ],
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Plans": [
+        {
+          "Async Capable": false,
+          "Disabled": false,
+          "Group Key": [
+            "c.resource_id"
+          ],
+          "Node Type": "Aggregate",
+          "Output": [
+            "c.resource_id",
+            "(('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real"
+          ],
+          "Parallel Aware": false,
+          "Parent Relationship": "Outer",
+          "Partial Mode": "Simple",
+          "Plans": [
+            {
+              "Async Capable": false,
+              "Disabled": false,
+              "Inner Unique": true,
+              "Join Filter": "(h_1.resource_id = r.id)",
+              "Join Type": "Inner",
+              "Node Type": "Nested Loop",
+              "Output": [
+                "c.resource_id",
+                "c.embedding"
+              ],
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plans": [
+                {
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Inner Unique": false,
+                  "Join Type": "Inner",
+                  "Node Type": "Nested Loop",
+                  "Output": [
+                    "c.resource_id",
+                    "c.embedding",
+                    "h_1.resource_id",
+                    "h.resource_id"
+                  ],
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Outer",
+                  "Plans": [
+                    {
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Inner Unique": true,
+                      "Join Type": "Inner",
+                      "Merge Cond": "(h_1.resource_id = h.resource_id)",
+                      "Node Type": "Merge Join",
+                      "Output": [
+                        "h_1.resource_id",
+                        "h.resource_id"
+                      ],
+                      "Parallel Aware": false,
+                      "Parent Relationship": "Outer",
+                      "Plans": [
+                        {
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Node Type": "Sort",
+                          "Output": [
+                            "h_1.resource_id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Outer",
+                          "Plans": [
+                            {
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Inner Unique": true,
+                              "Join Type": "Inner",
+                              "Node Type": "Nested Loop",
+                              "Output": [
+                                "h_1.resource_id"
+                              ],
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Outer",
+                              "Plans": [
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Group Key": [
+                                    "up_1.team_id"
+                                  ],
+                                  "Node Type": "Aggregate",
+                                  "Output": [
+                                    "up_1.team_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "InitPlan",
+                                  "Partial Mode": "Simple",
+                                  "Planned Partitions": 0,
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Inner Unique": false,
+                                      "Join Type": "Inner",
+                                      "Node Type": "Nested Loop",
+                                      "Output": [
+                                        "up_1.team_id"
+                                      ],
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Hash Cond": "(t_1.id = tm.team_id)",
+                                          "Inner Unique": true,
+                                          "Join Type": "Inner",
+                                          "Node Type": "Hash Join",
+                                          "Output": [
+                                            "tm.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Outer",
+                                          "Plans": [
+                                            {
+                                              "Alias": "t_1",
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Filter": "t_1.is_active",
+                                              "Node Type": "Seq Scan",
+                                              "Output": [
+                                                "t_1.id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Relation Name": "kb_teams",
+                                              "Schema": "public"
+                                            },
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Hash",
+                                              "Output": [
+                                                "tm.team_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Inner",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "tm",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Bitmap Heap Scan",
+                                                  "Output": [
+                                                    "tm.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Plans": [
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Index Cond": "(tm.profile_id = '<uuid>'::uuid)",
+                                                      "Index Name": "idx_kb_team_members_profile",
+                                                      "Node Type": "Bitmap Index Scan",
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer"
+                                                    }
+                                                  ],
+                                                  "Recheck Cond": "(tm.profile_id = '<uuid>'::uuid)",
+                                                  "Relation Name": "kb_team_members",
+                                                  "Schema": "public"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "Alias": "up_1",
+                                          "Async Capable": false,
+                                          "CTE Name": "up",
+                                          "Disabled": false,
+                                          "Node Type": "CTE Scan",
+                                          "Output": [
+                                            "up_1.team_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Inner",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Recursive Union",
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "InitPlan",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "t",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Filter": "t.is_active",
+                                                  "Index Cond": "(t.id = tm.team_id)",
+                                                  "Index Name": "kb_teams_pkey",
+                                                  "Node Type": "Index Scan",
+                                                  "Output": [
+                                                    "t.id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Relation Name": "kb_teams",
+                                                  "Scan Direction": "Forward",
+                                                  "Schema": "public"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Inner Unique": true,
+                                                  "Join Type": "Inner",
+                                                  "Node Type": "Nested Loop",
+                                                  "Output": [
+                                                    "tp.parent_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Hash Cond": "(tp.child_id = up.team_id)",
+                                                      "Inner Unique": false,
+                                                      "Join Type": "Inner",
+                                                      "Node Type": "Hash Join",
+                                                      "Output": [
+                                                        "tp.parent_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Plans": [
+                                                        {
+                                                          "Alias": "tp",
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Node Type": "Seq Scan",
+                                                          "Output": [
+                                                            "tp.child_id",
+                                                            "tp.parent_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer",
+                                                          "Relation Name": "kb_teams_parents",
+                                                          "Schema": "public"
+                                                        },
+                                                        {
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Node Type": "Hash",
+                                                          "Output": [
+                                                            "up.team_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Inner",
+                                                          "Plans": [
+                                                            {
+                                                              "Alias": "up",
+                                                              "Async Capable": false,
+                                                              "CTE Name": "up",
+                                                              "Disabled": false,
+                                                              "Node Type": "WorkTable Scan",
+                                                              "Output": [
+                                                                "up.team_id"
+                                                              ],
+                                                              "Parallel Aware": false,
+                                                              "Parent Relationship": "Outer"
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    },
+                                                    {
+                                                      "Alias": "pt",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Filter": "pt.is_active",
+                                                      "Index Cond": "(pt.id = tp.parent_id)",
+                                                      "Index Name": "kb_teams_pkey",
+                                                      "Node Type": "Index Scan",
+                                                      "Output": [
+                                                        "pt.id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Inner",
+                                                      "Relation Name": "kb_teams",
+                                                      "Scan Direction": "Forward",
+                                                      "Schema": "public"
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "Subplan Name": "CTE up"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "Strategy": "Hashed",
+                                  "Subplan Name": "CTE reachable_teams"
+                                },
+                                {
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Node Type": "Unique",
+                                  "Output": [
+                                    "h_1.resource_id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Outer",
+                                  "Plans": [
+                                    {
+                                      "Async Capable": false,
+                                      "Disabled": false,
+                                      "Node Type": "Merge Append",
+                                      "Parallel Aware": false,
+                                      "Parent Relationship": "Outer",
+                                      "Plans": [
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Sort",
+                                          "Output": [
+                                            "h_1.resource_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Member",
+                                          "Plans": [
+                                            {
+                                              "Alias": "h_1",
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Index Cond": "(h_1.owner_profile_id = '<uuid>'::uuid)",
+                                              "Index Name": "idx_kb_resource_homes_owner_profile",
+                                              "Node Type": "Index Scan",
+                                              "Output": [
+                                                "h_1.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Relation Name": "kb_resource_homes",
+                                              "Scan Direction": "Forward",
+                                              "Schema": "public"
+                                            }
+                                          ],
+                                          "Sort Key": [
+                                            "h_1.resource_id"
+                                          ]
+                                        },
+                                        {
+                                          "Alias": "g",
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Filter": "g.can_read",
+                                          "Index Cond": "(((g.subject_table)::text = 'kb_resources'::text) AND ((g.principal_table)::text = 'kb_profiles'::text) AND (g.principal_id = '<uuid>'::uuid))",
+                                          "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                                          "Node Type": "Index Scan",
+                                          "Output": [
+                                            "g.subject_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Member",
+                                          "Relation Name": "kb_access_grants",
+                                          "Scan Direction": "Forward",
+                                          "Schema": "public"
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Sort",
+                                          "Output": [
+                                            "g_1.subject_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Member",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Hash Cond": "(rt.team_id = g_1.principal_id)",
+                                              "Inner Unique": false,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Hash Join",
+                                              "Output": [
+                                                "g_1.subject_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "rt",
+                                                  "Async Capable": false,
+                                                  "CTE Name": "reachable_teams",
+                                                  "Disabled": false,
+                                                  "Node Type": "CTE Scan",
+                                                  "Output": [
+                                                    "rt.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Hash",
+                                                  "Output": [
+                                                    "g_1.subject_id",
+                                                    "g_1.principal_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "g_1",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Filter": "g_1.can_read",
+                                                      "Index Cond": "(((g_1.subject_table)::text = 'kb_resources'::text) AND ((g_1.principal_table)::text = 'kb_teams'::text))",
+                                                      "Index Name": "kb_access_grants_subject_table_subject_id_principal_table_p_key",
+                                                      "Node Type": "Index Scan",
+                                                      "Output": [
+                                                        "g_1.subject_id",
+                                                        "g_1.principal_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Relation Name": "kb_access_grants",
+                                                      "Scan Direction": "Forward",
+                                                      "Schema": "public"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ],
+                                          "Sort Key": [
+                                            "g_1.subject_id"
+                                          ]
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Sort",
+                                          "Output": [
+                                            "h_2.resource_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Member",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Node Type": "Aggregate",
+                                              "Output": [
+                                                "array_agg(reachable_teams.team_id)"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "InitPlan",
+                                              "Partial Mode": "Simple",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "reachable_teams",
+                                                  "Async Capable": false,
+                                                  "CTE Name": "reachable_teams",
+                                                  "Disabled": false,
+                                                  "Node Type": "CTE Scan",
+                                                  "Output": [
+                                                    "reachable_teams.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer"
+                                                }
+                                              ],
+                                              "Strategy": "Plain",
+                                              "Subplan Name": "InitPlan 3"
+                                            },
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Hash Cond": "(rc.context_id = h_2.anchor_id)",
+                                              "Inner Unique": false,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Hash Join",
+                                              "Output": [
+                                                "h_2.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "rc",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Function Call": "contexts_readable_by_teams('<uuid>'::uuid, COALESCE((InitPlan 3).col1, '{}'::uuid[]))",
+                                                  "Function Name": "contexts_readable_by_teams",
+                                                  "Node Type": "Function Scan",
+                                                  "Output": [
+                                                    "rc.context_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Schema": "public"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Hash",
+                                                  "Output": [
+                                                    "h_2.resource_id",
+                                                    "h_2.anchor_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "h_2",
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Index Cond": "((h_2.anchor_table)::text = 'kb_contexts'::text)",
+                                                      "Index Name": "idx_kb_resource_homes_anchor",
+                                                      "Node Type": "Index Scan",
+                                                      "Output": [
+                                                        "h_2.resource_id",
+                                                        "h_2.anchor_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Relation Name": "kb_resource_homes",
+                                                      "Scan Direction": "Forward",
+                                                      "Schema": "public"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ],
+                                          "Sort Key": [
+                                            "h_2.resource_id"
+                                          ]
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Sort",
+                                          "Output": [
+                                            "h_3.resource_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Member",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Hash Cond": "(rt_1.team_id = tc.team_id)",
+                                              "Inner Unique": false,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Hash Join",
+                                              "Output": [
+                                                "h_3.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "rt_1",
+                                                  "Async Capable": false,
+                                                  "CTE Name": "reachable_teams",
+                                                  "Disabled": false,
+                                                  "Node Type": "CTE Scan",
+                                                  "Output": [
+                                                    "rt_1.team_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer"
+                                                },
+                                                {
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Node Type": "Hash",
+                                                  "Output": [
+                                                    "tc.team_id",
+                                                    "h_3.resource_id"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Async Capable": false,
+                                                      "Disabled": false,
+                                                      "Inner Unique": false,
+                                                      "Join Type": "Inner",
+                                                      "Node Type": "Nested Loop",
+                                                      "Output": [
+                                                        "tc.team_id",
+                                                        "h_3.resource_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "Outer",
+                                                      "Plans": [
+                                                        {
+                                                          "Alias": "h_3",
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Index Cond": "((h_3.anchor_table)::text = 'kb_cogmaps'::text)",
+                                                          "Index Name": "idx_kb_resource_homes_anchor",
+                                                          "Node Type": "Index Scan",
+                                                          "Output": [
+                                                            "h_3.id",
+                                                            "h_3.resource_id",
+                                                            "h_3.anchor_table",
+                                                            "h_3.anchor_id",
+                                                            "h_3.originator_profile_id",
+                                                            "h_3.owner_profile_id",
+                                                            "h_3.created"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Outer",
+                                                          "Relation Name": "kb_resource_homes",
+                                                          "Scan Direction": "Forward",
+                                                          "Schema": "public"
+                                                        },
+                                                        {
+                                                          "Alias": "tc",
+                                                          "Async Capable": false,
+                                                          "Disabled": false,
+                                                          "Node Type": "Bitmap Heap Scan",
+                                                          "Output": [
+                                                            "tc.cogmap_id",
+                                                            "tc.team_id"
+                                                          ],
+                                                          "Parallel Aware": false,
+                                                          "Parent Relationship": "Inner",
+                                                          "Plans": [
+                                                            {
+                                                              "Async Capable": false,
+                                                              "Disabled": false,
+                                                              "Index Cond": "(tc.cogmap_id = h_3.anchor_id)",
+                                                              "Index Name": "kb_team_cogmaps_pkey",
+                                                              "Node Type": "Bitmap Index Scan",
+                                                              "Parallel Aware": false,
+                                                              "Parent Relationship": "Outer"
+                                                            }
+                                                          ],
+                                                          "Recheck Cond": "(tc.cogmap_id = h_3.anchor_id)",
+                                                          "Relation Name": "kb_team_cogmaps",
+                                                          "Schema": "public"
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ],
+                                          "Sort Key": [
+                                            "h_3.resource_id"
+                                          ]
+                                        },
+                                        {
+                                          "Async Capable": false,
+                                          "Disabled": false,
+                                          "Node Type": "Sort",
+                                          "Output": [
+                                            "h_4.resource_id"
+                                          ],
+                                          "Parallel Aware": false,
+                                          "Parent Relationship": "Member",
+                                          "Plans": [
+                                            {
+                                              "Async Capable": false,
+                                              "Disabled": false,
+                                              "Inner Unique": false,
+                                              "Join Type": "Inner",
+                                              "Node Type": "Nested Loop",
+                                              "Output": [
+                                                "h_4.resource_id"
+                                              ],
+                                              "Parallel Aware": false,
+                                              "Parent Relationship": "Outer",
+                                              "Plans": [
+                                                {
+                                                  "Alias": "h_4",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Index Cond": "((h_4.anchor_table)::text = 'kb_cogmaps'::text)",
+                                                  "Index Name": "idx_kb_resource_homes_anchor",
+                                                  "Node Type": "Index Scan",
+                                                  "Output": [
+                                                    "h_4.id",
+                                                    "h_4.resource_id",
+                                                    "h_4.anchor_table",
+                                                    "h_4.anchor_id",
+                                                    "h_4.originator_profile_id",
+                                                    "h_4.owner_profile_id",
+                                                    "h_4.created"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Outer",
+                                                  "Relation Name": "kb_resource_homes",
+                                                  "Scan Direction": "Forward",
+                                                  "Schema": "public"
+                                                },
+                                                {
+                                                  "Alias": "g_2",
+                                                  "Async Capable": false,
+                                                  "Disabled": false,
+                                                  "Filter": "(g_2.can_read AND ((((g_2.principal_table)::text = 'kb_profiles'::text) AND (g_2.principal_id = '<uuid>'::uuid)) OR (((g_2.principal_table)::text = 'kb_teams'::text) AND (ANY (g_2.principal_id = (hashed SubPlan 4).col1)))))",
+                                                  "Index Cond": "(((g_2.subject_table)::text = 'kb_cogmaps'::text) AND (g_2.subject_id = h_4.anchor_id))",
+                                                  "Index Name": "idx_kb_access_grants_subject",
+                                                  "Node Type": "Index Scan",
+                                                  "Output": [
+                                                    "g_2.id",
+                                                    "g_2.subject_table",
+                                                    "g_2.subject_id",
+                                                    "g_2.principal_table",
+                                                    "g_2.principal_id",
+                                                    "g_2.can_read",
+                                                    "g_2.can_write",
+                                                    "g_2.can_delete",
+                                                    "g_2.can_grant",
+                                                    "g_2.granted_by_profile_id",
+                                                    "g_2.granted_at"
+                                                  ],
+                                                  "Parallel Aware": false,
+                                                  "Parent Relationship": "Inner",
+                                                  "Plans": [
+                                                    {
+                                                      "Alias": "reachable_teams_1",
+                                                      "Async Capable": false,
+                                                      "CTE Name": "reachable_teams",
+                                                      "Disabled": false,
+                                                      "Node Type": "CTE Scan",
+                                                      "Output": [
+                                                        "reachable_teams_1.team_id"
+                                                      ],
+                                                      "Parallel Aware": false,
+                                                      "Parent Relationship": "SubPlan",
+                                                      "Subplan Name": "SubPlan 4"
+                                                    }
+                                                  ],
+                                                  "Relation Name": "kb_access_grants",
+                                                  "Scan Direction": "Forward",
+                                                  "Schema": "public"
+                                                }
+                                              ]
+                                            }
+                                          ],
+                                          "Sort Key": [
+                                            "h_4.resource_id"
+                                          ]
+                                        }
+                                      ],
+                                      "Sort Key": [
+                                        "h_1.resource_id"
+                                      ],
+                                      "Subplans Removed": 0
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Alias": "r_1",
+                                  "Async Capable": false,
+                                  "Disabled": false,
+                                  "Filter": "r_1.is_active",
+                                  "Index Cond": "(r_1.id = h_1.resource_id)",
+                                  "Index Name": "kb_resources_pkey",
+                                  "Node Type": "Index Scan",
+                                  "Output": [
+                                    "r_1.id"
+                                  ],
+                                  "Parallel Aware": false,
+                                  "Parent Relationship": "Inner",
+                                  "Relation Name": "kb_resources",
+                                  "Scan Direction": "Forward",
+                                  "Schema": "public"
+                                }
+                              ]
+                            }
+                          ],
+                          "Sort Key": [
+                            "h_1.resource_id"
+                          ]
+                        },
+                        {
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Node Type": "Sort",
+                          "Output": [
+                            "h.resource_id"
+                          ],
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Inner",
+                          "Plans": [
+                            {
+                              "Alias": "h",
+                              "Async Capable": false,
+                              "Disabled": false,
+                              "Index Cond": "(((h.anchor_table)::text = 'kb_contexts'::text) AND (h.anchor_id = '<uuid>'::uuid))",
+                              "Index Name": "idx_kb_resource_homes_anchor",
+                              "Node Type": "Index Scan",
+                              "Output": [
+                                "h.resource_id"
+                              ],
+                              "Parallel Aware": false,
+                              "Parent Relationship": "Outer",
+                              "Relation Name": "kb_resource_homes",
+                              "Scan Direction": "Forward",
+                              "Schema": "public"
+                            }
+                          ],
+                          "Sort Key": [
+                            "h.resource_id"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Alias": "c",
+                      "Async Capable": false,
+                      "Disabled": false,
+                      "Filter": "(c.embedding IS NOT NULL)",
+                      "Node Type": "Bitmap Heap Scan",
+                      "Output": [
+                        "c.id",
+                        "c.block_id",
+                        "c.resource_id",
+                        "c.chunk_index",
+                        "c.version",
+                        "c.header_path",
+                        "c.heading_depth",
+                        "c.content_hash",
+                        "c.embedding",
+                        "c.is_current",
+                        "c.created",
+                        "c.embedded_with"
+                      ],
+                      "Parallel Aware": false,
+                      "Parent Relationship": "Inner",
+                      "Plans": [
+                        {
+                          "Async Capable": false,
+                          "Disabled": false,
+                          "Index Cond": "(c.resource_id = h_1.resource_id)",
+                          "Index Name": "idx_kb_chunks_embed_provenance",
+                          "Node Type": "Bitmap Index Scan",
+                          "Parallel Aware": false,
+                          "Parent Relationship": "Outer"
+                        }
+                      ],
+                      "Recheck Cond": "((c.resource_id = h_1.resource_id) AND c.is_current)",
+                      "Relation Name": "kb_chunks",
+                      "Schema": "public"
+                    }
+                  ]
+                },
+                {
+                  "Alias": "r",
+                  "Async Capable": false,
+                  "Disabled": false,
+                  "Filter": "(r.is_active AND (r.ingest_state = 'complete'::text))",
+                  "Index Cond": "(r.id = c.resource_id)",
+                  "Index Name": "kb_resources_pkey",
+                  "Node Type": "Index Scan",
+                  "Output": [
+                    "r.id"
+                  ],
+                  "Parallel Aware": false,
+                  "Parent Relationship": "Inner",
+                  "Relation Name": "kb_resources",
+                  "Scan Direction": "Forward",
+                  "Schema": "public"
+                }
+              ]
+            }
+          ],
+          "Strategy": "Sorted"
+        }
+      ],
+      "Sort Key": [
+        "((('1'::double precision - ((min((c.embedding <=> '<vector>'::vector)) + ((avg((c.embedding <=> '<vector>'::vector)) - min((c.embedding <=> '<vector>'::vector))) * ('1'::double precision - ('1'::double precision / sqrt((count(*))::double precision))))) / '2'::double precision)))::real) DESC",
+        "c.resource_id"
+      ]
+    }
+  ]
+}
+{
+  "Async Capable": false,
+  "Disabled": false,
+  "Node Type": "Aggregate",
+  "Output": [
+    "count(*)"
+  ],
+  "Parallel Aware": false,
+  "Partial Mode": "Simple",
+  "Plans": [
+    {
+      "Alias": "search_wide",
+      "Async Capable": false,
+      "Disabled": false,
+      "Function Call": "search_wide('<uuid>'::uuid, '<vector>'::vector, 100, 'kb_contexts'::character varying, '<uuid>'::uuid, NULL::text, 10, 0)",
+      "Function Name": "search_wide",
+      "Node Type": "Function Scan",
+      "Output": [
+        "resource_id",
+        "vec_norm"
+      ],
+      "Parallel Aware": false,
+      "Parent Relationship": "Outer",
+      "Schema": "public"
+    }
+  ],
+  "Strategy": "Plain"
+}
+################ END ################

@@ -1,0 +1,480 @@
+{
+  "$defs": {
+    "BodyStorage": {
+      "description": "What guarantee a resource's body carries on read — a **surfaced projection** of coverage\n(`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.\nOrthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have\nread back exactly, or only approximately?*",
+      "oneOf": [
+        {
+          "const": "verbatim",
+          "description": "Every live block carries its raw source bytes; the body reads back byte-for-byte.",
+          "type": "string"
+        },
+        {
+          "const": "derived",
+          "description": "The body is reconstructed from chunks (lossy) — a pre-PR-3 resource, or one with only partial\nverbatim coverage.",
+          "type": "string"
+        }
+      ]
+    },
+    "CogmapRegionRow": {
+      "description": "One non-folded region of a cognitive map under a lens, as returned by `cogmap_shape`.",
+      "properties": {
+        "content_cohesion": {
+          "description": "Mean member-to-centroid cosine; `None` until the downstream readout has been computed.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Optional agent-authored region label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lens_id": {
+          "description": "The lens (perspective) that produced this region.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "member_count": {
+          "description": "Member count (the blur the surface tier exposes; identities stay interior) — over the members\n**this caller can read**, never all of them (spec §D5). Two readers of the same region can\nlegitimately see different numbers; that is the point.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "region_id": {
+          "description": "`kb_cogmap_regions.id` — the region's stable identity.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "salience": {
+          "description": "Computed, memoized blend (telos-alignment + reference-standing + centrality); higher = more salient.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "region_id",
+        "lens_id",
+        "salience",
+        "member_count"
+      ],
+      "type": "object"
+    },
+    "IngestState": {
+      "description": "A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.",
+      "oneOf": [
+        {
+          "const": "in_progress",
+          "description": "A segmented ingest has begun but not been finalized — the body is incomplete. Hidden from\nlist/search, still resumable and readable via `show`.",
+          "type": "string"
+        },
+        {
+          "const": "complete",
+          "description": "The whole body is present: every atomic create, and every finalized segmented ingest.",
+          "type": "string"
+        }
+      ]
+    },
+    "ManagedMeta": {
+      "additionalProperties": false,
+      "description": "Temper-governed **workflow + provenance** metadata for a vault resource.\n\nThis is a **closed, temper-owned vocabulary** of exactly the `KeyFate::Property`\nkeys — optional, smart-defaulted metadata. Identity (`title`/`slug`), type\n(`doc_type_name`), home (`context`/`cogmap`), and relationships (`goal`) are NOT\nmetadata: they are first-class wire fields, never carried here. The Property field\nset is kept in lockstep with `temper_substrate::keys::MANAGED_PROPERTY_KEYS` by the\ndrift-guard in `temper-services/tests/managed_meta_property_drift_test.rs`.\n\nThere is no catch-all — a key not named here is not a managed key. Caller-defined\n(\"bring-your-own\") fields belong in `open_meta`, the free-form tier. Deserialization\nrejects unknown keys (`#[serde(deny_unknown_fields)]`) so a mis-filed key (including a\nformer identity key like `temper-title`) fails loudly at the wire boundary instead of\nsilently migrating tiers.\n\nAll fields use `temper-*` YAML/JSON key names via `serde(rename)`.\n`None` fields are omitted from serialized output.",
+      "properties": {
+        "temper-branch": {
+          "description": "Git branch associated with the task (task only)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-effort": {
+          "description": "Task effort estimate (task only)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-llm-model": {
+          "description": "Model that produced this resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-llm-run": {
+          "description": "UUIDv7 stamp from a (historical) LLM-assisted run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-mode": {
+          "description": "Task execution mode (task only)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-pr": {
+          "description": "Pull request reference (task only)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-provenance": {
+          "description": "How this resource was created (LLM-discovered or user-created)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-seq": {
+          "description": "Sequence number for ordering (task/goal)",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "temper-stage": {
+          "description": "Task workflow stage (task only)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper-status": {
+          "description": "Goal lifecycle status (goal only)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MatchLocation": {
+      "description": "Where in a resource a chunk-grain match landed.",
+      "properties": {
+        "block_id": {
+          "description": "The `kb_content_blocks` row the closest chunk belongs to.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "header_path": {
+          "description": "The heading trail to that chunk, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snippet": {
+          "description": "The chunk's own text, or the part of it that matched.\n\nA snippet for the EXACT arm is a named remainder rather than a gap: it is possible without a\nnew index via `ts_headline` over re-fetched text, but that is a per-row fetch of prose the\nquery did not otherwise need, on a path that currently touches only the index. Nobody has\nmeasured it, and the retired `SearchResultRow` carried a snippet from the `unified_search`\nera whose cost was never isolated either.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "block_id"
+      ],
+      "type": "object"
+    },
+    "RegionHit": {
+      "description": "One region of a cognitive map. Produced by `survey`.",
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/CogmapRegionRow",
+          "description": "The region itself, in the same shape `cogmap_shape` answers in.\n\n**It carries its own `salience`, beside this hit's score.** Two numbers on one row, and they\nare not rivals: `salience` is an INPUT to `region_score` (`0.4·sal_norm + 0.6·query_cos`,\nwhere `sal_norm` is a rank over salience). Order by the score; ordering by `salience`\nanswers *\"what does this map think is prominent\"*, a different question.\n\n`[decided — 2026-08-08, Pete]` A narrower region projection without `salience` was\nconsidered and refused. [`ResourceView`] exists because six near-identical projections were\ncollapsed into one; minting a divergent region shape immediately afterwards, to hide one\nfield, would repeat the mistake that consolidation just paid to fix."
+        },
+        "scoring": {
+          "$ref": "#/$defs/Scoring"
+        }
+      },
+      "required": [
+        "region",
+        "scoring"
+      ],
+      "type": "object"
+    },
+    "ResourceHit": {
+      "description": "One resource that matched, however it matched.\n\n[`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both\nsearch arms answer in — six near-identical projections collapsed into one. A hit adds scoring\nand nothing else.",
+      "properties": {
+        "located_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MatchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where in the resource the match was — the closest chunk's block.\n\n**Filled only by the wide arm**, and its absence is declared in advance rather than\ndiscovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.\nThe wide arm matches at CHUNK grain and already computes which chunk was closest, then\ndiscards it collapsing to a per-resource score; recovering it is an argmin beside an\naggregate that already runs.\n\n`find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by\nconcatenating every chunk into a single blob, so the block boundary is gone before the query\nis asked. `follow-from` has no match position at all — it returns nodes reached by walking.\n\nIt sits on this type rather than on [`Scoring`] because `Scoring` is shared with\n[`RegionHit`], and a region is not somewhere inside a resource.\n\n**`None` serializes as an explicit `\"located_at\": null`** (F4, ruled): the contract's prose\nis load-bearing on the null — every `located_at` is null today and the null unambiguously\nmeans *not declared* — and omitting the key made the resource-hit null indistinguishable\nfrom a shape with no such field, which is exactly the distinction [`RegionHit`] exists to\ndraw."
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceView"
+        },
+        "scoring": {
+          "$ref": "#/$defs/Scoring"
+        }
+      },
+      "required": [
+        "resource",
+        "scoring"
+      ],
+      "type": "object"
+    },
+    "ResourceView": {
+      "description": "Everything a resource is, except its body — one shape for every read and write\nsurface.\n\nReplaces the six near-identical projections a caller used to have to tell apart\n(`ResourceRow`, `ResourceDetail`, `ResourceMetaResponse`, `ResourceSummary`, the\nsearch `HitIdentity`, and the inlined identity half of `ExactHit`/`WideHit`). A\nhuman or agent learns this shape once and it is the shape `list`, `show`, `create`,\n`update`, `annotate` and both search arms all answer in.\n\nThree properties are load-bearing and each has its own test below:\n\n1. **The anchor is `id`, never `resource_id`.** The retired `ResourceMetaResponse`\n   recorded why: \"With two different anchor names the subset relation is unachievable.\"\n   Here the relation is stronger than subset — it is identity.\n2. **No workflow field is hoisted.** `stage`/`mode`/`effort`/`seq` were flat columns on\n   `ResourceRow`; they live in [`ManagedMeta`] under their canonical `temper-*` names and\n   nowhere else. Dropping them is lossless *because* of property 3.\n3. **`managed_meta` is not an `Option`.** A consumer reads `view.managed_meta.stage`\n   without first distinguishing \"no meta\" from \"no stage\".\n\n**No `#[serde(flatten)]` anywhere**, deliberately: ts-rs cannot codegen a flattened\nfield, which is why `ResourceDetail` had to drop its `TS` derive and why the identity\nfields on `ExactHit`/`WideHit` were hand-inlined. This type is ts-rs-exported, so the\nconstraint is structural, not stylistic.\n\n**No `FromRow` derive, deliberately.** `ref` and `context_ref` are derived rather than\nselected and `content` arrives from a different read, so a `query_as` into this type\ncould never be complete. `ResourceRow` carried a `FromRow` derive with **zero**\n`query_as` call sites anywhere in the repo — decorative, and an invitation to try\nsomething that cannot work. Construction is by hand, as `substrate_read` already does.",
+      "properties": {
+        "body_hash": {
+          "description": "SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no\nmanifest row exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body_storage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BodyStorage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
+        },
+        "cogmap_id": {
+          "description": "Set when the resource is homed in a cognitive map. Mutually exclusive with\nthe `context_*` fields.",
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cogmap_name": {
+          "description": "Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "description": "The reconstructed markdown body — the `body` section.\n\nAbsent means **not requested**, never \"empty body\". An empty body is\n`Some(String::new())`, which serializes as `\"\"`; the two are distinguishable on\nthe wire and after a round-trip.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_owner_ref": {
+          "description": "Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_ref": {
+          "description": "The composed home-context address, `{context_owner_ref}/{context_slug}`.\n\nNot a column — derived by [`ResourceView::with_derived_refs`]. `None` for a\ncogmap-homed resource, which has no context half; never a half-formed ref.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_slug": {
+          "description": "Slug of the home context (the natural-key half of `@owner/slug`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "doc_type_name": {
+          "type": "string"
+        },
+        "id": {
+          "description": "A `kb_resources.id` value.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "ingest_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IngestState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Are all the bytes here? `Option` purely for version skew — the column is\n`NOT NULL` server-side, so `None` means the server predates W2 PR 1. Do not\nread `None` as \"incomplete\"."
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "kb_context_id": {
+          "description": "`Some` for a context-homed resource, `None` when homed in a cognitive map\n(Surface B). Mutually exclusive with the `cogmap_*` fields.",
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "managed_meta": {
+          "$ref": "#/$defs/ManagedMeta",
+          "default": {},
+          "description": "Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.\n\n**Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/\n`effort`/`seq` columns lossless: the values did not go away, they went home. A\nresource with no managed metadata carries an all-`None` `ManagedMeta`, which\nserializes as `{}` — present and empty, never absent."
+        },
+        "open_meta": {
+          "description": "Open (user-defined) frontmatter — the free-form tier, intentionally untyped.\nAbsent means the `open-meta` section was not requested."
+        },
+        "origin_uri": {
+          "description": "Original source URL or file reference.\n\nThere is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one\nwhose doc comment promised a \"canonical `kb://` URI ... from `kb_resource_uri`\",\nbut `kb_resource_uri` does not exist in `migrations/` and the assembly wrote\n`kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value\nunder a second name and a false description. It joins `origin` (the constant\n`\"unified\"`) and `slug` (always `String::new()`) as a field this arc dropped for\nnever having carried what it claimed.",
+          "type": "string"
+        },
+        "originator_profile_id": {
+          "description": "A `kb_profiles.id` value.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "owner_handle": {
+          "type": "string"
+        },
+        "owner_profile_id": {
+          "description": "A `kb_profiles.id` value.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "ref": {
+          "description": "The decorated, self-resolving address: `sluggify(title)-<uuid>`.\n\nNot a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`.\nUntil this task it was injected render-time by the CLI alone\n(`temper-cli/src/commands/resource.rs`), so MCP callers never received one even\nthough the shipped skill instructs agents to use it.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ref",
+        "title",
+        "origin_uri",
+        "doc_type_name",
+        "owner_handle",
+        "owner_profile_id",
+        "originator_profile_id",
+        "is_active",
+        "created",
+        "updated"
+      ],
+      "type": "object"
+    },
+    "ScoreKind": {
+      "anyOf": [
+        {
+          "const": "fts_norm",
+          "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.",
+          "type": "string"
+        },
+        {
+          "const": "vec_norm",
+          "description": "pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.",
+          "type": "string"
+        },
+        {
+          "const": "graph_score",
+          "description": "Product of edge weights along the best path. UNBOUNDED. `follow-from`.",
+          "type": "string"
+        },
+        {
+          "const": "region_score",
+          "description": "`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.",
+          "type": "string"
+        },
+        {
+          "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "Which quantity a hit's score is, named so that combining two of different kinds reads as the\ncategory error it is.\n\nThe values are the DEPLOYED column names the serving functions emit — not names invented here —\nso a caller who greps the SQL for one finds it, and each equals the\n[`super::act::ActQuantity::field`] of the act that produced the row.\n\n**OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary\nwould make adding one a breaking change for every client. Openness costs nothing here because\nthe operation a client performs on this value is EQUALITY — *are these two scores the same\nkind?* — never exhaustive enumeration. Contrast\n[`super::disposition::StageDisposition`], which stays closed precisely because consumers match\nit exhaustively.\n\n**The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as\n`1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans\n`[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on\n[`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming\n`[0,1]`, which is the live mistake in this family, not a hypothetical one."
+    },
+    "Scoring": {
+      "description": "How one hit scored, and by what measure.\n\nThe kind travels WITH the number, which is what lets a row be understood on its own. Two hits\nwhose `score_kind` differs hold values that must never be added, averaged, or sorted into one\nlist — and unlike a bare field name, that is something a client can actually check.",
+      "properties": {
+        "score": {
+          "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.",
+          "format": "float",
+          "type": "number"
+        },
+        "score_kind": {
+          "$ref": "#/$defs/ScoreKind"
+        }
+      },
+      "required": [
+        "score_kind",
+        "score"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a RETURNED stage produced, tagged by CURRENCY.\n\n# Two variants, and the tag answers exactly one question\n\n`[decided — 2026-08-09, Pete]` What was produced is resources, or regions. How they were scored\nis a different question, answered per row by [`super::hits::Scoring::score_kind`].\n\nAn earlier draft split this four ways — `fts_hits`, `vec_hits`, `graph_hits` — so that two acts'\nrows could not share a list type. That guard was real but the name was a misnomer: `vec_hits`\ndescribes the scoring, not what was produced, and it meant **a row could not be read without\nknowing which envelope carried it**. The quantity was the field name, so the envelope was load-\nbearing for interpreting the row. Now every hit is self-describing and there is one shape per\ncurrency instead of one per act.\n\nWhat still prevents `unified_search`'s conflation is structural and unchanged: arms are keyed\nseparately in the response, and there is no merged ordered list for two acts' rows to fall into.\nSee the module note on [`super::hits`] for the full argument.\n\n# There is no `ids` variant\n\nA returned stage is always hydrated. Ids remain the pipe's **internal** currency — the only\nvalue crossing a stage boundary is membership, and an intermediate stage that merely feeds a\ndownstream one is never hydrated at all. What is gone is `ids` as a thing a caller can ASK to be\ngiven back: subselecting a result set is a client concern with a good answer already\n(`temper … | jq`), and the principled version is a known later door (GraphQL over this surface).\nShipping one coarse \"just ids\" toggle now would occupy the space that door is for.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nscores are floats. Tests compare the serialized form, which is what a client observes.",
+  "oneOf": [
+    {
+      "description": "Produced by `find-exact`, both `find-about-*` acts, and `follow-from`.",
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/ResourceHit"
+          },
+          "type": "array"
+        },
+        "produced": {
+          "const": "resources",
+          "type": "string"
+        }
+      },
+      "required": [
+        "produced",
+        "hits"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Produced by `survey`.",
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/RegionHit"
+          },
+          "type": "array"
+        },
+        "produced": {
+          "const": "regions",
+          "type": "string"
+        }
+      },
+      "required": [
+        "produced",
+        "hits"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "StageOutput"
+}

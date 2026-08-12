@@ -140,6 +140,19 @@ else
 fi
 '''
 
+[tasks.seed-corpus]
+description = "Seed a MEASUREMENT corpus (uneven visibility, clustered vectors). Scale: cargo make seed-corpus 20"
+env = { SQLX_OFFLINE = "true" }
+script = '''
+# Not idempotent — it appends. Run against a freshly recreated volume (`cargo make docker-down-volumes
+# && cargo make docker-up`) or a scratch database, never on top of an existing corpus.
+#
+# Scale 1 is the size measurement_corpus.rs asserts over; the plan-shape and gate-cost measurements
+# that Phase 4 beat C turns on need thousands of rows, so pass a multiplier (20 => ~4800 resources).
+SCALE="${1:-1}"
+cargo run -p temper-substrate --bin temper-substrate -- seed-corpus --scale "${SCALE}"
+'''
+
 [tasks.db-collapsed]
 description = "Build the canonical substrate in public for collapsed-schema dev."
 env = { SQLX_OFFLINE = "false" }

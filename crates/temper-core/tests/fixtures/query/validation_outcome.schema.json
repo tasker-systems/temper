@@ -1,0 +1,241 @@
+{
+  "$defs": {
+    "ActName": {
+      "anyOf": [
+        {
+          "const": "find-exact",
+          "description": "*I can quote the exact words.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-anywhere",
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-within",
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string"
+        },
+        {
+          "const": "follow-from",
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string"
+        },
+        {
+          "const": "survey",
+          "description": "*A question about what a scope knows.*",
+          "type": "string"
+        },
+        {
+          "const": "substantiate",
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string"
+        },
+        {
+          "const": "admit",
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+    },
+    "ActQuantity": {
+      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score`, which is the exact expression the frame register forbids. It was dropped\non 2026-08-06; the body stays readable in the migration history.",
+      "properties": {
+        "field": {
+          "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it.",
+          "type": "string"
+        },
+        "means": {
+          "description": "What the number measures, in this act's own terms.",
+          "type": "string"
+        },
+        "scale": {
+          "$ref": "#/$defs/QuantityScale"
+        }
+      },
+      "required": [
+        "field",
+        "means",
+        "scale"
+      ],
+      "type": "object"
+    },
+    "Disclosure": {
+      "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with two members, not two special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists. Note that `match_location` is currently\ndeclared by NO act (see the registry): a declaration describes the DEPLOYED system, and the\nexecutor hard-codes `located_at: None` today.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking\nchange, and should be.",
+      "oneOf": [
+        {
+          "const": "match_location",
+          "description": "Where in the resource the match was — `ResourceHit.located_at`.",
+          "type": "string"
+        },
+        {
+          "const": "filter_counts",
+          "description": "How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.\n\nDeclared by NO act today, and that is a measured absence rather than an oversight: no\ndeployed fragment computes these counts, and counting on demand costs a second query. The\nvariant exists because the fields it names exist; a closed vocabulary may carry a member\nwith no current declarer, where an open one may not.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProducedVariant": {
+      "description": "Which [`StageOutput`] variant a stage carries — the tag, as a value.\n\nIt exists so `/api/query/validate` can PROMISE a variant using the same type the response\nREPORTS, rather than a parallel enum that would drift. [`StageOutput::variant`] answers it from\nan actual output; [`super::act::ActDeclaration::produced_variant`] predicts it from a\ndeclaration, and a test asserts the two agree.",
+      "enum": [
+        "resources",
+        "regions"
+      ],
+      "type": "string"
+    },
+    "QuantityScale": {
+      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`, while\n`wayfind_region_scores` rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
+      "oneOf": [
+        {
+          "description": "`[0,1]`, bounded by the expression's own arithmetic.",
+          "properties": {
+            "scale": {
+              "const": "unit_interval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Bounded, but NOT to `[0,1]`. `bounds` states the actual range.",
+          "properties": {
+            "bounds": {
+              "type": "string"
+            },
+            "scale": {
+              "const": "other_range",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale",
+            "bounds"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Nothing in the expression or in the schema bounds it.",
+          "properties": {
+            "scale": {
+              "const": "unbounded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scale"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ScoreKind": {
+      "anyOf": [
+        {
+          "const": "fts_norm",
+          "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.",
+          "type": "string"
+        },
+        {
+          "const": "vec_norm",
+          "description": "pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.",
+          "type": "string"
+        },
+        {
+          "const": "graph_score",
+          "description": "Product of edge weights along the best path. UNBOUNDED. `follow-from`.",
+          "type": "string"
+        },
+        {
+          "const": "region_score",
+          "description": "`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.",
+          "type": "string"
+        },
+        {
+          "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
+          "type": "string"
+        }
+      ],
+      "description": "Which quantity a hit's score is, named so that combining two of different kinds reads as the\ncategory error it is.\n\nThe values are the DEPLOYED column names the serving functions emit — not names invented here —\nso a caller who greps the SQL for one finds it, and each equals the\n[`super::act::ActQuantity::field`] of the act that produced the row.\n\n**OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary\nwould make adding one a breaking change for every client. Openness costs nothing here because\nthe operation a client performs on this value is EQUALITY — *are these two scores the same\nkind?* — never exhaustive enumeration. Contrast\n[`super::disposition::StageDisposition`], which stays closed precisely because consumers match\nit exhaustively.\n\n**The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as\n`1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans\n`[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on\n[`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming\n`[0,1]`, which is the live mistake in this family, not a hypothetical one."
+    },
+    "WillReturn": {
+      "description": "What one returned stage will carry.",
+      "properties": {
+        "act": {
+          "$ref": "#/$defs/ActName"
+        },
+        "discloses": {
+          "description": "Which optional fields will be FILLED rather than null, for this act.\n\nRead it and you know in advance whether asking for `located_at` is worth doing — rather\nthan discovering a null in a response and having to guess whether it means *cannot* or\n*none*.",
+          "items": {
+            "$ref": "#/$defs/Disclosure"
+          },
+          "type": "array"
+        },
+        "orders_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The quantity its rows will be ordered by, with its range. Absent for an act that orders\nnothing — which, since every returnable act orders something, does not happen today."
+        },
+        "produced": {
+          "$ref": "#/$defs/ProducedVariant",
+          "description": "Which `StageOutput` variant this stage will carry: resources, or regions."
+        },
+        "score_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScoreKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The score kind every row of this stage will carry, typed exactly as the rows carry it.\n\nThe envelope tags currency only, so `produced` alone does not distinguish two acts that\nboth return resources — this is what completes the answer, and it is the SAME type a hit\nholds, so a caller compares it directly rather than across a translation."
+        }
+      },
+      "required": [
+        "act",
+        "produced",
+        "discloses"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a composition WOULD return, derived from the act declarations without running anything.\n\nThis exists because `QueryResponse.returned` is an open map and has to be: its keys are whatever\nthe caller named their stages, and the shape under each depends on which act that stage runs.\nThat is a dependency from the request to the response, and **OpenAPI has no way to express it**.\nA reader of the schema alone learns only *\"some stage names, each holding one of four\nvariants.\"*\n\nThis closes it for one specific composition. Every fact it needs is already declared — an act's\n`produces` and `orders_by` give the output variant, and its `discloses` gives which optional\nfields will be filled — so it COMPUTES rather than guesses, and touches no rows.",
+  "properties": {
+    "order": {
+      "description": "The stages in the order they will run — the topological sort, which is not the order they\nwere listed in and which a DAG does not otherwise reveal.",
+      "items": {
+        "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "will_return": {
+      "additionalProperties": {
+        "$ref": "#/$defs/WillReturn"
+      },
+      "description": "Exactly the keys `QueryResponse.returned` will carry, and what will be under each.\n\n**This is the part the schema cannot say for itself.**",
+      "type": "object"
+    }
+  },
+  "required": [
+    "order",
+    "will_return"
+  ],
+  "title": "ValidationOutcome",
+  "type": "object"
+}

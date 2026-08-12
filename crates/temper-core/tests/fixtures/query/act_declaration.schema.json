@@ -44,7 +44,7 @@
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
     "ActQuantity": {
-      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is\nthe exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to\nthe migration that defined the body, which stays readable in history.",
+      "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score`, which is the exact expression the frame register forbids. It was dropped\non 2026-08-06; the body stays readable in the migration history.",
       "properties": {
         "field": {
           "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it.",
@@ -86,7 +86,7 @@
       ]
     },
     "BuildState": {
-      "description": "Whether a mechanic for this act exists, and whether the act has a door of its own or only its\nhost's. Every value is mechanically checkable by T3's gate — which is the whole point, because a\nhand-maintained build-state is the `ADMIN_EVENT_TYPES` failure: a const beside a registry, with\na test holding its own second copy.\n\n**This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is\n[`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A\n`served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and\nCLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts\nare **fused**, reachable from all three doors, and still door-partial — they declare\n[`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`\n`[verified — crates/temper-cli/src/cli.rs:286-336]`. Door-partiality is finer-grained than the\nact and orthogonal to whether a mechanic exists, so it cannot ride on this enum.",
+      "description": "Whether a mechanic for this act exists, and whether the act has a door of its own or only its\nhost's. Every value is mechanically checkable by T3's gate — which is the whole point, because a\nhand-maintained build-state is the `ADMIN_EVENT_TYPES` failure: a const beside a registry, with\na test holding its own second copy.\n\n**This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is\n[`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A\n`served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and\nCLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts\nare `Served`, reachable from all three doors, and still door-partial — they declare\n[`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`.\nDoor-partiality is finer-grained than the act and orthogonal to whether a mechanic exists, so it\ncannot ride on this enum.",
       "oneOf": [
         {
           "description": "A door invokes this act alone, rather than only as part of a composite. Says nothing about\nHOW MANY doors, or which — that is [`ActDeclaration::door_coverage`].",
@@ -133,8 +133,23 @@
         }
       ]
     },
+    "Disclosure": {
+      "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with two members, not two special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists. Note that `match_location` is currently\ndeclared by NO act (see the registry): a declaration describes the DEPLOYED system, and the\nexecutor hard-codes `located_at: None` today.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking\nchange, and should be.",
+      "oneOf": [
+        {
+          "const": "match_location",
+          "description": "Where in the resource the match was — `ResourceHit.located_at`.",
+          "type": "string"
+        },
+        {
+          "const": "filter_counts",
+          "description": "How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.\n\nDeclared by NO act today, and that is a measured absence rather than an oversight: no\ndeployed fragment computes these counts, and counting on demand costs a second query. The\nvariant exists because the fields it names exist; a closed vocabulary may carry a member\nwith no current declarer, where an open one may not.",
+          "type": "string"
+        }
+      ]
+    },
     "DoorReach": {
-      "description": "How much of an act one door can reach.\n\nTwo variants, not three: `Serves` with an empty shortfall IS full reach, so \"full\" needs no\nvariant of its own and cannot disagree with the lists beside it. An act absent from a door has\nno shortfall to state, which is why `Absent` carries nothing.\n\n**Absence is declared, never inferred from an omitted entry.** That is the whole point of the\nfield: goal `019fa618` (*surface parity — no door offers less than another without saying so*)\nhas no witnesses because no mechanical inventory of who-offers-what exists, and a declaration\nthat simply left a door out would reproduce exactly that hole in a new place.",
+      "description": "How much of an act one door can reach.\n\nTwo variants, not three: `Serves` with an empty shortfall IS full reach, so \"full\" needs no\nvariant of its own and cannot disagree with the lists beside it. An act absent from a door has\nno shortfall to state, which is why `Absent` carries nothing.\n\n**Absence is declared, never inferred from an omitted entry.** That is the whole point of the\nfield: goal `019fa618` (*surface parity — no door offers less than another without saying so*)\nhas no witnesses because no mechanical inventory of who-offers-what exists, and a declaration\nthat simply left a door out would reproduce exactly that hole in a new place.\n\n**Three shortfall axes, because a door falls short in three different ways and only one of them\nwas expressible.** `terms_unreachable` shipped alone, so `Serves {}` was a promise nobody could\nqualify: two real shortfalls had to be declared as full reach or not at all. A door can also be\nunable to supply a whole BOUND KIND — `SearchParams` carries `context_ref`, `cogmap_id` and\n`cogmap_ids` but no resource-id slot, so `find-exact`'s declared `Resource` bound is unsuppliable\nfrom every one of the three doors — and it can accept a FILTER SLOT the act declares and then\napply nothing, which is a silent substitution wearing a successful narrowing's costume. Each\nentry is guarded against the act's own `accepts_*` list (see the registry's tests): a door cannot\nfall short on something the act never admitted, in any of the three axes.",
       "oneOf": [
         {
           "description": "This door cannot invoke the act at all.",
@@ -152,6 +167,20 @@
         {
           "description": "This door invokes the act, minus whatever it lists as unreachable. Empty lists mean it\nreaches everything the act declares.",
           "properties": {
+            "bounds_unreachable": {
+              "description": "Bound KINDS the act admits that this door has no slot for. The live instance is the\n`find` acts' `Resource` bound: the shipped arms hard-bind `NULL` for bound-ids and no\ndoor's params carry a resource-id list, so the act accepts a narrowing every caller\nstanding at every door is unable to express. Same guard as `terms_unreachable` — every\nentry must appear in the act's `accepts_bounds`.",
+              "items": {
+                "$ref": "#/$defs/IdKind"
+              },
+              "type": "array"
+            },
+            "filters_unapplied": {
+              "description": "Filter slots the act admits that this door accepts and then does not apply. Distinct\nfrom a slot the act never admitted, which is refused outright\n([`super::disposition::RefusalReason::FilterNotApplicable`]) and needs no declaration:\nthis axis is for the worse case, where the act says yes and the door narrows nothing.\nEvery entry must appear in the act's `accepts_filters`.",
+              "items": {
+                "$ref": "#/$defs/FilterField"
+              },
+              "type": "array"
+            },
             "reach": {
               "const": "serves",
               "type": "string"
@@ -198,7 +227,7 @@
       "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
     },
     "QuantityScale": {
-      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`\n`[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`\nrescales *the same* `<=>` distance as `1 - d` into `[-1,1]`\n`[verified — migrations/20260731000050:120]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
+      "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`, while\n`wayfind_region_scores` rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
       "oneOf": [
         {
           "description": "`[0,1]`, bounded by the expression's own arithmetic.",
@@ -264,7 +293,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One act, declared.",
+  "description": "One act, declared.\n\nSee [`ActDeclaration::produced_variant`] for how a declaration predicts the response shape.",
   "properties": {
     "accepts_bound_terms": {
       "description": "Which bound terms this act admits. A term absent here is DECLINED, never reinterpreted:\n`survey` admits `[Regions]` and not `Limit`, because `wayfind_region_scores` takes a funnel\nwidth and has no rows to limit.",
@@ -306,6 +335,13 @@
     },
     "build_state": {
       "$ref": "#/$defs/BuildState"
+    },
+    "discloses": {
+      "description": "Which optional per-stage disclosures this act's mechanic **can** produce.\n\nThe response fields [`Disclosure`] names are filled for some acts and null for others, and\na null in any of them is otherwise ambiguous between *this act cannot* and *the answer is\nnone* — which are opposite answers. This is what disambiguates them, and what\n`/api/query/validate` reads to tell a caller in advance rather than leaving them to\ndiscover it in a response.\n\n**Absence from this list is the declaration, not silence** — the same rule\n[`ActDeclaration::door_coverage`] follows. Today every act's list is empty: a declaration\ndescribes the DEPLOYED system, and no deployed fragment carries either remaining\ndisclosure out (see the registry's per-site rulings).",
+      "items": {
+        "$ref": "#/$defs/Disclosure"
+      },
+      "type": "array"
     },
     "door_coverage": {
       "additionalProperties": false,

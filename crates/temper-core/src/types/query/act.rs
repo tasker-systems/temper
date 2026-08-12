@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::filter::FilterField;
+use super::hits::ScoreKind;
 use super::id_set::IdKind;
 use super::scalars::BoundTerm;
+use super::stage::ProducedVariant;
 
 /// The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
 /// the mechanic currently serving it is evidence rather than identity.
@@ -53,10 +55,10 @@ pub enum ActName {
 /// [`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A
 /// `served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and
 /// CLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts
-/// are **fused**, reachable from all three doors, and still door-partial — they declare
-/// [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`
-/// `[verified — crates/temper-cli/src/cli.rs:286-336]`. Door-partiality is finer-grained than the
-/// act and orthogonal to whether a mechanic exists, so it cannot ride on this enum.
+/// are `Served`, reachable from all three doors, and still door-partial — they declare
+/// [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`.
+/// Door-partiality is finer-grained than the act and orthogonal to whether a mechanic exists, so it
+/// cannot ride on this enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -115,6 +117,16 @@ impl Door {
 /// field: goal `019fa618` (*surface parity — no door offers less than another without saying so*)
 /// has no witnesses because no mechanical inventory of who-offers-what exists, and a declaration
 /// that simply left a door out would reproduce exactly that hole in a new place.
+///
+/// **Three shortfall axes, because a door falls short in three different ways and only one of them
+/// was expressible.** `terms_unreachable` shipped alone, so `Serves {}` was a promise nobody could
+/// qualify: two real shortfalls had to be declared as full reach or not at all. A door can also be
+/// unable to supply a whole BOUND KIND — `SearchParams` carries `context_ref`, `cogmap_id` and
+/// `cogmap_ids` but no resource-id slot, so `find-exact`'s declared `Resource` bound is unsuppliable
+/// from every one of the three doors — and it can accept a FILTER SLOT the act declares and then
+/// apply nothing, which is a silent substitution wearing a successful narrowing's costume. Each
+/// entry is guarded against the act's own `accepts_*` list (see the registry's tests): a door cannot
+/// fall short on something the act never admitted, in any of the three axes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -132,16 +144,28 @@ pub enum DoorReach {
         /// a contradiction, not a gap.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         terms_unreachable: Vec<BoundTerm>,
+        /// Bound KINDS the act admits that this door has no slot for. The live instance is the
+        /// `find` acts' `Resource` bound: the shipped arms hard-bind `NULL` for bound-ids and no
+        /// door's params carry a resource-id list, so the act accepts a narrowing every caller
+        /// standing at every door is unable to express. Same guard as `terms_unreachable` — every
+        /// entry must appear in the act's `accepts_bounds`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        bounds_unreachable: Vec<IdKind>,
+        /// Filter slots the act admits that this door accepts and then does not apply. Distinct
+        /// from a slot the act never admitted, which is refused outright
+        /// ([`super::disposition::RefusalReason::FilterNotApplicable`]) and needs no declaration:
+        /// this axis is for the worse case, where the act says yes and the door narrows nothing.
+        /// Every entry must appear in the act's `accepts_filters`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        filters_unapplied: Vec<FilterField>,
     },
 }
 
 /// The scale of an act's ordering quantity.
 ///
 /// Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
-/// `search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`
-/// `[verified — migrations/20260805000020:211-214, :258-260]`, while `wayfind_region_scores`
-/// rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`
-/// `[verified — migrations/20260731000050:120]`.
+/// `search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`, while
+/// `wayfind_region_scores` rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`.
 /// Neither column name says so, and one of the two feeds a weighted sum everyone reads as a
 /// `[0,1]` score.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,9 +192,8 @@ pub enum QuantityScale {
 /// carries its act's name and shape."* Arithmetic follows names: two fields called `score` invite
 /// `a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked
 /// failure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them
-/// into `combined_score` `[verified — migrations/20260714000001_ingest_state.sql:294-299]`, which is
-/// the exact expression the frame register forbids. It was dropped on 2026-08-06; the citation is to
-/// the migration that defined the body, which stays readable in history.
+/// into `combined_score`, which is the exact expression the frame register forbids. It was dropped
+/// on 2026-08-06; the body stays readable in the migration history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -226,7 +249,41 @@ pub enum VisibilityProfile {
     PrincipalRelative,
 }
 
+/// One optional piece of per-stage disclosure that some acts can produce and others cannot.
+///
+/// **One class with two members, not two special cases.** Each names a response field that is
+/// filled for some acts and null for others, and in every case a null means *not declared*, never
+/// zero — which is the whole reason the class exists. Note that `match_location` is currently
+/// declared by NO act (see the registry): a declaration describes the DEPLOYED system, and the
+/// executor hard-codes `located_at: None` today.
+///
+/// CLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the
+/// reason they always do here: a consumer branches exhaustively on which disclosures an act offers,
+/// whereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking
+/// change, and should be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Disclosure {
+    // `InputContribution` used to lead this enum. Removed with its `input_contributed` field
+    // (ratification ⟨6⟩/9d `[2026-08-09, Pete]`); returns when a walk carries origin.
+    /// Where in the resource the match was — `ResourceHit.located_at`.
+    MatchLocation,
+    /// How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.
+    ///
+    /// Declared by NO act today, and that is a measured absence rather than an oversight: no
+    /// deployed fragment computes these counts, and counting on demand costs a second query. The
+    /// variant exists because the fields it names exist; a closed vocabulary may carry a member
+    /// with no current declarer, where an open one may not.
+    FilterCounts,
+}
+
 /// One act, declared.
+///
+/// See [`ActDeclaration::produced_variant`] for how a declaration predicts the response shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -254,6 +311,20 @@ pub struct ActDeclaration {
     /// the clamping. A term with no entry here has no ceiling.
     pub bound_ceilings: BTreeMap<BoundTerm, i64>,
     pub produces: Option<IdKind>,
+    /// Which optional per-stage disclosures this act's mechanic **can** produce.
+    ///
+    /// The response fields [`Disclosure`] names are filled for some acts and null for others, and
+    /// a null in any of them is otherwise ambiguous between *this act cannot* and *the answer is
+    /// none* — which are opposite answers. This is what disambiguates them, and what
+    /// `/api/query/validate` reads to tell a caller in advance rather than leaving them to
+    /// discover it in a response.
+    ///
+    /// **Absence from this list is the declaration, not silence** — the same rule
+    /// [`ActDeclaration::door_coverage`] follows. Today every act's list is empty: a declaration
+    /// describes the DEPLOYED system, and no deployed fragment carries either remaining
+    /// disclosure out (see the registry's per-site rulings).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discloses: Vec<Disclosure>,
     /// Which surfaces reach this act, and how much of it. **Every [`Door`] carries an entry** —
     /// absence from a door is stated as [`DoorReach::Absent`], never by leaving the door out, so
     /// "this declaration says nothing about MCP" cannot be mistaken for "MCP serves it".
@@ -276,6 +347,50 @@ pub struct ActDeclaration {
     /// Bumped whenever the served-by body changes the scale or meaning of a quantity. T3 gate 4
     /// reds when the body hash moves and this does not.
     pub scoring_revision: u32,
+}
+
+impl ActDeclaration {
+    /// Which [`super::stage::StageOutput`] variant a stage running this act will carry.
+    ///
+    /// Now a straight read of `produces`, because the envelope tags CURRENCY and nothing else —
+    /// how the rows were scored travels per row as [`super::hits::Scoring::score_kind`]. An earlier
+    /// version had to consult `orders_by.field` here, which is what made `vec_hits` a possible tag
+    /// and the envelope load-bearing for reading a row.
+    ///
+    /// `None` for an act that selects nothing (`substantiate`, `admit`) — those are not composable
+    /// and never appear as a returned stage.
+    pub fn produced_variant(&self) -> Option<ProducedVariant> {
+        match self.produces.as_ref()? {
+            IdKind::Resource => Some(ProducedVariant::Resources),
+            IdKind::Region => Some(ProducedVariant::Regions),
+            // `Cogmap` and `Context` are accepted as scopes and never produced; `Other` is a kind
+            // this binary does not know. Either way there is no hit shape, and saying so is better
+            // than picking the nearest variant — a wrong promise is worse than an absent one.
+            IdKind::Cogmap | IdKind::Context | IdKind::Other(_) => None,
+        }
+    }
+
+    /// The score kind every row of this act's output will carry.
+    ///
+    /// Derived from `orders_by.field`, which is the DEPLOYED column name the serving function
+    /// emits — so this and [`super::hits::Scoring::score_kind`] are the same string by
+    /// construction, and a caller who greps the SQL for it finds it. Keying on `ActName` instead
+    /// would be a second copy of the relation, free to drift.
+    ///
+    /// `None` for an act that orders nothing. The consequence worth knowing: renaming a scoring
+    /// column without updating `orders_by.field` makes this return an unrecognized kind, and
+    /// `every_selecting_act_declares_a_known_score_kind` goes red. That is the intended direction —
+    /// the declaration is supposed to describe the deployed system.
+    pub fn score_kind(&self) -> Option<ScoreKind> {
+        let field = &self.orders_by.as_ref()?.field;
+        Some(match field.as_str() {
+            "fts_norm" => ScoreKind::FtsNorm,
+            "vec_norm" => ScoreKind::VecNorm,
+            "graph_score" => ScoreKind::GraphScore,
+            "region_score" => ScoreKind::RegionScore,
+            other => ScoreKind::Other(other.to_string()),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -347,23 +462,30 @@ mod tests {
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
+            discloses: vec![],
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,
                     DoorReach::Serves {
                         terms_unreachable: vec![BoundTerm::Offset],
+                        bounds_unreachable: vec![IdKind::Resource],
+                        filters_unapplied: vec![],
                     },
                 ),
                 (
                     Door::Api,
                     DoorReach::Serves {
                         terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
                     },
                 ),
                 (
                     Door::Mcp,
                     DoorReach::Serves {
                         terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
                     },
                 ),
             ]),
@@ -389,12 +511,43 @@ mod tests {
         let absent = serde_json::to_string(&DoorReach::Absent).unwrap();
         let full = serde_json::to_string(&DoorReach::Serves {
             terms_unreachable: vec![],
+            bounds_unreachable: vec![],
+            filters_unapplied: vec![],
         })
         .unwrap();
         assert_ne!(absent, full);
         assert_eq!(
             serde_json::from_str::<DoorReach>(&absent).unwrap(),
             DoorReach::Absent
+        );
+    }
+
+    #[test]
+    fn a_door_can_fall_short_on_a_kind_or_a_filter_and_not_only_on_a_term() {
+        // The axis `terms_unreachable` alone could not express. A door that supplies every term and
+        // still cannot express the act's `Resource` bound is NOT full reach, and before the
+        // widening it had no way to say so — `Serves { terms_unreachable: vec![] }` was the only
+        // honest-looking value available, and it claimed the opposite.
+        let partial = DoorReach::Serves {
+            terms_unreachable: vec![],
+            bounds_unreachable: vec![IdKind::Resource],
+            filters_unapplied: vec![FilterField::Edge],
+        };
+        let full = DoorReach::Serves {
+            terms_unreachable: vec![],
+            bounds_unreachable: vec![],
+            filters_unapplied: vec![],
+        };
+        assert_ne!(partial, full);
+        assert_eq!(
+            serde_json::from_str::<DoorReach>(&serde_json::to_string(&partial).unwrap()).unwrap(),
+            partial
+        );
+        // Empty shortfall lists stay off the wire, so full reach renders as the bare tag it always
+        // did — the widening is additive for a reader of the emitted contract.
+        assert_eq!(
+            serde_json::to_string(&full).unwrap(),
+            "{\"reach\":\"serves\"}"
         );
     }
 
@@ -416,12 +569,14 @@ mod tests {
 
     #[test]
     fn a_quantity_states_a_scale_that_is_not_assumed_to_be_zero_to_one() {
-        // `OtherRange` exists because `region_score` really is `[-0.6, 1.0]` — 0.4·sal_norm (a
-        // percent_rank in [0,1]) + 0.6·query_cos, where query_cos is `1 - (centroid <=> emb)` and
-        // a cosine DISTANCE spans [0,2], so the similarity spans [-1,1]. Collapsing that into
-        // `UnitInterval` would be the assumption this variant exists to refuse.
+        // `OtherRange` exists because `region_score` really is `[-0.57, 1.05]` — 0.4·sal_norm (a
+        // percent_rank in [0,1]) + 0.6·query_cos + 0.05·prior, where query_cos is
+        // `1 - (centroid <=> emb)` and a cosine DISTANCE spans [0,2], so the similarity spans
+        // [-1,1], and the anchor-kind prior is 1.0 or 0.6. Collapsing that into `UnitInterval`
+        // would be the assumption this variant exists to refuse — and note that the range does not
+        // merely dip below 0, it also exceeds 1.
         let r = QuantityScale::OtherRange {
-            bounds: "[-0.6, 1.0]".to_string(),
+            bounds: "[-0.57, 1.05]".to_string(),
         };
         assert_ne!(
             serde_json::to_string(&r).unwrap(),

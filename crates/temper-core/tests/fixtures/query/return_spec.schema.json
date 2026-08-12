@@ -1,0 +1,44 @@
+{
+  "$defs": {
+    "ResourceSection": {
+      "description": "One addable or removable part of a [`ResourceView`].\n\nReplaces `--meta-only`, which conflated two axes because the two commands differ in\nwhat they otherwise return: on `show` it means *drop the body*\n(`temper-cli/src/cli.rs:571-575` — \"Show everything except the body\"), on `list` it\nmeans *add both meta tiers* (`:537-542` — \"each row carries both the managed and open\nmeta tiers ... on top of the usual row fields\"). Once both commands answer in one\nshape, that flag has two meanings and no coherent one.\n\nNaming the parts lets a caller add or remove each independently — including\n`show --with edges --without body`, which is **unreachable today**: `meta_only`\ncarries `conflicts_with = \"edges\"` (`temper-cli/src/cli.rs:574`), so the present\ndesign needs a rule to forbid a combination that is merely useful.\n\nThe managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is\nalways present, which is what makes dropping the hoisted workflow fields lossless.\n\nThe names are **kebab-case** (`open-meta`), not the `open_meta` of the field the\nsection fills. They are values a human or agent types after `--with`, and the CLI's\nvocabulary is kebab throughout; the `snake_case` enums in [`super::resource`]\n([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's\nrename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`\nasserts both.\n`[widened — 2026-08-08]` This carried only `Serialize`/`Deserialize` while it was reached\nexclusively through query strings and `parse_accepting`. `/api/query`'s `ReturnSpec.with` is\nthe first TYPED field of this enum on a wire contract, and a boundary type that both surfaces\nspeak is supposed to carry the generation derives — so it now does. No route references it, so\n`openapi.json` is unmoved.",
+      "oneOf": [
+        {
+          "const": "body",
+          "description": "The reconstructed markdown body — [`ResourceView::content`].",
+          "type": "string"
+        },
+        {
+          "const": "open-meta",
+          "description": "The open (user-defined) frontmatter tier — [`ResourceView::open_meta`].",
+          "type": "string"
+        },
+        {
+          "const": "edges",
+          "description": "The resource's graph edges, fetched alongside the view rather than carried on it.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One stage whose rows come back, and how much of each row.",
+  "properties": {
+    "stage": {
+      "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+      "type": "string"
+    },
+    "with": {
+      "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary.",
+      "items": {
+        "$ref": "#/$defs/ResourceSection"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "stage"
+  ],
+  "title": "ReturnSpec",
+  "type": "object"
+}

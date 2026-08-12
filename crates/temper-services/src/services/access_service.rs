@@ -606,12 +606,19 @@ pub async fn promote_admin(
                         .to_string(),
                 ));
             };
-            sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
-                .fetch_optional(pool)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::BadRequest(format!("gating team '{slug}' does not exist"))
-                })?
+            // `AND is_active` per `20260703000001_team_metadata_soft_delete.sql`'s header
+            // invariant — *"membership in a soft-deleted team confers nothing anywhere"* — so a
+            // promotion cannot mint an `owner` row on a dead team. Same shape as
+            // `context_service::resolve_context_ref`'s team arm, which carries the argument in
+            // full. A soft-deleted gating team refuses as the incumbent `BadRequest`, identical to
+            // a slug naming no team at all: the settings row dangles either way.
+            sqlx::query_scalar!(
+                "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+                slug
+            )
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| ApiError::BadRequest(format!("gating team '{slug}' does not exist")))?
         }
     };
 
@@ -834,11 +841,21 @@ pub async fn create_join_request(
     let gating_slug = settings
         .gating_team_slug
         .ok_or_else(|| ApiError::Internal("System has no gating team configured".to_string()))?;
-    // Resolve team ID from slug (substrate `kb_teams` has no `is_active`).
-    let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", gating_slug,)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::Internal(format!("Gating team '{gating_slug}' not found")))?;
+    // Resolve team ID from slug. `AND is_active` per
+    // `20260703000001_team_metadata_soft_delete.sql`'s header invariant — *"membership in a
+    // soft-deleted team confers nothing anywhere"* — so a request cannot be filed against, and
+    // later approved into, a dead team. (The comment this replaced said `kb_teams` has no
+    // `is_active`; that migration gave it one.) A soft-deleted gating team refuses as the
+    // incumbent `Internal`, identical to a slug naming no team at all — both are the settings row
+    // pointing at nothing, not anything the requester did. Still a read, so it still refuses
+    // BEFORE the standing write below, which is the ordering that keeps a retry legal.
+    let team_id = sqlx::query_scalar!(
+        "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+        gating_slug,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::Internal(format!("Gating team '{gating_slug}' not found")))?;
 
     // Now the standing transition — the first write. An illegal Request (from Revoked, from
     // Approved) refuses here, before the request row exists (auth before writes). The refusal rides

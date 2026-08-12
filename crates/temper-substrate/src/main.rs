@@ -21,6 +21,26 @@ enum Cmd {
         #[arg(default_value = "telos-default")]
         lens: String,
     },
+    /// Load an access-scenario fixture's topology and generated populations into `DATABASE_URL`.
+    ///
+    /// The point is a corpus big and uneven enough that a MEASUREMENT over it is not vacuous. The
+    /// same fixture a `#[sqlx::test]` loads at declared size loads here at `--scale`× that size, so
+    /// the test-sized and measurement-sized corpora are one declaration and cannot drift.
+    ///
+    /// Not idempotent and not a migration: it appends rows and will fail on a second run against
+    /// the same database (profile handles are UNIQUE). Recreate the volume, or point it at a
+    /// scratch database.
+    SeedCorpus {
+        /// Path to an access-scenario YAML carrying a `populations:` block.
+        #[arg(
+            long,
+            default_value = "crates/temper-substrate/tests/fixtures/access-scenarios/measurement-corpus.yaml"
+        )]
+        fixture: String,
+        /// Multiplier applied to every population's declared `count`.
+        #[arg(long, default_value_t = 1)]
+        scale: u32,
+    },
 }
 
 #[tokio::main]
@@ -40,6 +60,50 @@ async fn main() -> Result<()> {
                 outcome.regions, name, lens, outcome.membership_fingerprint
             );
         }
+        Cmd::SeedCorpus { fixture, scale } => seed_corpus(&pool, &fixture, scale).await?,
+    }
+    Ok(())
+}
+
+/// Load a fixture and then REPORT what was built, per principal.
+///
+/// The report is not decoration. A corpus can be large and still unable to answer the question it
+/// was built for — if the gate passes ~every row, or the team arms are empty, or nothing carries an
+/// embedding, every measurement over it comes back green and meaningless. `measurement_corpus.rs`
+/// asserts these properties at test size; printing them here is how an operator confirms they
+/// survived scaling, rather than assuming they did.
+async fn seed_corpus(pool: &sqlx::PgPool, fixture: &str, scale: u32) -> Result<()> {
+    use temper_substrate::scenario::access::{self, model::AccessScenario};
+    use temper_substrate::scenario::bootseed;
+
+    let doc: AccessScenario = serde_yaml::from_str(&std::fs::read_to_string(fixture)?)?;
+    println!("seeding '{}' from {fixture} at scale {scale}", doc.name);
+
+    bootseed::seed_system(pool).await?;
+    let loaded = access::load_scaled(pool, &doc.world, scale).await?;
+
+    let m = access::measure_corpus(pool, &loaded).await?;
+    println!(
+        "\n{} resources registered, {} live, {} embedded chunks",
+        loaded.resources.len(),
+        m.live_resources,
+        m.embedded_chunks
+    );
+
+    println!("\nvisible fraction per principal (the gate's discriminating power):");
+    for (handle, seen, owned) in &m.per_principal {
+        let pct = if m.live_resources > 0 {
+            100.0 * *seen as f64 / m.live_resources as f64
+        } else {
+            0.0
+        };
+        // `via team/grant` is `seen - owned`: the arms that are EMPTY on the deployment whose
+        // numbers this corpus exists to replace.
+        println!(
+            "  {handle:<10} {seen:>7} / {} ({pct:5.1}%)   owned {owned:>6}, via team/grant {:>6}",
+            m.live_resources,
+            seen - owned
+        );
     }
     Ok(())
 }

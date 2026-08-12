@@ -1,5 +1,29 @@
 # `TemperQueryBuilder` — the compositional surface, v0 design
 
+> ## `[SUPERSEDED IN PART — 2026-08-08]` The wire contract now lives in `docs/api/query.openapi.yaml`
+>
+> **Ground in [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) for anything about the
+> request or response SHAPE.** It is hand-written, reviewed field by field, and it is the committed
+> target. This document remains authoritative for the *reasoning* — why a DAG and not an expression
+> language, why the executor does not transfer, why GraphQL is deferred — and for everything below
+> the wire.
+>
+> Six shapes this document (and the types it produced) got wrong, each amended there with its
+> argument:
+>
+> | this document says | the contract says |
+> |---|---|
+> | `OutcomeDeclaration.description` is required | removed — register discipline in a wire contract |
+> | `ReturnSpec.fields: [String]` subselects | `with: [open-meta]`; `body` refused, `edges` dropped |
+> | `bounds_mode` sits on the invocation | `StageInput.as`, so "input without a relation" cannot be expressed |
+> | `on_stage_refusal` is required | removed — all but one `RefusalReason` are static; `embedding_unavailable` is the single runtime refusal, and the field's two settings were observationally indistinguishable for that one case |
+> | a stage with no intention refuses | the server embeds, and a FAILED embed is the one runtime refusal |
+> | the trace keys stages by ordinal | keyed by `StageName` — the caller's own vocabulary |
+>
+> **And one defect this document's types have that is not a shape question:** `bounds_mode` is read
+> by the validator and by the compiler *nowhere*. `narrowing_for` routes every upstream set to the
+> narrowing slot, so a `seed` compiles as a `bound`. Latent only because `follow-from` is unbound.
+
 **Status:** design, approved in session 2026-08-05. Ships nothing by itself; it is the settled shape
 that phase 4 of the frame register's sequenced plan is built from.
 
@@ -102,6 +126,12 @@ one stage's quantity to order everything, which produces a partially-ordered res
 **Per-arm arrays are taken**, and the deciding reason is that it makes `/api/query`'s answer the same
 shape `/api/search` is becoming under phase 1 (`{ exact: [...], wide: [...] }`), so the two surfaces
 teach one lesson rather than two.
+
+> `[superseded — 2026-08-10]` The whole section below — `survey` producing `IdKind::Region`, the
+> region row and `region_score`, `survey` as `Indeterminate`, and the region-row projection — is
+> superseded by ratification ⟨3⟩ (2026-08-09): `survey` produces the member **resources** of its
+> salience-matched regions; regions are trace disclosure, not a returnable currency. See the
+> RATIFICATION block in [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml).
 
 ### v1 already needs two kinds, so this is not future-proofing
 

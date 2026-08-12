@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO kb_teams (slug, name) VALUES ($1,$2) RETURNING id",
+  "query": "INSERT INTO kb_teams (slug, name) VALUES ($1,$2) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       false
     ]
   },
-  "hash": "45281c7e78b3fce445abb12f34fb4826821f01798c421c0460daa3b3e1cd65b2"
+  "hash": "8c6b6eaac41b5cad24f3ccbe39b486b510c872be9b7a055be34acfc814ce0920"
 }

@@ -8,6 +8,7 @@ pub mod composition;
 pub mod disposition;
 pub mod envelope;
 pub mod filter;
+pub mod hits;
 pub mod id_set;
 pub mod registry;
 pub mod scalars;
@@ -19,21 +20,25 @@ pub mod validate;
 // re-exports it from `graph` — and a second public path to one type invites exactly the ambiguity
 // that re-using it instead of restating it was meant to remove.
 pub use act::{
-    ActDeclaration, ActName, ActQuantity, BuildState, Door, DoorReach, QuantityScale,
+    ActDeclaration, ActName, ActQuantity, BuildState, Disclosure, Door, DoorReach, QuantityScale,
     VisibilityProfile,
 };
 pub use composition::{
     CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
 };
-pub use disposition::{ActRefusal, RefusalDisposition, RefusalReason, StageDisposition};
-pub use envelope::{ActInvocation, ActResult, NarrowedBy};
+pub use disposition::{ActRefusal, RefusalReason, StageDisposition};
+pub use envelope::{ActInvocation, NarrowedBy, QueryResponse, StageResult};
 pub use filter::{
     EdgeFilter, FacetPredicate, FilterField, PropertyOp, PropertyPredicate, PropertySubject,
     ResourceFilter,
 };
+pub use hits::{MatchLocation, RegionHit, ResourceHit, ScoreKind, Scoring};
 pub use id_set::{IdKind, IdProvenance, IdSet};
-pub use registry::{declaration, search_family};
-pub use scalars::{BoundTerm, BoundsMode, Extent, MetaDetail};
-pub use stage::{StageInput, StageName, StageOutput};
-pub use trace::{BoundsSource, CompositionTrace, MetaTruncated, StageTrace};
-pub use validate::{validate, PlanRefusal, ValidatedComposition};
+pub use registry::{applied_terms, declaration, search_family};
+pub use scalars::{BoundTerm, Extent};
+pub use stage::{ProducedVariant, StageInput, StageName, StageOutput, StageRelation};
+pub use trace::{CompositionTrace, InputSource, StageTrace};
+pub use validate::{
+    emitted_fragment_for, validate, PlanRefusal, ValidatedComposition, ValidationOutcome,
+    WillReturn,
+};

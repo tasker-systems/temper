@@ -43,21 +43,6 @@
       ],
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
-    "BoundsMode": {
-      "description": "How a receiving act consumes the `IdSet` it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.",
-      "oneOf": [
-        {
-          "const": "bound",
-          "description": "Narrow to within this set.",
-          "type": "string"
-        },
-        {
-          "const": "seed",
-          "description": "Grow from this set.",
-          "type": "string"
-        }
-      ]
-    },
     "EdgeFilter": {
       "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.",
       "properties": {
@@ -266,7 +251,7 @@
       "description": "What a [`PropertyPredicate`] addresses.\n\nOPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a\nclosed set here would be a claim the schema does not make. This is the OPPOSITE call from\n[`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its\nclosedness is a *fact about the database*; `owner_table` mirrors nothing."
     },
     "ResourceFilter": {
-      "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\nAn unknown value on a closed vocabulary (`doc_type`, `stage`, `status`) is a REFUSAL\n(`RefusalReason::UnknownFilterValue`), never a confident empty page — the audit found four\nfilters that accept nonsense and return one.",
+      "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized\n[`PropertySubject`] — and its own doc carries the ruling.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
       "properties": {
         "doc_type": {
           "description": "`kb_properties` where `property_key = 'doc_type'`.",
@@ -317,11 +302,14 @@
       "type": "object"
     },
     "StageInput": {
-      "description": "Where a stage's set comes from: the caller's own id set, or an upstream stage's output.\n\nThis is the field that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.",
+      "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage.",
       "oneOf": [
         {
           "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
           "properties": {
+            "as": {
+              "$ref": "#/$defs/StageRelation"
+            },
             "from": {
               "const": "caller",
               "type": "string"
@@ -332,6 +320,7 @@
           },
           "required": [
             "from",
+            "as",
             "ids"
           ],
           "type": "object"
@@ -339,6 +328,9 @@
         {
           "description": "The `produced` set of an earlier stage, named rather than copied.",
           "properties": {
+            "as": {
+              "$ref": "#/$defs/StageRelation"
+            },
             "from": {
               "const": "upstream",
               "type": "string"
@@ -350,9 +342,25 @@
           },
           "required": [
             "from",
+            "as",
             "stage"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "StageRelation": {
+      "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+      "oneOf": [
+        {
+          "const": "bound",
+          "description": "Narrow to within this set.",
+          "type": "string"
+        },
+        {
+          "const": "seed",
+          "description": "Grow from this set.",
+          "type": "string"
         }
       ]
     }
@@ -362,17 +370,6 @@
   "properties": {
     "act": {
       "$ref": "#/$defs/ActName"
-    },
-    "bounds_mode": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/BoundsMode"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "How this act consumes its `input` set. Required whenever `input` is present."
     },
     "edge_filter": {
       "anyOf": [
@@ -393,7 +390,7 @@
           "type": "null"
         }
       ],
-      "description": "Where this stage's set comes from: caller-supplied ids or an upstream stage. Absent for a\nroot act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`]."
+      "description": "Where this stage's set comes from, and what this act does with it: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose\n\"required whenever `input` is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid."
     },
     "name": {
       "description": "This node's name, referenced by downstream stages and by `returns`.",

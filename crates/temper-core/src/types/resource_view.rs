@@ -58,6 +58,15 @@ use crate::types::ids::{ContextId, ProfileId, ResourceId};
 // exist on the later crate's exported set; it is not a property anything asserts, so it can be
 // removed by an unrelated refactor with no gate saying so. A file only temper-core writes cannot
 // be clobbered, whatever temper-workflow does or stops doing.
+//
+// `[corrected — 2026-08-08]` THAT LAST SENTENCE IS FALSE AS STATED, and `ResourceSection` below is
+// the counterexample. "Only temper-core writes it" is about who declares `export_to`; what
+// actually decides is REACHABILITY. ts-rs writes a dependency's file with only the types reachable
+// from the graph being exported, so temper-workflow — which reaches `ResourceView` — rewrites this
+// file whole, dropping any sibling it cannot see. `ResourceSection` was silently deleted on every
+// full regen until it was moved to a file of its own. The conclusion the paragraph reaches is
+// still right (do not move `ResourceView` back into `resource.ts`); the reason given for safety is
+// not, and a second type sharing this file is only safe if every later crate reaches it too.
 // A `//` comment, not a doc comment: utoipa renders doc comments into `openapi.json`, and a
 // build-system note is not part of the wire contract.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -219,7 +228,38 @@ impl ResourceView {
 /// ([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's
 /// rename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`
 /// asserts both.
+/// `[widened — 2026-08-08]` This carried only `Serialize`/`Deserialize` while it was reached
+/// exclusively through query strings and `parse_accepting`. `/api/query`'s `ReturnSpec.with` is
+/// the first TYPED field of this enum on a wire contract, and a boundary type that both surfaces
+/// speak is supposed to carry the generation derives — so it now does. No route references it, so
+/// `openapi.json` is unmoved.
+//
+// IT GETS ITS OWN FILE, and the reason is a clobber that was observed rather than predicted.
+//
+// Written as `export_to = "resource_view.ts"` — the obvious choice, beside `ResourceView` — this
+// enum SILENTLY DISAPPEARED from the generated tree on every full `cargo make generate-ts-types`,
+// while appearing correctly when temper-core's export test was run alone. The task runs four
+// crates in sequence, and ts-rs writes a dependency's file with only the types reachable from the
+// graph being exported. temper-workflow reaches `ResourceView` and not `ResourceSection`, so its
+// step rewrote `resource_view.ts` without it — leaving `query.ts` importing a name that no longer
+// existed.
+//
+// The comment above `ResourceView` says "a file only temper-core writes cannot be clobbered,
+// whatever temper-workflow does or stops doing." That reasons about who DECLARES `export_to`, and
+// the real mechanism is reachability: a later crate that reaches one type in a shared file
+// rewrites the whole file. This enum is that comment's counterexample, so it is annotated there
+// too rather than left to be rediscovered.
+//
+// A single-type file is immune — nothing downstream reaches this enum, so nothing rewrites it —
+// and it matches what the leaf id newtypes (`CogmapId.ts`, `BlockId.ts`) already do.
+//
+// A `//` comment, not a doc comment: utoipa renders doc comments into `openapi.json`, and a
+// build-system note is not part of the wire contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "ResourceSection.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceSection {
     /// The reconstructed markdown body — [`ResourceView::content`].
