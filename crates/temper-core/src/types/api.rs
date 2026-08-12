@@ -79,6 +79,13 @@ pub struct SearchParams {
     /// clients send it and a one-element set is still honoured.
     #[serde(default)]
     pub cogmap_ids: Option<Vec<Uuid>>,
+    /// Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than
+    /// replacing them — the fragments apply bound and anchor conjunctively.
+    ///
+    /// Reachable from every door: the MCP `search` tool takes this whole struct as its
+    /// `Parameters`, so the field arrives there without a tool change.
+    #[serde(default)]
+    pub bound_ids: Option<Vec<Uuid>>,
 }
 
 impl Default for SearchParams {
@@ -93,6 +100,7 @@ impl Default for SearchParams {
             offset: None,
             cogmap_id: None,
             cogmap_ids: None,
+            bound_ids: None,
         }
     }
 }

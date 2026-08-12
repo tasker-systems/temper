@@ -997,6 +997,10 @@ pub async fn search_select(
         .saturating_add(1);
     let arm = readback::ArmQuery {
         principal: profile_id,
+        // `None` is UNBOUNDED, not "bounded to nothing" — the wire field's own `None`/`Some(&[])`
+        // distinction rides straight through: an empty set from the caller arrives as
+        // `Some(&[])` (zero rows), never collapsed into `None` (unbounded).
+        bound_ids: params.bound_ids.as_deref(),
         anchor,
         doc_type: params.doc_type.as_deref(),
         limit: Some(fetch),
@@ -1080,7 +1084,9 @@ pub async fn search_select(
 /// this phase keeps, because it governs ADMISSION (how much the index is asked for) rather than
 /// ranking (how what came back is ordered). Nothing weighs it against anything.
 ///
-/// **`hnsw.ef_search` is pinned on `search_wide` at or above this value.** Raising it past the pin
+/// **`hnsw.ef_search` is pinned on `query_find_wide` at or above this value** — the twin
+/// `readback::search_wide` calls since `/api/search` gained a resource bound; proconfig binds to a
+/// signature, so the pin on the incumbent `search_wide` no longer covers this path. Raising it past the pin
 /// silently truncates the draw — the pin's whole reason for existing. See
 /// `search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for`.
 const VECTOR_K: i32 = 100;

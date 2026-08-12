@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Request body for POST /api/search.
   class SearchParams < ApiModelBase
+    # Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change.
+    attr_accessor :bound_ids
+
     # Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.  Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise a set `cogmap_id` is treated as a one-element set.
     attr_accessor :cogmap_id
 
@@ -46,6 +49,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'bound_ids' => :'bound_ids',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_ids' => :'cogmap_ids',
         :'context_ref' => :'context_ref',
@@ -71,6 +75,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'bound_ids' => :'Array<String>',
         :'cogmap_id' => :'String',
         :'cogmap_ids' => :'Array<String>',
         :'context_ref' => :'String',
@@ -86,6 +91,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'bound_ids',
         :'cogmap_id',
         :'cogmap_ids',
         :'context_ref',
@@ -112,6 +118,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'bound_ids')
+        if (value = attributes[:'bound_ids']).is_a?(Array)
+          self.bound_ids = value
+        end
+      end
 
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
@@ -174,6 +186,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          bound_ids == o.bound_ids &&
           cogmap_id == o.cogmap_id &&
           cogmap_ids == o.cogmap_ids &&
           context_ref == o.context_ref &&
@@ -194,7 +207,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, cogmap_ids, context_ref, doc_type, embedding, limit, offset, query, search_config].hash
+      [bound_ids, cogmap_id, cogmap_ids, context_ref, doc_type, embedding, limit, offset, query, search_config].hash
     end
 
     # Builds the object from hash

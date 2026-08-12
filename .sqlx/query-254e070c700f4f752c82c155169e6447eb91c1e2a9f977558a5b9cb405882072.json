@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_id AS \"resource_id!\", fts_norm AS \"fts_norm!\"\n             FROM search_exact($1, $2, $3, $4, $5, $6, $7)",
+  "query": "SELECT resource_id AS \"resource_id!\", fts_norm AS \"fts_norm!\"\n             FROM query_find_exact($1, $2, $3, $4, $5, $6, $7, $8)",
   "describe": {
     "columns": [
       {
@@ -18,6 +18,7 @@
       "Left": [
         "Uuid",
         "Text",
+        "UuidArray",
         "Varchar",
         "Uuid",
         "Text",
@@ -30,5 +31,5 @@
       null
     ]
   },
-  "hash": "57cdc3240d9813eb13aa74378ebb9e6c17ef9b332bd7f00758bdc59015ca6710"
+  "hash": "254e070c700f4f752c82c155169e6447eb91c1e2a9f977558a5b9cb405882072"
 }

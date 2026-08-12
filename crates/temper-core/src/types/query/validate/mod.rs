@@ -37,16 +37,21 @@ use super::stage::{ProducedVariant, StageName};
 /// An act whose `served_by` is absent here is declared and built but not reachable from THIS
 /// surface — refused as [`RefusalReason::NotSeparablyReachable`], never as `NotImplemented`.
 ///
-/// A MAP rather than a set since beat D, and the two names differ for the find acts on purpose:
-/// `served_by` must keep naming what `/api/search` calls, because that is the mechanic the
-/// declaration describes, while `/api/query` emits the fragment that accepts `p_bound_ids uuid[]`.
-/// They remain ONE BODY — `search_exact` delegates to `query_find_exact`, which delegates to
-/// `__temper_ungated_find_exact` — but they are three signatures, and the declaration describes the
-/// door rather than the compiler.
+/// A MAP rather than a set since beat D, and the key and value still differ for the find acts —
+/// but `[corrected — 2026-08-12]` NOT for the reason this comment used to give. It said `served_by`
+/// "must keep naming what `/api/search` calls … while `/api/query` emits the fragment that accepts
+/// `p_bound_ids uuid[]`", which put the gated twins on one side of the split and the door on the
+/// other. That distinction is gone: `/api/search` gained a resource bound, its read path was
+/// repointed, and the twin is now exactly what the deployed door calls — so `served_by` names
+/// `query_find_exact` and this map is keyed on it.
 ///
-/// The emitted names are the UNGATED cores (`20260808000030`), not the gated twins. `/api/query`
-/// hoists the visibility relation into one CTE and hands it to every stage, which is only possible
-/// against a fragment that does not gate internally; the twins remain what `/api/search` reaches.
+/// **What the split IS, and it is the durable one: GATED entry point → UNGATED core.** The values
+/// are the ungated cores (`20260808000030`), never the twins. `/api/query` hoists the visibility
+/// relation into ONE CTE and hands it to every stage, which is only possible against a fragment
+/// that does not gate internally — a twin per stage would recompute `resources_visible_to` N times,
+/// since the planner does not dedupe it across call sites. `/api/search` runs one stage and so
+/// enters at the gated twin. Still ONE BODY per arm: `search_exact` → `query_find_exact` →
+/// `__temper_ungated_find_exact`, three signatures over one implementation.
 /// A caller of this map must therefore already hold an RBAC verdict — in this crate the map only
 /// decides reachability, and the sole emitter of these names is
 /// `temper_substrate::readback::query_plan::emit_ungated_core_call`, which supplies that verdict
@@ -73,8 +78,8 @@ use super::stage::{ProducedVariant, StageName};
 /// (`p_depth`/`p_gamma` for `search_graph_expand`, `p_lens` for `wayfind_region_scores`). The
 /// edge-provenance spike is what unblocks `follow-from`; `survey` waits on a lens slot.
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
-    ("search_exact", "__temper_ungated_find_exact"),
-    ("search_wide", "__temper_ungated_find_wide"),
+    ("query_find_exact", "__temper_ungated_find_exact"),
+    ("query_find_wide", "__temper_ungated_find_wide"),
 ];
 
 /// The fragment the compiler emits for a declared mechanic, or `None` if this surface cannot reach

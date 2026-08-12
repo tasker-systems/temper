@@ -11857,6 +11857,17 @@
         "type": "object",
         "description": "Request body for POST /api/search.",
         "properties": {
+          "bound_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than\nreplacing them — the fragments apply bound and anchor conjunctively.\n\nReachable from every door: the MCP `search` tool takes this whole struct as its\n`Parameters`, so the field arrives there without a tool change."
+          },
           "cogmap_id": {
             "type": [
               "string",

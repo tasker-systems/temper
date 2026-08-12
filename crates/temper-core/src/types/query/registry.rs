@@ -69,10 +69,12 @@ fn provisionally_unexpressed() -> BuildState {
 /// a known-false `Serves` until `/api/query` arrives is the defect this whole field exists against.
 /// They restore to `Serves` when that door lands, which is additive.
 ///
-/// `bounds_unreachable` is the same at all three doors and so is passed once. That is not a
-/// simplification — the shortfall genuinely is door-independent: the shipped arms hard-bind `NULL`
-/// for bound-ids, so no caller anywhere can supply a resource bound. A door-varying shortfall would
-/// need the per-door literal these acts no longer share.
+/// `bounds_unreachable` is passed once for the same reason `cli_unreachable` is a parameter at all:
+/// it is the seam a shortfall on this axis would land in without a signature change, kept even
+/// though every call site now passes `vec![]`. `/api/search` gaining `bound_ids`, the MCP `search`
+/// tool inheriting it for free through the shared `SearchParams`, and `temper search` gaining
+/// repeatable `--within` closed the axis at all three doors at once — it is empty because every
+/// door can supply what the two bounded acts accept, not because the axis is door-independent.
 ///
 /// The MCP tool takes the whole [`crate::types::api::SearchParams`] as its `Parameters`, so every
 /// wire field is reachable from it — worth stating because grepping the `temper-mcp` crate for a
@@ -132,7 +134,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::FindExact,
             asker_holds: "I can quote the exact words".to_string(),
-            served_by: Some("search_exact".to_string()),
+            served_by: Some("query_find_exact".to_string()),
             build_state: BuildState::Served,
             // Where the bound is applied cannot change WHICH resources come back — only how many
             // rows the scan touches.
@@ -162,21 +164,21 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // from the vocabulary with its field — ratification ⟨6⟩/9d.)
             discloses: vec![],
             // The CLI's `search` command now has `--offset` beside `--context`, `--cogmap`,
-            // `--doc-type`, `--limit` and `--text-only` — so this act's term axis is fully
-            // reachable from every door; no term it admits lacks a flag anywhere. `Served`,
-            // reachable from every door on the TERM axis, and still door-partial on the BOUNDS
-            // axis below — the case a `BuildState` variant could not have carried, since
-            // door-partiality is orthogonal to build state and needs only one sub-axis to fail.
+            // `--doc-type`, `--limit`, `--text-only` and `--within` — so this act's term axis is
+            // fully reachable from every door, and the BOUNDS axis below no longer holds it back
+            // either: `Served`, reachable from every door on both axes. A `BuildState` variant
+            // could never have carried the door-partial case this axis used to record —
+            // door-partiality is orthogonal to build state — which is the whole reason the axis
+            // exists, even now that it has closed.
             //
-            // `bounds_unreachable` at ALL THREE doors is the second half of that case, and the
-            // sharper one: this act declares `accepts_bounds: [Resource, Context, Cogmap]` and NO
-            // door can supply the first. `SearchParams` carries `context_ref`, `cogmap_id` and
-            // `cogmap_ids` — so `Context` and `Cogmap` really are reachable — and carries no
-            // resource-id slot at all, while the shipped arms hard-bind `NULL` for bound-ids. The
-            // act's acceptance is true of the FRAGMENT (`p_bound_ids uuid[]` is right there) and
-            // unreachable from every caller, which is exactly the gap `Serves {}` could not state
-            // before this axis existed.
-            door_coverage: unified_doors(vec![], vec![IdKind::Resource]),
+            // `bounds_unreachable: []` at ALL THREE doors is that closing. This act declares
+            // `accepts_bounds: [Resource, Context, Cogmap]`; `Context` and `Cogmap` were always
+            // reachable through `context_ref` / `cogmap_id` / `cogmap_ids`. `Resource` was the
+            // gap: `SearchParams` gained `bound_ids`, the MCP tool inherits it because it takes
+            // the whole `SearchParams` as its `Parameters`, and `temper search` gained repeatable
+            // `--within` — so every door now reaches the fragment's `p_bound_ids uuid[]`, and the
+            // act's acceptance is no longer aspirational anywhere.
+            door_coverage: unified_doors(vec![], vec![]),
             orders_by: Some(ActQuantity {
                 field: "fts_norm".to_string(),
                 means: "postgres ts_rank of the query against the resource's own search vector — \
@@ -192,7 +194,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::FindAboutAnywhere,
             asker_holds: "a concept, no exact words; search everything I can see".to_string(),
-            served_by: Some("search_wide".to_string()),
+            served_by: Some("query_find_wide".to_string()),
             build_state: BuildState::Served,
             // A bound would make this find-about-within. Definitional exclusion, not a hole.
             accepts_bounds: vec![],
@@ -208,8 +210,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // it collapsing to a per-resource score; redeclaring is additive when the argmin ships.
             discloses: vec![],
             // No `bounds_unreachable`, and it is the empty list that carries the statement: this
-            // act accepts NO bounds by definition, so there is no kind for a door to fall short on.
-            // The find acts either side of it both declare `Resource` unreachable.
+            // act accepts NO bounds by definition, so there is no kind for a door to fall short on
+            // — a different reason than the find acts either side of it, which now also declare an
+            // empty list, but because every door CAN supply the bound they accept.
             door_coverage: unified_doors(vec![], vec![]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
@@ -218,7 +221,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::FindAboutWithin,
             asker_holds: "a concept, plus a set to search inside".to_string(),
-            served_by: Some("search_wide".to_string()),
+            served_by: Some("query_find_wide".to_string()),
             build_state: BuildState::Served,
             accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
@@ -232,10 +235,10 @@ pub fn search_family() -> Vec<ActDeclaration> {
             discloses: vec![],
             // The bound is the whole point of this act — "a concept, plus a set to search inside" —
             // and `Resource`, the one kind a caller most obviously holds a set of (40 hits from a
-            // previous search), is the kind no door can supply. `Context` and `Cogmap` reach it
-            // through `context_ref` / `cogmap_id`. Same shortfall as `find-exact`, and the same
-            // cause: no door's params carry a resource-id list.
-            door_coverage: unified_doors(vec![], vec![IdKind::Resource]),
+            // previous search), is now a kind every door can supply. `Context` and `Cogmap` reached
+            // it all along through `context_ref` / `cogmap_id`. Same fix as `find-exact`, and the
+            // same cause: `SearchParams.bound_ids` plus repeatable `temper search --within`.
+            door_coverage: unified_doors(vec![], vec![]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2,
@@ -573,8 +576,12 @@ mod tests {
         // same safe direction. It is recorded here because the set has now moved twice.
         //
         // Phase 1 steps 2-3 gave the three `find` acts doors of their own: `/api/search` invokes
-        // `search_exact` and `search_wide` directly, neither fused into anything. `substantiate`
-        // keeps the door it has had since Set 5 (`GET /api/resources/{id}/evidence`).
+        // their mechanic directly, neither fused into anything. `[re-cited — 2026-08-12]` That
+        // mechanic is now `query_find_exact` / `query_find_wide`, not `search_exact` /
+        // `search_wide` — the read path was repointed at the bound-accepting twins when
+        // `/api/search` gained a resource bound, and `served_by` above followed it. The CLAIM is
+        // unchanged (a door of its own, nothing fused); only the function it names moved.
+        // `substantiate` keeps the door it has had since Set 5 (`GET /api/resources/{id}/evidence`).
         //
         // Kept as an EXACT set: an act acquiring or losing a door must be a deliberate edit here,
         // and `build_state` moving is BREAKING under the semver table (design §6.2). Order follows
@@ -659,19 +666,29 @@ mod tests {
         }
     }
 
-    /// No door supplies a resource bound to the acts that accept one, and that is declared.
+    /// Every door can now supply the resource bound the find acts accept, and that is declared.
     ///
     /// The shortfall `terms_unreachable` alone could not express, and the reason the axis exists.
     /// `find-exact` and `find-about-within` both declare `accepts_bounds: [Resource, Context,
-    /// Cogmap]` — true of the FRAGMENTS, which take `p_bound_ids uuid[]` — while `SearchParams`
-    /// carries `context_ref`, `cogmap_id` and `cogmap_ids` and no resource-id slot at all. So the
-    /// one kind a caller most obviously holds a set of is the one no door can hand over.
+    /// Cogmap]`. `Context` and `Cogmap` were always reachable through `context_ref` / `cogmap_id` /
+    /// `cogmap_ids`; `Resource` — the one kind a caller most obviously holds a set of — was not,
+    /// until `/api/search` gained `bound_ids`, the MCP `search` tool inherited it for free through
+    /// the shared `SearchParams`, and `temper search` gained repeatable `--within`. All three doors
+    /// closed at once rather than door by door.
+    ///
+    /// `find-about-anywhere` still declares an empty list for the OTHER reason: it accepts no
+    /// bounds at all. An empty list there is "nothing to fall short on", a different statement from
+    /// an empty list here meaning "every door can supply what this act accepts" — which is why the
+    /// two cases are asserted separately below rather than folded into one loop.
     ///
     /// Asserted per door rather than once, because the claim is per door: an act reachable
-    /// everywhere and short in the same way everywhere is a different (and worse) statement than
-    /// one door lagging.
+    /// everywhere and full in the same way everywhere is a different statement than one door
+    /// lagging.
     #[test]
-    fn no_door_can_supply_the_resource_bound_the_find_acts_accept() {
+    fn every_door_can_now_supply_the_resource_bound_the_find_acts_accept() {
+        // Counted rather than merely non-empty: this branch has twice shipped a loop that iterated
+        // nothing and stayed green. Two acts times three doors, or the gate has silently emptied.
+        let mut doors_checked = 0usize;
         for name in [ActName::FindExact, ActName::FindAboutWithin] {
             let a = declaration(&name).unwrap();
             assert!(a.accepts_bounds.contains(&IdKind::Resource));
@@ -682,13 +699,20 @@ mod tests {
                 else {
                     panic!("{name:?} must serve {door:?}");
                 };
-                assert_eq!(
-                    bounds_unreachable,
-                    &vec![IdKind::Resource],
-                    "{name:?} at {door:?} must declare the resource bound unreachable"
+                assert!(
+                    bounds_unreachable.is_empty(),
+                    "{name:?} at {door:?} still declares {bounds_unreachable:?} unreachable"
                 );
+                doors_checked += 1;
             }
         }
+        assert_eq!(
+            doors_checked,
+            2 * Door::ALL.len(),
+            "must check both bounded find acts at every door — a lower count means this loop is \
+             iterating less than it claims to"
+        );
+
         // And the act that accepts no bounds declares no shortfall — an empty list here is the
         // statement that there is nothing to fall short on, not a door that was forgotten.
         let anywhere = declaration(&ActName::FindAboutAnywhere).unwrap();
@@ -757,7 +781,7 @@ mod tests {
             assert_eq!(a.build_state, BuildState::Served);
             // Read the term axis alone: `..` keeps this from silently becoming a second
             // assertion about the bound axis, which
-            // `no_door_can_supply_the_resource_bound_the_find_acts_accept` owns.
+            // `every_door_can_now_supply_the_resource_bound_the_find_acts_accept` owns.
             let Some(DoorReach::Serves {
                 terms_unreachable, ..
             }) = a.door_coverage.get(&Door::Cli)

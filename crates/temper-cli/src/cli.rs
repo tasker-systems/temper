@@ -304,6 +304,10 @@ pub enum Commands {
         /// independently, because their quantities are incommensurable.
         #[arg(long)]
         offset: Option<i64>,
+        /// Narrow to specific resources, by ref (UUID or decorated `slug-<uuid>`). Repeatable.
+        /// Composes with --context / --cogmap rather than replacing them.
+        #[arg(long = "within")]
+        within: Vec<String>,
         /// Use text-only search (no local embedding needed). The wide arm has no signal to run
         /// on without an embedding and will say so rather than returning an empty list.
         #[arg(long)]

@@ -4607,6 +4607,14 @@ export interface components {
         /** @description Request body for POST /api/search. */
         SearchParams: {
             /**
+             * @description Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than
+             *     replacing them — the fragments apply bound and anchor conjunctively.
+             *
+             *     Reachable from every door: the MCP `search` tool takes this whole struct as its
+             *     `Parameters`, so the field arrives there without a tool change.
+             */
+            bound_ids?: string[] | null;
+            /**
              * Format: uuid
              * @description Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
              *     Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
