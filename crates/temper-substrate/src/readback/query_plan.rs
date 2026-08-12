@@ -6,11 +6,15 @@
 //! only identifiers the builder ever emits are stage names, each already proven a safe SQL
 //! identifier by [`temper_core::types::query::StageName`]'s parse-only constructor (beat A).
 //!
-//! The three `find` acts emit real fragments. `follow-from` and `survey` still emit a PLACEHOLDER
-//! referencing a function (`__temper_unbound_act`) that does not exist in the schema, so a compiled
-//! statement containing one cannot silently return wrong rows if executed — Postgres errors loudly.
-//! Their fragments take arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), which is what
-//! binding them waits on.
+//! The three `find` acts emit real fragments, and they are now the ONLY acts that reach this
+//! builder. `follow-from` and `survey` used to emit a PLACEHOLDER referencing a function
+//! (`__temper_unbound_act`) that does not exist in the schema — loud rather than silently wrong if
+//! executed, but a failure at execution all the same. They have since left `CALLABLE_FRAGMENTS`, so
+//! `validate` refuses them and no [`ValidatedComposition`] can carry one. Their fragments take
+//! arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), which is what wiring them waits on.
+//!
+//! The placeholder arm survives regardless — unreachable through `validate`, and emitted anyway, as
+//! the drift guard for an act that ever declares itself into `search_family()` without a fragment.
 //!
 //! [`query_exec`](super::query_exec) runs a [`CompiledQuery`] and hands back its two row classes.
 //! What does NOT live in either module is the assembly of a `QueryResponse` — deciding a stage's
@@ -77,9 +81,10 @@ pub enum QueryBind {
     Embedding(Vec<f32>),
 }
 
-/// The placeholder function name every act CTE body targets until Task 10. It intentionally does
-/// NOT exist in the schema, so an accidentally-executed skeleton fails loudly rather than returning
-/// a silently-empty or silently-wrong result.
+/// The placeholder function name the fallback act body targets — not any act body: the three find
+/// acts emit real ungated cores, and no other act reaches this builder. It intentionally does NOT
+/// exist in the schema, so an accidentally-executed skeleton fails loudly rather than returning a
+/// silently-empty or silently-wrong result.
 const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 
 /// The ungated cores this builder emits for the find acts. Named here as constants so the match in
@@ -377,9 +382,28 @@ fn emit_act_body(
                  FROM {call}"
             )))
         }
-        // `follow-from` and `survey` reach here: their mechanics are declared reachable, but their
-        // fragments take arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), so this
-        // builder still emits the deliberately-absent placeholder rather than guessing a value.
+        // **Unreachable through `validate`, and emitted anyway.** `follow-from` and `survey` used to
+        // reach here; they left `CALLABLE_FRAGMENTS` because their fragments take arguments no slot
+        // supplies (`p_depth`/`p_gamma`, `p_lens`), and `validate` now refuses them with
+        // `NotSeparablyReachable` before a `ValidatedComposition` can exist. Every act this arm
+        // could still catch is one that declared itself into `search_family()` with a `served_by`
+        // this builder has no case for — an internal inconsistency, not a caller error. It emits a
+        // function that deliberately does not exist so Postgres errors loudly, rather than guessing
+        // a value and returning plausible rows.
+        //
+        // **NOTHING TESTS THIS ARM, and that is a second fact rather than the same one restated.**
+        // `[declared — 2026-08-12]` "Unreachable through `validate`" and "no test exercises it" are
+        // independent, and only the first was stated. The deleted
+        // `the_unmodelled_acts_still_emit_the_absent_placeholder` used to compile a `follow-from`
+        // plan straight through here and assert the emitted SQL carried `__temper_unbound_act`; its
+        // replacement in `query_plan_compile.rs`,
+        // `the_unmodelled_acts_are_refused_before_the_compiler_ever_sees_them`, calls `validate` and
+        // never `compile` — correct for what it now asserts, and it leaves this arm with ZERO
+        // exercising tests. So the drift guard is unwitnessed: an eighth act reaching here would
+        // fault at Postgres exactly as designed, and no test in this workspace would have said so
+        // first. Reaching it deliberately would take a `ValidatedComposition` built around
+        // `validate`, which is the parse-don't-validate seam working as intended — hence declared,
+        // not covered.
         _ => Ok(emitted(format!(
             "  -- act: {act} (placeholder body; this builder emits no fragment for it yet)\n  \
              SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({})",
@@ -508,10 +532,12 @@ impl StageNarrowing {
 /// narrowing slot unconditionally, on the strength of a comment asserting an upstream set "is
 /// always the array slot". So a seed compiled as a bound, and `follow-from` — the only seeding act
 /// — would have returned only what was already in its seed set: a traversal that looks like it
-/// worked and can never reach a neighbour. It was latent only because `follow-from` still emits
-/// the placeholder, and it would have fired the moment that fragment was bound. The relation is
-/// now a field of [`StageInput`] rather than an `Option` beside it, so there is a value to read
-/// instead of one to invent.
+/// worked and can never reach a neighbour. It was latent because `follow-from` emitted the
+/// placeholder, and is latent still for a different reason — `validate` refuses the only act that
+/// accepts a seed, so no seed reaches this function through `compile`. It fires the moment
+/// `search_graph_expand` is both reachable and bound. The relation is now a field of
+/// [`StageInput`] rather than an `Option` beside it, so there is a value to read instead of one to
+/// invent.
 ///
 /// **The kind** decides array-versus-anchor. `IdSet.kind` was previously ignored too and every set
 /// went to `p_bound_ids`: `find-exact` and `find-about-within` declare
@@ -850,11 +876,14 @@ mod tests {
     /// that looks like it worked and can never reach a neighbour.
     ///
     /// Tested here rather than through `compile` deliberately, and the reason is a limit worth
-    /// stating: `follow-from` still emits `__temper_unbound_act`, which has one slot, so the two
-    /// relations produce IDENTICAL emitted SQL today. An end-to-end assertion would pass against
-    /// the broken code. **This is the only level at which the fix is currently observable**, and
-    /// there is no witness at the SQL level until `search_graph_expand` is bound to its
-    /// `p_seed_ids` parameter — a named remainder, not a covered case.
+    /// stating — one the reachability flip widened rather than closed. It used to be that
+    /// `follow-from` emitted `__temper_unbound_act`, which has one slot, so both relations produced
+    /// IDENTICAL emitted SQL and an end-to-end assertion would pass against the broken code. Now
+    /// `follow-from` is the only act declaring `accepts_seeds` at all and `validate` refuses it, so
+    /// **no composition reaching `compile` can carry a seed** and there is no emitted SQL to assert
+    /// over in either direction. **This is the only level at which the fix is observable**, and
+    /// there is no witness at the SQL level until `search_graph_expand` is reachable and bound to
+    /// its `p_seed_ids` parameter — a named remainder, not a covered case.
     #[test]
     fn a_seed_routes_to_the_seed_slot_and_a_bound_to_the_bound_slot() {
         let mut binds = vec![];

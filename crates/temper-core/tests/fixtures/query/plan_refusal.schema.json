@@ -54,7 +54,7 @@
         },
         {
           "const": "not_separably_reachable",
-          "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D is the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler does not emit.\n`NotImplemented` would be false about them (they are served); this variant is the honest one.\nBeat D deletes the refusal for them by giving the compiler their fragments. Fusion is not the\nreason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts\nthis surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.",
+          "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D was the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit.\n`NotImplemented` would have been false about them (they are served); this variant is the\nhonest one. Beat D deleted the refusal for them by giving the compiler their fragments.\n\nThe live instances now are `substantiate`, `follow-from` and `survey` — the first `Served`,\nthe other two `Fused`, all three with mechanics the compiler emits no fragment for. **The\nrule keys on the callable-fragment set and never on `build_state`, and `substantiate` is\nwhat holds that**: it is `Served` and unreachable, so a rule reading the discriminant would\nadmit an act this surface cannot emit. The `Fused` half of the argument no longer has a\nwitness, since all three are unreachable and the two `Fused` declarations are exactly two of\nthem — so the discriminant happens to agree about that pair.",
           "type": "string"
         },
         {
@@ -63,7 +63,67 @@
           "type": "string"
         },
         {
-          "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That is false**, and was when it was\nwritten: `validate` constructs it for twelve topology and vocabulary refusals (`\"cycle\"`,\n`\"dangling-reference\"`, `\"duplicate-stage-name\"`, `\"combinator-arity\"`,\n`\"unknown-return-stage\"`, `\"duplicate-return-stage\"`, `\"combinator-not-returnable\"`,\n`\"unknown-act\"`, `\"empty-property-key\"`, `\"empty-contains\"`, `\"no-stages\"`,\n`\"no-returns\"`). So the server emits reasons its own [`RefusalReason::is_known`] answers\n`false` to, and those twelve are kebab-case while every declared variant is snake_case — a\nclient's vocabulary is two conventions. Found in review; recorded rather than repaired,\nbecause promoting twelve strings to variants is a wire change and belongs with the door,\nnot ahead of it. `[recounted — 2026-08-10]` An earlier count here said nine while listing\nten and omitting `\"no-stages\"`; the list is now held to\n`grep -o 'RefusalReason::Other(\"[a-z-]*\"' validate.rs | sort -u`.",
+          "const": "no_stages",
+          "description": "The composition declares no stages, so it asks nothing.",
+          "type": "string"
+        },
+        {
+          "const": "no_returns",
+          "description": "The composition returns no stages, so it answers nothing.",
+          "type": "string"
+        },
+        {
+          "const": "duplicate_stage_name",
+          "description": "Two stages share a name.",
+          "type": "string"
+        },
+        {
+          "const": "combinator_arity",
+          "description": "A set combination needs two or more inputs.",
+          "type": "string"
+        },
+        {
+          "const": "dangling_reference",
+          "description": "A stage references a stage that was never declared.",
+          "type": "string"
+        },
+        {
+          "const": "duplicate_return_stage",
+          "description": "A stage is named more than once in `returns`.",
+          "type": "string"
+        },
+        {
+          "const": "combinator_not_returnable",
+          "description": "A combinator's rows come from more than one act, so they have no single act to score them.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_return_stage",
+          "description": "`returns` names a stage that was never declared.",
+          "type": "string"
+        },
+        {
+          "const": "cycle",
+          "description": "The composition contains a cycle; a query DAG must be acyclic.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_act",
+          "description": "The `act` name is not one this server declares. `ActName` is open, so this is reachable.",
+          "type": "string"
+        },
+        {
+          "const": "empty_property_key",
+          "description": "A property predicate was supplied with no key.",
+          "type": "string"
+        },
+        {
+          "const": "empty_contains",
+          "description": "A `contains` predicate was supplied with no values, so it narrows nothing.",
+          "type": "string"
+        },
+        {
+          "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That was false at the time**:\n`validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while\nevery declared variant was snake_case — a client's vocabulary was two conventions at once.\nFound in review; recorded rather than repaired then, because promoting twelve strings to\nvariants is a wire change and nothing consumed them yet — `/api/query` did not exist, so\nthe change was free and the door was the moment it would stop being free.\n\n`[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants\nabove, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is\nexactly what its original doc said — a reason from a producer newer than this consumer, one\nthis binary has never been taught to name. Deserializing it never fails; `is_known` answers\n`false`; a caller degrades gracefully instead of losing the whole response to a parse error.",
           "type": "string"
         }
       ],

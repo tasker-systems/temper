@@ -650,58 +650,69 @@ fn the_shape_module_reaches_no_declaration() {
     }
 }
 
-/// Guard two — the reasons the shape pass emits are exactly this set.
+/// Guard two — the shape pass emits exactly these reasons, exactly this many times each.
 ///
 /// Pinned rather than derived, because the classification is a JUDGMENT. `FilterNotApplicable`
 /// at `capability.rs`'s "this door does not yet apply" sites reads no declaration and would pass
 /// guard one; it belongs to capability because Task 10b retires it. Nothing but this pin records
 /// that.
+///
+/// **Counts, not a set** — and this is the whole reason the guard works. `BoundTermNotApplicable`
+/// is emitted by BOTH passes: the negative-value arm is shape, the 32-bit and not-admitted arms
+/// are capability. Over a SET, the 32-bit site migrating into shape would change nothing, because
+/// the reason is already in shape's set — the guard would sit there green while the exact defect
+/// it exists to catch walked past it. Over counts, shape's tally for that reason goes 1 → 2 and it
+/// fails.
 #[test]
 fn the_shape_pass_emits_exactly_these_reasons() {
     let code = shape_code();
-    let mut found: Vec<&str> = code
-        .match_indices("RefusalReason::")
-        .map(|(i, _)| {
-            let tail = &code[i + "RefusalReason::".len()..];
-            let end = tail
-                .find(|c: char| !c.is_alphanumeric() && c != '_')
-                .unwrap_or(tail.len());
-            &tail[..end]
-        })
-        .collect();
-    found.sort_unstable();
-    found.dedup();
+    let mut found: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, _) in code.match_indices("RefusalReason::") {
+        let tail = &code[i + "RefusalReason::".len()..];
+        let end = tail
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(tail.len());
+        *found.entry(&tail[..end]).or_insert(0) += 1;
+    }
 
-    let expected = [
-        "AnchorTakesOneId",
-        "BoundTermNotApplicable",
-        "CombinatorArity",
-        "CombinatorNotReturnable",
-        "Cycle",
-        "DanglingReference",
-        "DuplicateReturnStage",
-        "DuplicateStageName",
-        "EmptyContains",
-        "EmptyPropertyKey",
-        "MissingIntention",
-        "MissingProvenance",
-        "NoReturns",
-        "NoStages",
-        "UnknownAct",
-        "UnknownFilterValue",
-        "UnknownReturnStage",
-    ];
+    // Every shape reason is emitted from exactly ONE site today. That uniformity is a fact about
+    // the current code, not a rule — if a future shape check legitimately raises an existing
+    // reason from a second site, bump its count here and say why in the commit.
+    let expected: BTreeMap<&str, usize> = [
+        ("AnchorTakesOneId", 1),
+        ("BoundTermNotApplicable", 1),
+        ("CombinatorArity", 1),
+        ("CombinatorNotReturnable", 1),
+        ("Cycle", 1),
+        ("DanglingReference", 1),
+        ("DuplicateReturnStage", 1),
+        ("DuplicateStageName", 1),
+        ("EmptyContains", 1),
+        ("EmptyPropertyKey", 1),
+        ("MissingIntention", 1),
+        ("MissingProvenance", 1),
+        ("NoReturns", 1),
+        ("NoStages", 1),
+        ("UnknownAct", 1),
+        ("UnknownFilterValue", 1),
+        ("UnknownReturnStage", 1),
+    ]
+    .into_iter()
+    .collect();
 
     assert_eq!(
         found, expected,
-        "the shape pass's emitted reasons moved. Adding one means asserting it cannot change \
-         without a wire-contract change; removing one means it moved to capability and \
-         `temper query --check` stopped reporting it."
+        "the shape pass's emitted reasons moved. A new entry means asserting it cannot change \
+         without a wire-contract change; a removed entry means it moved to capability and \
+         `temper query --check` stopped reporting it; a changed COUNT means a capability site \
+         migrated into shape under a reason shape already raises."
     );
 }
 ```
 
-> **`BoundTermNotApplicable` appears in both passes on purpose** — the negative-value arm is shape, the 32-bit and not-admitted arms are capability. That is why this pin is over emitted reasons rather than over variants, and why it cannot be a disjointness assertion.
+Add `use std::collections::BTreeMap;` at the top of the file.
+
+> **Why the counts matter, restated because it is easy to simplify away.** `BoundTermNotApplicable` straddles the seam by design. A set-based pin is the natural thing to write and is blind in exactly the direction that matters. If a later change makes every reason single-pass, the counts become redundant — but do not remove them without first checking that no reason is emitted by both modules.
 
 - [ ] **Step 2: Run and confirm both pass**
 

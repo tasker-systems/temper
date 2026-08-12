@@ -138,12 +138,18 @@ pub enum RefusalReason {
     /// compiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the
     /// distinction `BuildState` cannot draw: existence versus reachability-from-this-surface.
     ///
-    /// The live instance before beat D is the three `find` acts: `BuildState::Served` with their
-    /// own SQL functions (`search_exact` / `search_wide`), which the beat-C compiler does not emit.
-    /// `NotImplemented` would be false about them (they are served); this variant is the honest one.
-    /// Beat D deletes the refusal for them by giving the compiler their fragments. Fusion is not the
-    /// reason — `follow-from` and `survey` are the `Fused` declarations and are exactly the acts
-    /// this surface CAN reach, so the rule keys on the callable-fragment set, never on `build_state`.
+    /// The live instance before beat D was the three `find` acts: `BuildState::Served` with their
+    /// own SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit.
+    /// `NotImplemented` would have been false about them (they are served); this variant is the
+    /// honest one. Beat D deleted the refusal for them by giving the compiler their fragments.
+    ///
+    /// The live instances now are `substantiate`, `follow-from` and `survey` — the first `Served`,
+    /// the other two `Fused`, all three with mechanics the compiler emits no fragment for. **The
+    /// rule keys on the callable-fragment set and never on `build_state`, and `substantiate` is
+    /// what holds that**: it is `Served` and unreachable, so a rule reading the discriminant would
+    /// admit an act this surface cannot emit. The `Fused` half of the argument no longer has a
+    /// witness, since all three are unreachable and the two `Fused` declarations are exactly two of
+    /// them — so the discriminant happens to agree about that pair.
     NotSeparablyReachable,
     /// **The one refusal that is not static.** A `find-about-*` stage needed a query embedding,
     /// the server had to compute it because the caller could not, and the attempt failed — an
@@ -155,21 +161,53 @@ pub enum RefusalReason {
     /// this is the only one that can appear mid-flight, and it is what gives a runtime refusal a
     /// referent at all. `[decided — 2026-08-08, Pete]`
     EmbeddingUnavailable,
+
+    // ── Expressibility. Promoted from `Other(_)` strings with the door `[2026-08-12]` ───────────
+    //
+    // These were kebab-case strings the server emitted and its own `is_known` answered `false`
+    // to. Nothing consumed them, because there was no door — so the spelling change from
+    // `dangling-reference` to `dangling_reference` cost nothing here and would have been a
+    // breaking change to a published 400 body a week later.
+    /// The composition declares no stages, so it asks nothing.
+    NoStages,
+    /// The composition returns no stages, so it answers nothing.
+    NoReturns,
+    /// Two stages share a name.
+    DuplicateStageName,
+    /// A set combination needs two or more inputs.
+    CombinatorArity,
+    /// A stage references a stage that was never declared.
+    DanglingReference,
+    /// A stage is named more than once in `returns`.
+    DuplicateReturnStage,
+    /// A combinator's rows come from more than one act, so they have no single act to score them.
+    CombinatorNotReturnable,
+    /// `returns` names a stage that was never declared.
+    UnknownReturnStage,
+    /// The composition contains a cycle; a query DAG must be acyclic.
+    Cycle,
+    /// The `act` name is not one this server declares. `ActName` is open, so this is reachable.
+    UnknownAct,
+    /// A property predicate was supplied with no key.
+    EmptyPropertyKey,
+    /// A `contains` predicate was supplied with no values, so it narrows nothing.
+    EmptyContains,
+
     /// A reason outside the declared vocabulary.
     ///
     /// `[corrected — 2026-08-09]` This said "Never constructed by this crate — only by
-    /// deserializing a producer newer than this consumer." **That is false**, and was when it was
-    /// written: `validate` constructs it for twelve topology and vocabulary refusals (`"cycle"`,
-    /// `"dangling-reference"`, `"duplicate-stage-name"`, `"combinator-arity"`,
-    /// `"unknown-return-stage"`, `"duplicate-return-stage"`, `"combinator-not-returnable"`,
-    /// `"unknown-act"`, `"empty-property-key"`, `"empty-contains"`, `"no-stages"`,
-    /// `"no-returns"`). So the server emits reasons its own [`RefusalReason::is_known`] answers
-    /// `false` to, and those twelve are kebab-case while every declared variant is snake_case — a
-    /// client's vocabulary is two conventions. Found in review; recorded rather than repaired,
-    /// because promoting twelve strings to variants is a wire change and belongs with the door,
-    /// not ahead of it. `[recounted — 2026-08-10]` An earlier count here said nine while listing
-    /// ten and omitting `"no-stages"`; the list is now held to
-    /// `grep -o 'RefusalReason::Other("[a-z-]*"' validate.rs | sort -u`.
+    /// deserializing a producer newer than this consumer." **That was false at the time**:
+    /// `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while
+    /// every declared variant was snake_case — a client's vocabulary was two conventions at once.
+    /// Found in review; recorded rather than repaired then, because promoting twelve strings to
+    /// variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so
+    /// the change was free and the door was the moment it would stop being free.
+    ///
+    /// `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants
+    /// above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is
+    /// exactly what its original doc said — a reason from a producer newer than this consumer, one
+    /// this binary has never been taught to name. Deserializing it never fails; `is_known` answers
+    /// `false`; a caller degrades gracefully instead of losing the whole response to a parse error.
     #[serde(untagged)]
     Other(String),
 }
@@ -316,6 +354,49 @@ mod tests {
             serde_json::to_string(&RefusalReason::EmbeddingUnavailable).unwrap(),
             "\"embedding_unavailable\""
         );
+    }
+
+    #[test]
+    fn every_refusal_this_crate_raises_is_a_known_reason() {
+        // `is_known` answered `false` for twelve reasons the server itself emitted, and those twelve
+        // were kebab-case while every declared variant was snake_case — so a client's vocabulary was
+        // two conventions. Recorded in review and deferred to the door, which is now.
+        for reason in [
+            RefusalReason::NoStages,
+            RefusalReason::NoReturns,
+            RefusalReason::DuplicateStageName,
+            RefusalReason::CombinatorArity,
+            RefusalReason::DanglingReference,
+            RefusalReason::DuplicateReturnStage,
+            RefusalReason::CombinatorNotReturnable,
+            RefusalReason::UnknownReturnStage,
+            RefusalReason::Cycle,
+            RefusalReason::UnknownAct,
+            RefusalReason::EmptyPropertyKey,
+            RefusalReason::EmptyContains,
+        ] {
+            assert!(
+                reason.is_known(),
+                "{reason:?} must not deserialize as `Other`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_promoted_reason_round_trips_in_snake_case() {
+        let json = serde_json::to_string(&RefusalReason::DanglingReference).unwrap();
+        assert_eq!(json, "\"dangling_reference\"");
+        assert_eq!(
+            serde_json::from_str::<RefusalReason>(&json).unwrap(),
+            RefusalReason::DanglingReference
+        );
+    }
+
+    #[test]
+    fn other_still_carries_a_reason_from_a_newer_producer() {
+        // `Other` is not vestigial after the promotion — this is its actual purpose.
+        let reason: RefusalReason = serde_json::from_str("\"some_future_reason\"").unwrap();
+        assert!(!reason.is_known());
     }
 
     #[test]

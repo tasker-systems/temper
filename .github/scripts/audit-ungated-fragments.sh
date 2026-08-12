@@ -89,16 +89,19 @@ EOF
 # ungated fragment, comment lines excluded.
 #
 # REVIEWED 2026-08-08 (composable find fragments, plan Task 9).
-#   temper-core/src/types/query/validate.rs — `CALLABLE_FRAGMENTS`, the map from a declared mechanic
-#     to the fragment `/api/query` emits. Naming a core here does NOT call one: this crate has no
-#     database access and the map only decides which acts are reachable from this surface.
+#   temper-core/src/types/query/validate/mod.rs — `CALLABLE_FRAGMENTS`, the map from a declared
+#     mechanic to the fragment `/api/query` emits. Naming a core here does NOT call one: this crate
+#     has no database access and the map only decides which acts are reachable from this surface.
+#     `[path moved — 2026-08-12]` `validate.rs` became `validate/mod.rs` when validation split into
+#     a shape pass and a capability pass. The map did not move and the count is unchanged; the
+#     shape pass may not read it, which is the point of that split.
 #   temper-substrate/src/readback/query_plan.rs — the compiler, at 2: the two `EMIT_FIND_*`
 #     constants and nothing else. The match arms that emit these calls go through the constants, so
 #     they do not name the prefix — which is why a count of 2 rather than 4 is the correct reading
 #     and not a scan that is missing half the file. `emit_ungated_core_call` is the sole emitter and
 #     the place the visible set and the principal are fixed rather than passed.
 read -r -d '' RUST_BASELINE <<'EOF' || true
-2 crates/temper-core/src/types/query/validate.rs
+2 crates/temper-core/src/types/query/validate/mod.rs
 2 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 

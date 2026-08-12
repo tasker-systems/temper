@@ -11,21 +11,26 @@
 //! repairing a plan should see all of it in one round trip. And [`ValidatedComposition`] is
 //! parse-don't-validate: its fields are private and this is the only constructor, so the compiler
 //! cannot be handed a plan that skipped these checks.
+//!
+//! **It answers two different questions, and they are two modules.** `shape` asks whether the
+//! composition is *expressible* — true of the plan and the published wire contract alone, so it
+//! cannot change under a caller's feet. `capability` asks whether THIS server has built the
+//! thing, which moves with every beat. [`validate`] is both; [`validate_shape`] is the first
+//! alone, which is what a client may run locally against a server whose binary it does not share.
+
+mod capability;
+mod shape;
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use super::act::{ActName, ActQuantity, BuildState, Disclosure};
+use super::act::{ActName, ActQuantity, Disclosure};
 use super::composition::{Composition, ReturnSpec, StageNode};
 use super::disposition::RefusalReason;
-use super::envelope::ActInvocation;
-use super::filter::{FilterField, PropertyOp, PropertySubject};
 use super::hits::ScoreKind;
-use super::id_set::IdKind;
 use super::registry::declaration;
 use super::scalars::BoundTerm;
-use super::stage::{ProducedVariant, StageInput, StageName, StageRelation};
-use crate::types::resource_view::ResourceSection;
+use super::stage::{ProducedVariant, StageName};
 
 /// Declared mechanic (`served_by`) → the SQL function the compiler actually emits.
 ///
@@ -47,21 +52,29 @@ use crate::types::resource_view::ResourceSection;
 /// `temper_substrate::readback::query_plan::emit_ungated_core_call`, which supplies that verdict
 /// itself rather than taking it as an argument.
 ///
-/// Membership is what decides `NotSeparablyReachable`. It is keyed on served-by names and NEVER on
-/// `build_state`: the two `Fused` declarations (`follow-from`, `survey`) are among the reachable
-/// ones, so a rule keyed on that discriminant would refuse the wrong acts.
+/// Membership is what decides `NotSeparablyReachable`, and it is keyed on served-by names and NEVER
+/// on `build_state`. What holds that rule today is `substantiate`: `Served`, with a real mechanic
+/// (`resource_standing_shape`), and absent here — so a rule keyed on the discriminant would admit
+/// an act this surface cannot emit. **The `Fused` half of that argument no longer has a witness**:
+/// since `follow-from` and `survey` left this map, the acts absent from it are `substantiate`,
+/// `follow-from` and `survey` — all three unreachable, and the latter two exactly the `Fused` ones —
+/// so keying on that discriminant would agree with this map about those two by coincidence. One
+/// direction, said as one direction.
 ///
-/// `follow-from` and `survey` map to the deliberately-absent placeholder. That is honest rather
-/// than sloppy: their mechanics exist and are reachable *in principle*, but their fragments take
-/// arguments no slot supplies (`p_depth`/`p_gamma`, `p_lens`), so the builder emits a function that
-/// does not exist and Postgres errors loudly instead of a guessed value returning plausible rows.
-/// Keeping them here — rather than dropping them, which would make them refuse statically —
-/// preserves the beat-C behaviour their tests pin.
+/// `follow-from` and `survey` are ABSENT rather than mapped to the deliberately-absent placeholder
+/// (`__temper_unbound_act`), which is what they carried through beat C. Mapped, they validated
+/// clean and then failed at EXECUTION — invisible while nothing executed a composition outside its
+/// own tests, and a 500 the moment a door opened. Absent, they refuse statically as
+/// [`RefusalReason::NotSeparablyReachable`], which is what keeps `registry.rs`'s `DoorReach::Absent`
+/// TRUE at all three doors: mapped, both `Absent` and its promised restoration to `Serves` would
+/// have been false at once — reachable through the door, and unable to answer.
+///
+/// They cannot simply be wired up instead: their fragments take arguments no slot supplies
+/// (`p_depth`/`p_gamma` for `search_graph_expand`, `p_lens` for `wayfind_region_scores`). The
+/// edge-provenance spike is what unblocks `follow-from`; `survey` waits on a lens slot.
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ("search_exact", "__temper_ungated_find_exact"),
     ("search_wide", "__temper_ungated_find_wide"),
-    ("search_graph_expand", "__temper_unbound_act"),
-    ("wayfind_region_scores", "__temper_unbound_act"),
 ];
 
 /// The fragment the compiler emits for a declared mechanic, or `None` if this surface cannot reach
@@ -157,364 +170,17 @@ fn term_wire_name(term: &BoundTerm) -> String {
         .unwrap_or_else(|_| format!("{term:?}"))
 }
 
-/// The kind an upstream node produces, walking a combinator to its first input. `None` for a
-/// dangling reference (already refused as topology) or an act that produces nothing.
-fn produced_kind_of(name: &str, by_name: &BTreeMap<&str, &StageNode>) -> Option<IdKind> {
-    match by_name.get(name)? {
-        StageNode::Act(inv) => declaration(&inv.act)?.produces,
-        StageNode::Combine(c) => produced_kind_of(c.inputs.first()?.as_str(), by_name),
+/// The declared stages indexed by name, **first wins**.
+///
+/// One definition, called by both passes. A duplicate name is refused by [`shape`], but the two
+/// passes still have to agree about which of the two nodes they are talking about while they say
+/// so — and two inline builds are two places for that to diverge.
+fn index_by_name(c: &Composition) -> BTreeMap<&str, &StageNode> {
+    let mut by_name: BTreeMap<&str, &StageNode> = BTreeMap::new();
+    for node in &c.stages {
+        by_name.entry(node.name().as_str()).or_insert(node);
     }
-}
-
-/// Kahn's topological sort over the resolvable edges. `None` iff a cycle prevents a total order.
-fn topo_order(by_name: &BTreeMap<&str, &StageNode>) -> Option<Vec<StageNode>> {
-    let mut indegree: BTreeMap<&str, usize> = by_name.keys().map(|k| (*k, 0usize)).collect();
-    let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (&name, node) in by_name {
-        for up in node.upstream_names() {
-            if by_name.contains_key(up.as_str()) {
-                *indegree.get_mut(name).expect("name is in the map") += 1;
-                dependents.entry(up.as_str()).or_default().push(name);
-            }
-        }
-    }
-
-    let mut queue: Vec<&str> = by_name
-        .keys()
-        .copied()
-        .filter(|n| indegree[n] == 0)
-        .collect();
-    let mut ordered_names: Vec<&str> = Vec::new();
-    let mut i = 0;
-    while i < queue.len() {
-        let n = queue[i];
-        i += 1;
-        ordered_names.push(n);
-        if let Some(deps) = dependents.get(n) {
-            for &d in deps {
-                let e = indegree.get_mut(d).expect("dependent is in the map");
-                *e -= 1;
-                if *e == 0 {
-                    queue.push(d);
-                }
-            }
-        }
-    }
-
-    if ordered_names.len() != by_name.len() {
-        return None;
-    }
-    Some(
-        ordered_names
-            .into_iter()
-            .map(|n| (*by_name[n]).clone())
-            .collect(),
-    )
-}
-
-/// Declaration-driven checks for one act node. Every axis is independent — a node can fail more than
-/// one — so nothing short-circuits; a caller sees the whole picture.
-fn check_act(
-    inv: &ActInvocation,
-    name: &StageName,
-    c: &Composition,
-    by_name: &BTreeMap<&str, &StageNode>,
-    errs: &mut Vec<PlanRefusal>,
-) {
-    let Some(decl) = declaration(&inv.act) else {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::Other("unknown-act".to_string()),
-            format!("`{:?}` is not a known act", inv.act),
-        ));
-        return;
-    };
-
-    // Build-state / reachability. Keyed on the callable-fragment set, never on the `Fused`
-    // discriminant — see CALLABLE_FRAGMENTS.
-    match &decl.build_state {
-        BuildState::Unbuilt => errs.push(refusal(
-            Some(name),
-            RefusalReason::NotImplemented,
-            "the act is declared but not built",
-        )),
-        BuildState::Served | BuildState::Fused { .. } => {
-            let served = decl.served_by.as_deref().unwrap_or_default();
-            if emitted_fragment_for(served).is_none() {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::NotSeparablyReachable,
-                    format!("act mechanic `{served}` is not reachable from this surface yet"),
-                ));
-            }
-        }
-    }
-
-    // Input kind, read against the relation the EDGE declares.
-    //
-    // `[amended — 2026-08-08]` This used to read `matches!(inv.bounds_mode, Some(BoundsMode::Seed))`
-    // off the invocation. That was wrong in a way no test could see: `bounds_mode` was an `Option`
-    // whose "required whenever `input` is present" invariant lived in prose, so an input with no
-    // relation fell through to `false` and was silently checked against `accepts_bounds`. The
-    // relation now rides the input, is total, and cannot be absent.
-    if let Some(input) = &inv.input {
-        let (incoming, from_caller, provenance) = match input {
-            StageInput::Caller { ids, .. } => (Some(ids.kind.clone()), true, ids.provenance),
-            StageInput::Upstream { stage, .. } => {
-                (produced_kind_of(stage.as_str(), by_name), false, None)
-            }
-        };
-        if let Some(kind) = incoming {
-            // Provenance is the CALLER's responsibility; an upstream `survey` supplies it itself.
-            if from_caller && kind == IdKind::Region && provenance.is_none() {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::MissingProvenance,
-                    "a region set must declare whether it is cogmap- or context-anchored",
-                ));
-            }
-            let as_seed = input.relation() == StageRelation::Seed;
-            if as_seed && !decl.accepts_seeds.contains(&kind) {
-                // The negative face of putting the relation on the wire: this caller asked to
-                // REACH BEYOND the set, and this act can only narrow within one. Deriving the
-                // relation from the act would have executed the narrowing instead — a different
-                // question, answered confidently.
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::UnsupportedSeedKind,
-                    format!(
-                        "act `{}` cannot grow from a set — it does not accept seeds of kind \
-                         `{kind:?}`. Narrowing within the set instead would answer a different \
-                         question than the one asked",
-                        act_wire_name(&inv.act)
-                    ),
-                ));
-            } else if !as_seed && !decl.accepts_bounds.contains(&kind) {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::UnsupportedBoundKind,
-                    format!(
-                        "act `{}` does not accept bounds of kind `{kind:?}`",
-                        act_wire_name(&inv.act)
-                    ),
-                ));
-            }
-
-            // The anchor slot's CARDINALITY, checked separately from its kind because they are
-            // different complaints: the kind is accepted and the count is not. Only a CALLER can
-            // supply one of these — `cogmap` and `context` are accepted but never produced, so an
-            // upstream set is never anchor-kind (see the chainability relation in the contract).
-            if let StageInput::Caller { ids, .. } = input {
-                if matches!(ids.kind, IdKind::Cogmap | IdKind::Context) && ids.ids.len() != 1 {
-                    errs.push(refusal(
-                        Some(name),
-                        RefusalReason::AnchorTakesOneId,
-                        format!(
-                            "a `{kind:?}` bound is served by the anchor pair, which holds exactly \
-                             one id; this stage supplied {}. Anchoring on one of them would answer \
-                             a different question than the one asked",
-                            ids.ids.len()
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-
-    // ── NARROWINGS THIS DOOR DECLARES BUT DOES NOT APPLY ────────────────────────────────────────
-    //
-    // `[added — 2026-08-09]` **Closing a silent question substitution, found in review.** Every
-    // slot below was accepted by validation and then IGNORED by the compiler: `emit_ungated_core_call`
-    // passes literal `NULL` in the fragment's one filter parameter and has no slot at all for the
-    // rest. So a caller asking for sessions about X received anything about X — their question
-    // answered as a different question, confidently, with a full page of plausible rows.
-    //
-    // Worse, the response then ECHOED the filter back in `narrowed_by` as though it had been
-    // applied, which is the evidence a caller would use to believe the answer.
-    //
-    // Refusing is the contract's own rule: a narrowing is "declined, never ignored". The reason is
-    // `FilterNotApplicable`, whose name is imperfect here — the ACT admits these; it is this DOOR
-    // that cannot apply them — so each detail says so explicitly. Whether that deserves its own
-    // reason is an open question, not a silent choice.
-    if let Some(f) = &inv.resource_filter {
-        let declared: &[(&str, bool)] = &[
-            ("tags", !f.tags.is_empty()),
-            ("facets", !f.facets.is_empty()),
-            ("stage", f.stage.is_some()),
-            ("status", f.status.is_some()),
-            ("owner", f.owner.is_some()),
-            ("title_contains", f.title_contains.is_some()),
-        ];
-        for field in declared
-            .iter()
-            .filter(|(_, present)| *present)
-            .map(|(field, _)| field)
-        {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::FilterNotApplicable,
-                format!(
-                    "this door does not apply the `{field}` narrowing — the act admits it, the \
-                     compiler has no slot for it, and ignoring it would answer a different question \
-                     than the one asked"
-                ),
-            ));
-        }
-        // The fragment's `p_doc_type` is a single `text`, not an array, so a multi-value doc-type
-        // filter is inexpressible rather than merely unimplemented. Same shape as the anchor slot:
-        // narrowing to the first of them would answer a different question and look like a
-        // successful narrowing.
-        if f.doc_type.len() > 1 {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::FilterNotApplicable,
-                format!(
-                    "this door's doc-type narrowing holds exactly one value; this stage supplied {}",
-                    f.doc_type.len()
-                ),
-            ));
-        }
-    }
-    if !inv.properties.is_empty() {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            "this door does not yet apply property predicates — the compiler emits no slot for \
-             them, and a predicate that narrows nothing is a silent substitution",
-        ));
-    }
-    if inv.edge_filter.is_some() {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            "this door does not yet apply edge filters — the only act that admits one still \
-             compiles to the absent placeholder",
-        ));
-    }
-
-    // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution. A term
-    // outside the range the fragment can express IS a refusal, and must be one HERE.
-    //
-    // `[added — 2026-08-09]` The membership check was the only one, and `applied_terms` clamps only
-    // DOWNWARD against a ceiling, so a negative value passed straight through to the statement:
-    // `limit: -1` reached Postgres as `LIMIT must not be negative` and surfaced as a 500, and
-    // `offset` has no ceiling on any act so `3_000_000_000` gave "integer out of range". Same class
-    // as the empty-intention refusal above — a caller's error rendered as a server fault, one layer
-    // below where it was decidable. Found in review.
-    for (term, value) in &inv.terms {
-        if *value < 0 {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::BoundTermNotApplicable,
-                format!(
-                    "the `{}` bound term counts rows and cannot be negative; this stage \
-                     supplied {value}",
-                    term_wire_name(term)
-                ),
-            ));
-        } else if *value > i64::from(i32::MAX) {
-            // The fragments take `int`, not `bigint`. A value above that range is not a large
-            // page — it is a value the mechanic cannot express, and clamping it silently would
-            // answer a different question than the one asked.
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::BoundTermNotApplicable,
-                format!(
-                    "the `{}` bound term is served by a 32-bit slot; {value} is outside the \
-                     range this act can express",
-                    term_wire_name(term)
-                ),
-            ));
-        }
-    }
-    for term in inv.terms.keys() {
-        if !decl.accepts_bound_terms.contains(term) {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::BoundTermNotApplicable,
-                format!(
-                    "act does not admit the `{}` bound term",
-                    term_wire_name(term)
-                ),
-            ));
-        }
-    }
-
-    // Filters — declined, never silently ignored.
-    if inv.resource_filter.is_some() && !decl.accepts_filters.contains(&FilterField::Resource) {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            "act does not admit a resource filter",
-        ));
-    }
-    if inv.edge_filter.is_some() && !decl.accepts_filters.contains(&FilterField::Edge) {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            "act does not admit an edge filter",
-        ));
-    }
-
-    // Every find act refuses without a threaded intention. For `find-about-*` the reason is that
-    // the server does not embed on the caller's behalf — "I chose not to embed" and "I cannot
-    // embed" stay distinct. `find-exact` needs the intention for a different reason: its query TEXT
-    // is `query_find_exact`'s `p_query`, and there is nowhere else to get it.
-    //
-    // `[widened at beat D — 2026-08-08]` `FindExact` was missing here, which was invisible while
-    // the find acts were `NotSeparablyReachable` and became a real defect the moment the compiler
-    // could emit them: `validate` returned Ok and `compile` returned Err(MissingIntention) for the
-    // same plan. That is precisely the validator/emitter disagreement `CALLABLE_FRAGMENTS` was
-    // reshaped into a shared map to make impossible, reappearing on a different axis — the map
-    // makes the two agree about WHICH ACTS are reachable, and nothing was making them agree about
-    // WHAT EACH ACT REQUIRES.
-    if matches!(
-        inv.act,
-        ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
-    ) {
-        // `[widened — 2026-08-09]` An empty or whitespace-only query is the SAME omission as an
-        // absent intention, and leaving it out here sent it somewhere false: `resolve_embedding`
-        // declines to embed nothing, `compile` reads the resulting `None` as "the server tried and
-        // failed", and the caller was told `embedding_unavailable` — a server fault, for a question
-        // they never asked. The server never attempted anything. Found in review.
-        let missing = match c.intention.as_ref() {
-            None => Some("a find act requires a threaded intention"),
-            Some(i) if i.query.trim().is_empty() => Some(
-                "a find act requires a threaded intention with a question in it; this one is empty",
-            ),
-            Some(_) => None,
-        };
-        if let Some(detail) = missing {
-            errs.push(refusal(Some(name), RefusalReason::MissingIntention, detail));
-        }
-    }
-
-    // Property predicates: open subject vocabulary, non-empty key, non-empty `contains`.
-    for p in &inv.properties {
-        if let PropertySubject::Other(s) = &p.subject {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::UnknownFilterValue,
-                format!("`{s}` is not a queryable property subject"),
-            ));
-        }
-        if p.key.is_empty() {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::Other("empty-property-key".to_string()),
-                "a property predicate needs a key",
-            ));
-        }
-        if let PropertyOp::Contains { values } = &p.op {
-            if values.is_empty() {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::Other("empty-contains".to_string()),
-                    "`contains` with no values narrows nothing",
-                ));
-            }
-        }
-    }
+    by_name
 }
 
 /// What a composition WOULD return, derived from the act declarations without running anything.
@@ -622,196 +288,41 @@ impl ValidationOutcome {
     }
 }
 
-/// Where to go for a section this door declines.
-///
-/// A refusal that only says no leaves the caller to guess, and both of these have a real home. The
-/// advice is part of the refusal rather than documentation because the caller is reading the
-/// refusal, not the docs.
-fn section_advice(section: ResourceSection) -> &'static str {
-    match section {
-        // `fill_sections` records that the body arm "is an N+1 by construction" and that what
-        // keeps it honest is "the door, not the loop". This is a new door and is narrow from its
-        // first line.
-        ResourceSection::Body => "Bodies are read one at a time — ask `show` for the ones you want",
-        ResourceSection::Edges => {
-            "Edge listing has its own commands; `follow-from` with an `edge_filter` walks and \
-             filters on edges without returning them"
-        }
-        ResourceSection::OpenMeta => "",
-    }
-}
-
 /// Validate a composition against `search_family()` and the plan's own topology. Returns ALL
 /// refusals, never just the first.
 pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
-    let mut errs: Vec<PlanRefusal> = Vec::new();
+    let (mut errs, ordered) = shape::validate_shape_indexed(c);
 
-    // **A composition with no stages asks nothing.** `[added — 2026-08-09]` The contract declares
-    // `stages: minItems 1` and nothing enforced it: an empty plan validated cleanly, compiled to a
-    // zero-arm statement saved only by a fallback branch, and the compiler's comment beside that
-    // fallback claimed it was "unreachable through `validate`, which refuses an empty `stages`" —
-    // which was simply untrue. Found in review. Refusing here is what makes that sentence true.
-    if c.stages.is_empty() {
-        errs.push(refusal(
-            None,
-            RefusalReason::Other("no-stages".to_string()),
-            "a composition must declare at least one stage; this one asks nothing",
-        ));
-    }
+    // The capability pass has two halves and only its per-stage half is gated on the topology.
+    // This one reads no stage graph — it compares each `returns` entry's `with` against a
+    // constant — so a cycle takes nothing away from its answer, and gating it would drop a
+    // refusal a cyclic plan used to receive. Every refusal, not the first, is this module's rule.
+    capability::validate_returns(c, &mut errs);
 
-    // **A composition with no returns answers nothing.** `[added — 2026-08-10]` The contract
-    // declares `returns: minItems 1` and nothing enforced it: an empty `returns` compiled and ran,
-    // answering 200 where the contract says 400 (audit finding F6). Composition-level, like
-    // `no-stages` — the omission belongs to no stage.
-    if c.outcome.returns.is_empty() {
-        errs.push(refusal(
-            None,
-            RefusalReason::Other("no-returns".to_string()),
-            "a composition must return at least one stage; this one answers nothing",
-        ));
-    }
-
-    // Distinct declared names (first wins) + duplicate detection.
-    let mut by_name: BTreeMap<&str, &StageNode> = BTreeMap::new();
-    let mut declared: BTreeSet<&str> = BTreeSet::new();
-    for node in &c.stages {
-        let n = node.name().as_str();
-        if declared.insert(n) {
-            by_name.insert(n, node);
-        } else {
-            errs.push(refusal(
-                Some(node.name()),
-                RefusalReason::Other("duplicate-stage-name".to_string()),
-                format!("two stages share the name `{n}`"),
-            ));
-        }
-    }
-
-    // Combinator arity + dangling references.
-    for node in &c.stages {
-        if let StageNode::Combine(cn) = node {
-            if cn.inputs.len() < 2 {
-                errs.push(refusal(
-                    Some(node.name()),
-                    RefusalReason::Other("combinator-arity".to_string()),
-                    "a set combination needs two or more inputs",
-                ));
-            }
-        }
-        for up in node.upstream_names() {
-            if !declared.contains(up.as_str()) {
-                errs.push(refusal(
-                    Some(node.name()),
-                    RefusalReason::Other("dangling-reference".to_string()),
-                    format!(
-                        "stage `{}` references undeclared stage `{}`",
-                        node.name().as_str(),
-                        up.as_str()
-                    ),
-                ));
-            }
-        }
-    }
-
-    // A `returns` entry must name a declared stage, and may only ask for sections this door
-    // hydrates.
-    // **A stage may be named in `returns` at most once.**
-    //
-    // `[added — 2026-08-09]` A duplicate emitted one hit arm PER ENTRY, so every row of that stage
-    // came back twice while its tally still said `produced: 1` — and because `returned` is keyed by
-    // stage, only the LAST entry's `with` survived, silently discarding the other's. Two answers to
-    // one question, one of them thrown away without a word. Found in review.
-    let mut returned_once: BTreeSet<&str> = BTreeSet::new();
-    for ret in &c.outcome.returns {
-        if !returned_once.insert(ret.stage.as_str()) {
-            errs.push(refusal(
-                Some(&ret.stage),
-                RefusalReason::Other("duplicate-return-stage".to_string()),
-                format!(
-                    "stage `{}` is named more than once in `returns`; a stage answers once, and \
-                     two entries would duplicate its rows while only one `with` survived",
-                    ret.stage.as_str()
-                ),
-            ));
-        }
-    }
-
-    for ret in &c.outcome.returns {
-        // **A combinator may not be RETURNED.** `[added — 2026-08-09]` Its rows come from two or
-        // more acts, so the stage has no single act, no single `orders_by`, and no single
-        // `score_kind` — and a returned stage's rows carry exactly one of each. Hydrating a union
-        // would put two acts' rows into ONE ordered list, which is the merged list
-        // `no-cross-act-ranking` exists to make unrepresentable.
-        //
-        // It was reachable and silent: `ValidationOutcome::of` SKIPS a combinator when computing
-        // `will_return` (so the promise simply omitted it), the compiler emitted a hit arm for it
-        // anyway, and the assembler dropped every row for want of a score kind — answering
-        // `disposition: answered` with an empty list and a tally saying rows existed. Found in
-        // review. Combining stays legal; asking for the combined rows back does not.
-        if matches!(by_name.get(ret.stage.as_str()), Some(StageNode::Combine(_))) {
-            errs.push(refusal(
-                Some(&ret.stage),
-                RefusalReason::Other("combinator-not-returnable".to_string()),
-                format!(
-                    "stage `{}` combines other stages, so its rows have no single act to score \
-                     them; return the stages it combines instead",
-                    ret.stage.as_str()
-                ),
-            ));
-        }
-        if !declared.contains(ret.stage.as_str()) {
-            errs.push(refusal(
-                Some(&ret.stage),
-                RefusalReason::Other("unknown-return-stage".to_string()),
-                format!("returns names undeclared stage `{}`", ret.stage.as_str()),
-            ));
-        }
-        // Refused here rather than at deserialization, which is the whole reason `with` carries
-        // the shared `ResourceSection` vocabulary instead of a narrow query-local enum: a serde
-        // failure short-circuits before this function runs, so a caller with several problems
-        // would learn about one of them, phrased by a deserializer.
-        for section in &ret.with {
-            if !ReturnSpec::ADMITTED_SECTIONS.contains(section) {
-                errs.push(refusal(
-                    Some(&ret.stage),
-                    RefusalReason::SectionNotAvailable,
-                    format!(
-                        "`{section}` is not a section this door hydrates (it offers: {}). \
-                         {}",
-                        ReturnSpec::ADMITTED_SECTIONS
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        section_advice(*section),
-                    ),
-                ));
-            }
-        }
-    }
-
-    match topo_order(&by_name) {
-        None => errs.push(refusal(
-            None,
-            RefusalReason::Other("cycle".to_string()),
-            "the composition contains a cycle; a query DAG must be acyclic",
-        )),
-        Some(ordered) => {
-            for node in &c.stages {
-                if let StageNode::Act(inv) = node {
-                    check_act(inv, node.name(), c, &by_name, &mut errs);
-                }
-            }
-            if errs.is_empty() {
-                return Ok(ValidatedComposition {
-                    composition: c.clone(),
-                    ordered,
-                });
-            }
+    // The per-stage half runs only when the DAG is acyclic, which is the incumbent behaviour and
+    // exactly what the pinned rule is about — `reachable ACTS keep the cycle the sole finding`.
+    // Per-stage findings over a graph that is not a graph would be findings about a plan that
+    // cannot be read.
+    if let Some(ordered) = ordered {
+        let by_name = index_by_name(c);
+        capability::validate_stages(c, &by_name, &mut errs);
+        if errs.is_empty() {
+            return Ok(ValidatedComposition {
+                composition: c.clone(),
+                ordered,
+            });
         }
     }
 
     Err(errs)
+}
+
+/// Expressibility alone — every refusal that is true of the plan and the published contract
+/// without consulting what this server has built. It exists for a local `--check`: a client may
+/// run this against a plan it will send to a server whose binary it does not share. No such
+/// command ships yet; PR C adds `temper query --check` as its first caller.
+pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
+    shape::validate_shape_indexed(c).0
 }
 
 #[cfg(test)]
@@ -828,6 +339,10 @@ mod tests {
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
     use crate::types::query::scalars::BoundTerm;
+    // Named here rather than reached through `super::*`: the checks that read them moved into
+    // `shape` and `capability`, so this module no longer imports them for its own use.
+    use crate::types::query::stage::{StageInput, StageRelation};
+    use crate::types::resource_view::ResourceSection;
     use std::collections::BTreeMap;
 
     /// The relation that makes a plan legal for this act: `follow-from` seeds, everything else
@@ -963,8 +478,16 @@ mod tests {
         })
     }
 
+    /// One stage over `a`, a threaded question, and a `returns` naming that stage — a composition
+    /// with nothing in it but the minimum a plan needs to be well-formed. No input, no terms, no
+    /// filters, no predicates, so nothing here can raise a refusal of its own and obscure the one
+    /// under test.
+    fn a_legal_single_stage_plan_over(a: ActName) -> Composition {
+        plan_with_intention(vec![act("s", a, None)], vec!["s"])
+    }
+
     fn plan_with_property(subject: PropertySubject, key: &str, op: PropertyOp) -> Composition {
-        let mut node = act("s", ActName::FollowFrom, Some(caller_ids(IdKind::Resource)));
+        let mut node = act("s", ActName::FindExact, Some(caller_ids(IdKind::Resource)));
         if let StageNode::Act(a) = &mut node {
             a.properties.push(PropertyPredicate {
                 subject,
@@ -972,20 +495,26 @@ mod tests {
                 op,
             });
         }
-        plan(vec![node], vec!["s"])
+        plan_with_intention(vec![node], vec!["s"])
     }
 
     // ---- Task 6: topology -------------------------------------------------------------------
 
     #[test]
     fn a_cycle_is_refused_rather_than_compiled() {
-        // A query over a graph must itself be acyclic. Both `follow-from` acts are reachable, so the
-        // only thing wrong here is the cycle. (The plan's original used `find-exact`, which Task 8
-        // now refuses as unreachable; reachable acts keep the cycle the sole finding.)
-        let c = plan(
+        // A query over a graph must itself be acyclic. Both `find-exact` acts are reachable, so the
+        // only thing wrong here is the cycle.
+        //
+        // The subject has now made a round trip, which is worth recording rather than quietly
+        // arriving back where it started: this was `find-exact`, moved to `follow-from` at beat B
+        // because `search_exact` was then absent from `CALLABLE_FRAGMENTS`, and moved back when the
+        // two placeholder rows were dropped and `follow-from` became the unreachable one. The rule
+        // that decided it both times is the same — a cycle test needs a REACHABLE act, or the
+        // reachability refusal joins the finding and `is_err()` stops meaning "the cycle".
+        let c = plan_with_intention(
             vec![
-                act("a", ActName::FollowFrom, upstream("b")),
-                act("b", ActName::FollowFrom, upstream("a")),
+                act("a", ActName::FindExact, upstream("b")),
+                act("b", ActName::FindExact, upstream("a")),
             ],
             vec!["a"],
         );
@@ -998,13 +527,15 @@ mod tests {
 
     #[test]
     fn a_reference_to_an_undeclared_stage_is_refused() {
-        let c = plan(
-            vec![act("near", ActName::FollowFrom, upstream("ghost"))],
-            vec!["near"],
+        // A reachable act and a threaded question, so the dangling reference is the ONE refusal —
+        // which is what the exact count below is asserting.
+        let c = plan_with_intention(
+            vec![act("hits", ActName::FindExact, upstream("ghost"))],
+            vec!["hits"],
         );
         let errs = validate(&c).unwrap_err();
         assert_eq!(errs.len(), 1);
-        assert_eq!(errs[0].stage.as_ref().unwrap().as_str(), "near");
+        assert_eq!(errs[0].stage.as_ref().unwrap().as_str(), "hits");
     }
 
     #[test]
@@ -1032,11 +563,16 @@ mod tests {
     fn a_combinator_with_one_input_is_refused() {
         // One input is not a combination. Admitting it would let a plan express a no-op node that
         // reads as a merge.
-        let c = plan(
+        //
+        // A reachable act, so the act contributes no refusal of its own. Note what this `is_err()`
+        // still cannot separate, which predates the reachability flip: naming a combinator in
+        // `returns` is itself refused (`CombinatorNotReturnable`), so the arity check is not the
+        // only thing holding this assertion up.
+        let c = plan_with_intention(
             vec![
                 act(
                     "hits",
-                    ActName::FollowFrom,
+                    ActName::FindExact,
                     Some(caller_ids(IdKind::Resource)),
                 ),
                 StageNode::Combine(CombineNode {
@@ -1053,10 +589,10 @@ mod tests {
     #[test]
     fn every_refusal_is_reported_not_just_the_first() {
         // A caller repairing a plan should see all of it. Returning the first turns one round trip
-        // into N. `follow-from` is reachable, so the two findings are exactly the dangling ref and
-        // the bad return — nothing else.
-        let c = plan(
-            vec![act("near", ActName::FollowFrom, upstream("ghost"))],
+        // into N. `find-exact` is reachable and the question is threaded, so the two findings are
+        // exactly the dangling ref and the bad return — nothing else.
+        let c = plan_with_intention(
+            vec![act("hits", ActName::FindExact, upstream("ghost"))],
             vec!["also_missing"],
         );
         let errs = validate(&c).unwrap_err();
@@ -1068,24 +604,25 @@ mod tests {
 
     #[test]
     fn a_valid_plan_comes_back_in_dependency_order() {
-        // A `follow-from` chain — both reachable, resource→resource — so the plan is fully legal at
-        // the end of beat B and the topological order is the only thing under test.
-        let c = plan(
+        // `find-exact` → `find-about-within`: two reachable acts, resource→resource, and
+        // `find-about-within` accepts a resource bound — so the plan is fully legal and the
+        // topological order is the only thing under test.
+        let c = plan_with_intention(
             vec![
-                act("near", ActName::FollowFrom, upstream("hits")),
+                act("narrowed", ActName::FindAboutWithin, upstream("hits")),
                 act(
                     "hits",
-                    ActName::FollowFrom,
+                    ActName::FindExact,
                     Some(caller_ids(IdKind::Resource)),
                 ),
             ],
-            vec!["near"],
+            vec!["narrowed"],
         );
         let v = validate(&c).expect("plan is legal");
         let names: Vec<&str> = v.ordered().iter().map(|n| n.name().as_str()).collect();
         assert_eq!(
             names,
-            vec!["hits", "near"],
+            vec!["hits", "narrowed"],
             "declaration order is not execution order"
         );
     }
@@ -1094,8 +631,12 @@ mod tests {
 
     #[test]
     fn a_kind_the_act_does_not_accept_is_refused_against_the_registry() {
-        // `find-exact` accepts bounds of kind `resource` only. Piping `survey`'s regions into it is
+        // `find-exact` does not accept bounds of kind `region`. Piping `survey`'s regions into it is
         // a category error the DECLARATIONS already know about — this check reads them.
+        //
+        // `survey` stays the upstream because it is the only act that PRODUCES a kind no reachable
+        // act accepts; the alternative subjects are all resource-to-resource. Its own
+        // `NotSeparablyReachable` rides along, which is why the assertion names the reason it means.
         let c = plan(
             vec![
                 act("shape", ActName::Survey, Some(caller_ids(IdKind::Cogmap))),
@@ -1122,14 +663,20 @@ mod tests {
     /// it belongs in the 400 alongside every other refusal.
     #[test]
     fn a_multi_id_anchor_bound_is_refused_here_rather_than_costing_the_whole_composition() {
-        // `survey` throughout: it takes cogmap/context bounds and is not a find act, so no
-        // intention is threaded and the only thing under test is the cardinality.
-        let c = plan(
+        // `find-exact` throughout: it is reachable and declares `accepts_bounds: [Resource,
+        // Context, Cogmap]`, so with the question threaded the only thing under test is the
+        // cardinality. A reachable act is what the `ok` assertion below needs — an unreachable one
+        // would earn a refusal of its own and the innocent stage would no longer be innocent.
+        let c = plan_with_intention(
             vec![
-                act("ok", ActName::Survey, Some(anchor_ids(IdKind::Cogmap, 1))),
+                act(
+                    "ok",
+                    ActName::FindExact,
+                    Some(anchor_ids(IdKind::Cogmap, 1)),
+                ),
                 act(
                     "scoped",
-                    ActName::Survey,
+                    ActName::FindExact,
                     Some(anchor_ids(IdKind::Context, 2)),
                 ),
             ],
@@ -1157,10 +704,10 @@ mod tests {
     /// The boundary, so the check above is about CARDINALITY and not about anchors being unwelcome.
     #[test]
     fn a_single_id_anchor_bound_is_exactly_what_the_slot_holds_and_validates() {
-        let c = plan(
+        let c = plan_with_intention(
             vec![act(
                 "scoped",
-                ActName::Survey,
+                ActName::FindExact,
                 Some(anchor_ids(IdKind::Context, 1)),
             )],
             vec!["scoped"],
@@ -1177,10 +724,10 @@ mod tests {
     /// answer the unscoped question instead.
     #[test]
     fn an_empty_anchor_set_is_refused_rather_than_read_as_unscoped() {
-        let c = plan(
+        let c = plan_with_intention(
             vec![act(
                 "scoped",
-                ActName::Survey,
+                ActName::FindExact,
                 Some(anchor_ids(IdKind::Context, 0)),
             )],
             vec!["scoped"],
@@ -1190,6 +737,62 @@ mod tests {
             errs.iter()
                 .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
             "got: {errs:?}"
+        );
+    }
+
+    /// **The two anchor arms sit on opposite sides of the seam, and only this pins which.**
+    ///
+    /// `[added — 2026-08-12, Pete's ruling]` `AnchorTakesOneId` is raised from both modules, so the
+    /// seam guard — which counts per module and sees ONE site in each — cannot tell whether the
+    /// arms are the right way round. The classification is the ruling: naming nothing to scope to
+    /// is malformed against every door there will ever be, while "the pair holds one id" is a fact
+    /// about TODAY's fragments that an `anchor_ids uuid[]` retires. A client running
+    /// `validate_shape` against a newer server must therefore still refuse the empty set and must
+    /// NOT refuse the many-id one.
+    ///
+    /// Both remain refusals of `validate`, which the two tests above assert; what moves is only
+    /// which pass raises them.
+    #[test]
+    fn shape_refuses_an_empty_anchor_and_leaves_the_multi_id_one_to_capability() {
+        let empty = plan_with_intention(
+            vec![act(
+                "scoped",
+                ActName::FindExact,
+                Some(anchor_ids(IdKind::Context, 0)),
+            )],
+            vec!["scoped"],
+        );
+        assert!(
+            validate_shape(&empty)
+                .iter()
+                .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
+            "an anchor naming nothing is malformed whatever the fragments hold, so the shape \
+             pass must raise it: {:?}",
+            validate_shape(&empty)
+        );
+
+        let many = plan_with_intention(
+            vec![act(
+                "scoped",
+                ActName::FindExact,
+                Some(anchor_ids(IdKind::Context, 2)),
+            )],
+            vec!["scoped"],
+        );
+        assert!(
+            !validate_shape(&many)
+                .iter()
+                .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
+            "the one-id anchor slot is this door's fragment shape, not the contract's — a stale \
+             client must not refuse a plan a widened server would run: {:?}",
+            validate_shape(&many)
+        );
+        assert!(
+            validate(&many)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
+            "and the full validator must still refuse it against THIS server"
         );
     }
 
@@ -1253,7 +856,7 @@ mod tests {
         let errs = validate(&c).unwrap_err();
         assert!(
             errs.iter()
-                .any(|e| e.reason == RefusalReason::Other("duplicate-return-stage".to_string())),
+                .any(|e| e.reason == RefusalReason::DuplicateReturnStage),
             "got: {errs:?}"
         );
     }
@@ -1269,8 +872,7 @@ mod tests {
         };
         let errs = validate(&c).unwrap_err();
         assert!(
-            errs.iter()
-                .any(|e| e.reason == RefusalReason::Other("no-stages".to_string())),
+            errs.iter().any(|e| e.reason == RefusalReason::NoStages),
             "got: {errs:?}"
         );
     }
@@ -1280,16 +882,16 @@ mod tests {
     /// answering 200 where the contract says 400).
     #[test]
     fn a_composition_with_no_returns_is_refused() {
-        let c = plan(
+        let c = plan_with_intention(
             vec![act(
-                "near",
-                ActName::FollowFrom,
+                "hits",
+                ActName::FindExact,
                 Some(caller_ids(IdKind::Resource)),
             )],
             vec![],
         );
         let errs = validate(&c).unwrap_err();
-        let no_returns = RefusalReason::Other("no-returns".to_string());
+        let no_returns = RefusalReason::NoReturns;
         assert!(
             errs.iter()
                 .any(|e| e.reason == no_returns && e.stage.is_none()),
@@ -1298,13 +900,13 @@ mod tests {
 
         // And a one-return composition does not get it — the refusal is about the empty list, not
         // about returns generally.
-        let ok = plan(
+        let ok = plan_with_intention(
             vec![act(
-                "near",
-                ActName::FollowFrom,
+                "hits",
+                ActName::FindExact,
                 Some(caller_ids(IdKind::Resource)),
             )],
-            vec!["near"],
+            vec!["hits"],
         );
         assert!(validate(&ok).is_ok(), "got: {:?}", validate(&ok).err());
     }
@@ -1313,6 +915,10 @@ mod tests {
     fn survey_declines_limit_because_its_bound_is_a_funnel_width() {
         // `survey` admits `regions` and not `limit`, because `wayfind_region_scores` takes a funnel
         // width and has no rows to limit. A term is never reinterpreted to fit.
+        //
+        // Kept over `survey` because survey is the SUBJECT — no reachable act declines `limit`. The
+        // plan therefore also earns a `NotSeparablyReachable`, which is why the assertion names its
+        // reason rather than reading `is_err()`.
         let mut node = act("shape", ActName::Survey, Some(caller_ids(IdKind::Cogmap)));
         if let StageNode::Act(a) = &mut node {
             a.terms.insert(BoundTerm::Limit, 10);
@@ -1524,6 +1130,9 @@ mod tests {
         // Context regions and cogmap regions are both RegionId and are NOT interchangeable — a
         // context region's id 404s at the sole consumer of region ids. Checked here, that is a
         // declined plan; unchecked, it is a rediscovered 404.
+        //
+        // The act is incidental — the check reads the id SET — and moving it to a find act would
+        // trade one companion refusal for another, since no act accepts a region bound either.
         let c = plan(
             vec![act(
                 "r",
@@ -1542,7 +1151,19 @@ mod tests {
     fn a_kind_changing_hop_is_expressible_so_the_region_phase_is_not_foreclosed() {
         // Spec §4 requirement 3. No v1 act changes kind, so without this a resource-shaped
         // assumption could pass everything and quietly make region-mediated composition
-        // unbuildable. `cogmap in -> region out` is a legal hop TODAY with no SQL change.
+        // unbuildable. `cogmap in -> region out` is a legal SHAPE today with no SQL change.
+        //
+        // `[re-pointed — 2026-08-12]` This asserted `validate(&c).is_ok()`, and that stopped being
+        // true when `survey` left `CALLABLE_FRAGMENTS`: the only act that produces regions is now
+        // unreachable from this surface, so **no plan `validate` accepts changes kind at all**, and
+        // there is no reachable act to move this example onto. That is a fact about the flip, and
+        // this is where it is recorded rather than absorbed.
+        //
+        // The SUBJECT is expressibility and is unchanged — what changed is that the two questions
+        // are now two functions. `validate_shape` is the published contract's answer and says
+        // nothing about this hop; `validate`'s single refusal is this DOOR's capability and reads
+        // `NotSeparablyReachable`, naming a fragment rather than anything about kinds. Foreclosure
+        // would look like a SHAPE refusal, and there is none.
         let c = plan(
             vec![act(
                 "shape",
@@ -1551,8 +1172,21 @@ mod tests {
             )],
             vec!["shape"],
         );
-        let v = validate(&c).expect("cogmap in, region out is a legal hop");
-        assert_eq!(v.ordered().len(), 1);
+
+        let shape = validate_shape(&c);
+        assert!(
+            shape.is_empty(),
+            "a kind-changing hop must stay EXPRESSIBLE; the shape pass refused it: {shape:?}"
+        );
+
+        let errs = validate(&c).expect_err("survey has no fragment this surface can emit");
+        assert_eq!(errs.len(), 1, "got: {errs:?}");
+        assert_eq!(
+            errs[0].reason,
+            RefusalReason::NotSeparablyReachable,
+            "the only thing between this hop and execution is a fragment this door has not \
+             built; anything else would mean the shape itself was refused"
+        );
     }
 
     // ---- Task 7b: the property predicate ----------------------------------------------------
@@ -1616,6 +1250,28 @@ mod tests {
                 .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
             "a served act with no fragment must not be reported as unbuilt; got: {errs:?}"
         );
+    }
+
+    #[test]
+    fn an_act_whose_fragment_takes_arguments_no_slot_supplies_refuses_statically() {
+        // `follow-from` and `survey` mapped to a placeholder function that does not exist, so they
+        // validated clean and failed at EXECUTION. Invisible while nothing executed a composition
+        // outside its own tests; a 500 the moment a door opened.
+        //
+        // The flip is not primarily about the 500. `registry.rs` declares both acts
+        // `DoorReach::Absent` at all three doors and promises they restore to `Serves` when this
+        // door lands. Had the placeholder survived, BOTH would have been false: reachable through
+        // the door, and unable to answer.
+        for act in [ActName::FollowFrom, ActName::Survey] {
+            let c = a_legal_single_stage_plan_over(act.clone());
+            let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
+            assert!(
+                errs.iter()
+                    .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
+                "{act:?} must refuse as unreachable rather than compile to an absent function; \
+                 got {errs:?}"
+            );
+        }
     }
 
     // ---- The relation moved onto the edge ---------------------------------------------------
@@ -1710,7 +1366,9 @@ mod tests {
         );
 
         // And `follow-from` accepts seeds, not bounds — so the second plan is refused for the
-        // relation and the first is not.
+        // relation. It is the only act that accepts a seed at all, which is why it stays the
+        // subject after the flip; its `NotSeparablyReachable` rides along, and the assertion names
+        // the reason it is about.
         assert!(validate(&plan(vec![caller_bound], vec!["hits"]))
             .unwrap_err()
             .iter()
@@ -1724,23 +1382,27 @@ mod tests {
         // `body` is a real word in the shared vocabulary, so it deserializes — and is refused
         // here, which is the point of not making it a narrow query-local enum. A refusal that only
         // said no would leave the caller guessing; this one names `show`.
-        let c = plan_returning(
+        let mut c = plan_returning(
             vec![act(
-                "near",
-                ActName::FollowFrom,
+                "hits",
+                ActName::FindExact,
                 Some(caller_ids(IdKind::Resource)),
             )],
             vec![ReturnSpec {
-                stage: StageName::parse("near").unwrap(),
+                stage: StageName::parse("hits").unwrap(),
                 with: vec![ResourceSection::Body],
             }],
         );
+        c.intention = Some(Intention {
+            query: "q".to_string(),
+            embedded: false,
+        });
         let errs = validate(&c).unwrap_err();
         let hit = errs
             .iter()
             .find(|e| e.reason == RefusalReason::SectionNotAvailable)
             .unwrap_or_else(|| panic!("got: {errs:?}"));
-        assert_eq!(hit.stage.as_ref().unwrap().as_str(), "near");
+        assert_eq!(hit.stage.as_ref().unwrap().as_str(), "hits");
         assert!(hit.detail.contains("show"), "got: {}", hit.detail);
         assert!(
             hit.detail.contains("open-meta"),
@@ -1755,13 +1417,17 @@ mod tests {
         // a single-member enum, `body` would fail to parse and serde would short-circuit — this
         // caller would learn about their section and never hear about their dangling reference,
         // in a deserializer's vocabulary rather than this contract's.
-        let c = plan_returning(
-            vec![act("near", ActName::FollowFrom, upstream("ghost"))],
+        let mut c = plan_returning(
+            vec![act("hits", ActName::FindExact, upstream("ghost"))],
             vec![ReturnSpec {
-                stage: StageName::parse("near").unwrap(),
+                stage: StageName::parse("hits").unwrap(),
                 with: vec![ResourceSection::Body, ResourceSection::Edges],
             }],
         );
+        c.intention = Some(Intention {
+            query: "q".to_string(),
+            embedded: false,
+        });
         let errs = validate(&c).unwrap_err();
         assert_eq!(
             errs.iter()
@@ -1840,27 +1506,50 @@ mod tests {
         // derive from `orders_by.field`, and this is what holds them together — a caller reads the
         // kind off a hit and looks up its range on the stage, so a mismatch would send them to the
         // wrong scale.
-        let c = plan(
-            vec![act(
-                "shape",
-                ActName::Survey,
-                Some(caller_ids(IdKind::Cogmap)),
-            )],
-            vec!["shape"],
-        );
+        //
+        // `[re-pointed — 2026-08-12]` The subject was `survey`, and the promise was read through
+        // `ValidationOutcome`. The flip made that impossible rather than merely awkward: the
+        // reachable set is now exactly the three find acts, every one of which produces Resources
+        // on a UNIT-interval score, so **no plan `validate` accepts can carry a Regions variant or
+        // a non-unit range through the outcome at all**. Split rather than weakened — the
+        // derivation keeps its witness over a reachable act, and the region case is asserted one
+        // layer down, against the same two accessors `ValidationOutcome::of` reads.
+        let c = plan_with_intention(vec![act("hits", ActName::FindExact, None)], vec!["hits"]);
         let out = ValidationOutcome::of(&validate(&c).expect("legal"));
-        let shape = &out.will_return[&StageName::parse("shape").unwrap()];
+        let hits = &out.will_return[&StageName::parse("hits").unwrap()];
 
-        assert_eq!(shape.produced, ProducedVariant::Regions);
+        assert_eq!(hits.produced, ProducedVariant::Resources);
         assert_eq!(
-            shape.score_kind.as_ref().map(ScoreKind::as_str),
-            shape.orders_by.as_ref().map(|q| q.field.as_str())
+            hits.score_kind.as_ref().map(ScoreKind::as_str),
+            hits.orders_by.as_ref().map(|q| q.field.as_str())
         );
-        // And the range is carried, because region_score is NOT [0,1] and its name does not say so.
+        // And the range is carried rather than left to a convention about the name.
         assert!(matches!(
-            shape.orders_by.as_ref().map(|q| &q.scale),
+            hits.orders_by.as_ref().map(|q| &q.scale),
+            Some(crate::types::query::QuantityScale::UnitInterval)
+        ));
+
+        // The region case, at the layer that survives the flip. `region_score` is NOT [0,1] and its
+        // name does not say so, which is exactly why the pairing has to hold for THIS act — and
+        // `survey` is the only act it can be asked about.
+        let survey = declaration(&ActName::Survey).expect("survey is declared");
+        assert_eq!(
+            survey.score_kind().as_ref().map(ScoreKind::as_str),
+            survey.orders_by.as_ref().map(|q| q.field.as_str())
+        );
+        assert!(matches!(
+            survey.orders_by.as_ref().map(|q| &q.scale),
             Some(crate::types::query::QuantityScale::OtherRange { .. })
         ));
+        // **And the variant, which is the third fact and not a spare one.** The region half that
+        // travelled through `ValidationOutcome` asserted `produced == Regions`, and that was the
+        // only assertion in the workspace pinning `produced_variant`'s `IdKind::Region` arm:
+        // `every_selecting_act_predicts_a_response_shape` asserts `is_some()`, and
+        // `the_promised_variant_is_the_one_a_real_output_reports` reads `StageOutput::variant()`
+        // rather than a declaration. Without this line, mutating that arm to `Resources` leaves the
+        // whole workspace green — the wrong promise `act.rs`'s own comment says is worse than an
+        // absent one, and a promise no reachable plan can be handed is exactly where nobody looks.
+        assert_eq!(survey.produced_variant(), Some(ProducedVariant::Regions));
     }
 
     #[test]
@@ -1871,9 +1560,9 @@ mod tests {
         let mut c = plan(
             vec![
                 act("seeds", ActName::FindAboutAnywhere, None),
-                act("near", ActName::FollowFrom, upstream("seeds")),
+                act("narrowed", ActName::FindAboutWithin, upstream("seeds")),
             ],
-            vec!["near"],
+            vec!["narrowed"],
         );
         c.intention = Some(Intention {
             query: "x".to_string(),
@@ -1884,7 +1573,7 @@ mod tests {
         assert_eq!(out.will_return.len(), 1);
         assert!(out
             .will_return
-            .contains_key(&StageName::parse("near").unwrap()));
+            .contains_key(&StageName::parse("narrowed").unwrap()));
         assert!(
             !out.will_return
                 .contains_key(&StageName::parse("seeds").unwrap()),
@@ -1896,7 +1585,7 @@ mod tests {
             out.order,
             vec![
                 StageName::parse("seeds").unwrap(),
-                StageName::parse("near").unwrap()
+                StageName::parse("narrowed").unwrap()
             ]
         );
     }
@@ -1905,23 +1594,29 @@ mod tests {
     fn the_outcome_tells_a_caller_which_optional_fields_will_be_null() {
         // The reason `discloses` exists at all: a caller learns which optional fields will be
         // filled HERE rather than by finding a null in a response and guessing whether it means
-        // "cannot" or "none". `follow-from` declares nothing — it has no match position to report.
-        let c = plan(
+        // "cannot" or "none".
+        //
+        // `find-exact` declares nothing, and the reason is not that it has nothing to say: a find
+        // act is exactly the kind that COULD report where in a resource it matched, and
+        // `registry.rs`'s `match_location_is_declared_by_no_act_until_the_wide_fragments_carry_the_
+        // chunk_out` holds every act to declaring nothing until the executor fills it. So this is a
+        // promise of an empty set, made deliberately.
+        let c = plan_with_intention(
             vec![act(
-                "near",
-                ActName::FollowFrom,
+                "hits",
+                ActName::FindExact,
                 Some(caller_ids(IdKind::Resource)),
             )],
-            vec!["near"],
+            vec!["hits"],
         );
         let out = ValidationOutcome::of(&validate(&c).expect("legal"));
-        let near = &out.will_return[&StageName::parse("near").unwrap()];
+        let near = &out.will_return[&StageName::parse("hits").unwrap()];
 
         assert_eq!(near.produced, ProducedVariant::Resources);
-        assert_eq!(near.score_kind, Some(ScoreKind::GraphScore));
+        assert_eq!(near.score_kind, Some(ScoreKind::FtsNorm));
         assert!(
             near.discloses.is_empty(),
-            "follow-from declares neither disclosure; got: {:?}",
+            "find-exact declares no disclosure; got: {:?}",
             near.discloses
         );
         // So a caller also knows `located_at` will be absent on every row, before asking.
@@ -1948,10 +1643,10 @@ mod tests {
         // hydrating it would put two acts' rows into ONE ordered list — the merged list
         // `no-cross-act-ranking` exists to make unrepresentable. Combining stays legal; asking for
         // the combined rows back does not.
-        let c = plan(
+        let c = plan_with_intention(
             vec![
-                act("a", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
-                act("b", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
                 StageNode::Combine(CombineNode {
                     name: StageName::parse("merged").unwrap(),
                     op: CombineOp::Union,
@@ -1965,9 +1660,9 @@ mod tests {
         );
         let errs = validate(&c).expect_err("a combinator may not be returned");
         assert!(
-            errs.iter().any(|e| e.reason
-                == RefusalReason::Other("combinator-not-returnable".to_string())
-                && e.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::CombinatorNotReturnable
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
             "got: {errs:?}"
         );
     }
@@ -1977,10 +1672,10 @@ mod tests {
         // The boundary: combining is the point of having combinators. Only asking for the combined
         // rows BACK is refused, and a composition that unions two stages and returns one of them is
         // exactly the shape the DAG exists for.
-        let c = plan(
+        let c = plan_with_intention(
             vec![
-                act("a", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
-                act("b", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))),
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
                 StageNode::Combine(CombineNode {
                     name: StageName::parse("merged").unwrap(),
                     op: CombineOp::Union,
@@ -2016,30 +1711,115 @@ mod tests {
         }
     }
 
+    // `the_two_placeholder_fused_acts_are_not_refused_by_reading_their_host` stood here and is
+    // DELETED rather than re-pointed, because the flip did not move its subject — it falsified it.
+    // The test asserted that `survey` and `follow-from` validate clean, on the argument that the two
+    // `Fused` declarations were among the reachable ones and so a rule keyed on that discriminant
+    // would refuse the wrong acts. Both acts are now refused, deliberately, and
+    // `an_act_whose_fragment_takes_arguments_no_slot_supplies_refuses_statically` asserts exactly
+    // that over exactly them.
+    //
+    // What the deleted test also carried — that reachability is keyed on served-by names and never
+    // on `build_state` — is NOT retired with it, but it now has one witness rather than two:
+    // `a_served_act_this_builder_has_no_fragment_for_refuses_honestly`, where `substantiate` is
+    // `Served` and unreachable. There is no `Fused`-and-reachable act left to witness the other
+    // direction, and CALLABLE_FRAGMENTS' doc comment says so rather than implying both.
+
+    // ---- The shape/capability seam ----------------------------------------------------------
+
     #[test]
-    fn the_two_placeholder_fused_acts_are_not_refused_by_reading_their_host() {
-        // `follow-from` and `survey` declare `Fused { host: "unified_search" }`, a value registry.rs
-        // documents as the least-wrong of three rather than a fact. Their `served_by` mechanics
-        // (`search_graph_expand`, `wayfind_region_scores`) are the two the builder calls directly. A
-        // rule keyed on the `Fused` discriminant would refuse exactly the two acts beat C exists to
-        // execute; this is what makes that inversion fail loudly instead of looking like caution.
-        assert!(validate(&plan(
-            vec![act(
-                "shape",
-                ActName::Survey,
-                Some(caller_ids(IdKind::Cogmap))
-            )],
-            vec!["shape"],
-        ))
-        .is_ok());
-        assert!(validate(&plan(
-            vec![act(
-                "near",
-                ActName::FollowFrom,
-                Some(caller_ids(IdKind::Resource))
-            )],
-            vec!["near"],
-        ))
-        .is_ok());
+    fn the_shape_pass_answers_without_consulting_any_declaration() {
+        // A plan whose ONLY problem is that its act is not reachable from this surface. The
+        // capability pass refuses it; the shape pass must not, because a client one release behind
+        // would then decline a plan the server would run.
+        //
+        // `substantiate` is the subject rather than `survey`: it is `Served` by
+        // `resource_standing_shape`, which is absent from `CALLABLE_FRAGMENTS`, and its
+        // `accepts_*` lists are all empty — so a minimal plan over it raises exactly one refusal,
+        // and that refusal is `NotSeparablyReachable`.
+        let c = a_legal_single_stage_plan_over(ActName::Substantiate);
+
+        let shape = validate_shape(&c);
+        assert!(
+            shape.is_empty(),
+            "the shape pass raised {shape:?} for a well-formed plan; only expressibility belongs here"
+        );
+
+        let full = validate(&c).expect_err("the capability pass refuses an unreachable mechanic");
+        assert!(
+            full.iter()
+                .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
+            "expected the capability pass to supply the refusal the shape pass withheld; got {full:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_act_name_is_refused_from_the_type_rather_than_from_the_registry() {
+        // `ActName` is open (`act.rs:45-46`), so `"act": "made-up"` deserializes into `Other`
+        // instead of failing serde — this is a caller-reachable refusal, and it is answerable
+        // without the registry, which is what lets it sit in the shape pass.
+        //
+        // Pinned because the check was REWRITTEN when the passes split: it used to be
+        // `declaration(&inv.act)` returning `None`, and it is now `matches!(inv.act,
+        // ActName::Other(_))`. The two agree only because `search_family()` declares every
+        // non-`Other` variant, so the equivalence is load-bearing and had no witness at all.
+        let c = a_legal_single_stage_plan_over(ActName::Other("made-up".to_string()));
+
+        let shape = validate_shape(&c);
+        assert_eq!(shape.len(), 1, "got: {shape:?}");
+        assert_eq!(shape[0].reason, RefusalReason::UnknownAct);
+        assert_eq!(shape[0].stage.as_ref().map(|s| s.as_str()), Some("s"));
+
+        // And the capability pass adds nothing: an act with no declaration is nothing it can
+        // speak about, so the caller gets the one refusal that means something.
+        let errs = validate(&c).expect_err("an act nobody declares is not a plan");
+        assert_eq!(errs, shape, "got: {errs:?}");
+    }
+
+    #[test]
+    fn a_cyclic_plan_still_hears_about_a_section_this_door_does_not_hydrate() {
+        // The `returns` check reads no stage graph — it compares `with` against a constant — so
+        // a cycle takes nothing away from its answer, and swallowing it would hand this caller
+        // one of their two problems. `validate` returns EVERY refusal.
+        //
+        // Beside `a_refused_section_comes_back_alongside_every_other_refusal_not_instead_of_them`
+        // rather than replacing it: that one's subject is a dangling reference, whose graph still
+        // topologically sorts, so it cannot see this gate at all.
+        let c = plan_returning(
+            vec![
+                act("a", ActName::FindExact, upstream("b")),
+                act("b", ActName::FindExact, upstream("a")),
+            ],
+            vec![ReturnSpec {
+                stage: StageName::parse("a").unwrap(),
+                with: vec![ResourceSection::Body],
+            }],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.detail.contains("cycle")),
+            "got: {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::SectionNotAvailable),
+            "a cycle must not swallow a refusal that never asked about the graph; got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn the_shape_pass_still_refuses_a_malformed_plan() {
+        // The other direction: a shape refusal must not have migrated into the capability pass,
+        // where `--check` would never see it.
+        let mut c = a_legal_single_stage_plan_over(ActName::Substantiate);
+        c.outcome.returns.clear();
+
+        let shape = validate_shape(&c);
+        assert!(
+            shape
+                .iter()
+                .any(|e| e.reason == RefusalReason::NoReturns),
+            "a composition that answers nothing is malformed regardless of what is built; got {shape:?}"
+        );
     }
 }

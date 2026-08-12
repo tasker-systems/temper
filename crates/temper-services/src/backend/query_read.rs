@@ -443,6 +443,25 @@ fn extent_of(
                 .to_string(),
         };
     }
+    // **Unreachable through `validate`, and kept anyway** — the same status
+    // `query_plan.rs`'s `_` arm carries, said here too because a fact documented in one file and
+    // silent in another teaches the next reader that only one of them is unreachable.
+    // `[since 2026-08-12]` `survey` left `CALLABLE_FRAGMENTS`, so `validate` refuses it as
+    // `NotSeparablyReachable` and no `ValidatedComposition` can carry a `survey` stage to this
+    // function. It stays because the arm is a fact about the ACT — a funnel produces its candidate
+    // set rather than selecting from one — that a lens slot restores rather than invents, and
+    // because the fallback below would otherwise answer `complete` over a corpus survey never
+    // counted.
+    //
+    // **NOTHING TESTS THIS ARM, and that is a second fact rather than the same one restated.**
+    // `[declared — 2026-08-12, re-review]` The paragraph above justified itself by saying that a
+    // fact documented in one file and silent in another teaches the next reader that only one of
+    // them is unreachable — and then reproduced exactly that asymmetry one fact over, stating the
+    // unreachability and not the coverage. `a_refused_stage_reports_an_indeterminate_extent_rather_
+    // than_complete` is the only test in this file that reaches `Extent::Indeterminate`, and it
+    // drives a `find-about-anywhere` stage carrying an `EmbeddingUnavailable` refusal — so it
+    // exercises the REFUSAL arm above, never this one. `ActName::Survey` appears in this file
+    // exactly once, here. Same status as `query_plan.rs`'s `_` arm, now said the same way.
     if act_of(node) == ActName::Survey {
         return Extent::Indeterminate {
             reason:
