@@ -52,8 +52,11 @@ fn provisionally_unexpressed() -> BuildState {
     }
 }
 
-/// The `/api/search` door shape: all three doors present and serving, differing only in which bound
-/// terms a door cannot supply. **Three declarations write it** — the `find` acts, and only them.
+/// The `/api/search` door shape: all three doors present and serving. `cli_unreachable` is the
+/// term-axis shortfall the CLI alone can carry — empty at every call site today, since `temper
+/// search` now has a flag for every term the `find` acts admit — kept as a parameter rather than
+/// dropped because it is the seam a later CLI-only shortfall would land in without a signature
+/// change. **Three declarations write it** — the `find` acts, and only them.
 ///
 /// The name is historical — it was minted when five acts were fused into one host. The host is gone
 /// (retired 2026-08-06) and the doors did not move with it, which is why the shape survives it: the
@@ -158,11 +161,12 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // to fill, it is a question its index cannot answer. (`InputContribution` was removed
             // from the vocabulary with its field — ratification ⟨6⟩/9d.)
             discloses: vec![],
-            // The CLI's `search` command has no `--offset` — beside the positional query it takes
-            // `--context`, `--cogmap`, `--doc-type`, `--limit` and `--text-only`, and stops. So the
-            // CLI can only ever read page 1, and this act's declared `Offset` term is unreachable
-            // from it. Served, reachable from every door, and still door-partial — the case a
-            // `BuildState` variant could not have carried.
+            // The CLI's `search` command now has `--offset` beside `--context`, `--cogmap`,
+            // `--doc-type`, `--limit` and `--text-only` — so this act's term axis is fully
+            // reachable from every door; no term it admits lacks a flag anywhere. `Served`,
+            // reachable from every door on the TERM axis, and still door-partial on the BOUNDS
+            // axis below — the case a `BuildState` variant could not have carried, since
+            // door-partiality is orthogonal to build state and needs only one sub-axis to fail.
             //
             // `bounds_unreachable` at ALL THREE doors is the second half of that case, and the
             // sharper one: this act declares `accepts_bounds: [Resource, Context, Cogmap]` and NO
@@ -172,7 +176,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // act's acceptance is true of the FRAGMENT (`p_bound_ids uuid[]` is right there) and
             // unreachable from every caller, which is exactly the gap `Serves {}` could not state
             // before this axis existed.
-            door_coverage: unified_doors(vec![BoundTerm::Offset], vec![IdKind::Resource]),
+            door_coverage: unified_doors(vec![], vec![IdKind::Resource]),
             orders_by: Some(ActQuantity {
                 field: "fts_norm".to_string(),
                 means: "postgres ts_rank of the query against the resource's own search vector — \
@@ -206,7 +210,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // No `bounds_unreachable`, and it is the empty list that carries the statement: this
             // act accepts NO bounds by definition, so there is no kind for a door to fall short on.
             // The find acts either side of it both declare `Resource` unreachable.
-            door_coverage: unified_doors(vec![BoundTerm::Offset], vec![]),
+            door_coverage: unified_doors(vec![], vec![]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2, // best-of-N shrunk toward the chunk mean, 20260801000010
@@ -231,7 +235,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // previous search), is the kind no door can supply. `Context` and `Cogmap` reach it
             // through `context_ref` / `cogmap_id`. Same shortfall as `find-exact`, and the same
             // cause: no door's params carry a resource-id list.
-            door_coverage: unified_doors(vec![BoundTerm::Offset], vec![IdKind::Resource]),
+            door_coverage: unified_doors(vec![], vec![IdKind::Resource]),
             orders_by: Some(vec_norm_quantity()),
             visibility_profile: Some(VisibilityProfile::PrincipalRelative),
             scoring_revision: 2,
@@ -734,15 +738,16 @@ mod tests {
     }
 
     #[test]
-    fn the_cli_cannot_page_the_find_acts_and_that_is_declared() {
+    fn the_cli_can_now_page_the_find_acts_and_that_is_declared() {
         // The concrete parity gap that forced door coverage to be its own axis rather than a
-        // `BuildState` variant. The original form of this test noted the three acts were FUSED and
-        // still door-partial; they are `Served` now, and the gap is UNCHANGED — which is the
-        // stronger version of the same argument. Door-partiality is orthogonal to build state, so no
-        // `BuildState` variant could ever have carried it.
+        // `BuildState` variant — door-partiality is orthogonal to build state, so no
+        // `BuildState` variant could ever have carried it. The gap is now CLOSED: `temper search`
+        // gained `--offset`, so the axis records full term reach rather than a shortfall.
         //
-        // `temper search` still has no `--offset` and can only ever read page 1. Note that offset is
-        // now applied PER ARM (`substrate_read::search_select`), so the CLI cannot page either arm.
+        // Kept rather than deleted. The axis's value was never the non-empty entry; it is that
+        // the declaration and the parser are held to each other, which
+        // `the_cli_term_shortfall_is_what_clap_actually_lacks` now checks in the direction that
+        // has content — every admitted term must have a flag.
         for name in [
             ActName::FindExact,
             ActName::FindAboutAnywhere,
@@ -750,27 +755,20 @@ mod tests {
         ] {
             let a = declaration(&name).unwrap();
             assert_eq!(a.build_state, BuildState::Served);
-            // Read the term axis alone: this test is about `--offset`, and `..` keeps it from
-            // silently becoming a second assertion about the bound axis, which
+            // Read the term axis alone: `..` keeps this from silently becoming a second
+            // assertion about the bound axis, which
             // `no_door_can_supply_the_resource_bound_the_find_acts_accept` owns.
             let Some(DoorReach::Serves {
                 terms_unreachable, ..
             }) = a.door_coverage.get(&Door::Cli)
             else {
-                panic!("{name:?} must serve the CLI");
+                panic!("{name:?} must serve the CLI door");
             };
-            assert_eq!(
-                terms_unreachable,
-                &vec![BoundTerm::Offset],
-                "{name:?} must declare the CLI's missing --offset"
+            assert!(
+                terms_unreachable.is_empty(),
+                "{name:?} declares {terms_unreachable:?} unreachable at the CLI, but \
+                 `temper search` now accepts every term it admits"
             );
-            let Some(DoorReach::Serves {
-                terms_unreachable, ..
-            }) = a.door_coverage.get(&Door::Api)
-            else {
-                panic!("{name:?} must serve the API");
-            };
-            assert!(terms_unreachable.is_empty());
         }
     }
 

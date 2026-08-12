@@ -16,10 +16,19 @@
 //! which are prose: they went stale the moment the code moved, and nothing would have said so.
 //!
 //! The failure mode is worth naming precisely, because the pinning tests look like coverage.
-//! `the_cli_cannot_page_the_find_acts_and_that_is_declared` asserts `terms_unreachable == [Offset]`
-//! for the three find acts at the CLI. If `temper search` gained `--offset` tomorrow that test stays
-//! **green**, because it reads the declaration and compares it to itself. A declaration checked only
-//! against its own literal is a declaration nothing checks.
+//! `the_cli_cannot_page_the_find_acts_and_that_is_declared` used to assert `terms_unreachable ==
+//! [Offset]` for the three find acts at the CLI, comparing the declaration to itself — if `temper
+//! search` gained `--offset`, that test would stay **green** regardless, because it reads the
+//! declaration and compares it to itself. A declaration checked only against its own literal is a
+//! declaration nothing checks. That is exactly what happened: `temper search` gained `--offset`,
+//! and the pinning test was inverted by hand into
+//! `the_cli_can_now_page_the_find_acts_and_that_is_declared`. What would have caught the gap
+//! independently of that hand-edit is the sibling in `temper-cli`,
+//! `act_door_coverage_cli_terms.rs`'s `the_cli_term_shortfall_is_what_clap_actually_lacks` — it
+//! derives the shortfall from `Cli::command()`'s real parser tree rather than from the declaration,
+//! which is why it went red the moment the flag shipped. THIS file's oracle is the two doors that
+//! share `SearchParams` (`Door::Api`/`Door::Mcp`, see below) — the CLI's half of tier 2 needs
+//! clap's command tree and lives in that sibling instead.
 //!
 //! # The oracle, and why it is two things rather than one
 //!

@@ -1307,6 +1307,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             cogmap,
             doc_type,
             limit,
+            offset,
             text_only,
         } => {
             use temper_cli::actions::search as search_actions;
@@ -1325,6 +1326,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     cogmap: &cogmap,
                     doc_type: doc_type.as_deref(),
                     limit,
+                    offset,
                 },
                 output_format,
             )

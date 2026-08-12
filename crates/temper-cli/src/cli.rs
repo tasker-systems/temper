@@ -300,6 +300,10 @@ pub enum Commands {
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
+        /// Skip this many results. Applied per arm — the exact and wide arms page
+        /// independently, because their quantities are incommensurable.
+        #[arg(long)]
+        offset: Option<i64>,
         /// Use text-only search (no local embedding needed). The wide arm has no signal to run
         /// on without an embedding and will say so rather than returning an empty list.
         #[arg(long)]

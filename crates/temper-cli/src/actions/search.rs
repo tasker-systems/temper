@@ -32,6 +32,9 @@ pub struct CliSearchArgs<'a> {
     pub cogmap: &'a [String],
     pub doc_type: Option<&'a str>,
     pub limit: Option<i64>,
+    /// Page offset. `/api/search` has always accepted one (`SearchParams.offset`); this door
+    /// simply had no flag for it, which is what `door_coverage`'s CLI term axis recorded.
+    pub offset: Option<i64>,
 }
 
 /// Build a SearchParams from CLI arguments.
@@ -73,6 +76,7 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
         cogmap_ids,
         doc_type: args.doc_type.map(String::from),
         limit: args.limit,
+        offset: args.offset,
         ..SearchParams::default()
     })
 }
@@ -130,6 +134,28 @@ mod tests {
     }
 
     #[test]
+    fn the_cli_offset_reaches_search_params() {
+        // `temper search` could only ever read page 1. `SearchParams.offset` existed the whole
+        // time — this asserts the CLI now fills it, which is the only half that was missing.
+        let params = build_search_params(CliSearchArgs {
+            query: "anything",
+            embedding: None,
+            context: None,
+            cogmap: &[],
+            doc_type: None,
+            limit: Some(10),
+            offset: Some(20),
+        })
+        .expect("a query with no anchor conflict builds");
+        assert_eq!(params.offset, Some(20));
+        assert_eq!(
+            params.limit,
+            Some(10),
+            "limit must not be displaced by the new field"
+        );
+    }
+
+    #[test]
     fn build_search_params_carries_the_anchor_and_nothing_else() {
         let args = CliSearchArgs {
             query: "hello",
@@ -138,6 +164,7 @@ mod tests {
             cogmap: &[],
             doc_type: None,
             limit: Some(5),
+            offset: None,
         };
         let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.query.as_deref(), Some("hello"));
@@ -158,6 +185,7 @@ mod tests {
             cogmap: &two,
             doc_type: None,
             limit: None,
+            offset: None,
         };
         let err = build_search_params(args).expect_err("two anchors must be rejected");
         assert!(

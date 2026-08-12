@@ -54,11 +54,12 @@ pub enum ActName {
 /// **This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is
 /// [`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A
 /// `served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and
-/// CLI, absent from MCP) and would miss the other half of the class outright: the three `find` acts
-/// are `Served`, reachable from all three doors, and still door-partial — they declare
-/// [`super::scalars::BoundTerm::Offset`] and the CLI's `search` command has no `--offset`.
-/// Door-partiality is finer-grained than the act and orthogonal to whether a mechanic exists, so it
-/// cannot ride on this enum.
+/// CLI, absent from MCP) and would miss the other half of the class outright: `find-exact` and
+/// `find-about-within` are `Served`, reachable from all three doors, and still door-partial — they
+/// accept a [`super::id_set::IdKind::Resource`] bound, and no door's params carry a resource-id
+/// list to supply it (the search params type carries `context_ref` and `cogmap_id`/`cogmap_ids`,
+/// and no bound-ids slot at all). Door-partiality is finer-grained than the act and orthogonal to
+/// whether a mechanic exists, so it cannot ride on this enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

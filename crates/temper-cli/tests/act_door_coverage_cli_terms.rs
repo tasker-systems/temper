@@ -2,12 +2,15 @@
 //!
 //! # Why this half lives here, and why it carries the weight
 //!
-//! `door_coverage`'s three shortfall axes are declared per door. The **term** axis is the one with
-//! live content, and today every entry in it belongs to this door: `registry.rs`'s `unified_doors`
-//! helper takes its first argument as `cli_unreachable` and hands the API and MCP doors an empty
-//! list. So the assertion that matters is the one made here, and the sibling in `temper-core`
-//! (`act_door_coverage_reachability.rs`, which checks the two doors that share `SearchParams`)
-//! today checks a set that is empty by construction.
+//! `door_coverage`'s three shortfall axes are declared per door. The **term** axis is empty at
+//! every door today — `registry.rs`'s three `unified_doors` call sites all pass `vec![]` for
+//! `cli_unreachable`, and the sibling in `temper-core` (`act_door_coverage_reachability.rs`, which
+//! checks the two doors that share `SearchParams`) checks the same emptiness against that type's
+//! wire slots. This file still carries the weight, though: its oracle is clap's parser tree, the
+//! only artifact that can prove a term unreachable rather than merely assert it. The direction with
+//! content has inverted — every term an act admits must have a flag, not the other way around — and
+//! [`the_cli_term_shortfall_is_what_clap_actually_lacks`] now checks it in that direction. For what
+//! the live axis is today, see `bounds_unreachable`.
 //!
 //! It lives in `temper-cli` because the evidence does. The claim is *a caller standing at the CLI
 //! has no way to supply this term*, and the only artifact that answers it is clap's command tree —
@@ -21,10 +24,15 @@
 //! that does not exist reads exactly like a citation to one that does, and nothing in the build
 //! could tell them apart. Reading `get_arguments()` cannot cite a flag that is not there.
 //!
-//! And the pinning test it complements is blind in the direction that matters:
-//! `the_cli_cannot_page_the_find_acts_and_that_is_declared` asserts `terms_unreachable == [Offset]`
-//! by comparing the declaration to a literal. The day `temper search` gains `--offset`, that test
-//! stays green and the declaration becomes false. This one goes red.
+//! And the pinning test it complemented was blind in the direction that mattered:
+//! `the_cli_cannot_page_the_find_acts_and_that_is_declared` asserted `terms_unreachable ==
+//! [Offset]` by comparing the declaration to a literal, so the day `temper search` gained
+//! `--offset` that test would have stayed green while the declaration went false. That day has
+//! arrived — the flag shipped, the declaration was updated by hand alongside it, and the pinning
+//! test is now `the_cli_can_now_page_the_find_acts_and_that_is_declared` (inverted, asserting full
+//! reach rather than a literal shortfall). This file's `temper_search_can_page`, below, is the live
+//! instance: it reads clap's tree rather than the declaration, so it would go red on its own if the
+//! flag were ever removed while the declaration still claimed full reach.
 //!
 //! # Scope, stated rather than assumed
 //!
@@ -122,18 +130,21 @@ fn the_cli_term_shortfall_is_what_clap_actually_lacks() {
 
 /// The live instance, asserted from the parser rather than from the declaration.
 ///
-/// Kept as its own test beside the general gate because it is the concrete parity gap
-/// `door_coverage` exists to record — `temper search` can only ever read page 1 — and because a
-/// general gate over an empty set passes silently. This one names the flag.
+/// Kept as its own test beside the general gate for a different reason than its predecessor: the
+/// general gate would itself catch `--offset` disappearing today (`derived` would gain `Offset`
+/// while `declared` stayed empty). What it cannot catch is the declarations moving out from under
+/// it — `served_by` no longer naming a search fragment, or `Door::Cli` going `Absent`, both make
+/// `is_search_command_act`/`serves_cli` skip the act, so the general gate would pass vacuously with
+/// nothing left to check. This test asserts the flag's presence unconditionally, with no
+/// declaration in the loop to short-circuit on.
 #[test]
-fn temper_search_still_cannot_page() {
+fn temper_search_can_page() {
     let flags = search_flags();
     assert!(
-        !flags.contains("offset"),
-        "`temper search` has gained --offset. Every find act's CLI `terms_unreachable` must drop \
-         `Offset`, and `the_cli_cannot_page_the_find_acts_and_that_is_declared` in registry.rs \
-         must be updated with it — that test compares the declaration to a literal and will not \
-         notice on its own."
+        flags.contains("offset"),
+        "`temper search` has lost --offset. Every find act's CLI `terms_unreachable` must \
+         regain `Offset`, and `the_cli_can_now_page_the_find_acts_and_that_is_declared` in \
+         registry.rs compares the declaration to a literal and will not notice on its own."
     );
 }
 
