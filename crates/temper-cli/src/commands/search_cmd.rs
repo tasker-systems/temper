@@ -48,6 +48,7 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
         cogmap: args.cogmap,
         doc_type: args.doc_type,
         limit: args.limit,
+        offset: args.offset,
     })?;
     let response = runtime::with_client(|client| {
         Box::pin(async move { search_actions::search_api(client, params).await })
