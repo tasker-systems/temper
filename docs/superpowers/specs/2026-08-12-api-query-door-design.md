@@ -292,20 +292,39 @@ once for all three doors — would need a per-door literal.
 `/api/search` *"cannot take a resource bound and will not"*; the second half described no invariant.
 Measured instead:
 
-| Function | `p_bound_ids`? | Gated? | Called by |
-|---|---|---|---|
-| `search_exact` (7 args) | no | yes | `/api/search` |
-| `search_wide` (8 args) | no | yes | `/api/search` |
-| **`query_find_exact`** (8 args) | **yes** | **yes** | nothing |
-| `__temper_ungated_find_exact` | yes | no | `/api/query`'s compiler |
-| `__temper_ungated_find_wide` | yes | no | `/api/query`'s compiler |
+`[table corrected — 2026-08-12, A1 Task 1]` The first draft omitted `query_find_wide` and concluded
+the wide twin *"was never written."* It exists. Read from `pg_proc`, not from a grep:
 
-`query_find_exact` shipped in `20260810000010` — gated, bound-accepting, and **uncalled**. So the
-exact arm needs no SQL at all, only a repointed call site. The wide arm's twin was never written; it
-is the same eight-line wrapper, and `__temper_ungated_find_wide` already branches
+| Function | args | `p_bound_ids`? | Gated? | `proconfig` | Called by |
+|---|---|---|---|---|---|
+| `search_exact` | 7 | no | yes | — | `/api/search`, until A1 |
+| `search_wide` | 8 | no | yes | `hnsw.ef_search=200` | `/api/search`, until A1 |
+| **`query_find_exact`** | 8 | **yes** | **yes** | — | nothing, until A1 |
+| **`query_find_wide`** | 9 | **yes** | **yes** | **`hnsw.ef_search=200`** | nothing, until A1 |
+| `__temper_ungated_find_exact` | 9 | yes | no | — | `/api/query`'s compiler |
+| `__temper_ungated_find_wide` | 10 | yes | no | `hnsw.ef_search=200` | `/api/query`'s compiler |
+
+**Both twins shipped already** — the exact one in `20260810000010`, the wide one in
+`20260808000030` — gated, bound-accepting, and uncalled. So **A1 writes no SQL at all**; it repoints
+two call sites. And `__temper_ungated_find_wide` already branches
 `IF p_anchor_id IS NULL AND p_bound_ids IS NULL THEN <top-k> ELSE <exhaustive>`, so a bound routes to
-the exhaustive path on its own — the correctness rule is already served and no new semantics are
-needed.
+the exhaustive path on its own — the correctness rule is served and no new semantics are needed.
+
+**Why the error was more than a wrong row.** The plan derived from this table told an implementer to
+write `query_find_wide` by mirroring `query_find_exact`, which carries no `SET` clause. A
+`CREATE OR REPLACE` in that shape would have **silently dropped `hnsw.ef_search` from 200 to the
+default 40**, narrowing every ANN draw on the wide arm — a search-quality regression with no failing
+test and no error. It was caught because the implementer checked `pg_proc` before writing, which the
+plan instructed and the spec's author had not done: the missing row came from a grep for
+`CREATE OR REPLACE FUNCTION`, and the migration says bare `CREATE FUNCTION`.
+
+**A consequence for `served_by`.** Repointing the call sites moves what `/api/search` actually calls,
+and `served_by` is documented as naming exactly that. So the find acts' `served_by` becomes
+`query_find_exact` / `query_find_wide`, and `CALLABLE_FRAGMENTS`' keys move with them — they stay in
+sync because the map is keyed on `served_by` by construction. The reachability gate forces this
+rather than merely permitting it: its oracle scans production source for `FROM <name>(`, so a
+declaration naming a function no longer called goes red. Nothing downstream reads the literal names;
+`/api/query`'s compiler reads the map.
 
 **So the axis goes empty at all three doors at once** (MCP takes the whole `SearchParams`, so it
 gains the capability with it), `unified_doors` never grows a third argument, and the
@@ -325,7 +344,7 @@ shortfall, and leaving B's `door_coverage` untouched.
 | | Story | Touches | DB |
 |---|---|---|---|
 | **A0** | `temper search` can page | `temper-cli`, `registry.rs` | no |
-| **A1** | `/api/search` accepts a resource bound | `migrations/`, `temper-substrate`, `temper-core`, `temper-cli` | yes |
+| **A1** | `/api/search` accepts a resource bound | `temper-substrate`, `temper-services`, `temper-core`, `temper-cli` | no — both twins already shipped |
 | **A** | The refusal vocabulary becomes two vocabularies, and the placeholder stops lying | `temper-core` | no |
 | **B** | The door opens, end to end | `temper-api`, `temper-cli`, `temper-client`, e2e | yes |
 | **C** | The CLI can check a plan offline | `temper-cli` | no |

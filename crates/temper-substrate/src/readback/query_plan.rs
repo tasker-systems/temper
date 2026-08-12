@@ -93,9 +93,18 @@ const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 /// These apply NO visibility gate — they are handed the verdict. That is the entire point: the
 /// gated twins each compute `resources_visible_to` internally, and the planner does not dedupe those
 /// across call sites, so an N-stage composition would pay N recursive team closures. Nothing here
-/// may call them without going through [`emit_ungated_core_call`].
-const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
-const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
+/// may call them without going through `emit_ungated_core_call` (private to this module — these
+/// constants are exported for COMPARISON, never as an invitation to emit a call from elsewhere).
+///
+/// **`pub` because one question outside this module has to be answered against the same constants.**
+/// `query_read`'s `wants_a_vector` asks *does any stage in this plan search by vector*, which is
+/// `served_by` → [`temper_core::types::query::emitted_fragment_for`] → is it the wide core. It held
+/// its own hardcoded `"search_wide"` instead, and that literal did not travel when `served_by` was
+/// repointed at the twins on 2026-08-12: it silently answered `false` for every act, which skips
+/// server-side embedding and refuses every find-about stage `EmbeddingUnavailable`. A name spelled
+/// in a third place is what produced that, so the export exists to stop there being a third place.
+pub const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
+pub const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 
 /// **Every emitted identifier is double-quoted**, here and at each CTE definition and reference.
 /// `[fixed — 2026-08-09]` `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`,
@@ -724,10 +733,19 @@ fn missing_question(inv: &temper_core::types::query::ActInvocation, detail: &str
 
 /// The fragment this builder emits for an act, looked up through the act's DECLARED mechanic.
 ///
-/// Two hops on purpose. `served_by` keeps naming what `/api/search` calls (`search_exact`), because
-/// that is what the declaration describes; `CALLABLE_FRAGMENTS` maps that to what `/api/query`
-/// emits (`query_find_exact`). Collapsing them would force the declaration to name the composable
-/// twin, which is not the mechanic the deployed door serves.
+/// Two hops on purpose, and the FIRST hop's name moved on 2026-08-12 without the structure moving.
+/// `served_by` names what the deployed `/api/search` door calls — `query_find_exact` since that
+/// door gained a resource bound and `readback::search_exact` was repointed off the bound-less
+/// incumbent. `CALLABLE_FRAGMENTS` maps that to what `/api/query` emits, which is the UNGATED core
+/// (`__temper_ungated_find_exact`), because this compiler establishes the visibility verdict once
+/// in the hoisted `__temper_vis` CTE and must not pay a wrapper's second gate per stage.
+///
+/// So the hop is from a GATED entry point to the ungated body beneath it, and that is what keeps it
+/// from collapsing. Two things this comment used to say are recorded as dead rather than quietly
+/// dropped: that collapsing the hops "would force the declaration to name the composable twin,
+/// which is not the mechanic the deployed door serves" — the twin IS now what the deployed door
+/// serves — and that the second hop lands on `query_find_exact`, which the table has never mapped
+/// to. Neither was load-bearing; the two-hop structure rests on gated-vs-ungated, which is intact.
 fn fragment_for(act: &temper_core::types::query::ActName) -> Option<&'static str> {
     let decl = search_family().into_iter().find(|d| &d.name == act)?;
     let served = decl.served_by?;

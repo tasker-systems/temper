@@ -1,4 +1,5 @@
-//! The CLI half of `door_coverage`'s term axis, read from clap's own tree — ADJ-9d, tier 2.
+//! The CLI half of `door_coverage`'s term AND bound-kind axes, read from clap's own tree —
+//! ADJ-9d, tier 2.
 //!
 //! # Why this half lives here, and why it carries the weight
 //!
@@ -9,8 +10,13 @@
 //! wire slots. This file still carries the weight, though: its oracle is clap's parser tree, the
 //! only artifact that can prove a term unreachable rather than merely assert it. The direction with
 //! content has inverted — every term an act admits must have a flag, not the other way around — and
-//! [`the_cli_term_shortfall_is_what_clap_actually_lacks`] now checks it in that direction. For what
-//! the live axis is today, see `bounds_unreachable`.
+//! [`the_cli_term_shortfall_is_what_clap_actually_lacks`] now checks it in that direction.
+//!
+//! The **bound-kind** axis is empty at every door too, as of the same branch that emptied it in
+//! `registry.rs`: `find-exact` and `find-about-within` can now supply a `Resource` bound
+//! everywhere. [`temper_search_can_bound_to_a_resource_set`] is this file's half of that —
+//! `--within`'s presence, asserted unconditionally against the parser rather than derived, the
+//! same shape [`temper_search_can_page`] already established for `--offset`.
 //!
 //! It lives in `temper-cli` because the evidence does. The claim is *a caller standing at the CLI
 //! has no way to supply this term*, and the only artifact that answers it is clap's command tree —
@@ -38,7 +44,7 @@
 //!
 //! `Door::Cli` is not one command. `temper search` is the CLI door for the acts served by the two
 //! search fragments; `substantiate`'s CLI door is `temper resource evidence`. So this file speaks
-//! only for acts whose mechanic is `search_exact` or `search_wide`, and
+//! only for acts whose mechanic is `query_find_exact` or `query_find_wide`, and
 //! [`no_act_outside_the_search_command_declares_a_cli_term_shortfall`] asserts that every other act
 //! has nothing for it to check — which is what keeps "this file covers the CLI term axis" true
 //! rather than true-of-the-part-I-looked-at.
@@ -50,7 +56,13 @@ use temper_cli::cli::Cli;
 use temper_core::types::query::{search_family, ActDeclaration, BoundTerm, Door, DoorReach};
 
 /// The mechanics whose CLI door is `temper search`.
-const SEARCH_COMMAND_MECHANICS: [&str; 2] = ["search_exact", "search_wide"];
+///
+/// `[moved — 2026-08-12]` These were `search_exact` / `search_wide` until `/api/search` gained a
+/// resource bound and `served_by` was repointed at the bound-accepting twins. The literals did not
+/// travel, so `is_search_command_act` answered `false` for every act and the gate below iterated an
+/// empty loop — passing, with nothing in it. `temper_search_can_page` is what still had content, and
+/// it covers one flag rather than the axis.
+const SEARCH_COMMAND_MECHANICS: [&str; 2] = ["query_find_exact", "query_find_wide"];
 
 /// Every long flag `temper search` accepts, from the parser itself.
 fn search_flags() -> BTreeSet<String> {
@@ -103,6 +115,15 @@ fn the_cli_term_shortfall_is_what_clap_actually_lacks() {
          read, and an empty flag set would make every term look unreachable"
     );
 
+    // **The loop must have content, and until 2026-08-12 nothing said so.** Both `continue`s below
+    // are silent skips, so a declaration moving out from under this test empties the loop and the
+    // gate passes having checked nothing. That is not hypothetical: it is what repointing
+    // `served_by` at the twins did, and `temper_search_can_page`'s own doc predicted it in words
+    // ("the general gate would pass vacuously with nothing left to check") without asserting it.
+    // Counted rather than merely non-zero, because two of the three find acts skipping is the same
+    // defect in a quieter form.
+    let mut checked = 0usize;
+
     for act in search_family() {
         if !is_search_command_act(&act) {
             continue;
@@ -110,6 +131,7 @@ fn the_cli_term_shortfall_is_what_clap_actually_lacks() {
         let Some(terms_unreachable) = serves_cli(&act) else {
             continue;
         };
+        checked += 1;
 
         let derived: BTreeSet<BoundTerm> = act
             .accepts_bound_terms
@@ -126,6 +148,14 @@ fn the_cli_term_shortfall_is_what_clap_actually_lacks() {
             act.name
         );
     }
+
+    assert_eq!(
+        checked, 3,
+        "the three find acts stand at `temper search`, and this gate checked {checked} of them. \
+         Zero means `SEARCH_COMMAND_MECHANICS` no longer matches any `served_by` — the literals \
+         are a second copy of names that are allowed to move, and this assertion is what stops the \
+         gate going quiet instead of red when they do."
+    );
 }
 
 /// The live instance, asserted from the parser rather than from the declaration.
@@ -145,6 +175,25 @@ fn temper_search_can_page() {
         "`temper search` has lost --offset. Every find act's CLI `terms_unreachable` must \
          regain `Offset`, and `the_cli_can_now_page_the_find_acts_and_that_is_declared` in \
          registry.rs compares the declaration to a literal and will not notice on its own."
+    );
+}
+
+/// The CLI half of `bounds_unreachable`'s Api/Mcp derivation
+/// (`the_shared_params_doors_declare_exactly_the_bound_kinds_that_type_carries` in
+/// `act_door_coverage_reachability.rs`), which cannot itself see clap's tree. `bounds_unreachable`
+/// flipped from a pessimistic literal (`[Resource]`) to an optimistic empty one (`[]`) with the CLI
+/// side pinned nowhere — this is that pin, in the shape `temper_search_can_page` already
+/// established for the term axis: an unconditional assertion against the parser, with no
+/// declaration in the loop to short-circuit on.
+#[test]
+fn temper_search_can_bound_to_a_resource_set() {
+    let flags = search_flags();
+    assert!(
+        flags.contains("within"),
+        "`temper search` has lost --within. `find-exact` and `find-about-within`'s CLI \
+         `bounds_unreachable` must regain `IdKind::Resource`, and \
+         `every_door_can_now_supply_the_resource_bound_the_find_acts_accept` in registry.rs \
+         compares the declaration to itself and will not notice on its own."
     );
 }
 

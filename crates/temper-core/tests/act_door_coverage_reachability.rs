@@ -76,9 +76,9 @@
 //! the six, and it goes red on the day a mechanic's last production caller disappears rather than at
 //! the next audit.
 //!
-//! **Checked (tier 2):** which *bound terms* a door can supply, for the two doors whose surface is a
-//! shared Rust type. The CLI's half of tier 2 needs clap's command tree and therefore lives in
-//! `temper-cli` — see `act_door_coverage_cli_terms.rs`.
+//! **Checked (tier 2):** which *bound terms*, and now which *bound kinds*, a door can supply, for
+//! the two doors whose surface is a shared Rust type. Both CLI halves need clap's command tree and
+//! therefore live in `temper-cli` — see `act_door_coverage_cli_terms.rs`.
 //!
 //! **NOT checked, and declared so rather than left silent:** *which* door reaches a mechanic, among
 //! doors that could. Both oracles are workspace-global — they answer "production calls this", never
@@ -91,17 +91,24 @@
 //! act or a new door lands in it and forces a deliberate restatement instead of quietly inheriting
 //! "we check door coverage."
 //!
-//! Also not checked: `bounds_unreachable` and `filters_unapplied`. Both are reviewed. The bound axis
-//! is close to mechanical — `SearchParams` has no resource-id slot, which is the whole of the live
-//! claim — but the filter axis asks whether a door *applies* a filter it accepted, which is a
-//! question about behaviour rather than about surface, and no artifact answers it.
+//! `bounds_unreachable`'s Api/Mcp half is now checked too — mirroring the term derivation above,
+//! `the_shared_params_doors_declare_exactly_the_bound_kinds_that_type_carries` derives it from
+//! `SearchParams`' live serialized keys rather than pinning a literal, the same fix
+//! `every_door_can_now_supply_the_resource_bound_the_find_acts_accept` in `registry.rs` could not
+//! make on its own (that test compares the declaration to itself; this one compares it to the
+//! type). Its CLI half needs clap's command tree and lives beside its term sibling in
+//! `act_door_coverage_cli_terms.rs`.
+//!
+//! Still not checked: `filters_unapplied`, on any door. It is reviewed rather than derived because
+//! it asks whether a door *applies* a filter it accepted, which is a question about behaviour
+//! rather than about surface, and no artifact answers it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use temper_core::types::api::SearchParams;
-use temper_core::types::query::{search_family, ActName, BoundTerm, Door, DoorReach};
+use temper_core::types::query::{search_family, ActName, BoundTerm, Door, DoorReach, IdKind};
 
 // ---------------------------------------------------------------------------
 // The scanners
@@ -310,7 +317,7 @@ fn the_two_oracles_disagree_exactly_where_the_vector_cast_forces_it() {
 
     assert_eq!(
         invisible_to_cache,
-        BTreeSet::from(["search_wide".to_string()]),
+        BTreeSet::from(["query_find_wide".to_string()]),
         "the set of live mechanics invisible to the .sqlx cache has moved"
     );
 }
@@ -353,7 +360,11 @@ fn the_partition_between_production_and_test_sources_is_load_bearing() {
 fn the_scanner_separates_live_mechanics_from_names_that_merely_appear() {
     let prod = production_files();
 
-    for live in ["search_exact", "search_wide", "resource_standing_shape"] {
+    for live in [
+        "query_find_exact",
+        "query_find_wide",
+        "resource_standing_shape",
+    ] {
         assert!(
             !sql_call_sites(&prod, live).is_empty(),
             "`{live}` is invoked in production and the scanner missed it"
@@ -423,6 +434,78 @@ fn the_shared_params_doors_declare_exactly_the_terms_that_type_carries() {
                 .filter(|term| wire_slot(*term).is_none_or(|slot| !slots.contains(slot)))
                 .collect();
             let declared: BTreeSet<BoundTerm> = terms_unreachable.iter().copied().collect();
+
+            assert_eq!(
+                declared, derived,
+                "{:?} at {door:?} declares {declared:?} unreachable; `SearchParams` carries \
+                 slots {slots:?}, which makes {derived:?} unreachable",
+                act.name
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2b — bound kinds, for the same shared-type pair
+// ---------------------------------------------------------------------------
+
+/// The wire slot a bound KIND arrives in, or `None` if the shared params type has no slot for it.
+///
+/// Exhaustive bar `IdKind::Other` — `IdKind`'s forward-compat catch-all for a producer newer than
+/// this consumer, which this crate never constructs and no declaration's `accepts_bounds` names.
+/// `Region` also returns `None`: it is `produces`-only in this family (`follow-from`'s seeds are
+/// `Resource`, `survey` produces `Region` but is `Absent` everywhere), and no act's `accepts_bounds`
+/// contains it today — asserted below rather than assumed.
+fn wire_bound_slot(kind: &IdKind) -> Option<&'static str> {
+    match kind {
+        IdKind::Resource => Some("bound_ids"),
+        IdKind::Context => Some("context_ref"),
+        IdKind::Cogmap => Some("cogmap_id"),
+        IdKind::Region | IdKind::Other(_) => None,
+    }
+}
+
+/// The API and MCP doors reach exactly the bound KINDS `SearchParams` carries a slot for.
+///
+/// Was pinned-not-derived until this test: `bounds_unreachable` flipped from a pessimistic claim
+/// (`[Resource]`, which failed toward under-promising if left unchecked) to an optimistic one
+/// (`[]`, a promise) with nothing deriving it — the asymmetry `terms_unreachable` above never had,
+/// since it was derived from day one. Same technique, same file, same reason it is legitimate at
+/// the MCP door: `temper-api` and the MCP `search` tool both take the whole `SearchParams`.
+#[test]
+fn the_shared_params_doors_declare_exactly_the_bound_kinds_that_type_carries() {
+    let slots: BTreeSet<String> =
+        match serde_json::to_value(SearchParams::default()).expect("SearchParams serializes") {
+            serde_json::Value::Object(map) => map.keys().cloned().collect(),
+            other => panic!("SearchParams must serialize as an object, got {other:?}"),
+        };
+
+    // `wire_bound_slot`'s claim that no act admits `Region` as a bound, checked rather than
+    // assumed — if this ever fires, the match arm above needs a real slot, not `None` by omission.
+    for act in search_family() {
+        assert!(
+            !act.accepts_bounds.contains(&IdKind::Region),
+            "{:?} admits a Region bound; `wire_bound_slot` has no slot mapped for it",
+            act.name
+        );
+    }
+
+    for act in search_family() {
+        for door in [Door::Api, Door::Mcp] {
+            let Some(DoorReach::Serves {
+                bounds_unreachable, ..
+            }) = act.door_coverage.get(&door)
+            else {
+                continue;
+            };
+
+            let derived: HashSet<IdKind> = act
+                .accepts_bounds
+                .iter()
+                .filter(|kind| wire_bound_slot(kind).is_none_or(|slot| !slots.contains(slot)))
+                .cloned()
+                .collect();
+            let declared: HashSet<IdKind> = bounds_unreachable.iter().cloned().collect();
 
             assert_eq!(
                 declared, derived,

@@ -25,15 +25,15 @@ use crate::backend::substrate_read::{embed_query_text, QueryEmbed};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
-    applied_terms, declaration, ActName, ActRefusal, Extent, NarrowedBy, PlanRefusal,
-    QueryResponse, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode,
-    StageOutput, StageRelation, StageResult, StageTrace, ValidatedComposition,
+    applied_terms, declaration, emitted_fragment_for, ActName, ActRefusal, Extent, NarrowedBy,
+    PlanRefusal, QueryResponse, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput,
+    StageNode, StageOutput, StageRelation, StageResult, StageTrace, ValidatedComposition,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
 use temper_substrate::readback::query_exec::{execute, QueryRows};
-use temper_substrate::readback::query_plan::compile;
+use temper_substrate::readback::query_plan::{compile, EMIT_FIND_WIDE};
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
 ///
@@ -105,11 +105,27 @@ async fn resolve_embedding(
 
 /// Whether this node's act searches by vector. Read off the declared mechanic rather than a
 /// hardcoded act list, so a new act served by the wide arm is covered without an edit here.
+///
+/// **Two hops, and the second one is why this is not a string comparison against `served_by`.**
+/// `[fixed — 2026-08-12]` This asked `served_by == "search_wide"`. `served_by` names what the
+/// deployed `/api/search` door calls, and that moved to `query_find_wide` when the door gained a
+/// resource bound — so this returned `false` for BOTH wide acts, [`resolve_embedding`] skipped
+/// server-side embedding, `compile` took its `None` arm, and every find-about stage refused
+/// `EmbeddingUnavailable` for any caller that cannot precompute a vector. Which is the whole class
+/// of caller this module's own header says the server embeds on behalf of.
+///
+/// The repair is not a newer literal. `served_by` is a name that is ALLOWED to move — it follows the
+/// deployed door — so anything comparing it to a spelling here is a copy waiting to go stale a third
+/// time. Going through [`emitted_fragment_for`] asks the question the answer actually depends on:
+/// *does the compiler emit the wide core for this act?* Both hops are then single-sourced —
+/// `CALLABLE_FRAGMENTS` owns the mapping, [`EMIT_FIND_WIDE`] owns the core's name — and this
+/// function holds no name of its own.
 fn wants_a_vector(node: &StageNode) -> bool {
     match node {
         StageNode::Act(inv) => declaration(&inv.act)
             .and_then(|d| d.served_by)
-            .is_some_and(|m| m == "search_wide"),
+            .and_then(|mechanic| emitted_fragment_for(&mechanic))
+            .is_some_and(|fragment| fragment == EMIT_FIND_WIDE),
         StageNode::Combine(_) => false,
     }
 }
@@ -1017,6 +1033,58 @@ mod tests {
         assert_eq!(
             n[0].admitted, None,
             "absent, never a zero it did not measure"
+        );
+    }
+
+    /// **The acts the compiler emits the wide core for must want a vector — and when they stop, the
+    /// symptom is a plausible refusal rather than an error.**
+    ///
+    /// `wants_a_vector` is what decides whether the server embeds on the caller's behalf. Answer
+    /// `false` for a find-about stage and nothing fails loudly: [`resolve_embedding`] returns `None`,
+    /// `compile` takes its no-embedding arm, and the stage refuses `EmbeddingUnavailable` — which is
+    /// indistinguishable from outside from a genuine ONNX failure. That is how a hardcoded
+    /// `"search_wide"` here survived the `served_by` repoint of 2026-08-12 with no test going red:
+    /// there is no find-about case in `query_run_composition_test.rs`, and `/api/query` has no route
+    /// yet, so the door would have opened already broken.
+    ///
+    /// **Derived from the family, not written as an act list**, so an act added later that the
+    /// compiler emits the wide core for is covered with no edit here — and so the count assertion,
+    /// not a per-act one, is what catches the drift. An EMPTY derivation is the exact defect: it
+    /// means `served_by` no longer maps through `CALLABLE_FRAGMENTS`.
+    #[test]
+    fn every_act_the_compiler_emits_the_wide_core_for_wants_a_vector() {
+        use temper_core::types::query::search_family;
+
+        let wide: Vec<ActName> = search_family()
+            .into_iter()
+            .filter(|d| {
+                d.served_by
+                    .as_deref()
+                    .and_then(emitted_fragment_for)
+                    .is_some_and(|f| f == EMIT_FIND_WIDE)
+            })
+            .map(|d| d.name)
+            .collect();
+
+        assert_eq!(
+            wide.len(),
+            2,
+            "`find-about-anywhere` and `find-about-within` are both served by the wide core; the \
+             derivation found {wide:?}. Zero means `served_by` and `CALLABLE_FRAGMENTS` have drifted \
+             apart and every find-about stage is about to refuse EmbeddingUnavailable"
+        );
+
+        for act in wide {
+            assert!(
+                wants_a_vector(&act_node("s", act.clone(), None)),
+                "{act:?} is served by the wide core and must want a vector"
+            );
+        }
+
+        assert!(
+            !wants_a_vector(&act_node("s", ActName::FindExact, None)),
+            "the exact arm binds no vector — embedding for it pays ONNX inference to produce a \
+             value nothing binds, and a failure would then refuse a stage that never needed one"
         );
     }
 }

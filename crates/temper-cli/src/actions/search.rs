@@ -35,6 +35,10 @@ pub struct CliSearchArgs<'a> {
     /// Page offset. `/api/search` has always accepted one (`SearchParams.offset`); this door
     /// simply had no flag for it, which is what `door_coverage`'s CLI term axis recorded.
     pub offset: Option<i64>,
+    /// Resource refs (UUID or decorated `slug-<uuid>`) to narrow the search to. Repeatable.
+    /// Composes with `context` / `cogmap` rather than replacing them. Empty ⇒ unbounded — see
+    /// `build_search_params`, which is where empty-vs-populated becomes `None`-vs-`Some`.
+    pub within: &'a [String],
 }
 
 /// Build a SearchParams from CLI arguments.
@@ -68,6 +72,25 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
                 .collect::<Result<Vec<_>>>()?,
         )
     };
+    // Refs are trailing-UUID-only, resolved through the one resolver. Empty ⇒ `None`
+    // (unbounded), never `Some(vec![])` (bounded to nothing) — the two are different
+    // questions and the fragments already distinguish them.
+    let bound_ids: Option<Vec<uuid::Uuid>> = if args.within.is_empty() {
+        None
+    } else {
+        Some(
+            args.within
+                .iter()
+                .map(|r| {
+                    temper_workflow::operations::parse_ref(r)
+                        .map(|id| id.0)
+                        .map_err(|e| {
+                            TemperError::BadRequest(format!("invalid --within ref {r:?}: {e}"))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )
+    };
     Ok(SearchParams {
         query: Some(args.query.to_string()),
         embedding: args.embedding,
@@ -77,6 +100,7 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
         doc_type: args.doc_type.map(String::from),
         limit: args.limit,
         offset: args.offset,
+        bound_ids,
         ..SearchParams::default()
     })
 }
@@ -145,6 +169,7 @@ mod tests {
             doc_type: None,
             limit: Some(10),
             offset: Some(20),
+            within: &[],
         })
         .expect("a query with no anchor conflict builds");
         assert_eq!(params.offset, Some(20));
@@ -165,6 +190,7 @@ mod tests {
             doc_type: None,
             limit: Some(5),
             offset: None,
+            within: &[],
         };
         let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.query.as_deref(), Some("hello"));
@@ -186,11 +212,72 @@ mod tests {
             doc_type: None,
             limit: None,
             offset: None,
+            within: &[],
         };
         let err = build_search_params(args).expect_err("two anchors must be rejected");
         assert!(
             err.to_string().contains("single anchor"),
             "the error names the one-anchor rule; got {err}"
+        );
+    }
+
+    #[test]
+    fn the_cli_within_refs_reach_search_params_as_ids() {
+        // Refs are trailing-UUID-only, like every other ref this CLI takes — the slug half is
+        // presentation and a stale one is harmless.
+        let id = uuid::Uuid::now_v7();
+        let params = build_search_params(CliSearchArgs {
+            query: "anything",
+            embedding: None,
+            context: None,
+            cogmap: &[],
+            doc_type: None,
+            limit: None,
+            offset: None,
+            within: &[format!("some-stale-slug-{id}")],
+        })
+        .expect("a decorated ref resolves to its trailing uuid");
+        assert_eq!(params.bound_ids, Some(vec![id]));
+    }
+
+    #[test]
+    fn empty_within_leaves_bound_ids_unbounded_not_bounded_to_nothing() {
+        // `None` is unbounded; `Some(vec![])` is bounded to nothing and returns zero rows. An
+        // empty `--within` (i.e. the flag was never passed) must produce the former.
+        let params = build_search_params(CliSearchArgs {
+            query: "anything",
+            embedding: None,
+            context: None,
+            cogmap: &[],
+            doc_type: None,
+            limit: None,
+            offset: None,
+            within: &[],
+        })
+        .expect("no --within builds");
+        assert_eq!(params.bound_ids, None);
+    }
+
+    #[test]
+    fn an_unparseable_within_ref_is_a_bad_request_naming_the_ref() {
+        let args = CliSearchArgs {
+            query: "anything",
+            embedding: None,
+            context: None,
+            cogmap: &[],
+            doc_type: None,
+            limit: None,
+            offset: None,
+            within: &["not a valid ref!!".to_string()],
+        };
+        let err = build_search_params(args).expect_err("garbage ref must be rejected");
+        assert!(
+            matches!(err, TemperError::BadRequest(_)),
+            "an unparseable --within ref must be a BadRequest, not silently skipped; got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not a valid ref!!"),
+            "the error must name the offending ref; got {err}"
         );
     }
 

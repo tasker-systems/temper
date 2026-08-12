@@ -48,6 +48,7 @@ use crate::common::{at_cos, mk_chunked, mk_embedded, unit};
 
 use temper_substrate::ids::{CogmapId, ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
+use temper_substrate::readback::{self, ArmQuery};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes;
 use uuid::Uuid;
@@ -444,20 +445,34 @@ async fn search_wide_scores_by_proximity_under_its_own_name(pool: sqlx::PgPool) 
     );
 }
 
-/// `hnsw.ef_search` must be pinned on `search_wide` ITSELF.
+/// `hnsw.ef_search` must be pinned on THE FUNCTION `/api/search` ENTERS THE FAMILY THROUGH.
 ///
 /// `pg_proc.proconfig` binds to a signature, so the pin 20260804000030 put on
-/// `search_vector_candidates` does not reach a new function. Without its own pin `search_wide` runs
-/// at the server default of 40, which sits below any k a caller passes — `LIMIT p_k` becomes
+/// `search_vector_candidates` does not reach a new function. Without its own pin that entry point
+/// runs at the server default of 40, which sits below any k a caller passes — `LIMIT p_k` becomes
 /// unreachable and the draw truncates with no error and no symptom. Measured on prod before the
 /// original fix: 33.4 chunks and 24.3 admitted resources per query against an exact scan's 66.2.
+/// (A pin on an outer function DOES reach a nested call, which is why one pin per entry point is
+/// enough rather than one per level.)
+///
+/// **The subject is `query_find_wide`, not `search_wide`, and it moved for the same reason the
+/// name in `served_by` did.** `[moved — 2026-08-12]` `readback::search_wide` was repointed off the
+/// bound-less incumbent, so `search_wide` is no longer on any live path and a pin asserted there
+/// guards a door nobody stands at. Note what this test is FOR: escalation 1 of the resource-bound
+/// task turned on `query_find_wide` already carrying `{hnsw.ef_search=200}` from
+/// `20260808000030:414`, which a `CREATE OR REPLACE` would have silently discarded. This is the
+/// tripwire for that hazard, so it has to be aimed at the function actually exposed to it.
+///
+/// The sibling `every_ann_drawing_function_pins_ef_search_at_or_above_its_k` does NOT cover this:
+/// its derivation matches bodies containing `<=>` under a `LIMIT p_k`, which selects the ANN
+/// *cores* and never a delegating wrapper. Bodies and entry points are two different claims.
 ///
 /// Asserted as `pin >= k`, never as `pin == 200`: a value assertion pins a number nobody may tune,
 /// while the invariant is that the candidate list is at least as large as what the caller asks for.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for(pool: sqlx::PgPool) {
     let cfg: Option<Vec<String>> =
-        sqlx::query_scalar("SELECT proconfig FROM pg_proc WHERE proname = 'search_wide'")
+        sqlx::query_scalar("SELECT proconfig FROM pg_proc WHERE proname = 'query_find_wide'")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -466,8 +481,9 @@ async fn search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for(pool: sqlx
         .iter()
         .find_map(|e| e.strip_prefix("hnsw.ef_search=").map(str::to_owned))
         .expect(
-            "search_wide must pin hnsw.ef_search on the function itself; the pin on \
-             search_vector_candidates binds to that signature and does not inherit",
+            "query_find_wide must pin hnsw.ef_search on the function itself — it is what \
+             `readback::search_wide` calls, and proconfig binds to a signature, so neither the pin \
+             on `search_wide` nor the one on the ungated core reaches it",
         )
         .parse()
         .expect("ef_search pin is numeric");
@@ -477,7 +493,7 @@ async fn search_wide_pins_ef_search_at_or_above_the_k_it_is_asked_for(pool: sqlx
     let asked_for: i64 = 100;
     assert!(
         pinned >= asked_for,
-        "hnsw.ef_search ({pinned}) must be >= the k search_wide is called with ({asked_for}); \
+        "hnsw.ef_search ({pinned}) must be >= the k query_find_wide is called with ({asked_for}); \
          below it the ANN cannot return the k rows requested and admission truncates silently"
     );
 }
@@ -2099,14 +2115,206 @@ async fn the_incumbents_agree_with_their_twins_at_null_bounds(pool: sqlx::PgPool
     );
 }
 
+// ─── The READ PATH reaches the twins ────────────────────────────────────────────────────────────
+//
+// Every bound assertion above calls the SQL directly, so all of them witness the FRAGMENTS and none
+// of them witnesses which fragment `/api/search` calls. That was the whole shortfall: the twins have
+// accepted `p_bound_ids` since `20260808000030`, and `readback::search_exact` / `search_wide` named
+// the INCUMBENTS, which hardcode `p_bound_ids => NULL` and so had no reach to the parameter at all.
+//
+// These two assert the REACH rather than the fragment — a bound handed to [`ArmQuery`] arrives at
+// the twin — which is why they go through the Rust functions and not through `find_exact` /
+// `find_wide`. A repoint that dropped the bind, or bound it at the wrong ordinal, leaves every SQL
+// test above green and fails only here.
+
+/// A base [`ArmQuery`]: unbounded, unscoped, unfiltered, unpaged. Spread over, so a test names only
+/// the axis it is about.
+fn arm(principal: ProfileId) -> ArmQuery<'static> {
+    ArmQuery {
+        principal,
+        bound_ids: None,
+        anchor: None,
+        doc_type: None,
+        limit: None,
+        offset: 0,
+    }
+}
+
+fn ids_of<T, F: Fn(&T) -> Uuid>(hits: &[T], f: F) -> Vec<Uuid> {
+    let mut v: Vec<Uuid> = hits.iter().map(f).collect();
+    v.sort();
+    v
+}
+
+/// A bound narrows the WIDE arm through the read path.
+///
+/// The assertion is set membership, not ordering: this test is about the bound reaching the
+/// fragment, and `vec_norm` ordering is asserted elsewhere.
+///
+/// **Empty is not absent, and the Rust layer is where that is easiest to lose.** `Some(&[])` must
+/// stay `'{}'` — bounded to nothing — rather than being tidied into `None` on its way to the bind.
+/// A collapse in either direction leaves the narrowing assertion green: an empty bound that became
+/// unbounded returns the whole corpus, which is the silent widening the distinction exists to
+/// refuse.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_resource_bound_narrows_the_wide_arm_to_the_named_set(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "readback-bound-wide").await;
+    let anchor = AnchorRef {
+        table: temper_substrate::payloads::AnchorTable::Contexts,
+        id: home.uuid(),
+    };
+
+    let near = mk_embedded(&pool, anchor, owner, emitter, "Near", at_cos(0.95)).await;
+    let mid = mk_embedded(&pool, anchor, owner, emitter, "Mid", at_cos(0.60)).await;
+    let far = mk_embedded(&pool, anchor, owner, emitter, "Far", at_cos(0.30)).await;
+
+    let q = unit(0);
+
+    let unbounded = readback::search_wide(&pool, Some(q.as_slice()), 50, arm(owner))
+        .await
+        .unwrap();
+    assert_eq!(
+        ids_of(&unbounded, |h| h.resource_id.uuid()),
+        ids_of(&[near, mid, far], |u| *u),
+        "denominator: the corpus must be able to return more than the bound set, or narrowing to \
+         one proves nothing"
+    );
+
+    let only_mid = [mid];
+    let bounded = readback::search_wide(
+        &pool,
+        Some(q.as_slice()),
+        50,
+        ArmQuery {
+            bound_ids: Some(&only_mid),
+            ..arm(owner)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ids_of(&bounded, |h| h.resource_id.uuid()),
+        vec![mid],
+        "a bound must narrow to exactly the named set; near={near} far={far}"
+    );
+
+    let nothing: [Uuid; 0] = [];
+    let bounded_to_nothing = readback::search_wide(
+        &pool,
+        Some(q.as_slice()),
+        50,
+        ArmQuery {
+            bound_ids: Some(&nothing[..]),
+            ..arm(owner)
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        bounded_to_nothing.is_empty(),
+        "Some(&[]) is bounded to NOTHING and must survive the read path as '{{}}', never widen \
+         into an unbounded global draw; got {:?}",
+        ids_of(&bounded_to_nothing, |h| h.resource_id.uuid())
+    );
+}
+
+/// The exact arm's twin of the above, over the same three claims: denominator, narrowing, and empty
+/// is not absent.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_resource_bound_narrows_the_exact_arm_to_the_named_set(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "readback-bound-exact").await;
+
+    let kestrel = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Kestrel",
+        "The kestrel hovers over the verge.",
+    )
+    .await;
+    let merlin = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Merlin",
+        "The merlin hunts the kestrel's ground.",
+    )
+    .await;
+    let hobby = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Hobby",
+        "The hobby takes kestrel-sized prey.",
+    )
+    .await;
+
+    let unbounded = readback::search_exact(&pool, Some("kestrel"), arm(owner))
+        .await
+        .unwrap();
+    assert_eq!(
+        ids_of(&unbounded, |h| h.resource_id.uuid()),
+        ids_of(&[kestrel, merlin, hobby], |u| *u),
+        "denominator: all three must match unbounded, or narrowing to one proves nothing"
+    );
+
+    let only_merlin = [merlin];
+    let bounded = readback::search_exact(
+        &pool,
+        Some("kestrel"),
+        ArmQuery {
+            bound_ids: Some(&only_merlin),
+            ..arm(owner)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ids_of(&bounded, |h| h.resource_id.uuid()),
+        vec![merlin],
+        "a bound must narrow to exactly the named set; kestrel={kestrel} hobby={hobby}"
+    );
+
+    let nothing: [Uuid; 0] = [];
+    let bounded_to_nothing = readback::search_exact(
+        &pool,
+        Some("kestrel"),
+        ArmQuery {
+            bound_ids: Some(&nothing[..]),
+            ..arm(owner)
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        bounded_to_nothing.is_empty(),
+        "Some(&[]) is bounded to NOTHING and must survive the read path as '{{}}', never widen \
+         back into the full match set; got {:?}",
+        ids_of(&bounded_to_nothing, |h| h.resource_id.uuid())
+    );
+}
+
 /// Every function that draws ANN candidates pins `hnsw.ef_search` at or above the k it is asked for.
 ///
-/// **Rederived over a SET rather than named at one function.** The incumbent test reads
-/// `WHERE proname = 'search_wide'`, which cannot see a new door: `pg_proc.proconfig` binds to a
-/// SIGNATURE, so `query_find_wide` inherits nothing from `search_wide` and would draw at the server
-/// default of 40 — below any k a caller passes — truncating silently with no error. `/api/search`
-/// stays safe because a pin on a wrapper does reach a nested call; `/api/query` calls the twin
-/// DIRECTLY, which is exactly the door the incumbent test does not watch.
+/// **Rederived over a SET rather than named at one function.** `pg_proc.proconfig` binds to a
+/// SIGNATURE, so no function in this family inherits a sibling's pin; an unpinned one draws at the
+/// server default of 40 — below any k a caller passes — truncating silently with no error. A test
+/// naming ONE function therefore only ever watches the door it was written for, and the doors move:
+/// the sibling above was written against `search_wide`, and had to be re-aimed at `query_find_wide`
+/// on 2026-08-12 when `/api/search`'s read path was repointed at the bound-accepting twin. This
+/// test needs no such edit, because it asks the catalog which functions draw.
+///
+/// It does NOT subsume the sibling, and the two are not redundant. This one derives over ANN
+/// *bodies* (`<=>` under a `LIMIT p_k`), which selects the ungated cores and never a delegating
+/// wrapper; the sibling asserts the pin on the *entry point* a door actually calls. Bodies and entry
+/// points are different claims, and only the second one moves when a caller is repointed.
 ///
 /// The set is DERIVED from the catalog (function bodies containing the pgvector distance operator
 /// under an ORDER BY … LIMIT) rather than listed, so a future ANN-drawing function is covered

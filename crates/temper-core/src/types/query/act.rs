@@ -54,12 +54,20 @@ pub enum ActName {
 /// **This is the MECHANISM axis and nothing else.** *Which surfaces can reach the act* is
 /// [`DoorReach`], a separate field, and the separation is load-bearing rather than tidy. A
 /// `served`-vs-`served-on-some-doors` variant here would capture `substantiate` (served on API and
-/// CLI, absent from MCP) and would miss the other half of the class outright: `find-exact` and
-/// `find-about-within` are `Served`, reachable from all three doors, and still door-partial — they
-/// accept a [`super::id_set::IdKind::Resource`] bound, and no door's params carry a resource-id
-/// list to supply it (the search params type carries `context_ref` and `cogmap_id`/`cogmap_ids`,
-/// and no bound-ids slot at all). Door-partiality is finer-grained than the act and orthogonal to
-/// whether a mechanic exists, so it cannot ride on this enum.
+/// CLI, absent from MCP) and would miss the other half of the class outright: an act `Served`,
+/// reachable from all three doors, and STILL door-partial on one of `DoorReach`'s shortfall axes —
+/// a shape finer-grained than the act and orthogonal to whether a mechanic exists, so it cannot
+/// ride on this enum no matter how many variants it grew.
+///
+/// `find-exact` and `find-about-within` were the live witness of that second half: `Served`
+/// everywhere, yet no door's params carried a resource-id slot to supply the
+/// [`super::id_set::IdKind::Resource`] bound they accept. That closed with this branch —
+/// `SearchParams` gained `bound_ids`, and `temper search` gained `--within` — so **no act in the
+/// registry occupies the cell today.** Recorded plainly rather than silently dropped: the
+/// separation this paragraph argues for is structural, not contingent on a live example. Every
+/// `DoorReach::Serves`'s three shortfall lists stay independently settable per door regardless of
+/// `BuildState`, so the day any act's coverage goes non-empty again — on this axis or a new one —
+/// this enum still could not have expressed it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -122,12 +130,13 @@ impl Door {
 /// **Three shortfall axes, because a door falls short in three different ways and only one of them
 /// was expressible.** `terms_unreachable` shipped alone, so `Serves {}` was a promise nobody could
 /// qualify: two real shortfalls had to be declared as full reach or not at all. A door can also be
-/// unable to supply a whole BOUND KIND — `SearchParams` carries `context_ref`, `cogmap_id` and
-/// `cogmap_ids` but no resource-id slot, so `find-exact`'s declared `Resource` bound is unsuppliable
-/// from every one of the three doors — and it can accept a FILTER SLOT the act declares and then
-/// apply nothing, which is a silent substitution wearing a successful narrowing's costume. Each
-/// entry is guarded against the act's own `accepts_*` list (see the registry's tests): a door cannot
-/// fall short on something the act never admitted, in any of the three axes.
+/// unable to supply a whole BOUND KIND — the axis this exists for: `find-exact` and
+/// `find-about-within`'s `Resource` bound was unsuppliable from every door until `SearchParams`
+/// gained `bound_ids` and `temper search` gained `--within`, so as of this branch no act occupies
+/// the cell (see `Serves`'s `bounds_unreachable` field doc below). And it can accept a FILTER SLOT
+/// the act declares and then apply nothing, which is a silent substitution wearing a successful
+/// narrowing's costume. Each entry is guarded against the act's own `accepts_*` list (see the
+/// registry's tests): a door cannot fall short on something the act never admitted, in any axis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -145,11 +154,14 @@ pub enum DoorReach {
         /// a contradiction, not a gap.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         terms_unreachable: Vec<BoundTerm>,
-        /// Bound KINDS the act admits that this door has no slot for. The live instance is the
-        /// `find` acts' `Resource` bound: the shipped arms hard-bind `NULL` for bound-ids and no
-        /// door's params carry a resource-id list, so the act accepts a narrowing every caller
-        /// standing at every door is unable to express. Same guard as `terms_unreachable` — every
-        /// entry must appear in the act's `accepts_bounds`.
+        /// Bound KINDS the act admits that this door has no slot for. Zero live instances anywhere
+        /// in the registry as of this branch: the `find` acts' `Resource` bound was the one —
+        /// every door hard-bound `NULL` for bound-ids and no door's params carried a resource-id
+        /// list — until `SearchParams` gained `bound_ids` and `temper search` gained `--within`,
+        /// closing it everywhere at once. The field stays because an act admitting a bound kind
+        /// that not every door can supply is exactly this shape again; nothing currently occupies
+        /// it. Same guard as `terms_unreachable` — every entry must appear in the act's
+        /// `accepts_bounds`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         bounds_unreachable: Vec<IdKind>,
         /// Filter slots the act admits that this door accepts and then does not apply. Distinct

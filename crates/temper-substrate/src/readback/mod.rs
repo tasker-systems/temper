@@ -1523,12 +1523,29 @@ pub struct WideHit {
 
 /// What both arms take besides their own retrieval input.
 ///
-/// A params struct because the alternative is seven positional arguments per arm, four of which are
+/// A params struct because the alternative is eight positional arguments per arm, five of which are
 /// `Option`s of the same shape — and because `limit`/`offset` mean the same thing to both arms and
 /// should not be able to drift apart in two signatures.
 #[derive(Debug, Clone, Copy)]
 pub struct ArmQuery<'a> {
     pub principal: ProfileId,
+    /// Narrow the answer to this resource-id set — the act's own declared `accepts_bounds:
+    /// [Resource]` affordance, a filter on ONE act rather than a composition.
+    ///
+    /// **`None` is unbounded; `Some(&[])` is bounded to NOTHING and returns zero rows.** The two are
+    /// different questions and the SQL fragments already distinguish them (`p_bound_ids IS NULL OR
+    /// r.id = ANY(p_bound_ids)`), so neither may be collapsed into the other here. Collapsing empty
+    /// into `None` would let a caller who narrowed to nothing receive a global search instead — an
+    /// empty bound silently widening is the failure this distinction exists to refuse.
+    ///
+    /// A bound is a SCOPE, so supplying one routes the wide arm to its exhaustive branch
+    /// (`__temper_ungated_find_wide` branches on `p_anchor_id IS NULL AND p_bound_ids IS NULL`).
+    /// Nothing here selects that branch — it is the fragment's own doing, which is what keeps a
+    /// bound from ever being applied after a top-k truncation.
+    ///
+    /// Composes CONJUNCTIVELY with [`Self::anchor`]: each is its own NULL-guarded conjunct, so a
+    /// call may carry either, both, or neither.
+    pub bound_ids: Option<&'a [Uuid]>,
     /// The anchor pair, `None` ⇒ unscoped.
     pub anchor: Option<HomeAnchor>,
     /// Filter on the resource's `doc_type` property. `None` ⇒ no filter.
@@ -1555,18 +1572,26 @@ pub async fn search_exact(
     query: Option<&str>,
     arm: ArmQuery<'_>,
 ) -> Result<Vec<ExactHit>> {
+    // Calls `query_find_exact`, NOT the `search_exact` of the same name as this function. Both are
+    // gated and there is one body beneath them — `search_exact` (7 args) is literally
+    // `query_find_exact` with `p_bound_ids => NULL` (`20260808000030`), so this is not a change of
+    // semantics, only the reach to the one parameter the incumbent hardcodes away. The incumbent
+    // stays: its signature is load-bearing for callers that supply no bound.
+    //
     // Compile-time `query!`, unlike its sibling [`search_wide`]: this arm binds no vector, so the
     // module note's `::vector` exemption never covered it and a runtime read here would sit outside
-    // the `.sqlx` cache for no stated reason — which is the drift that note exists to prevent.
+    // the `.sqlx` cache for no stated reason — which is the drift that note exists to prevent. The
+    // repoint therefore moves a `.sqlx` cache entry; the wide arm's does not, because it has none.
     //
     // Both `!` overrides restate what the function's own `RETURNS TABLE(resource_id uuid, fts_norm
     // real)` already guarantees: sqlx types every column of a set-returning function as nullable
     // regardless of the declaration, so without them the row fields would arrive as `Option`.
     let rows = sqlx::query!(
         r#"SELECT resource_id AS "resource_id!", fts_norm AS "fts_norm!"
-             FROM search_exact($1, $2, $3, $4, $5, $6, $7)"#,
+             FROM query_find_exact($1, $2, $3, $4, $5, $6, $7, $8)"#,
         arm.principal.uuid(),
         query,
+        arm.bound_ids,
         arm.anchor.map(|a| a.table()),
         arm.anchor.map(|a| a.uuid()),
         arm.doc_type,
@@ -1603,12 +1628,19 @@ pub async fn search_wide(
     arm: ArmQuery<'_>,
 ) -> Result<Vec<WideHit>> {
     let emb_text = embedding.map(format_pgvector);
+    // `query_find_wide`, not the `search_wide` of the same name as this function — the twin that
+    // takes `p_bound_ids`. `search_wide` (8 args) is that twin with `p_bound_ids => NULL`
+    // (`20260808000030`), so one body still serves both and the incumbent keeps its signature for
+    // callers that supply no bound. Its `hnsw.ef_search = 200` pin is on `query_find_wide` too —
+    // proconfig binds to a signature, and each entry point in this family carries its own.
     let hits = sqlx::query_as::<_, WideHit>(
-        "SELECT resource_id, vec_norm FROM search_wide($1, $2::vector, $3, $4, $5, $6, $7, $8)",
+        "SELECT resource_id, vec_norm \
+           FROM query_find_wide($1, $2::vector, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(arm.principal)
     .bind(emb_text) // NULL when None → p_emb NULL → the arm returns nothing
     .bind(k)
+    .bind(arm.bound_ids)
     .bind(arm.anchor.map(|a| a.table()))
     .bind(arm.anchor.map(|a| a.uuid()))
     .bind(arm.doc_type)
