@@ -8529,7 +8529,8 @@
             "items": {
               "$ref": "#/components/schemas/StageName"
             },
-            "description": "Two or more. One input is not a combination; validation refuses it (beat B)."
+            "description": "Two or more. One input is not a combination; validation refuses it (beat B).",
+            "minItems": 2
           },
           "name": {
             "$ref": "#/components/schemas/StageName"
@@ -10937,18 +10938,12 @@
         ],
         "properties": {
           "admitted": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid."
           },
           "excluded": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64"
           },
           "key": {
@@ -11046,7 +11041,8 @@
             "items": {
               "$ref": "#/components/schemas/ReturnSpec"
             },
-            "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan."
+            "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
+            "minItems": 1
           }
         }
       },
@@ -11479,7 +11475,8 @@
             },
             "propertyNames": {
               "type": "string",
-              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total)."
+              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
             }
           },
           "trace": {
@@ -12569,7 +12566,8 @@
         "description": "One resource that matched, however it matched.\n\n[`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both\nsearch arms answer in — six near-identical projections collapsed into one. A hit adds scoring\nand nothing else.",
         "required": [
           "resource",
-          "scoring"
+          "scoring",
+          "located_at"
         ],
         "properties": {
           "located_at": {
@@ -13577,7 +13575,8 @@
       },
       "StageName": {
         "type": "string",
-        "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total)."
+        "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+        "pattern": "^[a-z][a-z0-9_]{0,62}$"
       },
       "StageNode": {
         "oneOf": [

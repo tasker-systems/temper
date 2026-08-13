@@ -114,6 +114,9 @@ pub struct OutcomeDeclaration {
     /// consumer, and means adding a downstream stage silently stops returning what you used to get
     /// back. The composition's produced kind(s) are DERIVED from these, replacing the old single
     /// `produces` field which could only ever be right for a one-arm plan.
+    // Same reason as [`CombineNode::inputs`]: `validate` refuses an empty list as `no_returns`, and
+    // a contract that admits one describes a request that cannot succeed.
+    #[cfg_attr(feature = "web-api", schema(min_items = 1))]
     pub returns: Vec<ReturnSpec>,
 }
 
@@ -141,6 +144,10 @@ pub struct CombineNode {
     pub name: StageName,
     pub op: CombineOp,
     /// Two or more. One input is not a combination; validation refuses it (beat B).
+    // `min_items` publishes the arity the doc sentence above already states and `validate` already
+    // enforces as `combinator_arity`. The derive cannot infer a bound from a refusal, so without
+    // this the contract admits a one-input combination the server always rejects.
+    #[cfg_attr(feature = "web-api", schema(min_items = 2))]
     pub inputs: Vec<StageName>,
 }
 

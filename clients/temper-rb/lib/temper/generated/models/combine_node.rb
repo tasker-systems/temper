@@ -126,8 +126,17 @@ module Temper::Generated
         invalid_properties.push('invalid value for "inputs", inputs cannot be nil.')
       end
 
+      if @inputs.length < 2
+        invalid_properties.push('invalid value for "inputs", number of items must be greater than or equal to 2.')
+      end
+
       if @name.nil?
         invalid_properties.push('invalid value for "name", name cannot be nil.')
+      end
+
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if @name !~ pattern
+        invalid_properties.push("invalid value for \"name\", must conform to the pattern #{pattern}.")
       end
 
       if @op.nil?
@@ -142,7 +151,9 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @inputs.nil?
+      return false if @inputs.length < 2
       return false if @name.nil?
+      return false if @name !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
       return false if @op.nil?
       true
     end
@@ -154,6 +165,10 @@ module Temper::Generated
         fail ArgumentError, 'inputs cannot be nil'
       end
 
+      if inputs.length < 2
+        fail ArgumentError, 'invalid value for "inputs", number of items must be greater than or equal to 2.'
+      end
+
       @inputs = inputs
     end
 
@@ -162,6 +177,11 @@ module Temper::Generated
     def name=(name)
       if name.nil?
         fail ArgumentError, 'name cannot be nil'
+      end
+
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if name !~ pattern
+        fail ArgumentError, "invalid value for \"name\", must conform to the pattern #{pattern}."
       end
 
       @name = name
