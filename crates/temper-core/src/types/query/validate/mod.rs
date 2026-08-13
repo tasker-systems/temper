@@ -324,8 +324,19 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
 
 /// Expressibility alone — every refusal that is true of the plan and the published contract
 /// without consulting what this server has built. It exists for a local `--check`: a client may
-/// run this against a plan it will send to a server whose binary it does not share. No such
-/// command ships yet; PR C adds `temper query --check` as its first caller.
+/// run this against a plan it will send to a server whose binary it does not share.
+///
+/// `[shipped — 2026-08-13]` This said *"No such command ships yet; PR C adds `temper query --check`
+/// as its first caller."* It has two callers now, and the pair is the point: `temper query --check`
+/// runs it **alone**, and `temper_services::backend::query_read::prepare` runs it as the gate
+/// before embedding. (Named, not linked — that crate depends on this one, so a link would point up
+/// the dependency graph.) One function, so a plan checked locally and a plan checked by the server
+/// cannot disagree about what "well-formed" means.
+///
+/// **What it still cannot see is capability** — spec §C: *"it reports expressibility and says so —
+/// it cannot speak to what the server has implemented and does not try."* That is why `--check`
+/// ships a disclosure rather than a verdict: a plan naming an act this deployment has not made
+/// reachable is shape-clean here and refused there.
 pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
     shape::validate_shape_indexed(c).0
 }

@@ -31,6 +31,7 @@ upfront; read only what the current task requires.
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
 - `teams.md` — Working with teams: create, invite (email as correlator), list your invitations, join, roles, offboarding
+- `querying.md` — **Which door to ask through** (`search` vs `query`), writing a composition, reading its trace
 
 ### Workflow Files (`workflows/`)
 One file per mode/effort combination. Read only the one that matches the current task.
@@ -185,6 +186,7 @@ authoring or amending a goal or sub-goal.
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
+| Asking a question of the knowledge base — deciding between `temper search` and `temper query`, writing or debugging a composition | Read `querying.md` |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Listing Is Truncated — Enumerate Before Asserting
