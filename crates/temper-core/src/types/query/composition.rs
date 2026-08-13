@@ -10,7 +10,13 @@ use super::envelope::ActInvocation;
 use super::stage::StageName;
 use crate::types::resource_view::ResourceSection;
 
-/// The question, computed once at composition start and threaded to every stage.
+/// One find act's question: its text, and the caller's vector when there is one.
+///
+/// `[2026-08-12]` This line read *"computed once at composition start and threaded to every
+/// stage"* — the envelope-placement claim spec ⟨7⟩ retired. It is corrected rather than left
+/// standing because **this doc comment IS a published schema description**
+/// (`tests/fixtures/query/intention.schema.json`), so a stale sentence here is a lie shipped to
+/// every client that reads the contract.
 ///
 /// **Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no
 /// intention has no words to search for, so it comes back `MissingIntention`. That refusal is
@@ -23,16 +29,35 @@ use crate::types::resource_view::ResourceSection;
 /// none arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as
 /// [`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the
 /// contract. `[decided — 2026-08-08, Pete]`
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// **This is a per-STAGE field, carried by [`super::envelope::ActInvocation`].** `[decided —
+/// 2026-08-12, Pete]`, spec ⟨7⟩. It sat on the composition envelope until then, which meant a
+/// composition could ask exactly ONE question: every find stage in a DAG interrogated the same
+/// string, and *"find A, find B, intersect them"* was inexpressible. That placement was never
+/// ruled — it entered as a first-person commit paragraph and hardened into a test name.
+///
+/// **No `Eq`, only `PartialEq`** — [`Self::embedding`] holds `f32`. Same reason
+/// [`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of
+/// floats is well-defined enough for a test, total equality is not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Intention {
     pub query: String,
-    /// Whether an embedding was computed for it. Inspectable in the trace, which is what makes
-    /// paraphrase-stability measurable from outside.
-    pub embedded: bool,
+    /// The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI
+    /// links temper-ingest and embeds locally, which is faster than making the server do it; the
+    /// ruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their
+    /// behalf and its absence is not a refusal.
+    ///
+    /// **It rides beside the text it was computed FROM, and that pairing is the point.** At
+    /// composition level a vector and its query could drift apart; here they cannot.
+    ///
+    /// This never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and
+    /// echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
+    /// a constraint — a 768-float array must not serialize back to the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
 }
 
 /// One stage whose rows come back, and how much of each row.
@@ -120,7 +145,10 @@ pub struct CombineNode {
 }
 
 /// A node in the composition DAG: an act invocation, or a set combination over other nodes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **No `Eq`, only `PartialEq`** — the act variant carries an intention, which carries the query
+/// vector. See [`Intention`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
@@ -162,15 +190,26 @@ impl StageNode {
 }
 
 /// A composition, declared before execution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **No `Eq`, only `PartialEq`** — it transitively holds the query vector. See [`Intention`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Composition {
     pub outcome: OutcomeDeclaration,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intention: Option<Intention>,
+    // There is deliberately no `intention` here — it moved onto each `ActInvocation`
+    // `[decided — 2026-08-12, Pete]`, spec ⟨7⟩. On the envelope it was computed once and threaded,
+    // which made "every find stage asks the same question" structural — and made asking TWO
+    // questions in one DAG impossible. That trade is now taken the other way: two stages may ask
+    // different things, and each stage's question is declared where the stage is.
+    //
+    // Removed under the same remove-and-tolerate precedent as `on_stage_refusal` and `bounds`: an
+    // envelope-level `intention` key on an old payload is ignored like any unknown field, pinned by
+    // the legacy-payload test below. It must NOT come back as a DEFAULT a stage inherits when it
+    // declares none — that is tasker-grammar's prev-else-context fallback under another name, and
+    // this contract exists partly to refuse it.
     // There is deliberately no `on_stage_refusal`. It was a required
     // `RefusalDisposition {halt | degrade_and_disclose}` describing a case that cannot occur:
     // every `RefusalReason` bar one is decidable statically, so a composition that could refuse
@@ -217,17 +256,34 @@ mod tests {
     use crate::types::query::stage::{StageInput, StageRelation};
     use std::collections::BTreeMap;
 
-    /// A minimal root act node named `s`.
+    /// A minimal root act node named `s`, carrying no question.
     fn stage(act: ActName) -> StageNode {
         StageNode::Act(ActInvocation {
             name: StageName::parse("s").unwrap(),
             act,
+            intention: None,
             input: None,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
         })
+    }
+
+    /// [`stage`] carrying a question. These are serialization tests, so they never run `validate`
+    /// and a questionless find act is representable here — which is exactly what
+    /// `an_absent_intention_is_representable_so_a_stage_can_refuse_rather_than_substitute` asserts.
+    fn stage_asking(act: ActName, query: &str) -> StageNode {
+        match stage(act) {
+            StageNode::Act(mut inv) => {
+                inv.intention = Some(Intention {
+                    query: query.to_string(),
+                    embedding: None,
+                });
+                StageNode::Act(inv)
+            }
+            other => other,
+        }
     }
 
     fn outcome(returns: Vec<ReturnSpec>) -> OutcomeDeclaration {
@@ -237,7 +293,6 @@ mod tests {
     fn composition(stages: Vec<StageNode>) -> Composition {
         Composition {
             outcome: outcome(vec![]),
-            intention: None,
             stages,
         }
     }
@@ -288,17 +343,29 @@ mod tests {
     }
 
     #[test]
-    fn the_intention_is_a_composition_level_field_not_a_per_stage_one() {
-        // Computed ONCE at composition start and threaded, so every find-about-* stage provably
-        // interrogates the same intention rather than re-embedding a mutated string.
-        let mut c = composition(vec![stage(ActName::FindAboutAnywhere)]);
-        c.intention = Some(Intention {
-            query: "wayfind salience".to_string(),
-            embedded: true,
-        });
+    fn the_intention_is_a_per_stage_field_and_two_stages_may_ask_different_questions() {
+        // `[inverted — 2026-08-12]` This asserted the OPPOSITE, under the name
+        // `the_intention_is_a_composition_level_field_not_a_per_stage_one`, on the rationale
+        // "computed ONCE at composition start and threaded, so every find-about-* stage provably
+        // interrogates the same intention rather than re-embedding a mutated string."
+        //
+        // That property is GIVEN UP deliberately — spec ⟨7⟩, `[decided — 2026-08-12, Pete]` — and
+        // not lost. It made "every find stage asks the same question" structural, and made asking
+        // two questions in one DAG impossible, so `find A, find B, intersect them` could not be
+        // expressed at all. What replaces it is per-stage declaration: each stage's question sits
+        // where the stage is.
+        //
+        // Kept as an inversion rather than deleted because the old name is what hardened: it was
+        // greppable, it read as a settled invariant, and it steered three sessions of planning. A
+        // test asserting the opposite is what stops it being re-derived.
+        let c = composition(vec![
+            stage_asking(ActName::FindAboutAnywhere, "wayfind salience"),
+            stage_asking(ActName::FindAboutAnywhere, "region scoring"),
+        ]);
         let json = serde_json::to_string(&c).unwrap();
-        // One intention on the envelope; the stage carries none.
-        assert_eq!(json.matches("\"intention\"").count(), 1);
+        // TWO intentions, one per stage — and none on the envelope.
+        assert_eq!(json.matches("\"intention\"").count(), 2);
+        assert!(json.contains("wayfind salience") && json.contains("region scoring"));
         assert_eq!(serde_json::from_str::<Composition>(&json).unwrap(), c);
     }
 
@@ -308,24 +375,56 @@ mod tests {
         // no query text, and `find-exact` has nowhere else to get its `p_query` — so the stage
         // refuses `MissingIntention`. An absent EMBEDDING is a different absence entirely: the
         // server computes one, because API callers cannot.
+        //
+        // Now asserted PER STAGE: the refusal follows the stage that omitted its question, not the
+        // composition that failed to thread one.
         let c = composition(vec![stage(ActName::FindExact)]);
-        assert!(c.intention.is_none());
+        let StageNode::Act(inv) = &c.stages[0] else {
+            panic!("act node");
+        };
+        assert!(inv.intention.is_none());
         assert!(!serde_json::to_string(&c).unwrap().contains("intention"));
     }
 
     #[test]
-    fn an_intention_carries_the_fact_of_embedding_and_never_the_vector() {
-        // `embedded` is inspectable in the trace, which is what makes paraphrase-stability
-        // measurable from outside. The 768-float array reaches the compiler as a separate
-        // argument — putting it in the envelope would be a wire contract nobody asked for.
-        let i = Intention {
+    fn an_intention_carries_the_query_and_the_callers_vector_and_asserts_nothing_about_it() {
+        // `[rewritten — 2026-08-12]` Was `an_intention_carries_the_fact_of_embedding_and_never_the
+        // _vector`, pinning a byte-exact `{"query":…,"embedded":false}`. Both halves are retired.
+        //
+        // The VECTOR is here now (spec ⟨7⟩): it rides beside the text it was computed from, so the
+        // two cannot drift apart. The old rationale — "putting it in the envelope would be a wire
+        // contract nobody asked for" — was about the ENVELOPE and about response bloat, and
+        // `CompositionTrace` carries only `stages` and echoes no intention, so nothing here reaches
+        // a response.
+        //
+        // And `embedded: bool` is GONE `[decided — 2026-08-13, Pete]`. It claimed to make
+        // paraphrase-stability "measurable from outside" while never appearing in any trace; its
+        // only live distinction — your vector versus the server's — is already covered on the
+        // failing side by `EmbeddingUnavailable`; and the real hazard it looked like it addressed
+        // (a CLI embedding with a different model than the corpus) is guarded by build.rs's model
+        // sha256 pin, which a boolean could not express anyway.
+        let bare = Intention {
             query: "composable search fragments".to_string(),
-            embedded: false,
+            embedding: None,
         };
-        let json = serde_json::to_string(&i).unwrap();
+        // An absent vector serializes to nothing at all — a caller that cannot embed sends a
+        // question and no key, exactly as the ruby gem and MCP do.
         assert_eq!(
-            json,
-            r#"{"query":"composable search fragments","embedded":false}"#
+            serde_json::to_string(&bare).unwrap(),
+            r#"{"query":"composable search fragments"}"#
+        );
+
+        let carried = Intention {
+            query: "composable search fragments".to_string(),
+            embedding: Some(vec![0.25, -0.5]),
+        };
+        assert_eq!(
+            serde_json::to_string(&carried).unwrap(),
+            r#"{"query":"composable search fragments","embedding":[0.25,-0.5]}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Intention>(&serde_json::to_string(&carried).unwrap()).unwrap(),
+            carried
         );
     }
 
@@ -352,6 +451,7 @@ mod tests {
     fn an_act_node_reports_its_single_upstream_and_a_caller_fed_one_reports_none() {
         let seeded = StageNode::Act(ActInvocation {
             name: StageName::parse("near").unwrap(),
+            intention: None,
             input: Some(StageInput::Upstream {
                 relation: StageRelation::Seed,
                 stage: StageName::parse("hits").unwrap(),
@@ -366,6 +466,7 @@ mod tests {
 
         let rooted = StageNode::Act(ActInvocation {
             name: StageName::parse("hits").unwrap(),
+            intention: None,
             input: None,
             terms: BTreeMap::new(),
             resource_filter: None,

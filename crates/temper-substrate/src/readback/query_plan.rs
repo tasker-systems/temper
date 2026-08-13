@@ -24,7 +24,7 @@
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
-    search_family, BoundTerm, IdKind, Intention, PlanRefusal, RefusalReason, StageInput, StageNode,
+    search_family, BoundTerm, IdKind, PlanRefusal, RefusalReason, StageInput, StageNode,
     StageRelation, ValidatedComposition,
 };
 use uuid::Uuid;
@@ -167,17 +167,23 @@ const ANN_DRAW_K: i32 = 100;
 /// Compile a validated composition into one statement. `principal` is bound as `$1` and drives the
 /// single visibility relation every stage joins.
 ///
-/// `embedding` is the query vector. It is a parameter rather than a field of
-/// `Composition.intention` because `Intention` is a WIRE type carrying `query: String` and
-/// `embedded: bool` — the *fact* that an embedding was computed, never the vector. Putting a
-/// 768-float array in the envelope would be a contract change nobody asked for.
+/// **The query vector is NOT a parameter here.** `[2026-08-12]` It was one, on the reasoning that
+/// `Intention` was a wire type carrying only `query` and `embedded` and that *"putting a 768-float
+/// array in the envelope would be a contract change nobody asked for."* Spec ⟨7⟩ overturned both
+/// halves: the intention moved onto each `ActInvocation` and now carries its own
+/// `embedding: Option<Vec<f32>>`, so a stage's vector arrives with the stage.
 ///
-/// **`None` means the vector could not be obtained, not that the caller declined to send one.**
-/// `[amended — 2026-08-08, Pete]` Embedding on the caller's behalf is this surface's job: the CLI
-/// links temper-ingest and computes vectors client-side, while the ruby gem, the TypeScript
-/// package and MCP structurally cannot, so a caller-must-embed rule would deny `find-about-*` to
-/// every non-CLI client. The executor calls `substrate_read::embed_query_if_missing` before it
-/// reaches here, exactly as `/api/search` does.
+/// Removing the parameter is the point, not tidying. With the vector on the node, a `compile` that
+/// ALSO accepted one would have two sources for one fact — and the prev-else-context fallback this
+/// whole contract refuses is exactly what two sources for one fact decays into.
+///
+/// **An absent `intention.embedding` means the vector could not be obtained, not that the caller
+/// declined to send one.** `[amended — 2026-08-08, Pete]` Embedding on the caller's behalf is this
+/// surface's job: the CLI links temper-ingest and computes vectors client-side, while the ruby gem,
+/// the TypeScript package and MCP structurally cannot, so a caller-must-embed rule would deny
+/// `find-about-*` to every non-CLI client. The caller fills each stage's missing vector **before**
+/// building the `ValidatedComposition`, exactly as `/api/search` does — which is also why this
+/// function needs no embedding argument to honour the rule.
 ///
 /// So a `None` at this point has already survived that attempt, and a `find-about-*` stage
 /// refuses with `EmbeddingUnavailable` — the contract's ONE runtime refusal. Still a refusal
@@ -187,7 +193,6 @@ const ANN_DRAW_K: i32 = 100;
 pub fn compile(
     v: &ValidatedComposition,
     principal: ProfileId,
-    embedding: Option<&[f32]>,
 ) -> Result<CompiledQuery, PlanRefusal> {
     let mut binds: Vec<QueryBind> = vec![QueryBind::Profile(principal)];
     let mut cte_names: Vec<(String, String)> = Vec::new();
@@ -213,13 +218,12 @@ pub fn compile(
          resources_visible_to({PRINCIPAL_BIND})\n)"
     ));
 
-    let intention = v.composition().intention.as_ref();
     let mut tallies: Vec<StageTally> = Vec::new();
     let mut refusals: Vec<PlanRefusal> = Vec::new();
     for node in v.ordered() {
         let (name, body, unusable) = match node {
             StageNode::Act(inv) => {
-                let emitted = emit_act_body(inv, intention, embedding, &mut binds, &mut refusals)?;
+                let emitted = emit_act_body(inv, &mut binds, &mut refusals)?;
                 (inv.name.as_str(), emitted.body, emitted.unusable)
             }
             // A combinator's inputs are upstream stages, so nothing it was handed can be unusable.
@@ -285,12 +289,14 @@ fn refused_body(act: &str) -> String {
 /// quantity, which is what keeps `no-cross-act-ranking` structural (spec §4).
 fn emit_act_body(
     inv: &temper_core::types::query::ActInvocation,
-    intention: Option<&Intention>,
-    embedding: Option<&[f32]>,
     binds: &mut Vec<QueryBind>,
     refusals: &mut Vec<PlanRefusal>,
 ) -> Result<EmittedAct, PlanRefusal> {
     let act = act_name(&inv.act);
+    // This stage's own question. `[2026-08-12]` Was threaded in from the composition; spec ⟨7⟩
+    // put it on the node, so a sibling stage's intention can no longer answer for this one.
+    let intention = inv.intention.as_ref();
+    let embedding = intention.and_then(|i| i.embedding.as_deref());
 
     let (narrowing, unusable) = narrowing_for(inv, binds)?;
     let emitted = |body: String| EmittedAct {
@@ -323,7 +329,7 @@ fn emit_act_body(
                 missing_question(
                     inv,
                     "find-exact needs the intention's query text — it becomes `p_query`, and there \
-                     is nowhere else to source it. The composition threaded no intention",
+                     is nowhere else to source it. This stage carries no intention",
                 )
             })?;
             let qi = binds.len() + 1;
@@ -853,6 +859,8 @@ mod tests {
         ActInvocation {
             name: StageName::parse("s").unwrap(),
             act: ActName::FollowFrom,
+            // `follow-from` asks no question of its own — it walks from a set it is handed.
+            intention: None,
             input,
             terms: Default::default(),
             resource_filter: None,

@@ -1,18 +1,24 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The question, computed once at composition start and threaded to every stage.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`",
+  "description": "One find act's question: its text, and the caller's vector when there is one.\n\n`[2026-08-12]` This line read *\"computed once at composition start and threaded to every\nstage\"* — the envelope-placement claim spec ⟨7⟩ retired. It is corrected rather than left\nstanding because **this doc comment IS a published schema description**\n(`tests/fixtures/query/intention.schema.json`), so a stale sentence here is a lie shipped to\nevery client that reads the contract.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`\n**This is a per-STAGE field, carried by [`super::envelope::ActInvocation`].** `[decided —\n2026-08-12, Pete]`, spec ⟨7⟩. It sat on the composition envelope until then, which meant a\ncomposition could ask exactly ONE question: every find stage in a DAG interrogated the same\nstring, and *\"find A, find B, intersect them\"* was inexpressible. That placement was never\nruled — it entered as a first-person commit paragraph and hardened into a test name.\n\n**No `Eq`, only `PartialEq`** — [`Self::embedding`] holds `f32`. Same reason\n[`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of\nfloats is well-defined enough for a test, total equality is not.",
   "properties": {
-    "embedded": {
-      "description": "Whether an embedding was computed for it. Inspectable in the trace, which is what makes\nparaphrase-stability measurable from outside.",
-      "type": "boolean"
+    "embedding": {
+      "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.",
+      "items": {
+        "format": "float",
+        "type": "number"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "query": {
       "type": "string"
     }
   },
   "required": [
-    "query",
-    "embedded"
+    "query"
   ],
   "title": "Intention",
   "type": "object"

@@ -240,7 +240,7 @@ pub(super) fn validate_shape_indexed(
         Some(ordered) => {
             for node in &c.stages {
                 if let StageNode::Act(inv) = node {
-                    check_act(inv, node.name(), c, &mut errs);
+                    check_act(inv, node.name(), &mut errs);
                 }
             }
             (errs, Some(ordered))
@@ -250,7 +250,11 @@ pub(super) fn validate_shape_indexed(
 
 /// The expressibility checks for one act node. Every axis is independent — a node can fail more
 /// than one — so nothing short-circuits; a caller sees the whole picture.
-fn check_act(inv: &ActInvocation, name: &StageName, c: &Composition, errs: &mut Vec<PlanRefusal>) {
+/// `[2026-08-12]` No longer takes the `&Composition`. It needed one for exactly one reason —
+/// reading the envelope's `intention` — and spec ⟨7⟩ moved that onto the node. **A per-node check
+/// that cannot see the composition is the stronger shape**: it cannot accidentally let a sibling
+/// stage's field satisfy this one's requirement, which is the defect the move exists to prevent.
+fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>) {
     // `ActName` is open (`act.rs:45-46`), so an unrecognized act name deserializes into
     // `Other` rather than failing serde. That makes this caller-reachable — a KNOWN variant with
     // no declaration would be an internal inconsistency, not a caller error, and the capability
@@ -403,15 +407,26 @@ fn check_act(inv: &ActInvocation, name: &StageName, c: &Composition, errs: &mut 
         ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
     ) {
         // `[widened — 2026-08-09]` An empty or whitespace-only query is the SAME omission as an
-        // absent intention, and leaving it out here sent it somewhere false: `resolve_embedding`
+        // absent intention, and leaving it out here sent it somewhere false: the server-side embed
         // declines to embed nothing, `compile` reads the resulting `None` as "the server tried and
         // failed", and the caller was told `embedding_unavailable` — a server fault, for a question
         // they never asked. The server never attempted anything. Found in review.
-        let missing = match c.intention.as_ref() {
-            None => Some("a find act requires a threaded intention"),
-            Some(i) if i.query.trim().is_empty() => Some(
-                "a find act requires a threaded intention with a question in it; this one is empty",
-            ),
+        //
+        // `[2026-08-13]` The function that arm named, `resolve_embedding`, is gone; its successor
+        // is `temper-services`' `text_to_embed`, which holds the same arm. Deliberately BOTH: this
+        // pass is what makes it structural — under `prepare` an empty question never reaches an
+        // embed at all — and that one is the contract of a function this crate cannot see.
+        //
+        // `[2026-08-12]` Reads THIS STAGE's intention, not the composition's — spec ⟨7⟩ moved the
+        // field onto `ActInvocation`. The check was already per-invocation and already attached its
+        // refusal to `name`, so the move is one field access; what changes is that a sibling stage's
+        // intention no longer satisfies this one. That is the point: two find stages may now ask
+        // different questions, and each must bring its own.
+        let missing = match inv.intention.as_ref() {
+            None => Some("this find act carries no intention, and a find act needs a question"),
+            Some(i) if i.query.trim().is_empty() => {
+                Some("this find act's intention carries no question; its query text is empty")
+            }
             Some(_) => None,
         };
         if let Some(detail) = missing {

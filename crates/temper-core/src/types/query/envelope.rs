@@ -13,7 +13,10 @@ use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageInput, StageName, StageOutput};
 
 /// One act, invoked — a named node in the composition DAG.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **No `Eq`, only `PartialEq`** — [`Self::intention`] carries the query vector. See
+/// [`super::composition::Intention`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
@@ -22,6 +25,17 @@ pub struct ActInvocation {
     /// This node's name, referenced by downstream stages and by `returns`.
     pub name: StageName,
     pub act: ActName,
+    /// The question this act asks: its text, and the caller's vector when there is one.
+    ///
+    /// **A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]**
+    /// `[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then,
+    /// which made a DAG able to ask only one question — every find stage reading the same string.
+    ///
+    /// `None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a
+    /// find act is `MissingIntention`, refused by the shape pass: `find-exact` sources its
+    /// `p_query` from here and there is nowhere else to get it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intention: Option<super::composition::Intention>,
     /// Where this stage's set comes from, and what this act does with it: caller-supplied ids or
     /// an upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root
     /// act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
@@ -242,6 +256,7 @@ mod tests {
         let inv = ActInvocation {
             name: StageName::parse("wide").unwrap(),
             act: ActName::FindAboutAnywhere,
+            intention: None,
             input: None,
             terms: BTreeMap::new(),
             resource_filter: None,

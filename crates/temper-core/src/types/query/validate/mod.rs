@@ -382,15 +382,79 @@ mod tests {
             StageInput::Caller { ids, .. } => StageInput::Caller { relation, ids },
             StageInput::Upstream { stage, .. } => StageInput::Upstream { relation, stage },
         });
+        let intention = natural_intention(&a);
         StageNode::Act(ActInvocation {
             name: StageName::parse(name).unwrap(),
             act: a,
+            intention,
             input,
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
         })
+    }
+
+    /// The intention an act needs to be well-formed: a question for the find acts, nothing for the
+    /// rest. The sibling of [`natural_relation`], and it exists for the same reason — a helper that
+    /// built every act WITHOUT one would make `MissingIntention` join the finding in every test
+    /// about something else, exactly as a wrong relation would.
+    ///
+    /// `[2026-08-12]` Replaces the `plan_with_intention` helper, which threaded one question onto
+    /// the composition for the whole plan. Spec ⟨7⟩ moved the field onto the stage, so supplying it
+    /// is now the act builder's job.
+    fn natural_intention(a: &ActName) -> Option<Intention> {
+        matches!(
+            a,
+            ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
+        )
+        .then(|| Intention {
+            query: "q".to_string(),
+            embedding: None,
+        })
+    }
+
+    /// A find act carrying NO question — for the tests that assert `MissingIntention`. Deliberately
+    /// separate from [`act`], so a test that wants the refusal says so in the builder it calls
+    /// rather than by mutating a plan after the fact.
+    #[allow(dead_code)]
+    fn act_without_intention(name: &str, a: ActName, input: Option<StageInput>) -> StageNode {
+        match act(name, a, input) {
+            StageNode::Act(mut inv) => {
+                inv.intention = None;
+                StageNode::Act(inv)
+            }
+            other => other,
+        }
+    }
+
+    /// Strip the question from every act in a plan.
+    ///
+    /// `[2026-08-12]` Replaces `c.intention = None`, which was one assignment because there was one
+    /// intention. **These two helpers are a translation of the old shape, and they flatten a
+    /// distinction that now exists:** with the question per stage, a plan may have SOME stages
+    /// carrying one, which is neither "threaded" nor "absent" and is what the new tests in
+    /// `shape.rs` cover directly. Used here so the incumbent tests keep asserting what they always
+    /// asserted, with no silent change of subject.
+    fn clear_intentions(c: &mut Composition) {
+        for node in &mut c.stages {
+            if let StageNode::Act(inv) = node {
+                inv.intention = None;
+            }
+        }
+    }
+
+    /// Give every act in a plan the same question — the old envelope semantics, stated explicitly
+    /// rather than implied by the type. See [`clear_intentions`] for why these exist.
+    fn set_intentions(c: &mut Composition, query: &str) {
+        for node in &mut c.stages {
+            if let StageNode::Act(inv) = node {
+                inv.intention = Some(Intention {
+                    query: query.to_string(),
+                    embedding: None,
+                });
+            }
+        }
     }
 
     fn plan(stages: Vec<StageNode>, returns: Vec<&str>) -> Composition {
@@ -406,20 +470,18 @@ mod tests {
         )
     }
 
-    /// [`plan`] with a threaded question, for the find acts that require one.
+    /// `[retained as an alias — 2026-08-12]` Was [`plan`] plus a composition-level question. Spec
+    /// ⟨7⟩ moved the question onto each stage, where [`act`] now supplies it, so the two are the
+    /// same function. Kept rather than sed-ed away at ~11 call sites because the NAME still says
+    /// something true about those tests — they are the ones whose acts need a question — and a
+    /// mechanical rename would bury that in the diff of a PR that is already large.
     fn plan_with_intention(stages: Vec<StageNode>, returns: Vec<&str>) -> Composition {
-        let mut c = plan(stages, returns);
-        c.intention = Some(Intention {
-            query: "q".to_string(),
-            embedded: false,
-        });
-        c
+        plan(stages, returns)
     }
 
     fn plan_returning(stages: Vec<StageNode>, returns: Vec<ReturnSpec>) -> Composition {
         Composition {
             outcome: OutcomeDeclaration { returns },
-            intention: None,
             stages,
         }
     }
@@ -852,10 +914,6 @@ mod tests {
                     },
                 ],
             },
-            intention: Some(Intention {
-                query: "q".to_string(),
-                embedded: false,
-            }),
             stages: vec![act("hits", ActName::FindExact, None)],
         };
         let errs = validate(&c).unwrap_err();
@@ -872,7 +930,6 @@ mod tests {
     fn a_composition_with_no_stages_is_refused() {
         let c = Composition {
             outcome: OutcomeDeclaration { returns: vec![] },
-            intention: None,
             stages: vec![],
         };
         let errs = validate(&c).unwrap_err();
@@ -1102,16 +1159,13 @@ mod tests {
             vec![act("wide", ActName::FindAboutAnywhere, None)],
             vec!["wide"],
         );
-        c.intention = None;
+        clear_intentions(&mut c);
         let errs = validate(&c).unwrap_err();
         assert!(errs
             .iter()
             .any(|e| e.reason == RefusalReason::MissingIntention));
 
-        c.intention = Some(Intention {
-            query: "salience".to_string(),
-            embedded: true,
-        });
+        set_intentions(&mut c, "salience");
         assert!(
             validate(&c).is_ok(),
             "with an intention threaded and its mechanic reachable, the plan is legal; got: {:?}",
@@ -1322,10 +1376,7 @@ mod tests {
             )],
             vec!["hits"],
         );
-        c.intention = Some(Intention {
-            query: "composable fragments".to_string(),
-            embedded: true,
-        });
+        set_intentions(&mut c, "composable fragments");
         assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
     }
 
@@ -1398,10 +1449,7 @@ mod tests {
                 with: vec![ResourceSection::Body],
             }],
         );
-        c.intention = Some(Intention {
-            query: "q".to_string(),
-            embedded: false,
-        });
+        set_intentions(&mut c, "q");
         let errs = validate(&c).unwrap_err();
         let hit = errs
             .iter()
@@ -1429,10 +1477,7 @@ mod tests {
                 with: vec![ResourceSection::Body, ResourceSection::Edges],
             }],
         );
-        c.intention = Some(Intention {
-            query: "q".to_string(),
-            embedded: false,
-        });
+        set_intentions(&mut c, "q");
         let errs = validate(&c).unwrap_err();
         assert_eq!(
             errs.iter()
@@ -1458,10 +1503,7 @@ mod tests {
                 with: vec![ResourceSection::OpenMeta],
             }],
         );
-        c.intention = Some(Intention {
-            query: "salience".to_string(),
-            embedded: true,
-        });
+        set_intentions(&mut c, "salience");
         assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
     }
 
@@ -1482,10 +1524,7 @@ mod tests {
             ],
             vec!["wide", "quoted"],
         );
-        c.intention = Some(Intention {
-            query: "composable fragments".to_string(),
-            embedded: true,
-        });
+        set_intentions(&mut c, "composable fragments");
         let out = ValidationOutcome::of(&validate(&c).expect("plan is legal"));
         let wide = &out.will_return[&StageName::parse("wide").unwrap()];
         let quoted = &out.will_return[&StageName::parse("quoted").unwrap()];
@@ -1569,10 +1608,7 @@ mod tests {
             ],
             vec!["narrowed"],
         );
-        c.intention = Some(Intention {
-            query: "x".to_string(),
-            embedded: true,
-        });
+        set_intentions(&mut c, "x");
         let out = ValidationOutcome::of(&validate(&c).expect("legal"));
 
         assert_eq!(out.will_return.len(), 1);

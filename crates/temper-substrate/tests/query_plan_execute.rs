@@ -92,6 +92,10 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
         StageNode::Act(ActInvocation {
             name: StageName::parse(name).unwrap(),
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
             input,
             terms: Default::default(),
             resource_filter: None,
@@ -106,10 +110,6 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: query.to_string(),
-            embedded: false,
-        }),
         stages: vec![
             stage("hits", None),
             stage(
@@ -174,7 +174,7 @@ async fn a_compiled_composition_executes_and_returns_its_declared_arm(pool: sqlx
     )
     .await;
 
-    let c = compile(&two_stage_find("kestrel"), owner, None).expect("compiles");
+    let c = compile(&two_stage_find("kestrel"), owner).expect("compiles");
     let rows = run(&pool, &c)
         .await
         .expect("the compiled statement must run");
@@ -224,7 +224,7 @@ async fn a_composition_returns_nothing_to_a_principal_who_can_see_nothing(pool: 
 
     let plan = two_stage_find("kestrel");
 
-    let mine = run(&pool, &compile(&plan, owner, None).expect("compiles"))
+    let mine = run(&pool, &compile(&plan, owner).expect("compiles"))
         .await
         .expect("runs");
     assert_eq!(
@@ -234,7 +234,7 @@ async fn a_composition_returns_nothing_to_a_principal_who_can_see_nothing(pool: 
     );
 
     let stranger = ProfileId::from(common::insert_profile(&pool, "exec-stranger").await);
-    let theirs = run(&pool, &compile(&plan, stranger, None).expect("compiles"))
+    let theirs = run(&pool, &compile(&plan, stranger).expect("compiles"))
         .await
         .expect("runs");
     assert!(
@@ -270,13 +270,13 @@ fn one_find_exact(query: &str, bound: Option<Vec<Uuid>>) -> ValidatedComposition
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: query.to_string(),
-            embedded: false,
-        }),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
             input: bound.map(|ids| StageInput::Caller {
                 relation: StageRelation::Bound,
                 ids: IdSet {
@@ -304,13 +304,13 @@ fn find_exact_paged(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompo
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: query.to_string(),
-            embedded: false,
-        }),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
             input: None,
             terms: terms.into_iter().collect(),
             resource_filter: None,
@@ -353,7 +353,7 @@ async fn a_declared_limit_returns_that_many_rows_and_an_offset_returns_a_differe
         terms: Vec<(BoundTerm, i64)>,
     ) -> Vec<Uuid> {
         let v = find_exact_paged("kestrel", terms);
-        let rows = execute(pool, &compile(&v, owner, None).expect("compiles"))
+        let rows = execute(pool, &compile(&v, owner).expect("compiles"))
             .await
             .expect("runs");
         rows.hits_for("a").into_iter().map(|h| h.id).collect()
@@ -412,7 +412,7 @@ async fn a_matched_row_carries_its_quantity_and_is_counted_by_the_tally(pool: sq
 
     let rows = execute(
         &pool,
-        &compile(&one_find_exact("composable", None), owner, None).unwrap(),
+        &compile(&one_find_exact("composable", None), owner).unwrap(),
     )
     .await
     .expect("runs");
@@ -442,7 +442,7 @@ async fn a_stage_that_matched_nothing_is_tallied_zero_rather_than_going_unreport
 
     let rows = execute(
         &pool,
-        &compile(&one_find_exact("nothing matches this", None), owner, None).unwrap(),
+        &compile(&one_find_exact("nothing matches this", None), owner).unwrap(),
     )
     .await
     .expect("runs");
@@ -477,7 +477,7 @@ async fn an_id_the_principal_cannot_see_is_counted_unusable_without_saying_why(p
     .await;
 
     let plan = one_find_exact("composable", Some(vec![visible, hidden]));
-    let rows = execute(&pool, &compile(&plan, owner, None).unwrap())
+    let rows = execute(&pool, &compile(&plan, owner).unwrap())
         .await
         .expect("runs");
 
@@ -511,12 +511,7 @@ async fn a_principal_who_can_see_nothing_finds_every_supplied_id_unusable(pool: 
     let outsider = ProfileId::from(common::insert_profile(&pool, "coalesce-outsider").await);
     let rows = execute(
         &pool,
-        &compile(
-            &one_find_exact("composable", Some(vec![a, b])),
-            outsider,
-            None,
-        )
-        .unwrap(),
+        &compile(&one_find_exact("composable", Some(vec![a, b])), outsider).unwrap(),
     )
     .await
     .expect("runs");
@@ -558,6 +553,10 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
             StageNode::Act(ActInvocation {
                 name: n.clone(),
                 act: ActName::FindExact,
+                intention: Some(Intention {
+                    query: "kestrel".to_string(),
+                    embedding: None,
+                }),
                 input,
                 terms: Default::default(),
                 resource_filter: None,
@@ -572,10 +571,6 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
                     with: vec![],
                 }],
             },
-            intention: Some(Intention {
-                query: "kestrel".to_string(),
-                embedded: false,
-            }),
             stages: vec![
                 stage(&up, None),
                 stage(
@@ -588,7 +583,7 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
             ],
         };
         let v = validate(&c).expect("a reserved word is a legal stage name");
-        let compiled = compile(&v, owner, None).expect("compiles");
+        let compiled = compile(&v, owner).expect("compiles");
         let rows = execute(&pool, &compiled)
             .await
             .unwrap_or_else(|e| panic!("stage named `{reserved}` failed to run: {e}"));
@@ -655,6 +650,10 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
         StageNode::Act(ActInvocation {
             name: n.clone(),
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: "kestrel".to_string(),
+                embedding: None,
+            }),
             input,
             terms: Default::default(),
             resource_filter: None,
@@ -669,10 +668,6 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: "kestrel".to_string(),
-            embedded: false,
-        }),
         stages: vec![
             find(&all, None),
             // Bounded to Kestrel alone, so this stage produces a strict subset of `all_hits`.
@@ -697,7 +692,7 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
 
     // Precondition: the two stages genuinely differ, or neither assertion below means anything.
     let v = validate(&compose(temper_core::types::query::CombineOp::Intersect)).expect("valid");
-    let rows = execute(&pool, &compile(&v, owner, None).expect("compiles"))
+    let rows = execute(&pool, &compile(&v, owner).expect("compiles"))
         .await
         .expect("runs");
     assert_eq!(rows.tally("all_hits").unwrap().produced, 2, "both match");
@@ -709,7 +704,7 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
     );
 
     let v = validate(&compose(temper_core::types::query::CombineOp::Union)).expect("valid");
-    let rows = execute(&pool, &compile(&v, owner, None).expect("compiles"))
+    let rows = execute(&pool, &compile(&v, owner).expect("compiles"))
         .await
         .expect("runs");
     assert_eq!(
@@ -741,6 +736,12 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
         stages.push(StageNode::Act(ActInvocation {
             name: wide.clone(),
             act: ActName::FindAboutAnywhere,
+            // No vector, deliberately — the caller of this helper asserts the wide stage refuses
+            // `EmbeddingUnavailable` at compile and emits `refused_body`.
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
             input: None,
             terms: Default::default(),
             resource_filter: None,
@@ -751,6 +752,10 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
     stages.push(StageNode::Act(ActInvocation {
         name: narrowed.clone(),
         act: ActName::FindExact,
+        intention: Some(Intention {
+            query: query.to_string(),
+            embedding: None,
+        }),
         input: bind_to_wide.then(|| StageInput::Upstream {
             relation: StageRelation::Bound,
             stage: wide.clone(),
@@ -768,10 +773,6 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: query.to_string(),
-            embedded: false,
-        }),
         stages,
     };
     validate(&c).expect("plan is valid")
@@ -815,7 +816,7 @@ async fn a_stage_bound_to_a_refused_stage_returns_nothing_when_actually_executed
     }
 
     // No embedding, so the wide stage refuses at compile and emits `refused_body`.
-    let bound = compile(&wide_then_narrowed("kestrel", true), owner, None)
+    let bound = compile(&wide_then_narrowed("kestrel", true), owner)
         .expect("a runtime refusal does not abort the plan");
     let rows = execute(&pool, &bound)
         .await
@@ -850,7 +851,7 @@ async fn a_stage_bound_to_a_refused_stage_returns_nothing_when_actually_executed
     // ── The denominator ──
     // The same stage, unbounded, over the same corpus. If this returned nothing the assertions
     // above would be vacuous — they would hold against a corpus with nothing to find.
-    let unbound = compile(&wide_then_narrowed("kestrel", false), owner, None).expect("compiles");
+    let unbound = compile(&wide_then_narrowed("kestrel", false), owner).expect("compiles");
     let rows = execute(&pool, &unbound).await.expect("runs");
     assert!(
         rows.refusals.is_empty(),
@@ -867,7 +868,13 @@ async fn a_stage_bound_to_a_refused_stage_returns_nothing_when_actually_executed
 
 /// One `find-about-anywhere` stage, returned. The wide arm's 10-slot call, and the only
 /// composition in this file that reaches it.
-fn one_find_about_anywhere(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedComposition {
+fn one_find_about_anywhere(
+    query: &str,
+    // `[2026-08-12]` The vector used to be `compile`'s third argument; spec ⟨7⟩ put it on the
+    // stage's intention, so the plan builder is where it enters.
+    embedding: Option<Vec<f32>>,
+    terms: Vec<(BoundTerm, i64)>,
+) -> ValidatedComposition {
     let name = StageName::parse("wide").unwrap();
     let c = Composition {
         outcome: OutcomeDeclaration {
@@ -876,13 +883,13 @@ fn one_find_about_anywhere(query: &str, terms: Vec<(BoundTerm, i64)>) -> Validat
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: query.to_string(),
-            embedded: true,
-        }),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindAboutAnywhere,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding,
+            }),
             input: None,
             terms: terms.into_iter().collect(),
             resource_filter: None,
@@ -951,8 +958,8 @@ async fn the_wide_arms_ten_slot_call_executes_and_the_query_vector_reaches_its_s
     // intention that also matched textually would let a mis-wired call look right for the wrong
     // reason. `find-about-anywhere` never reads the query text.
     let query_vec = common::unit(0);
-    let plan = one_find_about_anywhere("something I cannot spell", vec![]);
-    let compiled = compile(&plan, owner, Some(&query_vec)).expect("compiles");
+    let plan = one_find_about_anywhere("something I cannot spell", Some(query_vec.clone()), vec![]);
+    let compiled = compile(&plan, owner).expect("compiles");
     assert!(
         compiled.refusals.is_empty(),
         "an embedding was supplied, so nothing may refuse; got {:?}",
@@ -989,13 +996,14 @@ async fn the_wide_arms_ten_slot_call_executes_and_the_query_vector_reaches_its_s
     // ── The page ──
     // `Far` came back above, so its ABSENCE here is the limit biting on a real ordering rather
     // than a claim about a corpus that never held it.
-    let paged = one_find_about_anywhere("something I cannot spell", vec![(BoundTerm::Limit, 1)]);
-    let rows = execute(
-        &pool,
-        &compile(&paged, owner, Some(&query_vec)).expect("compiles"),
-    )
-    .await
-    .expect("runs");
+    let paged = one_find_about_anywhere(
+        "something I cannot spell",
+        Some(common::unit(0)),
+        vec![(BoundTerm::Limit, 1)],
+    );
+    let rows = execute(&pool, &compile(&paged, owner).expect("compiles"))
+        .await
+        .expect("runs");
     let hits = rows.hits_for("wide");
     assert_eq!(hits.len(), 1, "one row was asked for; got {hits:?}");
     assert_eq!(

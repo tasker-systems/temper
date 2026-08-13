@@ -123,13 +123,13 @@ fn one_find(
                 with,
             }],
         },
-        intention: Some(Intention {
-            query: query.to_string(),
-            embedded: false,
-        }),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
             input: None,
             terms: Default::default(),
             resource_filter: (!doc_type.is_empty()).then(|| ResourceFilter {
@@ -169,7 +169,7 @@ async fn a_matched_resource_comes_back_hydrated_and_carries_its_acts_score_kind(
     )
     .await;
 
-    let r = run_composition(&pool, owner, &one_find("composable", vec![], vec![]), None)
+    let r = run_composition(&pool, owner, &one_find("composable", vec![], vec![]))
         .await
         .expect("the composition runs");
 
@@ -203,7 +203,7 @@ async fn open_meta_is_absent_until_asked_for_and_empty_is_a_different_answer(poo
     let home = ctx(&pool, owner, "sections").await;
     mk(&pool, home, owner, emitter, "Plain", "composable fragments").await;
 
-    let without = run_composition(&pool, owner, &one_find("composable", vec![], vec![]), None)
+    let without = run_composition(&pool, owner, &one_find("composable", vec![], vec![]))
         .await
         .expect("runs");
     assert_eq!(
@@ -216,7 +216,6 @@ async fn open_meta_is_absent_until_asked_for_and_empty_is_a_different_answer(poo
         &pool,
         owner,
         &one_find("composable", vec![ResourceSection::OpenMeta], vec![]),
-        None,
     )
     .await
     .expect("runs");
@@ -251,7 +250,6 @@ async fn a_resource_the_principal_cannot_see_is_not_in_the_answer(pool: PgPool) 
         &pool,
         ProfileId::from(stranger),
         &one_find("composable", vec![], vec![]),
-        None,
     )
     .await
     .expect("runs");
@@ -299,7 +297,7 @@ async fn a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_th
     )
     .await;
 
-    let unfiltered = run_composition(&pool, owner, &one_find("composable", vec![], vec![]), None)
+    let unfiltered = run_composition(&pool, owner, &one_find("composable", vec![], vec![]))
         .await
         .expect("runs");
     assert_eq!(
@@ -312,7 +310,6 @@ async fn a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_th
         &pool,
         owner,
         &one_find("composable", vec![], vec!["concept".to_string()]),
-        None,
     )
     .await
     .expect("runs");
@@ -347,13 +344,13 @@ fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: "composable".to_string(),
-            embedded: false,
-        }),
         stages: vec![StageNode::Act(ActInvocation {
             name,
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: "composable".to_string(),
+                embedding: None,
+            }),
             input: None,
             terms: Default::default(),
             resource_filter: Some(ResourceFilter {
@@ -399,6 +396,10 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
         StageNode::Act(ActInvocation {
             name: n.clone(),
             act: ActName::FindExact,
+            intention: Some(Intention {
+                query: "composable".to_string(),
+                embedding: None,
+            }),
             input: None,
             terms: Default::default(),
             resource_filter: None,
@@ -419,15 +420,11 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
                 },
             ],
         },
-        intention: Some(Intention {
-            query: "composable".to_string(),
-            embedded: false,
-        }),
         stages: vec![stage(&asked), stage(&silent)],
     };
     let v = validate(&c).expect("plan is valid");
 
-    let r = run_composition(&pool, owner, &v, None).await.expect("runs");
+    let r = run_composition(&pool, owner, &v).await.expect("runs");
 
     let arm = |n: &StageName| match &r.returned[n].produced {
         StageOutput::Resources { hits } => hits[0].resource.open_meta.clone(),
@@ -443,4 +440,171 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
         None,
         "the arm that did not ask must not be told this resource has no open metadata"
     );
+}
+
+/// **The server embeds on the caller's behalf, and this is the only place that is witnessed.**
+///
+/// `test-embed` gated: these run real ONNX twice over — once to give the corpus true vectors
+/// (`create_resource` with `chunks: None` chunks and embeds server-side), once for the query. A run
+/// scoped `--features test-db` alone compiles this module to nothing and reads green.
+///
+/// `query_read.rs`'s own `wants_a_vector` doc names the absence these close: a hardcoded
+/// `"search_wide"` survived the `served_by` repoint of 2026-08-12 with no test going red, because
+/// *"there is no find-about case in `query_run_composition_test.rs`, and `/api/query` has no route
+/// yet, so the door would have opened already broken."* The unit test over `search_family()` is a
+/// family assertion; nothing drove the embed and the compiler together until here.
+///
+/// **They go through [`prepare`], not `validate`** — which is the point. `validate` seals a plan,
+/// and a sealed plan cannot be given a vector; a test that reached for it would be asserting over a
+/// composition the server never had a chance to embed for.
+#[cfg(feature = "test-embed")]
+mod server_side_embedding {
+    use super::*;
+    use temper_services::backend::query_read::prepare;
+
+    fn find_about(stage: &str, query: &str) -> StageNode {
+        StageNode::Act(ActInvocation {
+            name: StageName::parse(stage).unwrap(),
+            act: ActName::FindAboutAnywhere,
+            // **No embedding.** This is the ruby gem / TypeScript package / MCP caller — the whole
+            // class of client that structurally cannot compute one.
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
+            input: None,
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
+    }
+
+    fn about(stages: Vec<StageNode>) -> Composition {
+        Composition {
+            outcome: OutcomeDeclaration {
+                returns: stages
+                    .iter()
+                    .map(|n| ReturnSpec {
+                        stage: n.name().clone(),
+                        with: vec![],
+                    })
+                    .collect(),
+            },
+            stages,
+        }
+    }
+
+    fn stage_hits<'a>(
+        r: &'a temper_core::types::query::QueryResponse,
+        stage: &str,
+    ) -> &'a Vec<temper_core::types::query::ResourceHit> {
+        let s = &r.returned[&StageName::parse(stage).unwrap()];
+        assert_eq!(
+            s.disposition,
+            StageDisposition::Answered,
+            "stage `{stage}` did not answer; refusal: {:?}",
+            s.refusal
+        );
+        match &s.produced {
+            StageOutput::Resources { hits } => hits,
+            other => panic!("expected resources, got {other:?}"),
+        }
+    }
+
+    /// **A caller that cannot embed gets a server-computed vector, not a refusal.**
+    ///
+    /// The regression this closes was quiet by construction: an unembedded find-about stage refuses
+    /// `EmbeddingUnavailable`, which from outside is indistinguishable from a genuine ONNX failure.
+    /// So the assertion is on the stage ANSWERING with a real row — the one outcome the broken path
+    /// cannot produce — rather than on the absence of a refusal, which a broken embedder would also
+    /// satisfy by refusing for a different reason.
+    #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+    async fn a_caller_that_cannot_embed_still_gets_a_vector_search(pool: PgPool) {
+        bootseed::seed_system(&pool).await.unwrap();
+        let (owner, emitter) = system_actor(&pool).await;
+        let home = ctx(&pool, owner, "semantic").await;
+        let id = mk(
+            &pool,
+            home,
+            owner,
+            emitter,
+            "Hovering hunters",
+            "The kestrel is a small falcon that hunts by hovering above open grassland, \
+             dropping onto voles and large insects it spots below.",
+        )
+        .await;
+
+        // Deliberately shares NO word with the body: a lexical arm cannot produce this hit, so the
+        // row can only have arrived through a vector the SERVER computed.
+        let c = about(vec![find_about("birds", "raptor predation behaviour")]);
+        let v = prepare(c).await.expect("the plan is valid");
+        let r = run_composition(&pool, owner, &v)
+            .await
+            .expect("the composition runs");
+
+        let hits = stage_hits(&r, "birds");
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert_eq!(hits[0].resource.id.uuid(), id);
+        assert!(
+            hits[0].scoring.score > 0.0,
+            "a real similarity, not a NULL bind reading as an answer"
+        );
+    }
+
+    /// **Two stages, two questions, two vectors — the property the whole PR exists to create.**
+    ///
+    /// Under the retired envelope placement this composition was inexpressible: every find stage
+    /// interrogated one string. Asserting it end-to-end rather than at the type layer is what makes
+    /// it a property of the ANSWER — a single shared vector would rank both stages identically, so
+    /// the two stages disagreeing about their top hit is exactly the observation that cannot be
+    /// faked by anything upstream.
+    #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+    async fn two_stages_asking_different_questions_receive_different_vectors(pool: PgPool) {
+        bootseed::seed_system(&pool).await.unwrap();
+        let (owner, emitter) = system_actor(&pool).await;
+        let home = ctx(&pool, owner, "twoquestions").await;
+        let falcon = mk(
+            &pool,
+            home,
+            owner,
+            emitter,
+            "Hovering hunters",
+            "The kestrel is a small falcon that hunts by hovering above open grassland, \
+             dropping onto voles and large insects it spots below.",
+        )
+        .await;
+        let bread = mk(
+            &pool,
+            home,
+            owner,
+            emitter,
+            "The slow rise",
+            "Sourdough dough ferments with a wild yeast starter; the baker folds it every hour \
+             and bakes the loaf in a covered pot at high heat.",
+        )
+        .await;
+
+        let c = about(vec![
+            find_about("birds", "raptor predation behaviour"),
+            find_about("baking", "fermented loaves and oven craft"),
+        ]);
+        let v = prepare(c).await.expect("the plan is valid");
+        let r = run_composition(&pool, owner, &v)
+            .await
+            .expect("the composition runs");
+
+        assert_eq!(
+            stage_hits(&r, "birds")[0].resource.id.uuid(),
+            falcon,
+            "the stage asking about raptors ranked the baking note first — both stages were \
+             answered by ONE vector"
+        );
+        assert_eq!(
+            stage_hits(&r, "baking")[0].resource.id.uuid(),
+            bread,
+            "the stage asking about bread ranked the falconry note first — both stages were \
+             answered by ONE vector"
+        );
+    }
 }
