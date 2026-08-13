@@ -292,6 +292,13 @@ pub enum Commands {
         /// Plan source: `@<path>` to read a file, `-` to read stdin. Omit to auto-detect a pipe.
         #[arg(long)]
         plan: Option<String>,
+        /// Check the plan's shape locally and exit — no network, no token, no server consulted.
+        ///
+        /// Reports EXPRESSIBILITY: whether the plan is well-formed against the published contract.
+        /// A clean result does not promise the server will run it; only the server knows what it
+        /// has built. Refusals print to stdout as data and the exit code is non-zero.
+        #[arg(long)]
+        check: bool,
     },
 
     /// Search the knowledge base

@@ -434,6 +434,26 @@ async fn send_once(req: RequestBuilder) -> Result<Response> {
 
     let body_text = resp.text().await.unwrap_or_default();
     let err = map_status_to_error(status, &body_text);
+    // **The level says whose fault it is, and that is what stops the CLI printing every error
+    // twice.** This logged every failure at `warn` with `error = %err` — the error's whole
+    // `Display` — and then the same error propagated and was rendered again by the caller. With
+    // `init_cli_logging` at `warn`/stderr, a user saw the message once from here and once from the
+    // CLI's own renderer. Invisible while every message was one line; obvious the moment
+    // `PlanRefused` arrived carrying a refusal per line, and a three-refusal plan printed six.
+    //
+    // A `4xx` is a CALLER error the caller is about to be told about by whoever handles it, so it
+    // is a `debug` — kept, because a library embedder with no renderer still wants it. A `5xx` or a
+    // transport failure is a genuine observation about the SERVER that nothing else reports, and
+    // stays at `warn`; it is also the class `should_retry` acts on.
+    if status.as_u16() < 500 {
+        tracing::debug!(
+            status = status.as_u16(),
+            latency_ms,
+            error = %err,
+            "request failed",
+        );
+        return Err(err);
+    }
     tracing::warn!(
         status = status.as_u16(),
         latency_ms,

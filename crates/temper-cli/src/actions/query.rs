@@ -51,6 +51,44 @@ pub fn parse_composition(raw: &str) -> Result<Composition> {
         .map_err(|e| TemperError::Project(format!("plan is not a valid composition: {e}")))
 }
 
+/// What `--check` can answer, stated so a clean result is not read as a promise.
+///
+/// Spec §C: *"Its disclosure is that it reports expressibility and says so — it cannot speak to what
+/// the server has implemented and does not try."* Carried as a field rather than printed as a
+/// footer, so it survives `--format json` — the agent reading this programmatically is exactly the
+/// caller most likely to treat `expressible: true` as "this will run".
+pub const SHAPE_DISCLOSURE: &str =
+    "Expressibility only: the plan was checked against the published contract with no server \
+     consulted. A clean result does not promise the server will run it — the server may be older \
+     or newer than this client, and only it knows what it has built.";
+
+/// The verdict of a local `--check`.
+#[derive(Debug, serde::Serialize)]
+pub struct ShapeReport {
+    /// True when the plan raises no shape refusal. **Not** a prediction that it will run.
+    pub expressible: bool,
+    /// Every shape refusal at once, never just the first.
+    pub refusals: Vec<PlanRefusal>,
+    /// Always [`SHAPE_DISCLOSURE`]. Present in every report, including clean ones — a disclosure
+    /// that appears only on failure is absent exactly when it is most likely to mislead.
+    pub disclosure: &'static str,
+}
+
+/// Check a plan's shape locally: no network, no declarations, every refusal at once.
+///
+/// Calls [`temper_core::types::query::validate::validate_shape`], which is the **same** pass the
+/// server runs before it embeds — so this cannot drift into a second, kinder validator. What it
+/// deliberately does not run is the capability pass, which is why a clean result is a statement
+/// about expressibility and not about this deployment.
+pub fn check_plan(composition: &Composition) -> ShapeReport {
+    let refusals = temper_core::types::query::validate::validate_shape(composition);
+    ShapeReport {
+        expressible: refusals.is_empty(),
+        refusals,
+        disclosure: SHAPE_DISCLOSURE,
+    }
+}
+
 /// An answered plan, or the refusals that stopped it.
 ///
 /// **A refusal is an outcome, not a transport failure**, and the type says so — mirroring the
@@ -141,6 +179,59 @@ mod tests {
             render_refusal_line(&refusal(Some("about"), "needs a question")),
             "about: needs a question"
         );
+    }
+
+    /// `--check` reports every shape refusal at once, exactly as the server's 400 does. A check
+    /// that stopped at the first would send a plan author round the same loop the door avoids.
+    #[test]
+    fn check_reports_every_shape_refusal_not_just_the_first() {
+        // Two find acts, neither carrying an intention — independently unrunnable.
+        let plan: Composition = serde_json::from_str(
+            r#"{"stages":[{"name":"one","act":"find-about-anywhere"},
+                          {"name":"two","act":"find-about-anywhere"}],
+                "outcome":{"returns":[{"stage":"one","with":[]}]}}"#,
+        )
+        .expect("fixture parses");
+
+        let report = check_plan(&plan);
+        assert!(!report.expressible);
+        assert!(
+            report.refusals.len() >= 2,
+            "a shape check must report all of them; got {:?}",
+            report.refusals
+        );
+        let stages: Vec<&str> = report
+            .refusals
+            .iter()
+            .filter_map(|r| r.stage.as_ref().map(|s| s.as_str()))
+            .collect();
+        assert!(stages.contains(&"one") && stages.contains(&"two"));
+    }
+
+    /// **The disclosure rides on the clean result too.** A caveat that appears only when something
+    /// is wrong is missing exactly when it is most likely to mislead — `expressible: true` is the
+    /// value an agent will read as "this will run".
+    #[test]
+    fn a_clean_check_still_carries_its_disclosure() {
+        let plan: Composition = serde_json::from_str(
+            r#"{"stages":[{"name":"about","act":"find-about-anywhere",
+                           "intention":{"query":"anything"}}],
+                "outcome":{"returns":[{"stage":"about","with":[]}]}}"#,
+        )
+        .expect("fixture parses");
+
+        let report = check_plan(&plan);
+        assert!(report.expressible, "refusals: {:?}", report.refusals);
+        assert!(report.refusals.is_empty());
+        assert_eq!(report.disclosure, SHAPE_DISCLOSURE);
+        assert!(
+            report.disclosure.contains("does not promise"),
+            "the disclosure must decline to promise, not merely describe itself"
+        );
+        // It survives serialization — the JSON an agent parses is the point.
+        let json = serde_json::to_value(&report).expect("serializes");
+        assert!(json["disclosure"].is_string());
+        assert_eq!(json["expressible"], true);
     }
 
     /// The headline property, at the last hop that can drop it: **every** refusal is rendered.

@@ -170,6 +170,74 @@ async fn a_refused_plan_prints_every_refusal_and_exits_non_zero(pool: sqlx::PgPo
     );
 }
 
+/// `--check` reports shape refusals on **stdout** and exits non-zero, touching no network.
+///
+/// Only reachable through the real binary: the exit code comes from `std::process::exit`, which no
+/// in-process test can observe, and "did it reach the server" is a claim about a whole process.
+///
+/// **It reports FEWER refusals than the server does, and that is the contract, not a shortfall.**
+/// The same plan comes back from `POST /api/query` with a third — `follow-from`'s mechanic is not
+/// reachable on this deployment — which is a *capability* refusal that a local shape pass cannot
+/// see. That gap is exactly what the disclosure exists to state.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn check_reports_shape_refusals_on_stdout_and_never_calls_the_server(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    let out = common::run_temper_cli_with_stdin(&app, DOUBLY_REFUSED_PLAN, &["query", "--check"])
+        .await
+        .expect("spawn temper query --check");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "a plan with refusals must exit non-zero; stdout: {stdout}"
+    );
+
+    // Data on stdout, not a rendered error on stderr — `--check` was ASKED to find these, so they
+    // are its output. An agent gates on this.
+    let report: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("--check must emit parseable JSON on stdout: {e}\n{stdout}"));
+    assert_eq!(report["expressible"], false);
+    let refusals = report["refusals"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no refusals array in {report:#}"));
+    assert!(
+        refusals.len() >= 2,
+        "every shape refusal at once, not the first; got {report:#}"
+    );
+    assert!(
+        report["disclosure"].as_str().is_some_and(|d| !d.is_empty()),
+        "the disclosure must ride on the wire, not only on the terminal: {report:#}"
+    );
+}
+
+/// A clean plan checks clean, exits zero, and still carries the disclosure.
+///
+/// The pairing matters: a `--check` that only ever spoke up about problems would let
+/// `expressible: true` read as a promise the server will run it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_clean_check_exits_zero_and_still_declines_to_promise(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    let out = common::run_temper_cli_with_stdin(&app, ANSWERABLE_PLAN, &["query", "--check"])
+        .await
+        .expect("spawn temper query --check");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "a well-formed plan must check clean: {stdout}"
+    );
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
+    assert_eq!(report["expressible"], true);
+    assert!(
+        report["disclosure"]
+            .as_str()
+            .is_some_and(|d| d.contains("does not promise")),
+        "a clean report must still decline to promise: {report:#}"
+    );
+}
+
 /// A missing plan is an error rather than an empty request — the deliberate divergence from
 /// `resource update`, which treats absent stdin as "no body update requested".
 ///

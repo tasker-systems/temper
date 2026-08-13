@@ -74,6 +74,7 @@ static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verif
 static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
+static QUERYING_MD: &str = include_str!("../../skill-content/querying.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
 static KNOWLEDGE_BASE_MD: &str =
     include_str!("../../../../agent-skills/temper-knowledge-base/knowledge-base.md");
@@ -980,6 +981,7 @@ fn check_expected_files(skill_dir: &Path) {
         "session-lifecycle.md",
         "cognitive-maps.md",
         "teams.md",
+        "querying.md",
         "knowledge-base.md",
         "workflows/build-small.md",
         "workflows/build-medium.md",
@@ -1120,6 +1122,10 @@ pub fn generate_skill_files_with_hash(
         COGNITIVE_MAPS_MD.to_string(),
     );
     files.insert("teams.md".to_string(), TEAMS_MD.to_string());
+    // CLI-only, and declared absent from the MCP tree rather than shipped wrong: MCP has no query
+    // tool yet (spec [2] defers it), so an MCP reader routed here would be sent to a door that is
+    // not on their surface. Same reason `cognitive-maps.md` and `teams.md` are CLI-only.
+    files.insert("querying.md".to_string(), QUERYING_MD.to_string());
 
     files.insert(
         "knowledge-base.md".to_string(),
@@ -1226,18 +1232,38 @@ mod tests {
         // reached on demand from the routing table (plus a one-line stanza in the always-read
         // steps), which is deliberate — it is ~200 lines that only a goal-authoring session needs.
         // Unreachable is the failure this pins; expensive-on-every-task is a separate judgment.
-        for guidance in [
-            "subagent-guidance.md",
-            "plan-verification.md",
-            "implementation-grounding.md",
-            "outcome-registers.md",
-        ] {
-            assert!(
-                skill_md.contains(guidance),
-                "SKILL.md never mentions `{guidance}`, so no session will read it — ship it in the \
-                 router's steps or do not ship it at all"
-            );
-        }
+        //
+        // **Derived from what is actually shipped, not a list restated here.** This was four
+        // hand-written names, which meant the guard covered the four files that had already rotted
+        // and no future one — a new supporting file could be added, shipped, and never routed to,
+        // which is precisely the silent failure the test exists to catch. `querying.md` was the
+        // file that made that gap concrete. Deriving the set means adding a file to the emit is
+        // enough to bring it under the guard.
+        let unrouted: Vec<&String> = files
+            .keys()
+            .filter(|name| {
+                // Three exclusions, each for a different reason:
+                //
+                // - `SKILL.md` is the router; it cannot route to itself.
+                // - `workflows/*` are named by PATTERN (`workflows/{mode}-{effort}.md`) rather
+                //   than individually, deliberately: exactly one of the six is read per task.
+                // - `command-wrapper.md` is not a supporting file at all. `install` writes it to
+                //   `~/.claude/commands/temper.md` and excludes it from the skill dir (see the
+                //   write loop above). It is the ENTRY POINT — the `/temper` slash command — so a
+                //   router naming it would point backwards, at the thing that invoked the router.
+                name.as_str() != "SKILL.md"
+                    && name.as_str() != "command-wrapper.md"
+                    && !name.starts_with("workflows/")
+            })
+            .filter(|name| !skill_md.contains(name.as_str()))
+            .collect();
+
+        assert!(
+            unrouted.is_empty(),
+            "SKILL.md never mentions {unrouted:?}, so no session will read them — name them in the \
+             router (Supporting Files AND, where they answer a question, the routing table) or do \
+             not ship them at all"
+        );
     }
 
     #[test]
