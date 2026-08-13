@@ -163,6 +163,16 @@ jobs:
       - name: Security tripwire — ungated find fragments and who names them
         run: bash .github/scripts/audit-ungated-fragments.sh
 
+      # Not a security tripwire — a PROVENANCE one. Three planning sessions on the /api/query arc
+      # were spent undoing "firm decisions" that no human took: an agent writes a design paragraph
+      # in the first person, nothing marks it unratified because our prose voice for a decision and
+      # for a proposal are identical, and it hardens — worst of all into a TEST NAME, which every
+      # later agent greps and reads as settled. The discriminator already existed and cost nothing
+      # to omit: every real decision in these files carries `[decided — DATE, WHO]` or an ADJ
+      # number. This makes omitting it cost something. See the script header for the specimen.
+      - name: Provenance tripwire — decision-voiced prose nobody signed
+        run: bash .github/scripts/audit-unattributed-decisions.sh
+
       # Not a security tripwire — a COVERAGE one, and it sits here because it is the same shape:
       # a pinned set that makes an exception a declaration rather than a place to put things.
       #
@@ -272,6 +282,14 @@ jobs:
 
       - name: Guard test — audit-ungated-fragments
         run: bash .github/scripts/test-audit-ungated-fragments.sh
+
+      # Five probes, and two of them exist because the guard's own first run was green for the wrong
+      # reason: `awk -v` had eaten a backslash out of the attribution pattern, and a `grep -v` on an
+      # empty baseline was exiting 1 under `pipefail` before any comparison ran — so the red probe
+      # was passing on a crash. Claim 1 therefore asserts the OUTPUT names the flagged file, not
+      # merely that the exit code is non-zero.
+      - name: Guard test — audit-unattributed-decisions
+        run: bash .github/scripts/test-audit-unattributed-decisions.sh
 
       # Spec §1's "silence is a failure" half. The checker itself lives in this job rather than in
       # rust-quality because it parses migrations/*.sql and needs no toolchain and no database —
