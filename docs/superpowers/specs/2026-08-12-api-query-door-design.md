@@ -612,6 +612,47 @@ it, and a partial re-cut ahead of the door is churn against a file B will move a
 Per the standing ruling the contract is **provisional** and alignment is bidirectional, so D
 adjudicates case by case rather than conforming code to the yaml.
 
+### D shipped `[2026-08-13]` — and three of the seven above were already stale
+
+`[decided — 2026-08-13, Pete]` The file is **re-scoped, not retired and not fixed in place.** Its
+premise had expired — B1 shipped the route, so `openapi.json` publishes `POST /api/query` and 34 of
+the 37 schemas the file hand-wrote. It now keeps the two things a generated document structurally
+cannot hold, and `$ref`s everything else:
+
+- **the rulings** — 38 attributed decisions, kept beside what they decided (`openapi.json` carries
+  the per-field prose, 242 of 247 schemas, but never who ruled or what was rejected);
+- **the targets** — the six schemas that are designed and unbuilt (`IdSet`, `StageOutput`,
+  `StageTrace`, `BoundTerm`, `Disclosure`, `ResourcesOutput`), each retiring into a `$ref` when its
+  work lands.
+
+**Alignment ran the other way on eight schemas, which is the bidirectional ruling earning its
+keep.** The yaml was a *tighter* contract than the generated one on `StageName`'s pattern (which is
+what stops a caller-chosen stage shadowing a compiler-internal relation), `CombineNode.inputs`'
+minimum of two and `OutcomeDeclaration.returns`' minimum of one — and simply *right* where
+`openapi.json` was wrong on `ResourceHit.located_at`'s required-ness and `NarrowedBy`'s nullability,
+both of which contradicted the `[ruled — 2026-08-10, Pete]` absent-versus-null rule the Rust
+honours. Those moved into the Rust as utoipa annotations, so the published document can say what the
+yaml said, and the `$ref`s are lossless rather than merely shorter.
+
+**Stale on arrival: entries 2, 3 and 4** — not the two the grounding pass predicted. Entry 3's
+`located_at` was resolved by the 2026-08-10 fix pass (the "19 occurrences" were header narrative,
+not defects), and `MatchLocation` is declared *and* published — the type landed, only the argmin
+that fills it has not. **Entry 5 was finally located**: ⟨6⟩ in the six-questions block promises
+`input_contributed` while ⟨6⟩'s own ratification twenty lines below drops it.
+
+**One thing D tried and reverted, worth recording so it is not re-attempted.** The yaml carried
+`discriminator` on six internally-tagged unions, and a document modifier was written to publish them
+into `openapi.json` (following ⟨9⟩'s ratified addon pattern). It worked — nine schemas, guard green,
+bite probe clean — and it **broke the Ruby gem**: `Extent.build` went from try-each-arm, which
+works, to `const_get("complete")`, which raises, because the arms are *inline* and `complete` is a
+tag value, not a schema name. Five of the six carried no `mapping` and were therefore invalid; only
+`StageOutput`'s is well-formed. They cost nothing while nothing fed that file to a generator. **A
+`discriminator` over inline arms is not a constraint the split lost — it is one that was never
+real.**
+
+`audit-contract-crossrefs.sh` now resolves every `$ref` against `openapi.json`, because "a
+restatement can drift; a `$ref` cannot" is true about drift and silent about dangling.
+
 ---
 
 ## Non-goals, named so they are not rediscovered as good ideas
