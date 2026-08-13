@@ -448,6 +448,27 @@ async fn send_once(req: RequestBuilder) -> Result<Response> {
 /// Extracted as a pure function so it can be unit-tested without network calls.
 pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
     match status.as_u16() {
+        // Keyed on the CODE, mirroring the 403 and 422 arms — a 400 is otherwise an ordinary
+        // caller error, and only `PLAN_REFUSED` carries a refusal list. A body-shape heuristic
+        // ("does `details` exist?") would misclassify the day another error learns to carry one.
+        400 if parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::PLAN_REFUSED_CODE) =>
+        {
+            match parse_plan_refusals(body) {
+                Some(refusals) => ClientError::PlanRefused { refusals },
+                // The code said refusals and the payload did not parse as them. Reporting a
+                // caller fault with an empty list would read as "refused for no reason"; this is
+                // a contract disagreement between client and server, so it says so.
+                None => ClientError::Server {
+                    status: 400,
+                    message: format!(
+                        "server sent {} with a `details.refusals` payload this client could not \
+                         parse — client and server disagree about the refusal contract",
+                        temper_core::error::PLAN_REFUSED_CODE
+                    ),
+                },
+            }
+        }
         401 => ClientError::NotAuthenticated,
         403 => {
             if let Some(details) = parse_system_access_details(body) {
@@ -533,6 +554,19 @@ fn parse_system_access_details(body: &str) -> Option<SystemAccessErrorDetails> {
     }
     let details = v.get("error")?.get("details")?;
     serde_json::from_value(details.clone()).ok()
+}
+
+/// Try to parse the refusal list from a `PLAN_REFUSED` 400 body.
+///
+/// Reads `error.details.refusals` — the wire path the server's `PlanRefusal` doc names and the
+/// route's own e2e asserts. Deliberately does NOT re-check the code: the caller already matched on
+/// it, and checking twice invites the two checks to disagree.
+fn parse_plan_refusals(
+    body: &str,
+) -> Option<Vec<temper_core::types::query::validate::PlanRefusal>> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let refusals = v.get("error")?.get("details")?.get("refusals")?;
+    serde_json::from_value(refusals.clone()).ok()
 }
 
 /// Try to extract `{ "error": { "message": "..." } }` from an API error body.
@@ -718,6 +752,80 @@ mod tests {
         let result = client.resolve_token();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), token);
+    }
+
+    /// A `PLAN_REFUSED` 400 body, as `ApiError::PlanRefused` renders it.
+    fn plan_refused_body(refusals: &str) -> String {
+        format!(
+            r#"{{"error":{{"code":"PLAN_REFUSED","message":"Plan refused","details":{{"refusals":[{refusals}]}}}}}}"#
+        )
+    }
+
+    /// **Every refusal survives the client**, which is the whole reason this arm exists. Before it,
+    /// a 400 fell to the status catch-all and the list was discarded entirely.
+    #[test]
+    fn a_400_plan_refused_preserves_the_whole_refusal_list() {
+        let body = plan_refused_body(
+            r#"{"stage":"one","reason":"missing_intention","detail":"needs a question"},
+               {"stage":"two","reason":"unknown_act","detail":"no such act"}"#,
+        );
+        match map_status_to_error(status(400), &body) {
+            ClientError::PlanRefused { refusals } => {
+                assert_eq!(refusals.len(), 2, "the refusal list was truncated");
+                assert_eq!(refusals[0].detail, "needs a question");
+                assert_eq!(refusals[1].detail, "no such act");
+                assert_eq!(refusals[0].stage.as_ref().map(|s| s.as_str()), Some("one"));
+            }
+            other => panic!("expected PlanRefused, got {other:?}"),
+        }
+    }
+
+    /// A caller fault must not be reported as a SERVER fault. This is the misclassification the
+    /// arm corrects: with no 400 arm, the catch-all produced `Server { status: 400 }`.
+    #[test]
+    fn a_refused_plan_is_a_caller_error_not_a_server_error() {
+        let body = plan_refused_body(r#"{"reason":"no_stages","detail":"a plan needs a stage"}"#);
+        let err = map_status_to_error(status(400), &body);
+        assert!(
+            !matches!(err, ClientError::Server { .. }),
+            "a refused plan reported as a server error: {err:?}"
+        );
+        // `Display` carries the reasons too — anything that does not branch on this variant still
+        // reaches `to_string()`, and dropping them there loses them for every such path.
+        assert!(
+            err.to_string().contains("a plan needs a stage"),
+            "Display dropped the refusal detail: {err}"
+        );
+    }
+
+    /// An ordinary 400 keeps its incumbent behaviour. The arm is keyed on the CODE, so widening it
+    /// must not capture every other bad request.
+    #[test]
+    fn an_ordinary_400_is_untouched_by_the_plan_refused_arm() {
+        let body = r#"{"error":{"code":"BAD_REQUEST","message":"Invalid JSON"}}"#;
+        match map_status_to_error(status(400), body) {
+            ClientError::Server {
+                status: 400,
+                message,
+            } => assert_eq!(message, "Invalid JSON"),
+            other => panic!("expected the incumbent Server mapping, got {other:?}"),
+        }
+    }
+
+    /// The code claimed refusals and the payload was not refusals. Reporting an empty list would
+    /// read to the user as "refused for no reason"; this is a contract disagreement and says so.
+    #[test]
+    fn a_plan_refused_code_with_an_unparseable_payload_does_not_invent_an_empty_refusal_list() {
+        let body = r#"{"error":{"code":"PLAN_REFUSED","message":"Plan refused","details":{"refusals":"not-an-array"}}}"#;
+        match map_status_to_error(status(400), body) {
+            ClientError::Server {
+                status: 400,
+                message,
+            } => {
+                assert!(message.contains("disagree"), "got {message}");
+            }
+            other => panic!("expected a contract-disagreement Server error, got {other:?}"),
+        }
     }
 
     #[test]

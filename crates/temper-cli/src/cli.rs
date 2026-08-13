@@ -283,6 +283,17 @@ pub enum Commands {
         action: ConfigAction,
     },
 
+    /// Run a composed query — declared acts, piped, answered in one round trip
+    ///
+    /// The plan is JSON. Source it like a resource body: `--plan @<path>` wins, `--plan -` always
+    /// reads stdin, and a piped stdin is auto-detected. Unlike `resource update` there is no
+    /// frontmatter-only case, so a missing plan is an error.
+    Query {
+        /// Plan source: `@<path>` to read a file, `-` to read stdin. Omit to auto-detect a pipe.
+        #[arg(long)]
+        plan: Option<String>,
+    },
+
     /// Search the knowledge base
     Search {
         /// Search query text

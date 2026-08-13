@@ -21,6 +21,7 @@ pub mod login;
 mod login_page;
 pub mod machine;
 pub mod profile;
+pub mod query;
 pub mod relationships;
 pub mod resources;
 pub mod search;
@@ -144,6 +145,11 @@ impl TemperClient {
     /// Search sub-client.
     pub fn search(&self) -> search::SearchClient<'_> {
         search::SearchClient::new(&self.http)
+    }
+
+    /// Composed-query sub-client. Its method is `run`, not `query` — see [`query`].
+    pub fn query(&self) -> query::QueryClient<'_> {
+        query::QueryClient::new(&self.http)
     }
 
     /// Profile sub-client.
