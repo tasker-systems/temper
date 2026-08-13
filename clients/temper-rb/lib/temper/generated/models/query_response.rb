@@ -14,20 +14,19 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # What `POST /api/query` answers with: the returned arms, keyed by the caller's own stage names, and the trace covering every stage.  **A 200 does not mean every stage answered.** A stage may be empty, withheld or refused and still be reported here — see [`super::disposition::StageDisposition`]. Static invalidity never reaches this type at all; it is a 400 carrying every [`super::validate::PlanRefusal`] at once.  # The schema cannot state the real invariant, and that is said plainly rather than hidden  The keys of `returned` are exactly `outcome.returns[].stage`, and the variant of `produced` under each is determined by the declared `produces` of the act that stage names. That is a dependency from REQUEST to RESPONSE, and OpenAPI has no way to express it.  Nothing on this surface closes it today. A `POST /api/query/validate` route was drafted to and was withdrawn (it authenticated nobody and protected nothing). The facts needed to compute it all live in the act declarations, and [`super::validate::ValidationOutcome`] is the pure function that does — so a client holding the declarations can derive it. Publishing them is an open question, not a promise.
+  class QueryResponse < ApiModelBase
+    # One entry per `outcome.returns` — no more, no fewer.  **A map rather than a list, and that is the structural half of `no-cross-act-ranking`.** Arms are keyed separately and there is no merged ordered list anywhere for two acts' rows to fall into, so combining them takes a deliberate act by the caller. The row types no longer differ per act — incommensurability is DATA now, carried by [`super::hits::Scoring::score_kind`] — which makes this keying the protection rather than a convenience.
+    attr_accessor :returned
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
-
-    attr_accessor :message
+    # EVERY stage, including the ones whose rows were not returned.  Intermediate stages are mostly not returned — the pipe carries ids, not rows — so without this a composition is a black box with an answer at the end and no way to tell whether stage 2 earned its place.
+    attr_accessor :trace
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'returned' => :'returned',
+        :'trace' => :'trace'
       }
     end
 
@@ -44,16 +43,14 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'returned' => :'Hash<String, StageResult>',
+        :'trace' => :'CompositionTrace'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
       ])
     end
 
@@ -61,32 +58,30 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::QueryResponse` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::QueryResponse`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'returned')
+        if (value = attributes[:'returned']).is_a?(Hash)
+          self.returned = value
+        end
       else
-        self.code = nil
+        self.returned = nil
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
-      end
-
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
+      if attributes.key?(:'trace')
+        self.trace = attributes[:'trace']
       else
-        self.message = nil
+        self.trace = nil
       end
     end
 
@@ -95,12 +90,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
+      if @returned.nil?
+        invalid_properties.push('invalid value for "returned", returned cannot be nil.')
       end
 
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @trace.nil?
+        invalid_properties.push('invalid value for "trace", trace cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +105,29 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @returned.nil?
+      return false if @trace.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # @param [Object] returned Value to be assigned
+    def returned=(returned)
+      if returned.nil?
+        fail ArgumentError, 'returned cannot be nil'
       end
 
-      @code = code
+      @returned = returned
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
+    # @param [Object] trace Value to be assigned
+    def trace=(trace)
+      if trace.nil?
+        fail ArgumentError, 'trace cannot be nil'
       end
 
-      @message = message
+      @trace = trace
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +135,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          returned == o.returned &&
+          trace == o.trace
     end
 
     # @see the `==` method
@@ -154,7 +148,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [returned, trace].hash
     end
 
     # Builds the object from hash

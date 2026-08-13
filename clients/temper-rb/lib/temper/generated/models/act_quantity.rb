@@ -14,20 +14,22 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # The quantity an act orders its answer by, named so that summing it with another act's reads as the category error it is.  This is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers. Research [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never expose commensurable score fields — no bare `score: f64` shared across acts; each quantity carries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite `a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked failure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them into `combined_score`, which is the exact expression the frame register forbids. It was dropped on 2026-08-06; the body stays readable in the migration history.
+  class ActQuantity < ApiModelBase
+    # The DEPLOYED column name the serving function emits. Not a name invented here — a declaration is a description, so a caller who greps the SQL for this string finds it.
+    attr_accessor :field
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
+    # What the number measures, in this act's own terms.
+    attr_accessor :means
 
-    attr_accessor :message
+    attr_accessor :scale
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'field' => :'field',
+        :'means' => :'means',
+        :'scale' => :'scale'
       }
     end
 
@@ -44,16 +46,15 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'field' => :'String',
+        :'means' => :'String',
+        :'scale' => :'QuantityScale'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
       ])
     end
 
@@ -61,32 +62,34 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ActQuantity` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ActQuantity`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'field')
+        self.field = attributes[:'field']
       else
-        self.code = nil
+        self.field = nil
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
+      if attributes.key?(:'means')
+        self.means = attributes[:'means']
+      else
+        self.means = nil
       end
 
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
+      if attributes.key?(:'scale')
+        self.scale = attributes[:'scale']
       else
-        self.message = nil
+        self.scale = nil
       end
     end
 
@@ -95,12 +98,16 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
+      if @field.nil?
+        invalid_properties.push('invalid value for "field", field cannot be nil.')
       end
 
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @means.nil?
+        invalid_properties.push('invalid value for "means", means cannot be nil.')
+      end
+
+      if @scale.nil?
+        invalid_properties.push('invalid value for "scale", scale cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +117,40 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @field.nil?
+      return false if @means.nil?
+      return false if @scale.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # @param [Object] field Value to be assigned
+    def field=(field)
+      if field.nil?
+        fail ArgumentError, 'field cannot be nil'
       end
 
-      @code = code
+      @field = field
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
+    # @param [Object] means Value to be assigned
+    def means=(means)
+      if means.nil?
+        fail ArgumentError, 'means cannot be nil'
       end
 
-      @message = message
+      @means = means
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] scale Value to be assigned
+    def scale=(scale)
+      if scale.nil?
+        fail ArgumentError, 'scale cannot be nil'
+      end
+
+      @scale = scale
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +158,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          field == o.field &&
+          means == o.means &&
+          scale == o.scale
     end
 
     # @see the `==` method
@@ -154,7 +172,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [field, means, scale].hash
     end
 
     # Builds the object from hash

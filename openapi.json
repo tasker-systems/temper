@@ -3519,6 +3519,88 @@
         ]
       }
     },
+    "/api/query": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Query"
+        ],
+        "summary": "`POST /api/query`.",
+        "description": "The door onto the composition contract: a caller sends a plan, the server answers it or refuses\nit. Everything before this route built a door that nothing could knock on.\n\n**The pipeline is not assembled here.** [`query_read::prepare`] owns the order — shape-gate,\nthen embed, then validate — and is the only constructor of a `ValidatedComposition`, so this\nhandler cannot run an unvalidated plan even by mistake. Spelling the order out here would make\nthis the second place that knows it, and the day the MCP tool and the CLI arrive, the third and\nfourth.\n\n**The refusal branch is the only thing that differs from [`super::search::search`]**, whose\nshape this otherwise copies: `search_select` takes params and answers, while `prepare` may\nrefuse first.",
+        "operationId": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Composition"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One entry in `returned` per `outcome.returns` — no more, no fewer — keyed by stage name rather than merged into one ordered list, so combining two acts' rows takes a deliberate act by the caller. `trace` covers EVERY stage, including those whose rows were not returned, because the pipe carries ids rather than rows and an untraced composition is a black box with an answer at the end.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The composition will not run, with **every** static reason at once in `error.details.refusals` under the code `PLAN_REFUSED` — never just the first, because repairing a plan one refusal per round trip is the experience this contract exists to avoid. A caller meets this response before they meet a 200, so it is the door's most-read documentation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "System access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/relationships": {
       "parameters": [
         {
@@ -7070,6 +7152,186 @@
           }
         }
       },
+      "ActInvocation": {
+        "type": "object",
+        "description": "One act, invoked — a named node in the composition DAG.\n\n**No `Eq`, only `PartialEq`** — [`Self::intention`] carries the query vector. See\n[`super::composition::Intention`].",
+        "required": [
+          "name",
+          "act"
+        ],
+        "properties": {
+          "act": {
+            "$ref": "#/components/schemas/ActName"
+          },
+          "edge_filter": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EdgeFilter"
+              }
+            ]
+          },
+          "input": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageInput",
+                "description": "Where this stage's set comes from, and what this act does with it: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose\n\"required whenever `input` is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid."
+              }
+            ]
+          },
+          "intention": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Intention",
+                "description": "The question this act asks: its text, and the caller's vector when there is one.\n\n**A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]**\n`[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then,\nwhich made a DAG able to ask only one question — every find stage reading the same string.\n\n`None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a\nfind act is `MissingIntention`, refused by the shape pass: `find-exact` sources its\n`p_query` from here and there is nowhere else to get it."
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/StageName",
+            "description": "This node's name, referenced by downstream stages and by `returns`."
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PropertyPredicate"
+            },
+            "description": "Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An\nunknown subject or an empty key/value is refused statically (spec §12)."
+          },
+          "resource_filter": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceFilter",
+                "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`."
+              }
+            ]
+          },
+          "terms": {
+            "type": "object",
+            "description": "Act-level bound terms. A term this act does not admit is refused STATICALLY\n(`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
+              "enum": [
+                "limit",
+                "offset",
+                "regions"
+              ]
+            }
+          }
+        }
+      },
+      "ActName": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "*I can quote the exact words.*",
+            "enum": [
+              "find-exact"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "*A concept, no exact words; search everything I can see.*",
+            "enum": [
+              "find-about-anywhere"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "*A concept, plus a set to search inside.*",
+            "enum": [
+              "find-about-within"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "*A found thing; I want its neighbours.*",
+            "enum": [
+              "follow-from"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "*A question about what a scope knows.*",
+            "enum": [
+              "survey"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "*A claim; I want its defensibility.*",
+            "enum": [
+              "substantiate"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+            "enum": [
+              "admit"
+            ]
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+      },
+      "ActQuantity": {
+        "type": "object",
+        "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score`, which is the exact expression the frame register forbids. It was dropped\non 2026-08-06; the body stays readable in the migration history.",
+        "required": [
+          "field",
+          "means",
+          "scale"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "The DEPLOYED column name the serving function emits. Not a name invented here — a\ndeclaration is a description, so a caller who greps the SQL for this string finds it."
+          },
+          "means": {
+            "type": "string",
+            "description": "What the number measures, in this act's own terms."
+          },
+          "scale": {
+            "$ref": "#/components/schemas/QuantityScale"
+          }
+        }
+      },
+      "ActRefusal": {
+        "type": "object",
+        "description": "A refusal, distinct from a failure and from an honest empty.",
+        "required": [
+          "reason",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Human-readable, disclosed at the depth the asker's standing allows."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RefusalReason"
+          }
+        }
+      },
       "ActorAuthority": {
         "type": "string",
         "description": "Who is acting. Three authorities (spec §6).",
@@ -8018,6 +8280,11 @@
           }
         }
       },
+      "CogmapId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_cogmaps.id` value — a cognitive map."
+      },
       "CogmapRegionMetricsRow": {
         "type": "object",
         "description": "The per-region analytics tier (the five materialized scalar readouts) as returned by\n`cogmap_region_metrics`. Sibling to `CogmapRegionRow`'s surface tier; member identities are still\nnever carried. Each metric is `Option<f64>` (the columns are nullable until materialization computes\nthem; `telos_alignment` stays `None` when the telos has no embedded chunks).",
@@ -8245,6 +8512,73 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "CombineNode": {
+        "type": "object",
+        "description": "A set combination over two-or-more upstream stages. Its own node kind because no act takes more\nthan one input, so modelling it as an act would lie about what an act is.",
+        "required": [
+          "name",
+          "op",
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageName"
+            },
+            "description": "Two or more. One input is not a combination; validation refuses it (beat B)."
+          },
+          "name": {
+            "$ref": "#/components/schemas/StageName"
+          },
+          "op": {
+            "$ref": "#/components/schemas/CombineOp"
+          }
+        }
+      },
+      "CombineOp": {
+        "type": "string",
+        "description": "A set combinator's operation. `union` and `intersect` take two-or-more inputs; no act does,\nwhich is why a combinator is its own node kind rather than an act invocation.",
+        "enum": [
+          "union",
+          "intersect"
+        ]
+      },
+      "Composition": {
+        "type": "object",
+        "description": "A composition, declared before execution.\n\n**No `Eq`, only `PartialEq`** — it transitively holds the query vector. See [`Intention`].",
+        "required": [
+          "outcome",
+          "stages"
+        ],
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/OutcomeDeclaration"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageNode"
+            },
+            "description": "The DAG's nodes. Each references its inputs explicitly by stage name — there is no\nprev-else-fallback, and no single execution order (a DAG has none). Beat B's topological\nsort derives the order; there is deliberately no `act_sequence` method, which would be a\nfalse claim that a DAG has one sequence."
+          }
+        }
+      },
+      "CompositionTrace": {
+        "type": "object",
+        "description": "The whole composition's disclosure: an ordered per-stage record array.",
+        "required": [
+          "stages"
+        ],
+        "properties": {
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageTrace"
+            }
           }
         }
       },
@@ -8815,6 +9149,24 @@
           }
         }
       },
+      "EdgeFilter": {
+        "type": "object",
+        "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.",
+        "properties": {
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeKind"
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "EdgeId": {
         "type": "string",
         "format": "uuid",
@@ -8986,8 +9338,8 @@
                 "type": "null"
               },
               {
-                "$ref": "#/components/schemas/SystemAccessDetails",
-                "description": "Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on\nevery other error."
+                "$ref": "#/components/schemas/ErrorDetails",
+                "description": "Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on\n`PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every\nother error."
               }
             ]
           },
@@ -8995,6 +9347,17 @@
             "type": "string"
           }
         }
+      },
+      "ErrorDetails": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SystemAccessDetails"
+          },
+          {
+            "$ref": "#/components/schemas/PlanRefusalDetails"
+          }
+        ],
+        "description": "The `oneOf` an error's `details` may be.\n\nUntagged, so the payload stays exactly what each arm already sent — widening the contract must\nnot move the shipped `SYSTEM_ACCESS_REQUIRED` body, which every current client parses.\n\n**The variants are unambiguous by required field, not by order.** `SystemAccessDetails` requires\n`refusal` (its four other fields are `Option`); `PlanRefusalDetails` requires `refusals`. Neither\npayload satisfies the other's required field, so untagged deserialization cannot pick wrong —\nasserted by `each_arm_round_trips_to_its_own_variant`. Adding an all-optional arm here would\nbreak that, silently, at the first payload that omits everything."
       },
       "EventCursorResponse": {
         "type": "object",
@@ -9079,6 +9442,60 @@
           }
         }
       },
+      "Extent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Everything that matched is here.",
+            "required": [
+              "extent"
+            ],
+            "properties": {
+              "extent": {
+                "type": "string",
+                "enum": [
+                  "complete"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "More exists beyond what was returned.",
+            "required": [
+              "extent"
+            ],
+            "properties": {
+              "extent": {
+                "type": "string",
+                "enum": [
+                  "partial"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Neither is determinable: the candidate set is *produced by* the bound rather than selected\nunder it. `survey` is the worked case — a region-salience traversal has no size prior to\nits own funnel width.",
+            "required": [
+              "reason",
+              "extent"
+            ],
+            "properties": {
+              "extent": {
+                "type": "string",
+                "enum": [
+                  "indeterminate"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Whether the caller received everything that matched.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\"."
+      },
       "FacetAck": {
         "type": "object",
         "description": "Acknowledgement returned by the facet write endpoint — **every row the assert wrote**.\n\nA facet is stored one row per inner key (migration `20260730000010`), so `{status: open,\nas_of: X}` is two rows and a singular ack could only name one of them. Which one it named would\nbe arbitrary, and a caller reading a single id back from a two-mark write would have a value\nthat *reads as complete* — precisely the defect `GET /api/resources/{id}/facets` shipped to end\n(goal `019fafd9-a978-7860-ae39-23958b4471b8`). So the ack is plural at the type level: there is\nno shape in which it can under-report.\n\nOrdered as written — one entry per inner key of the asserted object, in the order the projector\nwalked them. A non-facet property write yields exactly one entry.",
@@ -9093,6 +9510,22 @@
               "format": "uuid"
             },
             "description": "The rows written. Never empty: an assert that names no mark is refused upstream rather than\nacknowledged with nothing (`facet_object_has_keys` in `db_backend`)."
+          }
+        }
+      },
+      "FacetPredicate": {
+        "type": "object",
+        "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
           }
         }
       },
@@ -9359,6 +9792,111 @@
           }
         }
       },
+      "IdKind": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "resource"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "region"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "cogmap"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "context"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer."
+          }
+        ],
+        "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+      },
+      "IdProvenance": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "anchor"
+            ],
+            "properties": {
+              "anchor": {
+                "type": "string",
+                "enum": [
+                  "cogmap"
+                ]
+              },
+              "id": {
+                "$ref": "#/components/schemas/CogmapId"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "anchor"
+            ],
+            "properties": {
+              "anchor": {
+                "type": "string",
+                "enum": [
+                  "context"
+                ]
+              },
+              "id": {
+                "$ref": "#/components/schemas/ContextId"
+              }
+            }
+          }
+        ],
+        "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal."
+      },
+      "IdSet": {
+        "type": "object",
+        "description": "The one value that crosses a stage boundary. Membership, never rank.",
+        "required": [
+          "kind",
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/IdKind"
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IdProvenance",
+                "description": "Required for `region`; absent for every other kind today."
+              }
+            ]
+          }
+        }
+      },
       "IdpRevocation": {
         "type": "string",
         "description": "What happened to the stored grant at the identity provider.\n\nA three-state enum rather than a `bool`, because `false` used to collapse\nthree genuinely different facts — \"there was no grant, so nothing was\nattempted\", \"a revoke was attempted and failed\", and (in AS mode) \"the\nUPDATE matched zero rows\" — and consumers could not tell them apart. The CLI\nconsequently warned \"the identity provider did not confirm revocation\" at a\nuser who had no grant at all.",
@@ -9591,6 +10129,83 @@
           "team_ref": {
             "type": "string",
             "description": "Decorated `+team-slug` ref."
+          }
+        }
+      },
+      "InputSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Verbatim from an earlier stage's `produced` set.\n\n**Keyed by the caller's own stage NAME, not an ordinal.** `[amended — 2026-08-08]` The\nrequest names stages throughout — `ActInvocation.name`, `StageInput.stage`,\n`ReturnSpec.stage` are all `StageName` — while this side keyed them by position, so a\ncaller who declared `\"hits\"` got disclosure back saying `2`. `composition-is-legible` is a\nclause about what the ASKER can read, and an ordinal is not their vocabulary.",
+            "required": [
+              "stage",
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "upstream"
+                ]
+              },
+              "stage": {
+                "$ref": "#/components/schemas/StageName"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "**Reserved and currently unreachable.** No compiled plan emits this — there is no\nexpression language (spec §9.1), so no caller-supplied expression ever sub-selects a stage's\nbounds. Beat C adds a test asserting no compiled plan ever produces it.\n\nIt is KEPT rather than removed because [`InputSource`] is a *closed* tagged enum: deleting\na variant now would make re-adding it a breaking change, whereas an unreachable-but-declared\nvariant costs nothing. The paired removal on the refusal side went the other way — a jaq\n`ExpressionNotPushdownable` reason was *removed*, because `RefusalReason` is OPEN, so keeping\nan unraisable reason there would be a claim with no referent. The two are treated differently\non the real distinction between an open and a closed vocabulary (spec §9.1).",
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "expression"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Supplied directly by the caller.",
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "caller"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a stage's input set came from: an earlier stage, or the caller.\n\n`[renamed from BoundsSource — 2026-08-08]` It reports where an input came from, which is\ndirection-neutral, and the surrounding fields no longer say \"bounds\" — an input may be a bound\nor a seed, and half the compositions this surface exists for alternate between them."
+      },
+      "Intention": {
+        "type": "object",
+        "description": "One find act's question: its text, and the caller's vector when there is one.\n\n`[2026-08-12]` This line read *\"computed once at composition start and threaded to every\nstage\"* — the envelope-placement claim spec ⟨7⟩ retired. It is corrected rather than left\nstanding because **this doc comment IS a published schema description**\n(`tests/fixtures/query/intention.schema.json`), so a stale sentence here is a lie shipped to\nevery client that reads the contract.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`\n**This is a per-STAGE field, carried by [`super::envelope::ActInvocation`].** `[decided —\n2026-08-12, Pete]`, spec ⟨7⟩. It sat on the composition envelope until then, which meant a\ncomposition could ask exactly ONE question: every find stage in a DAG interrogated the same\nstring, and *\"find A, find B, intersect them\"* was inexpressible. That placement was never\nruled — it entered as a first-person commit paragraph and hardened into a test name.\n\n**No `Eq`, only `PartialEq`** — [`Self::embedding`] holds `f32`. Same reason\n[`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of\nfloats is well-defined enough for a test, total equality is not.",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "embedding": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller."
+          },
+          "query": {
+            "type": "string"
           }
         }
       },
@@ -10126,6 +10741,33 @@
         },
         "additionalProperties": false
       },
+      "MatchLocation": {
+        "type": "object",
+        "description": "Where in a resource a chunk-grain match landed.",
+        "required": [
+          "block_id"
+        ],
+        "properties": {
+          "block_id": {
+            "$ref": "#/components/schemas/BlockId",
+            "description": "The `kb_content_blocks` row the closest chunk belongs to."
+          },
+          "header_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The heading trail to that chunk, when it has one."
+          },
+          "snippet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The chunk's own text, or the part of it that matched.\n\nA snippet for the EXACT arm is a named remainder rather than a gap: it is possible without a\nnew index via `ts_headline` over re-fetched text, but that is a per-row fetch of prose the\nquery did not otherwise need, on a path that currently touches only the index. Nobody has\nmeasured it, and the retired `SearchResultRow` carried a snippet from the `unified_search`\nera whose cost was never isolated either."
+          }
+        }
+      },
       "MaterializeAck": {
         "type": "object",
         "description": "Outcome of a materialize trigger. When `materialized` is false the delta was below threshold and\nnothing ran (the idempotent no-op); when true, `regions` + `membership_fingerprint` describe the\nmaterialize that ran.\n\n## Why `cogmap_id` survives beside the anchor pair\n\nT8 made this command anchor-addressed (a context materializes too), so the target is now\n`anchor_table` + `anchor_id`. `cogmap_id` is kept — and still populated whenever the anchor IS a\ncogmap — deliberately, because this is a **wire type on a deployed instance**: the temper-rb gem\n`raise`s on an unknown attribute *and* on a missing required one, and the generated TS is\nconsumed by a UI that ships on its own cadence. Dropping `cogmap_id` would hard-fail an older\nclient on the cogmap path it already uses.\n\nA client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),\nso it never receives an ack where the field is absent. New clients read the anchor pair and\nignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.",
@@ -10286,6 +10928,37 @@
         ],
         "description": "Payload for meta-only sync updates that do not require re-chunking."
       },
+      "NarrowedBy": {
+        "type": "object",
+        "description": "One act-specific threshold, and what applying it did.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "admitted": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Counts are carried ONLY where the act computes them for free. Requiring them would\nre-introduce the second query `Extent` exists to avoid."
+          },
+          "excluded": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "NodeHome": {
         "type": "string",
         "description": "Which home a node is bound to — drives the Atlas fill-vs-outline encoding\n(cogmap-homed = filled chip, context-homed = outlined chip). A resource has\nexactly one home (`kb_resource_homes.resource_id` is unique); this\ndistinguishes the two anchor kinds.",
@@ -10358,6 +11031,65 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "OutcomeDeclaration": {
+        "type": "object",
+        "description": "Which stages come back, and how much of each row.",
+        "required": [
+          "returns"
+        ],
+        "properties": {
+          "returns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReturnSpec"
+            },
+            "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan."
+          }
+        }
+      },
+      "PlanRefusal": {
+        "type": "object",
+        "description": "One reason a plan is not executable. Static — no database was consulted.\n\n**On the wire**, in `ErrorBody.error.details.refusals`: a rejected composition answers 400 with\nALL of these at once, never just the first, because repairing a plan one refusal per round trip\nis the experience that design avoids. It carries the generation derives for that reason — it\nwent without them while nothing could return it, and a door is now being built that does.",
+        "required": [
+          "reason",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Human-readable, at the depth the asker's standing allows."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RefusalReason"
+          },
+          "stage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageName",
+                "description": "The stage it attaches to, when it attaches to one.\n\n`None` for a refusal about the composition as a whole — a cycle, a dangling reference, a\nduplicate name."
+              }
+            ]
+          }
+        }
+      },
+      "PlanRefusalDetails": {
+        "type": "object",
+        "description": "Every static reason a composition is not executable, in one payload.\n\n**A list rather than a single refusal, and that is the whole point.** `validate` returns every\nrefusal rather than the first *\"because a caller repairing a plan should see all of it in one\nround trip\"* — a property that exists on the wire only if the transport carries the list.",
+        "required": [
+          "refusals"
+        ],
+        "properties": {
+          "refusals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanRefusal"
+            }
           }
         }
       },
@@ -10508,6 +11240,88 @@
           }
         ]
       },
+      "PropertyOp": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "has_key"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\nThe caller supplies the JSON shape they mean. Containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.",
+            "required": [
+              "values",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "contains"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {}
+              }
+            }
+          }
+        ],
+        "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither\noperator takes a fragment of a query language; both bind their values."
+      },
+      "PropertyPredicate": {
+        "type": "object",
+        "description": "A property predicate: what it addresses, which key, and how.\n\nThe subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:\na `follow-from` stage walks edges and produces resources, so \"the properties of this stage's\nsubject\" has two answers.",
+        "required": [
+          "subject",
+          "key",
+          "op"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "op": {
+            "$ref": "#/components/schemas/PropertyOp"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/PropertySubject"
+          }
+        }
+      },
+      "PropertySubject": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "resource"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Empty in this deployment's data and NOT empty in others — the polymorphic owner is design\nintent, not accident. Spec §12.",
+            "enum": [
+              "edge"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An unrecognized subject — e.g. `content_block`, which is addressable but deliberately not a\nqueryable subject (spec §12). Validation renders it as `UnknownFilterValue`."
+          }
+        ],
+        "description": "What a [`PropertyPredicate`] addresses.\n\nOPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a\nclosed set here would be a claim the schema does not make. This is the OPPOSITE call from\n[`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its\nclosedness is a *fact about the database*; `owner_table` mirrors nothing."
+      },
       "ProvenanceSource": {
         "oneOf": [
           {
@@ -10592,6 +11406,85 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "QuantityScale": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`[0,1]`, bounded by the expression's own arithmetic.",
+            "required": [
+              "scale"
+            ],
+            "properties": {
+              "scale": {
+                "type": "string",
+                "enum": [
+                  "unit_interval"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Bounded, but NOT to `[0,1]`. `bounds` states the actual range.",
+            "required": [
+              "bounds",
+              "scale"
+            ],
+            "properties": {
+              "bounds": {
+                "type": "string"
+              },
+              "scale": {
+                "type": "string",
+                "enum": [
+                  "other_range"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Nothing in the expression or in the schema bounds it.",
+            "required": [
+              "scale"
+            ],
+            "properties": {
+              "scale": {
+                "type": "string",
+                "enum": [
+                  "unbounded"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`, while\n`wayfind_region_scores` rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score."
+      },
+      "QueryResponse": {
+        "type": "object",
+        "description": "What `POST /api/query` answers with: the returned arms, keyed by the caller's own stage names,\nand the trace covering every stage.\n\n**A 200 does not mean every stage answered.** A stage may be empty, withheld or refused and\nstill be reported here — see [`super::disposition::StageDisposition`]. Static invalidity never\nreaches this type at all; it is a 400 carrying every [`super::validate::PlanRefusal`] at once.\n\n# The schema cannot state the real invariant, and that is said plainly rather than hidden\n\nThe keys of `returned` are exactly `outcome.returns[].stage`, and the variant of `produced`\nunder each is determined by the declared `produces` of the act that stage names. That is a\ndependency from REQUEST to RESPONSE, and OpenAPI has no way to express it.\n\nNothing on this surface closes it today. A `POST /api/query/validate` route was drafted to and\nwas withdrawn (it authenticated nobody and protected nothing). The facts needed to compute it\nall live in the act declarations, and [`super::validate::ValidationOutcome`] is the pure\nfunction that does — so a client holding the declarations can derive it. Publishing them is an\nopen question, not a promise.",
+        "required": [
+          "returned",
+          "trace"
+        ],
+        "properties": {
+          "returned": {
+            "type": "object",
+            "description": "One entry per `outcome.returns` — no more, no fewer.\n\n**A map rather than a list, and that is the structural half of `no-cross-act-ranking`.**\nArms are keyed separately and there is no merged ordered list anywhere for two acts' rows\nto fall into, so combining them takes a deliberate act by the caller. The row types no\nlonger differ per act — incommensurability is DATA now, carried by\n[`super::hits::Scoring::score_kind`] — which makes this keying the protection rather than a\nconvenience.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StageResult"
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total)."
+            }
+          },
+          "trace": {
+            "$ref": "#/components/schemas/CompositionTrace",
+            "description": "EVERY stage, including the ones whose rows were not returned.\n\nIntermediate stages are mostly not returned — the pipe carries ids, not rows — so without\nthis a composition is a black box with an answer at the end and no way to tell whether\nstage 2 earned its place."
           }
         }
       },
@@ -11064,6 +11957,200 @@
         ],
         "description": "Why a principal was refused, typed.\n\nThis replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose\ntests asserted a sentinel `\"join_request\"` that was never a real mode\n(`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).\n\nSpec §12: \"Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at\nthe act is that the actor learns why; a test that only checks 'not admitted' would pass on a\nsilent denial.\""
       },
+      "RefusalReason": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "The act does not accept bounds of the supplied `IdKind`.",
+            "enum": [
+              "unsupported_bound_kind"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A cogmap or context bound arrived carrying anything other than exactly one id.\n\n**Distinct from [`RefusalReason::UnsupportedBoundKind`] on purpose, and the distinction is\nthe whole reason this variant exists.** The kind IS accepted — reporting \"this act does not\nnarrow on that kind of id\" would teach the caller the wrong lesson (*stop sending cogmap\nbounds*) when the right one is *send one*. `RefusalReason` is OPEN precisely so a reason that\nsays the true thing can be added without breaking a client.\n\nThe constraint is the fragments': a resource bound is a `uuid[]`, but a cogmap or context\nbound is served by an `(anchor_table, anchor_id)` PAIR, which holds one id. Spec §9 names the\nmismatch — *\"an `IdSet` holds N ids; an anchor slot holds one\"* — as an open cardinality gap,\nand refusing is the honest response to it. Silently anchoring on the first element would\nanswer a different question than the one asked and look like a successful narrowing.\n\n**Zero refuses too, and is not \"unbounded\".** For a resource array the fragments distinguish\n`'{}'` (bounded to nothing) from `NULL` (unbounded); an anchor has no such pair, so an empty\nanchor set is a caller who asked to scope and named nothing. Admitting it would drop the\nscope and answer the unscoped question.\n\n`[moved from the compiler — 2026-08-09, Pete]` The compiler used to raise this as an `Err`\nthat aborted the whole composition, costing every innocent stage beside it. It is a STATIC\nproperty of the plan, so it belongs here, in the 400 with every other refusal at once.",
+            "enum": [
+              "anchor_takes_one_id"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The act does not accept seeds of the supplied `IdKind`.",
+            "enum": [
+              "unsupported_seed_kind"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A region set arrived without the `provenance` its kind requires.",
+            "enum": [
+              "missing_provenance"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The act is declared but not built (`build_state` is not `served` or `fused`).",
+            "enum": [
+              "not_implemented"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A find stage with no threaded intention — no QUESTION, not no vector. Explicitly NOT a\nsilent substitution.\n\nThe distinction is load-bearing and easy to lose. This fires when the composition supplied\nno query text at all, which `find-exact` cannot work around: its text becomes `p_query` and\nthere is nowhere else to source it. It does **not** fire for a missing embedding — the\nserver computes one, because API callers structurally cannot, and a failed attempt is\n[`RefusalReason::EmbeddingUnavailable`] instead.",
+            "enum": [
+              "missing_intention"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "`ReturnSpec.with` named a hydration section this door does not offer.\n\nA refusal rather than a parse error on purpose. The section vocabulary is shared with\n`show` and `list`, so `body` and `edges` are real words that deserialize cleanly — they are\nsimply not what `/api/query` hydrates, and saying so (with a pointer to the door that does)\nis worth more than a deserializer's \"unknown variant\". It also keeps the promise that every\nrefusal comes back at once: serde failures short-circuit before validation runs.",
+            "enum": [
+              "section_not_available"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A filter value outside a genuinely CLOSED vocabulary. Refused rather than returned as an\nempty page: a value that cannot possibly match must never be reportable as an absence.\n\n`[corrected — 2026-08-10, ADJ-10]` This said *\"an unknown `doc_type`, `stage` or `status`\"*\nand was false about all three. This door raises it for exactly one thing: an unrecognized\n**property subject** ([`super::filter::PropertySubject::Other`]). `stage` and `status` are\nrefused wholesale here as `FilterNotApplicable` and have **no closed vocabulary in Rust at\nall** — both are free-form `Option<String>`, so there was never a set to be outside of.\n`doc_type` IS admitted and applied, and is deliberately **not** checked.\n\n**The distinction the old wording collapsed** `[ruled — 2026-08-10, Pete]`: *\"an unknown\nvalue in a closed set\"* and *\"a string that may be perfectly legitimate but matches nothing\nin the scope you asked about\"* are different answers, and only the first is a refusal — the\nsecond is an honest empty. A `doc_type` is a `kb_properties` row, not a forced commitment;\nany resource may carry any value, and increasingly does over time. So this door checks the\ntypes it natively supports and does not try to infer what the caller meant by the ones it\ndoes not. Two facts hold that ruling in place rather than convenience: `DocType::ALL` lives\nin `temper-workflow` and is unreachable from here (the dependency runs workflow → core), and\nits own header records that a later task loosens the parse gate to an open tail — so\nchecking against it would bet against the direction of travel and buy a refusal that becomes\nwrong.",
+            "enum": [
+              "unknown_filter_value"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the\nreverse). Declined, never ignored.",
+            "enum": [
+              "filter_not_applicable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A bound term was supplied to an act for which that frame of reference does not exist —\ne.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never\nreinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the\ngenerated schemas, so an inapplicable bound is a property of the plan rather than a\nruntime surprise.",
+            "enum": [
+              "bound_term_not_applicable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D was the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit.\n`NotImplemented` would have been false about them (they are served); this variant is the\nhonest one. Beat D deleted the refusal for them by giving the compiler their fragments.\n\nThe live instances now are `substantiate`, `follow-from` and `survey` — the first `Served`,\nthe other two `Fused`, all three with mechanics the compiler emits no fragment for. **The\nrule keys on the callable-fragment set and never on `build_state`, and `substantiate` is\nwhat holds that**: it is `Served` and unreachable, so a rule reading the discriminant would\nadmit an act this surface cannot emit. The `Fused` half of the argument no longer has a\nwitness, since all three are unreachable and the two `Fused` declarations are exactly two of\nthem — so the discriminant happens to agree about that pair.",
+            "enum": [
+              "not_separably_reachable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "**The one refusal that is not static.** A `find-about-*` stage needed a query embedding,\nthe server had to compute it because the caller could not, and the attempt failed — an\nerror, a panic, or the query-embed budget expiring.\n\nIt is a refusal rather than an empty because the stage holds a well-formed question it\ncannot answer; returning `empty` would hand back a list that reads like an answer. It is\nalso the reason every OTHER refusal here can be reported as a 400 before anything runs:\nthis is the only one that can appear mid-flight, and it is what gives a runtime refusal a\nreferent at all. `[decided — 2026-08-08, Pete]`",
+            "enum": [
+              "embedding_unavailable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The composition declares no stages, so it asks nothing.",
+            "enum": [
+              "no_stages"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The composition returns no stages, so it answers nothing.",
+            "enum": [
+              "no_returns"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Two stages share a name.",
+            "enum": [
+              "duplicate_stage_name"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A set combination needs two or more inputs.",
+            "enum": [
+              "combinator_arity"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A stage references a stage that was never declared.",
+            "enum": [
+              "dangling_reference"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A stage is named more than once in `returns`.",
+            "enum": [
+              "duplicate_return_stage"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A combinator's rows come from more than one act, so they have no single act to score them.",
+            "enum": [
+              "combinator_not_returnable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "`returns` names a stage that was never declared.",
+            "enum": [
+              "unknown_return_stage"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The composition contains a cycle; a query DAG must be acyclic.",
+            "enum": [
+              "cycle"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The `act` name is not one this server declares. `ActName` is open, so this is reachable.",
+            "enum": [
+              "unknown_act"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A property predicate was supplied with no key.",
+            "enum": [
+              "empty_property_key"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A `contains` predicate was supplied with no values, so it narrows nothing.",
+            "enum": [
+              "empty_contains"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That was false at the time**:\n`validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while\nevery declared variant was snake_case — a client's vocabulary was two conventions at once.\nFound in review; recorded rather than repaired then, because promoting twelve strings to\nvariants is a wire change and nothing consumed them yet — `/api/query` did not exist, so\nthe change was free and the door was the moment it would stop being free.\n\n`[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants\nabove, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is\nexactly what its original doc said — a reason from a producer newer than this consumer, one\nthis binary has never been taught to name. Deserializing it never fails; `is_known` answers\n`false`; a caller degrades gracefully instead of losing the whole response to a parse error."
+          }
+        ],
+        "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
+      },
+      "RegionHit": {
+        "type": "object",
+        "description": "One region of a cognitive map. Produced by `survey`.",
+        "required": [
+          "region",
+          "scoring"
+        ],
+        "properties": {
+          "region": {
+            "$ref": "#/components/schemas/CogmapRegionRow",
+            "description": "The region itself, in the same shape `cogmap_shape` answers in.\n\n**It carries its own `salience`, beside this hit's score.** Two numbers on one row, and they\nare not rivals: `salience` is an INPUT to `region_score` (`0.4·sal_norm + 0.6·query_cos`,\nwhere `sal_norm` is a rank over salience). Order by the score; ordering by `salience`\nanswers *\"what does this map think is prominent\"*, a different question.\n\n`[decided — 2026-08-08, Pete]` A narrower region projection without `salience` was\nconsidered and refused. [`ResourceView`] exists because six near-identical projections were\ncollapsed into one; minting a divergent region shape immediately afterwards, to hide one\nfield, would repeat the mistake that consolidation just paid to fix."
+          },
+          "scoring": {
+            "$ref": "#/components/schemas/Scoring"
+          }
+        }
+      },
       "RegionId": {
         "type": "string",
         "format": "uuid",
@@ -11393,6 +12480,57 @@
           }
         }
       },
+      "ResourceFilter": {
+        "type": "object",
+        "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized\n[`PropertySubject`] — and its own doc carries the ruling.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
+        "properties": {
+          "doc_type": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`kb_properties` where `property_key = 'doc_type'`."
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FacetPredicate"
+            },
+            "description": "`kb_properties` where `property_key = 'facet'`."
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`kb_properties` where `property_key = 'tags'`. AND-containment."
+          },
+          "title_contains": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ResourceGrantBody": {
         "type": "object",
         "description": "Mint/update a `kb_access_grants` row on a resource. Principal `{kb_teams,kb_profiles}`.\nThe DB coherence CHECK enforces `write|delete|grant ⇒ read`; pass a coherent set\n(a write grant implies read).",
@@ -11423,6 +12561,33 @@
           },
           "principal_table": {
             "type": "string"
+          }
+        }
+      },
+      "ResourceHit": {
+        "type": "object",
+        "description": "One resource that matched, however it matched.\n\n[`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both\nsearch arms answer in — six near-identical projections collapsed into one. A hit adds scoring\nand nothing else.",
+        "required": [
+          "resource",
+          "scoring"
+        ],
+        "properties": {
+          "located_at": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MatchLocation",
+                "description": "Where in the resource the match was — the closest chunk's block.\n\n**Filled only by the wide arm**, and its absence is declared in advance rather than\ndiscovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.\nThe wide arm matches at CHUNK grain and already computes which chunk was closest, then\ndiscards it collapsing to a per-resource score; recovering it is an argmin beside an\naggregate that already runs.\n\n`find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by\nconcatenating every chunk into a single blob, so the block boundary is gone before the query\nis asked. `follow-from` has no match position at all — it returns nodes reached by walking.\n\nIt sits on this type rather than on [`Scoring`] because `Scoring` is shared with\n[`RegionHit`], and a region is not somewhere inside a resource.\n\n**`None` serializes as an explicit `\"located_at\": null`** (F4, ruled): the contract's prose\nis load-bearing on the null — every `located_at` is null today and the null unambiguously\nmeans *not declared* — and omitting the key made the resource-hit null indistinguishable\nfrom a shape with no such field, which is exactly the distinction [`RegionHit`] exists to\ndraw."
+              }
+            ]
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceView"
+          },
+          "scoring": {
+            "$ref": "#/components/schemas/Scoring"
           }
         }
       },
@@ -11528,6 +12693,15 @@
             "type": "string"
           }
         }
+      },
+      "ResourceSection": {
+        "type": "string",
+        "description": "One addable or removable part of a [`ResourceView`].\n\nReplaces `--meta-only`, which conflated two axes because the two commands differ in\nwhat they otherwise return: on `show` it means *drop the body*\n(`temper-cli/src/cli.rs:571-575` — \"Show everything except the body\"), on `list` it\nmeans *add both meta tiers* (`:537-542` — \"each row carries both the managed and open\nmeta tiers ... on top of the usual row fields\"). Once both commands answer in one\nshape, that flag has two meanings and no coherent one.\n\nNaming the parts lets a caller add or remove each independently — including\n`show --with edges --without body`, which is **unreachable today**: `meta_only`\ncarries `conflicts_with = \"edges\"` (`temper-cli/src/cli.rs:574`), so the present\ndesign needs a rule to forbid a combination that is merely useful.\n\nThe managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is\nalways present, which is what makes dropping the hoisted workflow fields lossless.\n\nThe names are **kebab-case** (`open-meta`), not the `open_meta` of the field the\nsection fills. They are values a human or agent types after `--with`, and the CLI's\nvocabulary is kebab throughout; the `snake_case` enums in [`super::resource`]\n([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's\nrename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`\nasserts both.\n`[widened — 2026-08-08]` This carried only `Serialize`/`Deserialize` while it was reached\nexclusively through query strings and `parse_accepting`. `/api/query`'s `ReturnSpec.with` is\nthe first TYPED field of this enum on a wire contract, and a boundary type that both surfaces\nspeak is supposed to carry the generation derives — so it now does. No route references it, so\n`openapi.json` is unmoved.",
+        "enum": [
+          "body",
+          "open-meta",
+          "edges"
+        ]
       },
       "ResourceSortField": {
         "type": "string",
@@ -11796,6 +12970,25 @@
           }
         }
       },
+      "ReturnSpec": {
+        "type": "object",
+        "description": "One stage whose rows come back, and how much of each row.",
+        "required": [
+          "stage"
+        ],
+        "properties": {
+          "stage": {
+            "$ref": "#/components/schemas/StageName"
+          },
+          "with": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceSection"
+            },
+            "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary."
+          }
+        }
+      },
       "RetypeRelationshipRequest": {
         "allOf": [
           {
@@ -11852,6 +13045,61 @@
           }
         ],
         "description": "Request body for `POST /api/relationships/{edge_handle}/reweight`."
+      },
+      "ScoreKind": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.",
+            "enum": [
+              "fts_norm"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.",
+            "enum": [
+              "vec_norm"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Product of edge weights along the best path. UNBOUNDED. `follow-from`.",
+            "enum": [
+              "graph_score"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.",
+            "enum": [
+              "region_score"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer."
+          }
+        ],
+        "description": "Which quantity a hit's score is, named so that combining two of different kinds reads as the\ncategory error it is.\n\nThe values are the DEPLOYED column names the serving functions emit — not names invented here —\nso a caller who greps the SQL for one finds it, and each equals the\n[`super::act::ActQuantity::field`] of the act that produced the row.\n\n**OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary\nwould make adding one a breaking change for every client. Openness costs nothing here because\nthe operation a client performs on this value is EQUALITY — *are these two scores the same\nkind?* — never exhaustive enumeration. Contrast\n[`super::disposition::StageDisposition`], which stays closed precisely because consumers match\nit exhaustively.\n\n**The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as\n`1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans\n`[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on\n[`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming\n`[0,1]`, which is the live mistake in this family, not a hypothetical one."
+      },
+      "Scoring": {
+        "type": "object",
+        "description": "How one hit scored, and by what measure.\n\nThe kind travels WITH the number, which is what lets a row be understood on its own. Two hits\nwhose `score_kind` differs hold values that must never be added, averaged, or sorted into one\nlist — and unlike a bare field name, that is something a client can actually check.",
+        "required": [
+          "score_kind",
+          "score"
+        ],
+        "properties": {
+          "score": {
+            "type": "number",
+            "format": "float",
+            "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage."
+          },
+          "score_kind": {
+            "$ref": "#/components/schemas/ScoreKind"
+          }
+        }
       },
       "SearchParams": {
         "type": "object",
@@ -12265,6 +13513,303 @@
           "desc",
           "asc"
         ]
+      },
+      "StageDisposition": {
+        "type": "string",
+        "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
+        "enum": [
+          "answered",
+          "empty",
+          "withheld",
+          "refused"
+        ]
+      },
+      "StageInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
+            "required": [
+              "as",
+              "ids",
+              "from"
+            ],
+            "properties": {
+              "as": {
+                "$ref": "#/components/schemas/StageRelation"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "caller"
+                ]
+              },
+              "ids": {
+                "$ref": "#/components/schemas/IdSet"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The `produced` set of an earlier stage, named rather than copied.",
+            "required": [
+              "as",
+              "stage",
+              "from"
+            ],
+            "properties": {
+              "as": {
+                "$ref": "#/components/schemas/StageRelation"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "upstream"
+                ]
+              },
+              "stage": {
+                "$ref": "#/components/schemas/StageName"
+              }
+            }
+          }
+        ],
+        "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage."
+      },
+      "StageName": {
+        "type": "string",
+        "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total)."
+      },
+      "StageNode": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ActInvocation"
+          },
+          {
+            "$ref": "#/components/schemas/CombineNode"
+          }
+        ],
+        "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes.\n\n**No `Eq`, only `PartialEq`** — the act variant carries an intention, which carries the query\nvector. See [`Intention`]."
+      },
+      "StageOutput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Produced by `find-exact`, both `find-about-*` acts, and `follow-from`.",
+            "required": [
+              "hits",
+              "produced"
+            ],
+            "properties": {
+              "hits": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ResourceHit"
+                }
+              },
+              "produced": {
+                "type": "string",
+                "enum": [
+                  "resources"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Produced by `survey`.",
+            "required": [
+              "hits",
+              "produced"
+            ],
+            "properties": {
+              "hits": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RegionHit"
+                }
+              },
+              "produced": {
+                "type": "string",
+                "enum": [
+                  "regions"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a RETURNED stage produced, tagged by CURRENCY.\n\n# Two variants, and the tag answers exactly one question\n\n`[decided — 2026-08-09, Pete]` What was produced is resources, or regions. How they were scored\nis a different question, answered per row by [`super::hits::Scoring::score_kind`].\n\nAn earlier draft split this four ways — `fts_hits`, `vec_hits`, `graph_hits` — so that two acts'\nrows could not share a list type. That guard was real but the name was a misnomer: `vec_hits`\ndescribes the scoring, not what was produced, and it meant **a row could not be read without\nknowing which envelope carried it**. The quantity was the field name, so the envelope was load-\nbearing for interpreting the row. Now every hit is self-describing and there is one shape per\ncurrency instead of one per act.\n\nWhat still prevents `unified_search`'s conflation is structural and unchanged: arms are keyed\nseparately in the response, and there is no merged ordered list for two acts' rows to fall into.\nSee the module note on [`super::hits`] for the full argument.\n\n# There is no `ids` variant\n\nA returned stage is always hydrated. Ids remain the pipe's **internal** currency — the only\nvalue crossing a stage boundary is membership, and an intermediate stage that merely feeds a\ndownstream one is never hydrated at all. What is gone is `ids` as a thing a caller can ASK to be\ngiven back: subselecting a result set is a client concern with a good answer already\n(`temper … | jq`), and the principled version is a known later door (GraphQL over this surface).\nShipping one coarse \"just ids\" toggle now would occupy the space that door is for.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nscores are floats. Tests compare the serialized form, which is what a client observes."
+      },
+      "StageRelation": {
+        "type": "string",
+        "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+        "enum": [
+          "bound",
+          "seed"
+        ]
+      },
+      "StageResult": {
+        "type": "object",
+        "description": "One returned stage's answer.\n\nNeither `PartialEq` nor `Eq`, unlike its neighbours here: it holds hydrated rows, and\n[`crate::types::resource_view::ResourceView`] derives neither while the quantities are floats.\nThe tests below compare the SERIALIZED form instead, which is what a client actually observes\nand is the stronger assertion anyway — a field that fails to serialize is invisible to\nstructural equality.\n\n`[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is\nthe STAGE — it is keyed by the caller's stage name, and its numbers are about the set that\nstage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape\nalso removed.",
+        "required": [
+          "act",
+          "disposition",
+          "produced",
+          "extent",
+          "terms_applied",
+          "narrowed_by",
+          "input_ids",
+          "input_unusable"
+        ],
+        "properties": {
+          "act": {
+            "$ref": "#/components/schemas/ActName"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/StageDisposition"
+          },
+          "extent": {
+            "$ref": "#/components/schemas/Extent",
+            "description": "Complete / partial / indeterminate. NOT a total — see `Extent`."
+          },
+          "input_ids": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many ids this stage was handed. Zero for a stage with no input."
+          },
+          "input_unusable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many did not — for ANY reason, deliberately conflated.\n\nInvisible, nonexistent and malformed are one number on purpose. Separating them, or naming\nthis field for the invisible case alone, is a **single-probe existence oracle**: pass one\nid, read the counter, learn whether it exists. This shipped in T2 as `bounds_withheld`,\nwhose name inherited [`super::disposition::StageDisposition::Withheld`]'s meaning —\n*material exists* — and so disclosed exactly that. The arithmetic was always harmless\n(`input_ids - input_contributed` is derivable either way); the leak was in the label.\n\nThe caller still learns that 28 of their 40 did not contribute, which is what\n`composition-is-legible` asks for. They do not learn why. Decision\n`019fcd13-4e65-7213-ac6f-20c3c8ccfce1`."
+          },
+          "narrowed_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NarrowedBy"
+            }
+          },
+          "orders_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActQuantity",
+                "description": "Echoed from this act's declaration. Present iff the act orders anything.\n\n**Once per stage, rather than once per row.** The row keeps a literal field name so two\nacts' numbers cannot be summed by accident; this carries the RANGE so a reader is not left\nto assume `[0,1]`. Assuming `[0,1]` is the live mistake in this family, not a hypothetical\none: `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]` while `region_score`\nspans `[-0.6, 1.0]`, and neither column name says so."
+              }
+            ]
+          },
+          "produced": {
+            "$ref": "#/components/schemas/StageOutput",
+            "description": "What this stage produced, as a tagged union. Declared kind, so contract chaining compares\nkinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field."
+          },
+          "refusal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActRefusal",
+                "description": "Present iff `disposition` is `refused` — the reason and standing-aware detail of the\nruntime refusal (`embedding_unavailable` is the only current case; the vocabulary is open).\nRuled ADJ-3 `[2026-08-10, Pete]`: the contract's \"one behaviour\" promise requires the\nreason to reach the reader, so [`super::disposition::ActRefusal`] is resurrected from\ndeclared-unreachable to the carrier.\n\n**The pair rule**: [`super::trace::StageTrace`] carries an identical field, and the two must\nstay identical for the same reason as the input numbers — the trace covers every stage and\nthe results only the returned ones, so disagreeing copies would leave a reader with no way\nto tell which was right."
+              }
+            ]
+          },
+          "terms_applied": {
+            "type": "object",
+            "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.\n\nThere is no separate \"you were clamped\" flag, deliberately: ceilings are published per act,\nso the applied value is the whole story. Clamping to a ceiling nobody published would be\nthe bug. This covers only terms the act ADMITS — one it does not is refused outright.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,\n`offset` is rows skipped, `regions` is funnel width.\n\nAn act that cannot serve a term does NOT reinterpret it — it declines it\n(`RefusalReason::BoundTermNotApplicable`), decided statically against the schema before\nexecution. That is `the-same-bound-term-means-the-same-thing-on-every-read` by construction.",
+              "enum": [
+                "limit",
+                "offset",
+                "regions"
+              ]
+            }
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Carried only by acts that can produce one WITHOUT a second query. Never by a composition."
+          }
+        }
+      },
+      "StageTrace": {
+        "type": "object",
+        "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.",
+        "required": [
+          "stage",
+          "act",
+          "disposition",
+          "input_ids",
+          "input_unusable",
+          "narrowed_by"
+        ],
+        "properties": {
+          "act": {
+            "$ref": "#/components/schemas/ActName"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/StageDisposition"
+          },
+          "input_ids": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many ids this stage was handed. Zero for a stage with no input."
+          },
+          "input_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InputSource"
+              }
+            ]
+          },
+          "input_unusable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of them this stage could not use at all — invisible, nonexistent, or malformed.\n\nConflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].\nNaming the invisible case alone would make the trace a single-probe existence oracle."
+          },
+          "narrowed_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NarrowedBy"
+            }
+          },
+          "refusal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActRefusal",
+                "description": "Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace\ncovers every stage while results cover only returned ones, so this is the ONLY refusal\nrecord for an intermediate stage. **The pair rule**: identical to\n[`super::envelope::StageResult::refusal`], for the same reason as the input numbers."
+              }
+            ]
+          },
+          "relation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageRelation",
+                "description": "Whether this stage NARROWED or REACHED, echoed back.\n\nA reader of the trace can then tell without knowing the act vocabulary — *\"did stage 3\nnarrow or expand?\"* is the question `composition-is-legible` most obviously owes an answer\nto, and a caller reading only the response has no other way to get it. Absent for a stage\nwith no input."
+              }
+            ]
+          },
+          "stage": {
+            "$ref": "#/components/schemas/StageName"
+          }
+        }
       },
       "Standing": {
         "type": "string",
@@ -12972,6 +14517,10 @@
     {
       "name": "Search",
       "description": "Semantic and keyword search"
+    },
+    {
+      "name": "Query",
+      "description": "Composed queries — declared acts, piped, one round trip"
     },
     {
       "name": "Meta",

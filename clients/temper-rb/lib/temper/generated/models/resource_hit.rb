@@ -14,20 +14,21 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # One resource that matched, however it matched.  [`ResourceView`] is the same projection `list`/`show`/`create`/`update`/`annotate` and both search arms answer in — six near-identical projections collapsed into one. A hit adds scoring and nothing else.
+  class ResourceHit < ApiModelBase
+    # Where in the resource the match was — the closest chunk's block.  **Filled only by the wide arm**, and its absence is declared in advance rather than discovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it. The wide arm matches at CHUNK grain and already computes which chunk was closest, then discards it collapsing to a per-resource score; recovering it is an argmin beside an aggregate that already runs.  `find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by concatenating every chunk into a single blob, so the block boundary is gone before the query is asked. `follow-from` has no match position at all — it returns nodes reached by walking.  It sits on this type rather than on [`Scoring`] because `Scoring` is shared with [`RegionHit`], and a region is not somewhere inside a resource.  **`None` serializes as an explicit `\"located_at\": null`** (F4, ruled): the contract's prose is load-bearing on the null — every `located_at` is null today and the null unambiguously means *not declared* — and omitting the key made the resource-hit null indistinguishable from a shape with no such field, which is exactly the distinction [`RegionHit`] exists to draw.
+    attr_accessor :located_at
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
+    attr_accessor :resource
 
-    attr_accessor :message
+    attr_accessor :scoring
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'located_at' => :'located_at',
+        :'resource' => :'resource',
+        :'scoring' => :'scoring'
       }
     end
 
@@ -44,16 +45,16 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'located_at' => :'MatchLocation',
+        :'resource' => :'ResourceView',
+        :'scoring' => :'Scoring'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
+        :'located_at',
       ])
     end
 
@@ -61,32 +62,32 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ResourceHit` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ResourceHit`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
-      else
-        self.code = nil
+      if attributes.key?(:'located_at')
+        self.located_at = attributes[:'located_at']
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
+      if attributes.key?(:'resource')
+        self.resource = attributes[:'resource']
+      else
+        self.resource = nil
       end
 
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
+      if attributes.key?(:'scoring')
+        self.scoring = attributes[:'scoring']
       else
-        self.message = nil
+        self.scoring = nil
       end
     end
 
@@ -95,12 +96,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
+      if @resource.nil?
+        invalid_properties.push('invalid value for "resource", resource cannot be nil.')
       end
 
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @scoring.nil?
+        invalid_properties.push('invalid value for "scoring", scoring cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +111,29 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @resource.nil?
+      return false if @scoring.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # @param [Object] resource Value to be assigned
+    def resource=(resource)
+      if resource.nil?
+        fail ArgumentError, 'resource cannot be nil'
       end
 
-      @code = code
+      @resource = resource
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
+    # @param [Object] scoring Value to be assigned
+    def scoring=(scoring)
+      if scoring.nil?
+        fail ArgumentError, 'scoring cannot be nil'
       end
 
-      @message = message
+      @scoring = scoring
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +141,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          located_at == o.located_at &&
+          resource == o.resource &&
+          scoring == o.scoring
     end
 
     # @see the `==` method
@@ -154,7 +155,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [located_at, resource, scoring].hash
     end
 
     # Builds the object from hash

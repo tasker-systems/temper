@@ -14,20 +14,39 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # Bounded, but NOT to `[0,1]`. `bounds` states the actual range.
+  class QuantityScaleOneOf1 < ApiModelBase
+    attr_accessor :bounds
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
+    attr_accessor :scale
 
-    attr_accessor :message
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'bounds' => :'bounds',
+        :'scale' => :'scale'
       }
     end
 
@@ -44,16 +63,14 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'bounds' => :'String',
+        :'scale' => :'String'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
       ])
     end
 
@@ -61,32 +78,28 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::QuantityScaleOneOf1` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::QuantityScaleOneOf1`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'bounds')
+        self.bounds = attributes[:'bounds']
       else
-        self.code = nil
+        self.bounds = nil
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
-      end
-
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
+      if attributes.key?(:'scale')
+        self.scale = attributes[:'scale']
       else
-        self.message = nil
+        self.scale = nil
       end
     end
 
@@ -95,12 +108,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
+      if @bounds.nil?
+        invalid_properties.push('invalid value for "bounds", bounds cannot be nil.')
       end
 
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @scale.nil?
+        invalid_properties.push('invalid value for "scale", scale cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +123,31 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @bounds.nil?
+      return false if @scale.nil?
+      scale_validator = EnumAttributeValidator.new('String', ["other_range"])
+      return false unless scale_validator.valid?(@scale)
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # @param [Object] bounds Value to be assigned
+    def bounds=(bounds)
+      if bounds.nil?
+        fail ArgumentError, 'bounds cannot be nil'
       end
 
-      @code = code
+      @bounds = bounds
     end
 
-    # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
+    # Custom attribute writer method checking allowed values (enum).
+    # @param [Object] scale Object to be assigned
+    def scale=(scale)
+      validator = EnumAttributeValidator.new('String', ["other_range"])
+      unless validator.valid?(scale)
+        fail ArgumentError, "invalid value for \"scale\", must be one of #{validator.allowable_values}."
       end
-
-      @message = message
+      @scale = scale
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +155,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          bounds == o.bounds &&
+          scale == o.scale
     end
 
     # @see the `==` method
@@ -154,7 +168,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [bounds, scale].hash
     end
 
     # Builds the object from hash

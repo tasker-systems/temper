@@ -171,6 +171,7 @@ use temper_workflow::types::resource::{
         (name = "Profile", description = "Authenticated user profile"),
         (name = "Events", description = "Activity event log"),
         (name = "Search", description = "Semantic and keyword search"),
+        (name = "Query", description = "Composed queries — declared acts, piped, one round trip"),
         (name = "Meta", description = "Resource frontmatter metadata management"),
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
@@ -213,6 +214,91 @@ impl Modify for SecurityAddon {
                         .build(),
                 ),
             );
+        }
+    }
+}
+
+/// The open enums whose escape-hatch arm utoipa renders wrong, listed rather than shape-matched.
+///
+/// Each is a `#[serde(rename_all = "snake_case")]` enum ending in a **variant-level**
+/// `#[serde(untagged)] Other(String)` — the open-vocabulary escape hatch, so a client meeting a
+/// value from a newer producer degrades instead of failing to parse.
+///
+/// **Named explicitly, never detected by shape.** A shape rule ("any `oneOf` arm that is an object
+/// with one string property `other`") would silently capture a future type that genuinely has an
+/// `other` field, and rewrite a correct contract into a wrong one. This list is auditable and its
+/// completeness is asserted by `every_open_enum_publishes_its_escape_hatch_as_a_bare_string`.
+const OPEN_STRING_ENUMS: [&str; 5] = [
+    "ActName",
+    "RefusalReason",
+    "PropertySubject",
+    "ScoreKind",
+    "IdKind",
+];
+
+/// Corrects the published schema of an open string enum to match the bytes it actually sends.
+///
+/// **The defect this repairs is utoipa's, and it is silent.** utoipa honors an *enum-level*
+/// `#[serde(untagged)]` (`StageNode` and `ErrorDetails` both render correctly) but not the
+/// *variant-level* form. So it emits the escape hatch as an externally-tagged object,
+/// `{"other": "quota_exhausted"}`, while serde writes the bare string `"quota_exhausted"` — the
+/// wire bytes and the published contract disagree, and **no Rust test can see it**, because
+/// `openapi.json` is downstream of the derives and agrees with whatever they say.
+///
+/// That mismatch is not cosmetic. These enums are open *so that* a generated client tolerates a
+/// value it has never been taught to name; a client generated from the object form rejects exactly
+/// the value the openness exists to admit, which is the failure the vocabulary was designed to
+/// prevent. `schemars` gets it right — it emits `{"type": "string"}` — so the target shape here is
+/// not invented, it is the one the project's other generator already publishes.
+///
+/// **A document modifier rather than five hand-written `ToSchema` impls.** Writing them by hand
+/// was the first repair considered and is strictly worse: it drops every per-variant doc comment
+/// from the published contract (24 of them on `RefusalReason` alone), and it replaces one derive
+/// with five hand-maintained variant lists — five drift sites where there were none. This edits
+/// only the arm that is wrong and leaves the derive, and its documentation, in charge of the rest.
+/// It follows [`SurfaceHeaderAddon`], which repairs the generated document the same way.
+pub(crate) struct OpenStringEnumAddon;
+
+impl Modify for OpenStringEnumAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::{RefOr, Schema};
+
+        let Some(components) = openapi.components.as_mut() else {
+            return;
+        };
+        for name in OPEN_STRING_ENUMS {
+            let Some(RefOr::T(Schema::OneOf(one_of))) = components.schemas.get_mut(name) else {
+                // Absent is not an error: the query tree only reaches the document once a route
+                // references it, and this addon runs against every build, route or no route.
+                continue;
+            };
+            for item in &mut one_of.items {
+                let RefOr::T(Schema::Object(object)) = item else {
+                    continue;
+                };
+                // The mis-rendered arm, identified by what utoipa built: a single property named
+                // for the variant. Untouched if utoipa ever starts rendering it correctly, which
+                // is what keeps this addon from fighting a future fix.
+                //
+                // **Case-insensitively, and that is not defensive tidiness.** The key is `other`
+                // on an enum carrying `rename_all = "snake_case"` (`RefusalReason`) and `Other` on
+                // one whose variants are renamed individually (`ActName`, `ScoreKind`) — utoipa
+                // falls back to the raw variant identifier when no container rule applies. A
+                // lowercase-only match silently repaired three of the five and left two wrong.
+                let matches_escape_hatch = object.properties.len() == 1
+                    && object
+                        .properties
+                        .keys()
+                        .next()
+                        .is_some_and(|key| key.eq_ignore_ascii_case("other"));
+                if !matches_escape_hatch {
+                    continue;
+                }
+                let description = object.description.take();
+                let mut repaired = ObjectBuilder::new().schema_type(Type::String).build();
+                repaired.description = description;
+                *item = RefOr::T(Schema::Object(repaired));
+            }
         }
     }
 }
@@ -511,6 +597,68 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    /// An open enum's escape hatch must publish as the bare string it actually travels as.
+    ///
+    /// **Scans every schema rather than the declared list**, which is what makes this a
+    /// completeness guard and not a restatement of [`OPEN_STRING_ENUMS`]. A *new* open enum whose
+    /// name nobody added to that list still renders the wrong way, so it still trips this — the
+    /// failure names it, and the repair is one line.
+    ///
+    /// Guarded against a vacuous pass at both ends: an empty spec, or a query tree that has left
+    /// the document entirely, would make the scan trivially clean.
+    #[test]
+    fn every_open_enum_publishes_its_escape_hatch_as_a_bare_string() {
+        let spec = crate::routes::openapi_spec();
+        let json = serde_json::to_value(&spec).expect("spec serializes to JSON");
+        let schemas = json["components"]["schemas"]
+            .as_object()
+            .expect("components.schemas is an object");
+
+        // Not vacuous: at least one open enum is actually published. `RefusalReason` reaches the
+        // document through `ErrorDetail.details`, which every route's error response carries.
+        let published: Vec<&str> = super::OPEN_STRING_ENUMS
+            .iter()
+            .copied()
+            .filter(|name| schemas.contains_key(*name))
+            .collect();
+        assert!(
+            !published.is_empty(),
+            "no open enum is in the spec at all — this guard would pass over an empty document"
+        );
+
+        let mut wrong: Vec<String> = Vec::new();
+        for (name, schema) in schemas {
+            let Some(arms) = schema.get("oneOf").and_then(|a| a.as_array()) else {
+                continue;
+            };
+            for arm in arms {
+                // Case-insensitive on purpose — see `OpenStringEnumAddon`. This assertion was
+                // written lowercase-only first and passed while `ActName` and `ScoreKind` were
+                // still publishing `{"Other": …}`; the enum surface caught what the test could not.
+                let is_object_wrapper = arm.get("type").and_then(|t| t.as_str()) == Some("object")
+                    && arm
+                        .get("properties")
+                        .and_then(|p| p.as_object())
+                        .is_some_and(|p| {
+                            p.len() == 1
+                                && p.keys()
+                                    .next()
+                                    .is_some_and(|k| k.eq_ignore_ascii_case("other"))
+                        });
+                if is_object_wrapper {
+                    wrong.push(name.clone());
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "these schemas publish an open enum's escape hatch as `{{\"other\": \"…\"}}` while \
+             serde sends the bare string: {wrong:?}. A client generated from this rejects exactly \
+             the unknown value the open vocabulary exists to admit. If one of these is a NEW open \
+             enum, add it to `OPEN_STRING_ENUMS`."
+        );
     }
 
     /// A `$ref` to a component that does not exist makes the document invalid OpenAPI.

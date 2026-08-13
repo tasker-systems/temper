@@ -9,6 +9,20 @@ use thiserror::Error;
 /// and the consumer each name independently is a wire contract nothing checks.
 pub const FORBIDDEN_DETAIL_CODE: &str = "FORBIDDEN_DETAIL";
 
+/// The wire `error.code` a refused composition travels under — a `400` whose `details` carry
+/// [`crate::types::error_details::PlanRefusalDetails`], every static refusal at once.
+///
+/// **A code of its own rather than `BAD_REQUEST`.** The client branches on the code to decide
+/// whether a body carries refusals; reusing the generic code would force it to sniff the shape of
+/// `details` instead, which is the message-text heuristic in another costume.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`] — the producer
+/// (`temper-services`' `IntoResponse`) and the consumer (`temper-client`'s status mapper) name one
+/// constant rather than two literals nothing checks.
+///
+/// `[decided — 2026-08-13, Pete]` The spec (§B) authorized "its own code" and named no string.
+pub const PLAN_REFUSED_CODE: &str = "PLAN_REFUSED";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
