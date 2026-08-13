@@ -1,34 +1,65 @@
 # =============================================================================
-# POST /api/query — the compositional read surface. HAND-WRITTEN DESIGN ARTIFACT.
+# POST /api/query — the compositional read surface. DESIGN RATIONALE + TARGETS.
 # =============================================================================
 #
 # `[drafted — 2026-08-08, Pete + session]`
+# `[re-scoped — 2026-08-13, Pete, PR D]`
 #
-# ── WHAT THIS FILE IS ────────────────────────────────────────────────────────
+# ── WHAT THIS FILE IS, NOW THAT THE DOOR EXISTS ──────────────────────────────
 #
-# A hand-written contract for `/api/query`, written BEFORE the route exists, so
-# that what we are building can be reviewed as a data shape rather than argued
-# about as prose. It is the artifact the first attempt at this work skipped: that
-# attempt went straight to generating a spec from Rust and never established
-# whether the shape being generated was the one we meant.
+# It was a hand-written contract for `/api/query`, written BEFORE the route
+# existed, so that what we were building could be reviewed as a data shape rather
+# than argued about as prose. It is the artifact the first attempt at this work
+# skipped: that attempt went straight to generating a spec from Rust and never
+# established whether the shape being generated was the one we meant.
 #
-# ── WHY IT IS NOT `openapi.json` ─────────────────────────────────────────────
+# **That premise has expired, and this file is re-scoped rather than retired.**
+# PR B1 shipped the route. `openapi.json` now publishes `POST /api/query` and grew
+# 203 → 247 schemas, including 34 of the 37 this file had hand-written. So the
+# question D asked first was what the file is FOR — and the answer is the two
+# things a generated document structurally cannot hold:
+#
+#   THE RULINGS   Thirty-eight attributed decisions — `[decided …]`,
+#                 `[ratified …]`, `[ruled …]`, `[corrected …]` — kept next to what
+#                 they decided. `openapi.json` carries the per-field prose (242 of
+#                 its 247 schemas have a `description`, straight from the Rust doc
+#                 comments), but it cannot record who ruled, when, or what was
+#                 rejected on the way. That is this file's job.
+#
+#   THE TARGETS   The shapes that are DESIGNED AND NOT YET BUILT, listed under
+#                 IMPLEMENTATION PENDING below. Only these are still declared here
+#                 as schemas — `IdSet`, `StageOutput`, `StageTrace`, `BoundTerm`,
+#                 `Disclosure`, `ResourcesOutput` — because there is nothing
+#                 generated to point at yet. Each is a deliberate delta, never
+#                 drift, and each retires into a `$ref` when its work lands.
+#
+# ── WHY IT IS NOT `openapi.json`, AND WHERE IT DEFERS TO IT ──────────────────
 #
 # `openapi.json` at the repo root is GENERATED from the router by
 # `crates/temper-api/src/bin/emit-openapi.rs`, and `cargo make openapi` gates it.
-# A hand edit there is destroyed by the next regen. utoipa also derives paths from
-# `#[utoipa::path]` on live handlers, so `/api/query` cannot appear there until a
-# route exists.
+# A hand edit there is destroyed by the next regen — which is exactly why the
+# *rulings* live here and the *shapes* do not.
 #
-# This file therefore `$ref`s the generated one for anything already shipped —
-# `ResourceView`, `CogmapRegionRow` — rather than restating it. A restatement can
-# drift; a `$ref` cannot.
+# **Every schema whose shape has shipped is now a `$ref` into the generated
+# document.** A restatement can drift; a `$ref` cannot. That is not a stylistic
+# preference — this file had drifted on five counts in the week before D, one of
+# them silently (it named a refusal code, `COMPOSITION_INVALID`, that was never
+# built), and every one of those five was a shape stated twice.
+#
+# `[decided — 2026-08-13, Pete]` Where a constraint existed here that the generated
+# document could not express, the constraint MOVED INTO THE RUST rather than
+# staying behind as a reason to keep restating the shape: `StageName`'s pattern,
+# `CombineNode.inputs`' minimum of two, `OutcomeDeclaration.returns`' minimum of
+# one, and `ResourceHit.located_at`'s required-ness. Alignment is bidirectional,
+# and on those four the yaml was right and the published schema was wrong.
 #
 # ── STATUS OF EACH PART ──────────────────────────────────────────────────────
 #
-#   TRANSCRIBED  — faithfully copied from types already merged in
+#   TRANSCRIBED  — was faithfully copied from types already merged in
 #                  `crates/temper-core/src/types/query/` (Beat A, PR #663).
-#                  Not invention. Cited per schema.
+#                  These are now `$ref`s; the marker survives on the rulings that
+#                  cite it, because "this was a mis-copy, not a choice" is an
+#                  argument several of them turn on.
 #   DESIGNED     — worked out in this session and agreed. New. Each decision
 #                  carries its reasoning where the field is, so a later reader
 #                  can attack the argument rather than just the value.
@@ -71,6 +102,15 @@
 #       survive the question "what authenticates it".
 #   ⟨6⟩ `bounds_*` → `input_ids` / `input_unusable` / `input_contributed`, the
 #       last nullable where an act cannot compute it.
+#       `[corrected — 2026-08-13, PR D]` **SUPERSEDED BY ⟨6⟩'S OWN RATIFICATION
+#       BELOW, WHICH DROPS `input_contributed` FROM v0.** This is the header
+#       block that contradicted a later one — the lag the spec recorded and
+#       could not locate. A reader stopping at this list saw a trio promised;
+#       the ratification twenty lines down ships a pair, and the code ships a
+#       pair. Left in place with the correction attached rather than rewritten,
+#       because the point of this list is what the session closed, and editing
+#       it to agree with the ratification would erase the very drift the
+#       block's own preamble warns to expect.
 #
 # ── RATIFICATION — 2026-08-09, Pete, item by item ────────────────────────────
 #
@@ -124,6 +164,14 @@
 #                     by how they were found. MatchLocation is UNDECLARED until
 #                     the wide fragment carries the winning chunk's identity
 #                     out — a declaration describes the deployed system.
+#                     `[corrected — 2026-08-13, PR D]` MatchLocation IS declared
+#                     and published: `ResourceHit.located_at` is
+#                     `MatchLocation | null` in `openapi.json`. The ruling's
+#                     PRINCIPLE stands — a declaration describes the deployed
+#                     system — and by it the type is correctly declared, since
+#                     the field genuinely exists on every response; what has
+#                     not landed is the argmin that fills it (`None` at
+#                     query_read.rs:491).
 #   ⟨6⟩ input trio    input_ids and input_unusable RATIFIED (the one-number
 #                     collapse is the point). input_contributed is DROPPED from
 #                     v0: redundant where filled (bound ⇒ equals produced),
@@ -135,11 +183,18 @@
 # `[amended — 2026-08-09, same session]` The schema text below now REFLECTS
 # these rulings: the survey redesign, the located_at/MatchLocation retraction,
 # and the input_contributed removal are applied in place, each leaving a
-# recording block where the old shape stood. THIS DOCUMENT IS THE TARGET.
+# recording block where the old shape stood.
+#
+# `[re-scoped — 2026-08-13, PR D]` This block used to end "THIS DOCUMENT IS THE
+# TARGET", and that is now true of SIX schemas rather than all thirty-seven.
+# Everything whose shape has shipped is a `$ref`; only the list below is still
+# declared here, and each entry names the schema that stays hand-written for it.
+# The rule for reading this file is therefore mechanical: **a hand-written
+# schema is a target, a `$ref` is the contract.**
 #
 # IMPLEMENTATION PENDING — updated `[2026-08-10]` after the P4 audit's fix
-# pass implemented the cheap half (MatchLocation undeclared; input_contributed
-# and Disclosure::InputContribution removed; located_at now an explicit null;
+# pass implemented the cheap half (input_contributed and
+# Disclosure::InputContribution removed; located_at now an explicit null;
 # bounds/meta_detail/meta_truncated removed; the `refusal` field added and
 # filled). Deliberate deltas remaining — pending-implementation, never drift:
 #
@@ -151,19 +206,35 @@
 #     answers `indeterminate` for survey; `StageTrace.regions_matched` does
 #     not exist yet. All of it lands together when the survey fragment is
 #     built to the ratified semantics.
+#     HAND-WRITTEN FOR THIS: `StageOutput`, `ResourcesOutput`, `StageTrace`,
+#     `IdSet` — each differs from the published shape deliberately, and each
+#     becomes a `$ref` when the redesign lands `[verified — 2026-08-13]`.
 #   * THE FOLLOW-FROM MECHANIC (P3 door work): `follow-from` compiles to the
 #     deliberately-nonexistent placeholder, and validate.rs refuses EVERY
 #     `edge_filter` unconditionally — correctly, since nothing exists to apply
 #     one. When the mechanic lands, the unconditional arm retires in favour of
 #     the per-act check that already exists. `[ruled — 2026-08-10, ADJ-2]`
+#     `[corrected — 2026-08-13, PR D]` ⟨5⟩ also took `follow-from` and `survey`
+#     out of `CALLABLE_FRAGMENTS`, so such a stage is refused STATICALLY as
+#     `not_separably_reachable` (capability.rs:162) and never reaches Postgres.
+#     Both refusals arrive together; see the worked example.
 #   * PROPERTY PREDICATES, the twin of the line above and missed by the first
 #     pass `[added — 2026-08-10, audit P2]`: validate.rs refuses EVERY non-empty
 #     `properties` array, on every act, for the identical reason — the compiler
 #     emits no slot, and a predicate that narrows nothing is a silent
-#     substitution. `PropertyPredicate`/`PropertyOp` below describe the target
-#     shape, not a live narrowing.
-#   * MatchLocation redeclaration awaits the wide fragments carrying the
-#     winning chunk's identity out (the argmin); `located_at` fills then.
+#     substitution.
+#     `[corrected — 2026-08-13, PR D]` This said `PropertyPredicate`/`PropertyOp`
+#     "describe the target shape, not a live narrowing", which conflated two
+#     things: their SHAPES were already identical to the merged Rust and are now
+#     `$ref`s. What is pending is BEHAVIOUR — the door refuses what the type can
+#     express. A pending narrowing is not a pending shape.
+#   * FILLING `located_at` awaits the wide fragments carrying the winning
+#     chunk's identity out (the argmin).
+#     `[corrected — 2026-08-13, PR D]` This said "MatchLocation redeclaration
+#     awaits". `MatchLocation` is declared and PUBLISHED — `ResourceHit`'s
+#     `located_at` is `MatchLocation | null` in `openapi.json`. The type landed;
+#     only the value is pending, hard-coded `None` at query_read.rs:491. Nothing
+#     here stays hand-written for it.
 #
 # ── ABSENT VERSUS NULL — one rule, and it decides every optional field ───────
 #
@@ -358,32 +429,33 @@ paths:
             refusal per round-trip is the experience this avoids.
 
             The body is the ordinary `ErrorBody` every other route uses, with the
-            list carried in its typed `details` slot. That slot already works this
-            way — it is a union whose only member today is `SystemAccessDetails`,
-            present only on one code and absent otherwise — so a second member is
-            additive and needs no new envelope. `code` is
-            `COMPOSITION_INVALID`.
+            list carried in its typed `details` slot. That slot was a union whose
+            only member was `SystemAccessDetails`, present on one code and absent
+            otherwise, so a second member was additive and needed no new envelope.
+            PR B1 added it: `details` is now the two-member `ErrorDetails`
+            (`SystemAccessDetails | PlanRefusalDetails`), untagged, so each arm's
+            payload is byte-identical to what it sent before the widening.
 
             Each entry names the stage it attaches to, or none for a refusal about
             the composition as a whole (a cycle, a dangling reference).
+
+            `[corrected — 2026-08-13, PR D]` **`code` is `PLAN_REFUSED`**
+            (`temper_core::error::PLAN_REFUSED_CODE`). This block said
+            `COMPOSITION_INVALID`, which was drafted here and never built — no such
+            code exists anywhere in `crates/`. It is recorded rather than quietly
+            swapped because of HOW it failed: a client keying on the wrong code
+            never matches a real refusal, falls through to its generic 400 handler,
+            and reports a caller fault as something else. That is silent, and it is
+            the exact class PR B2.1 existed to remove from `temper-client` — which
+            keys on the code, never on the presence of `details` or on message text.
           content:
             application/json:
-              schema:
-                allOf:
-                  - $ref: '../../openapi.json#/components/schemas/ErrorBody'
-                  - type: object
-                    properties:
-                      error:
-                        type: object
-                        properties:
-                          details:
-                            type: object
-                            required: [refusals]
-                            properties:
-                              refusals:
-                                type: array
-                                minItems: 1
-                                items: { $ref: '#/components/schemas/PlanRefusal' }
+              # The shape is `openapi.json`'s, whole: `ErrorBody` → `ErrorDetail.details` →
+              # `ErrorDetails` → `PlanRefusalDetails`, all published since B1. The hand-written
+              # `allOf` that stood here restated that chain and pinned `details` to a
+              # single-member object — two statements of one wire type, which is a drift site by
+              # construction and had already drifted (see the correction above).
+              schema: { $ref: '../../openapi.json#/components/schemas/ErrorBody' }
         '401':
           description: Unauthorized.
           content:
@@ -395,6 +467,29 @@ paths:
 # `[decided — 2026-08-09, Pete]` It was drafted here as a route that would state
 # the request→response dependency OpenAPI cannot express. It is not built and
 # will not be, and the reasoning is kept so it is not re-invented.
+#
+# `[shipped — 2026-08-13, PR C]` **The capability arrived, as a flag rather than
+# a route: `temper query --check`.** It answers the same expressibility
+# question, locally — no network, no token, no server consulted — which is what
+# the whole argument below said it needed. So this section is now a record of a
+# door correctly NOT built, next to the thing that made it unnecessary, and the
+# withdrawal reads as vindicated rather than merely declined.
+#
+# It also names a distinction this contract otherwise leaves implicit, and which
+# a client copying this document has to understand:
+#
+#   EXPRESSIBILITY  is the plan well-formed against the PUBLISHED contract?
+#                   Answerable by anyone holding this document. `--check`
+#                   answers exactly this and nothing more.
+#   CAPABILITY      has the server BUILT the thing the plan asks for? Only the
+#                   server knows. `not_separably_reachable`,
+#                   `filter_not_applicable` and `not_implemented` are its
+#                   refusals, and no local pass can anticipate them.
+#
+# The two genuinely differ, and the worked example below is the demonstration:
+# it is `expressible: true` with zero local refusals, and the server refuses it
+# twice. That is why `--check`'s disclosure rides on CLEAN results too — a
+# caveat printed only on failure is missing exactly when it misleads.
 #
 # THE TELL WAS AN AUTH QUESTION. Asked what authenticates it, nobody could say —
 # and for a pure function over a static table the honest answer is "nobody, and
@@ -438,343 +533,120 @@ components:
     Composition:
       # TRANSCRIBED from composition.rs:133-158, EXCEPT `outcome.returns[].with`
       # (see ReturnSpec).
-      type: object
-      required: [outcome, stages]
-      properties:
-        outcome:
-          $ref: '#/components/schemas/OutcomeDeclaration'
-        intention:
-          description: |
-            The question, computed once at composition start and threaded to
-            every stage.
 
-            ITS ABSENCE REFUSES, AND THAT IS ABOUT THE QUESTION, NOT THE VECTOR.
-            A find stage with no intention has no words to search for, so it
-            comes back `missing_intention`. This is forced rather than chosen:
-            `find-exact` sources its query TEXT from here and has nowhere else
-            to get it.
-
-            An absent EMBEDDING is a different absence and does not refuse —
-            the server computes one. See `Intention.embedded`.
-
-            `[decided — 2026-08-08, Pete]` This block previously said a
-            `find-about-*` stage with no intention refuses "rather than the
-            server embedding on the caller's behalf", which contradicted
-            `Intention.embedded` two schemas below. That sentence was leftover
-            transcription from the merged types and is superseded here.
-          $ref: '#/components/schemas/Intention'
-        # (`meta_detail` was declared here — removed with `bounds`, see below.)
-        # `bounds` was defined here — "the SECOND bound layer, over the
-        # composition's own output." REMOVED, ADJ-4 `[2026-08-10, Pete]`: a
-        # composition cannot meaningfully have bounds. Its output is nothing but
-        # the returned stages' outputs, each already bounded by its own `terms`
-        # — there is no residual thing for a composition-level bound to bound.
-        # (The field's own note half-knew: "a full-composition total is not
-        # well-defined"; the same argument, completed.) A cross-stage BUDGET
-        # would be a coherent different feature, undesigned and unasked-for.
-        # Removed per the `on_stage_refusal` remove-and-tolerate precedent: an
-        # unknown `bounds` key is ignored like any unknown field, test-pinned.
-        # `meta_detail` is removed by the same ruling — nobody could state the
-        # job it did (its `MetaTruncated` machinery goes with it); if a
-        # metadata budget ever materializes it returns designed, additively.
-        stages:
-          description: |
-            The DAG's nodes. Each references its inputs explicitly BY NAME. There
-            is no prev-else-context fallback — that is the flattering-degradation
-            vector this surface exists not to inherit — and there is no single
-            execution order, because a DAG has none.
-          type: array
-          minItems: 1
-          items: { $ref: '#/components/schemas/StageNode' }
+      # -- rulings recorded on `properties`, whose SHAPE is now the generated one --
+      # `[decided — 2026-08-08, Pete]` This block previously said a
+      # `find-about-*` stage with no intention refuses "rather than the
+      # server embedding on the caller's behalf", which contradicted
+      # `Intention.embedded` two schemas below. That sentence was leftover
+      # transcription from the merged types and is superseded here.
+      $ref: '../../openapi.json#/components/schemas/Composition'
 
     OutcomeDeclaration:
       # AMENDED from composition.rs:45-60 — `description` REMOVED, see header.
-      type: object
-      required: [returns]
-      properties:
-        returns:
-          description: |
-            The stages whose rows are hydrated and returned. DECLARED, never
-            inferred from graph shape: inferring from out-degree zero makes
-            returning an intermediate impossible without a dummy consumer, and
-            means adding a downstream stage silently stops returning what you
-            used to get back.
-          type: array
-          minItems: 1
-          items: { $ref: '#/components/schemas/ReturnSpec' }
+      $ref: '../../openapi.json#/components/schemas/OutcomeDeclaration'
 
     ReturnSpec:
       # DESIGNED. Replaces the merged `ReturnSpec { stage, fields: Vec<String> }`
       # (composition.rs:35-43). `fields` is removed: it promised field-level
       # subselection over a projection, nothing implements it, and it duplicates
       # a vocabulary that already works.
-      type: object
-      required: [stage]
-      properties:
-        stage: { $ref: '#/components/schemas/StageName' }
-        with:
-          description: |
-            Which sections to hydrate onto each row, by the SAME vocabulary
-            `temper resource show --with` uses (`ResourceSection`).
-
-            Absent from a row means NOT REQUESTED, never empty. An empty body is
-            `""` and an empty open tier is `{}`; both distinctions survive the
-            wire and are pinned by
-            `ResourceView::body_absent_is_distinguishable_from_body_empty`.
-
-            `open-meta` costs ONE statement for the whole stage, via
-            `readback::meta_batch`. Its predecessor ran a per-view read and a
-            13-row page cost 28 statements, measured; it is 3 now, and
-            `list_page_open_meta_query_count_test` holds it there.
-
-            `body` is REFUSED here rather than merely unsupported.
-            `fill_sections` records that the body arm "is an N+1 by
-            construction" and that what keeps it honest is "the door, not the
-            loop" — `list_select` was narrowed to `ResourceSection::LIST` for
-            exactly this. `/api/query` is a new door and is narrow from its first
-            line. Ask `show` for a body.
-
-            `edges` is absent by decision, not omission: edge listing has its own
-            commands, and `follow-from` + `EdgeFilter` walk and filter on edges
-            without returning them.
-
-            ── WHY THE ENUM IS WIDE AND THE REFUSAL IS AT VALIDATION ────────────
-
-            `[decided during build — 2026-08-08]` This was drafted as a
-            single-member wire enum (`enum: [open-meta]`), which would make
-            `body` fail to DESERIALIZE. Built the other way, and the reason is
-            this document's own two rules:
-
-              * `POST /api/query` promises "ALL refusals come back, never just
-                the first". A serde failure is not a `PlanRefusal` — it short-
-                circuits before validation runs, so a caller who wrote `body`
-                AND has three other problems learns about one of them, in a
-                deserializer's vocabulary rather than this contract's.
-
-              * A refusal is supposed to tell a caller what the system cannot
-                do. That is the whole argument for `StageRelation` being on the
-                wire rather than derived. "unknown variant `body`" says the
-                field is malformed; `section_not_available` says this door does
-                not hydrate bodies and points at `show`.
-
-            So the type is `ResourceSection` — the SAME Rust enum `show` and
-            `list` use, not a query-local copy — and this door names its own
-            admitted subset, exactly as `ResourceSection::LIST` already does for
-            `list`. Sections outside the subset are refused at validation.
-            Adding one later is a const change, not a second vocabulary.
-          type: array
-          items:
-            type: string
-            enum: [body, open-meta, edges]
-          default: []
+      $ref: '../../openapi.json#/components/schemas/ReturnSpec'
 
     Intention:
       # TRANSCRIBED from composition.rs:17-31.
-      type: object
-      required: [query, embedded]
-      properties:
-        query: { type: string }
-        embedded:
-          description: |
-            Whether an embedding was computed for it. Inspectable in the trace,
-            which is what makes paraphrase-stability measurable from outside.
 
-            NOTE: this carries the FACT, not the vector. The vector reaches the
-            compiler as a separate caller-supplied argument and is deliberately
-            not in this envelope — a 768-float array is not a wire contract
-            anyone asked for.
-
-            AN ABSENT EMBEDDING IS NOT A REFUSAL. The merged contract said a
-            `find-about-*` stage with no intention refuses. `/api/search` already
-            handles this better, with three states rather than two: the caller
-            supplied one; the caller did not and the server embedded
-            (`substrate_read::embed_query_if_missing` — MCP, the web UI,
-            `--text-only`); or the server tried and could not, which is disclosed
-            rather than returned as an empty list that reads like an answer.
-            `/api/query` inherits that. `[decided — 2026-08-08, Pete]`
-
-            THE REASON IS STRUCTURAL, NOT A CONVENIENCE. The CLI can embed —
-            it links temper-ingest and computes chunks client-side. API callers
-            CANNOT: the ruby gem, the TypeScript package, and MCP as it expands
-            carry no native embedding ability. Refusing a vector search because
-            the caller could not precompute a vector would deny this surface to
-            every non-CLI client. So the server embeds when no vector arrives,
-            and only a FAILED embed refuses — as `embedding_unavailable`.
-          type: boolean
-        # THERE IS NO `degraded` FLAG HERE, deliberately. `/api/search` needs one
-        # because its arms are fixed and an arm that cannot run must say so
-        # in-place. A composition already has somewhere better: a stage whose
-        # embedding could not be computed comes back `refused` with reason
-        # `embedding_unavailable`, per stage, where the reader is already looking.
-        # A second signal on the shared intention would be the same fact in two
-        # places, free to disagree. `[decided — 2026-08-08]`
+      # -- rulings recorded on `properties`, whose SHAPE is now the generated one --
+      # AN ABSENT EMBEDDING IS NOT A REFUSAL. The merged contract said a
+      # `find-about-*` stage with no intention refuses. `/api/search` already
+      # handles this better, with three states rather than two: the caller
+      # supplied one; the caller did not and the server embedded
+      # (`substrate_read::embed_query_if_missing` — MCP, the web UI,
+      # `--text-only`); or the server tried and could not, which is disclosed
+      # rather than returned as an empty list that reads like an answer.
+      # `/api/query` inherits that. `[decided — 2026-08-08, Pete]`
+      #
+      # THERE IS NO `degraded` FLAG HERE, deliberately. `/api/search` needs one
+      # because its arms are fixed and an arm that cannot run must say so
+      # in-place. A composition already has somewhere better: a stage whose
+      # embedding could not be computed comes back `refused` with reason
+      # `embedding_unavailable`, per stage, where the reader is already looking.
+      # A second signal on the shared intention would be the same fact in two
+      # places, free to disagree. `[decided — 2026-08-08]`
+      #
+      # `[corrected — 2026-08-13, PR D]` Two things ⟨7⟩ moved under this block.
+      # **There is no SHARED intention any more** — it left `Composition` and now
+      # sits on each `ActInvocation`, so a composition can ask more than one
+      # question. The ruling above is unaffected and reads better for it: the
+      # per-stage refusal it prefers is now co-located with the per-stage
+      # intention it refuses about. **And `embedded` is gone**, replaced by
+      # `embedding: Option<Vec<f32>>` — deleted rather than relocated, and the
+      # argument against re-adding it is in PR A2's plan, Task 5. Any example
+      # elsewhere in this file spelling `"embedded": true` is pre-⟨7⟩ text.
 
     StageNode:
       # TRANSCRIBED from composition.rs:99-110.
-      description: |
-        A node in the DAG: an act invocation, or a set combination over other
-        nodes. A combination is its OWN node kind because no act takes more than
-        one input, so modelling it as an act would lie about what an act is.
-      oneOf:
-        - $ref: '#/components/schemas/ActInvocation'
-        - $ref: '#/components/schemas/CombineNode'
+      # A node in the DAG: an act invocation, or a set combination over other
+      # nodes. A combination is its OWN node kind because no act takes more than
+      # one input, so modelling it as an act would lie about what an act is.
+      $ref: '../../openapi.json#/components/schemas/StageNode'
 
     ActInvocation:
       # TRANSCRIBED from envelope.rs:21-47.
-      type: object
-      required: [name, act]
-      properties:
-        name:
-          description: This node's name, referenced by downstream stages and by `returns`.
-          $ref: '#/components/schemas/StageName'
-        act: { $ref: '#/components/schemas/ActName' }
-        input:
-          description: |
-            Where this stage's set comes from. Absent for a root act that takes
-            no incoming set. THIS is the field that makes the pipe expressible —
-            before it, an invocation could carry only a literal id set and had no
-            way to name a producing stage.
-          $ref: '#/components/schemas/StageInput'
-        # `bounds_mode` REMOVED from this level and moved into `StageInput.as`.
-        #
-        # It was `Option<BoundsMode>` with the invariant "required whenever `input`
-        # is present" held by prose, which admits a meaningless state (input
-        # present, mode absent). The relation is a property of the EDGE, not of the
-        # stage, so it belongs on the edge. See `StageInput` and `StageRelation`.
-        terms:
-          description: |
-            This stage's own limits — how many rows, how many to skip, how wide a
-            funnel. Which terms an act accepts is per act, and there are two
-            different outcomes if you get it wrong:
-
-              * A term the act accepts, above its published ceiling → CLAMPED.
-                The value used comes back in `StageResult.terms_applied`.
-              * A term the act does not accept at all → REFUSED. The composition
-                fails validation; it is never reinterpreted to fit.
-
-            `survey` is the case that shows why — and since its redesign it
-            shows both outcomes at once: it admits `regions` (how wide the
-            funnel — how many regions may admit members) AND `limit`/`offset`
-            (paging over the member rows, which its deterministic ordering
-            makes meaningful). The funnel and the page are different bounds,
-            each declared. But send `regions` to `find-exact` — an act with no
-            funnel — and it is REFUSED: a different question, not a smaller one.
-
-            A third outcome, previously enforced and undocumented
-            `[documented — 2026-08-10, audit F2]`: an admitted term whose VALUE
-            is out of range — negative, or beyond the 32-bit slot the serving
-            functions bind — is refused as `bound_term_not_applicable`, not
-            clamped. The bounds below are the published rule.
-          type: object
-          propertyNames: { $ref: '#/components/schemas/BoundTerm' }
-          additionalProperties:
-            type: integer
-            format: int64
-            minimum: 0
-            maximum: 2147483647
-          default: {}
-        resource_filter:
-          description: |
-            Narrowing by what a thing IS. At most one filter slot applies per
-            act; supplying the other is refused.
-          $ref: '#/components/schemas/ResourceFilter'
-        edge_filter:
-          $ref: '#/components/schemas/EdgeFilter'
-        properties:
-          description: |
-            Narrowing by what a thing IS in `kb_properties`: open key space,
-            CLOSED operator set. There is no expression language, deliberately —
-            a general predicate grammar "would immediately re-open every
-            conflation this contract exists to close."
-          type: array
-          items: { $ref: '#/components/schemas/PropertyPredicate' }
-          default: []
+      $ref: '../../openapi.json#/components/schemas/ActInvocation'
 
     CombineNode:
       # TRANSCRIBED from composition.rs:83-88.
-      type: object
-      required: [name, op, inputs]
-      properties:
-        name: { $ref: '#/components/schemas/StageName' }
-        op:
-          type: string
-          enum: [union, intersect]
-        inputs:
-          description: Two or more. One input is not a combination; validation refuses it.
-          type: array
-          minItems: 2
-          items: { $ref: '#/components/schemas/StageName' }
+      $ref: '../../openapi.json#/components/schemas/CombineNode'
 
     StageInput:
       # TRANSCRIBED from stage.rs:78-85, EXTENDED with `as` (see StageRelation).
-      description: |
-        Where this stage's set comes from, and WHAT IT IS FOR. `as` is required
-        here rather than optional on the invocation, so "an input with no declared
-        relation" is unrepresentable rather than merely invalid.
-      oneOf:
-        - type: object
-          required: [from, as, ids]
-          properties:
-            from: { type: string, enum: [caller] }
-            as: { $ref: '#/components/schemas/StageRelation' }
-            ids:
-              description: A literal id set the caller supplied.
-              $ref: '#/components/schemas/IdSet'
-        - type: object
-          required: [from, as, stage]
-          properties:
-            from: { type: string, enum: [upstream] }
-            as: { $ref: '#/components/schemas/StageRelation' }
-            stage:
-              description: The `produced` set of an earlier stage, NAMED rather than copied.
-              $ref: '#/components/schemas/StageName'
-      discriminator:
-        propertyName: from
+      # Where this stage's set comes from, and WHAT IT IS FOR. `as` is required
+      # here rather than optional on the invocation, so "an input with no declared
+      # relation" is unrepresentable rather than merely invalid.
+      $ref: '../../openapi.json#/components/schemas/StageInput'
 
     StageRelation:
       # DESIGNED. Replaces `BoundsMode` (scalars.rs:61-66) at a new position.
-      description: |
-        What the receiving act does with the set it was handed. Declared at the
-        CONSUMING stage — the producer emits membership and has no opinion about
-        what the next act does with it.
-
-        `bound`  — narrow to within this set.  Output ⊆ input.
-        `seed`   — grow from this set.         Output ESCAPES input.
-
-        A COMPOSITION IS NOT MONOTONICALLY NARROWING. A pipeline may alternate:
-        `find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches
-        beyond) → `find-exact` as a BOUND (narrows again). Any language that
-        assumes a stage's output is a subset of its input is wrong for half of
-        these — which is why the input numbers on `StageResult` are named
-        `input_*` and not `bounds_*`, and why one of them is nullable.
-
-        ── WHY THIS IS ON THE WIRE AND NOT DERIVED ──────────────────────────────
-
-        Across all seven acts, `accepts_bounds` and `accepts_seeds` are DISJOINT:
-        no act accepts both, and `follow-from` is the only seeder. So the relation
-        is fully determined by the act, and this field can only ever agree with
-        the declaration or be refused.
-
-        It is on the wire anyway, and the reason is the negative face. A caller who
-        writes `seed` against `find-exact` meant something real — "reach beyond
-        these" — and `find-exact` cannot. Deriving the relation from the act would
-        silently execute a NARROWING instead: the caller's question answered as a
-        different question, which is `no-silent-question-substitution`. Refusing it
-        tells them what the system cannot do. `[decided — 2026-08-08, Pete]`
-
-        ── THE THIRD ID SET, WHICH IS NOT ON THIS AXIS ──────────────────────────
-
-        Three id sets are in play and only two of them are the caller's:
-
-          the visibility verdict  hard, applies to every stage, NEVER expressible
-                                  here, computed once per composition
-          a bound                 narrow to within
-          a seed                  grow from
-
-        The first is structurally unreachable from this contract. It is not a
-        `StageRelation` value and must never become one.
-      type: string
-      enum: [bound, seed]
+      # What the receiving act does with the set it was handed. Declared at the
+      # CONSUMING stage — the producer emits membership and has no opinion about
+      # what the next act does with it.
+      #
+      # `bound`  — narrow to within this set.  Output ⊆ input.
+      # `seed`   — grow from this set.         Output ESCAPES input.
+      #
+      # A COMPOSITION IS NOT MONOTONICALLY NARROWING. A pipeline may alternate:
+      # `find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches
+      # beyond) → `find-exact` as a BOUND (narrows again). Any language that
+      # assumes a stage's output is a subset of its input is wrong for half of
+      # these — which is why the input numbers on `StageResult` are named
+      # `input_*` and not `bounds_*`, and why one of them is nullable.
+      #
+      # ── WHY THIS IS ON THE WIRE AND NOT DERIVED ──────────────────────────────
+      #
+      # Across all seven acts, `accepts_bounds` and `accepts_seeds` are DISJOINT:
+      # no act accepts both, and `follow-from` is the only seeder. So the relation
+      # is fully determined by the act, and this field can only ever agree with
+      # the declaration or be refused.
+      #
+      # It is on the wire anyway, and the reason is the negative face. A caller who
+      # writes `seed` against `find-exact` meant something real — "reach beyond
+      # these" — and `find-exact` cannot. Deriving the relation from the act would
+      # silently execute a NARROWING instead: the caller's question answered as a
+      # different question, which is `no-silent-question-substitution`. Refusing it
+      # tells them what the system cannot do. `[decided — 2026-08-08, Pete]`
+      #
+      # ── THE THIRD ID SET, WHICH IS NOT ON THIS AXIS ──────────────────────────
+      #
+      # Three id sets are in play and only two of them are the caller's:
+      #
+      #   the visibility verdict  hard, applies to every stage, NEVER expressible
+      #                           here, computed once per composition
+      #   a bound                 narrow to within
+      #   a seed                  grow from
+      #
+      # The first is structurally unreachable from this contract. It is not a
+      # `StageRelation` value and must never become one.
 
     # =========================================================================
     # THE CHAINABILITY RELATION — DERIVED, NON-NORMATIVE
@@ -846,6 +718,7 @@ components:
     # never becomes a second copy of another act. `[ratified — 2026-08-09, Pete]`
     #
     # =========================================================================
+      $ref: '../../openapi.json#/components/schemas/StageRelation'
 
     Disclosure:
       # BUILT — `ActDeclaration.discloses` exists now (temper-core, act.rs), with
@@ -914,37 +787,6 @@ components:
     QueryResponse:
       # DESIGNED. No merged type for this exists today — `query/mod.rs` exports
       # `ActResult` and `CompositionTrace` and nothing that composes them.
-      type: object
-      required: [returned, trace]
-      properties:
-        returned:
-          description: |
-            One entry per `outcome.returns` — no more, no fewer — keyed by
-            `StageName`. What you asked for by name comes back under that name.
-
-            THE SCHEMA CANNOT STATE THE REAL INVARIANT, and that is worth saying
-            plainly rather than hiding behind `additionalProperties`: the keys
-            here are exactly `outcome.returns[].stage`, and the variant of
-            `produced` under each key is determined by the declared `produces` of
-            the act named by the stage with that name. That is a dependency from
-            request to response, and OpenAPI has no way to express it.
-
-            NOTHING ON THIS SURFACE CLOSES IT TODAY, and that is stated rather
-            than papered over. A `POST /api/query/validate` route was drafted to
-            and has been withdrawn (see the block above `components:`). The facts
-            needed to compute it are all in the act declarations — `produces`
-            gives the currency, `orders_by` the quantity and its range,
-            `discloses` which optional fields will be filled — so a client that
-            HAS the declarations can derive it. Publishing them is an open
-            question, not a promise.
-          type: object
-          additionalProperties: { $ref: '#/components/schemas/StageResult' }
-        trace:
-          description: |
-            EVERY stage, including stages whose rows were not returned. This is
-            where per-stage disclosure lives: what was asked, what narrowed what,
-            and what came back empty, withheld or refused.
-          $ref: '#/components/schemas/CompositionTrace'
 
     # ── WHAT THE TRACE IS FOR ────────────────────────────────────────────────
     #
@@ -975,105 +817,19 @@ components:
     # server needs and which a client with the declarations could run itself. If
     # the declarations are ever published, this shape comes back with a path
     # attached to it.
+      $ref: '../../openapi.json#/components/schemas/QueryResponse'
 
     StageResult:
       # DESIGNED, adapting `ActResult` (envelope.rs:72-100).
-      type: object
       # `narrowed_by` added `[corrected — 2026-08-10, audit P2]`: the code emits
       # it unconditionally (a plain `Vec`, no default, no skip), and `StageTrace`
       # below already had it required — so the contract's own pair rule
       # disagreed with itself.
-      required:
-        [act, disposition, produced, extent, terms_applied, narrowed_by, input_ids, input_unusable]
-      properties:
-        act: { $ref: '#/components/schemas/ActName' }
-        disposition: { $ref: '#/components/schemas/StageDisposition' }
-        refusal:
-          description: |
-            Present iff `disposition` is `refused`: the reason and its
-            standing-aware detail. `[ruled — 2026-08-10, Pete, ADJ-3]`
 
-            The ⟨2⟩ behaviour — "reports `refused` with reason
-            `embedding_unavailable`, where the reader is already looking" —
-            requires the reason to REACH the reader. Before this field, neither
-            this schema nor the code carried one: the promise was prose only,
-            and a second runtime refusal would have collapsed two different
-            answers into one word. The carrier is the same `{reason, detail}`
-            shape `PlanRefusal` uses, minus the stage (you are already on it);
-            `detail` follows the same standing-aware discipline. Identical
-            field on `StageTrace`, and the two must stay identical — the trace
-            is the only record for an intermediate stage.
-          $ref: '#/components/schemas/ActRefusal'
-        orders_by:
-          description: |
-            Echoed from this act's declaration in `search_family()`. Present iff
-            the act orders anything.
-
-            IT IS HERE, ONCE PER STAGE, RATHER THAN ONCE PER ROW. The row keeps a
-            literal field name so two acts' numbers cannot be summed by accident;
-            this carries the range so a reader is not left to assume `[0,1]`.
-            Assuming `[0,1]` is the LIVE mistake in this family, not a
-            hypothetical one: `vec_norm` rescales a cosine distance as `1 - d/2`
-            into `[0,1]` while `region_score` spans `[-0.57, 1.05]`, and neither
-            column name says so.
-          $ref: '#/components/schemas/ActQuantity'
-        produced: { $ref: '#/components/schemas/StageOutput' }
-        extent: { $ref: '#/components/schemas/Extent' }
-        total:
-          description: |
-            Carried ONLY by acts that can produce one without a second query.
-            Never by a composition. ABSENT — not null — when the act cannot.
-          type: integer
-          format: int64
-        terms_applied:
-          description: |
-            The value actually used for each term, which may not be the value you
-            asked for. Ask `limit: 500` against an act whose published ceiling is
-            50 and you get back `{"limit": 50}`.
-
-            There is no separate "you were clamped" flag, deliberately: ceilings
-            are published per act, so the applied value is the whole story.
-            Clamping to a ceiling nobody published would be the bug.
-
-            NOTE this only covers terms the act ADMITS. A term it does not admit
-            is refused outright — see `ActInvocation.terms`.
-          type: object
-          propertyNames: { $ref: '#/components/schemas/BoundTerm' }
-          additionalProperties: { type: integer, format: int64 }
-        narrowed_by:
-          type: array
-          items: { $ref: '#/components/schemas/NarrowedBy' }
-          default: []
-
-        # ── The two input numbers. Renamed from `bounds_*` because a pipeline is
-        #    not monotonically narrowing — a seed stage's input is not a bound.
-        #
-        #    `input_contributed` was the third and is REMOVED by ratification
-        #    ⟨6⟩/9d `[2026-08-09, Pete]`: redundant where filled (bound ⇒ equals
-        #    the produced count by construction — the same fact twice, free to
-        #    disagree, the argument that killed the `degraded` flag), null where
-        #    interesting (`follow-from`'s walk discards seed origin —
-        #    `SELECT node, MAX(score) FROM walk WHERE hop > 0 GROUP BY node` —
-        #    and the `bound` fallback reading would report 0 contributed on a
-        #    stage that just returned forty good neighbours: plausible, quiet,
-        #    and false). It returns, additively with its null-never-means-zero
-        #    semantics, when a walk carries its origin.
-        input_ids:
-          description: |
-            How many ids this stage was handed. Zero for a stage with no input.
-          type: integer
-          format: int64
-        input_unusable:
-          description: |
-            How many of them this stage could not use at all — invisible to you,
-            nonexistent, or malformed.
-
-            THOSE THREE ARE ONE NUMBER ON PURPOSE, and this is not negotiable.
-            Splitting them, or naming a field for the invisible case alone, turns
-            the trace into a single-probe existence oracle: pass one id, read the
-            counter, learn whether that id exists.
-          type: integer
-          format: int64
+      # -- rulings recorded on `properties`, whose SHAPE is now the generated one --
+      # Present iff `disposition` is `refused`: the reason and its
+      # standing-aware detail. `[ruled — 2026-08-10, Pete, ADJ-3]`
+      $ref: '../../openapi.json#/components/schemas/StageResult'
 
     StageOutput:
       description: |
@@ -1160,58 +916,44 @@ components:
     # `StageOutput` discriminator's design.
 
     ScoreKind:
-      description: |
-        Which quantity a hit's score is, named so that combining two of different
-        kinds reads as the category error it is.
-
-        The values are the DEPLOYED column names the serving functions emit — not
-        names invented here — so a caller who greps the SQL for one finds it, and
-        each equals the `orders_by.field` of the act that produced the row.
-
-        OPEN, like `ActName`: a new act brings a new quantity, and a closed
-        vocabulary would make adding one a breaking change for every client.
-        Openness costs nothing because the operation a client performs on this
-        value is EQUALITY — *are these two scores the same kind?* — never
-        exhaustive enumeration. Treat an unrecognized kind as "not comparable to
-        anything I know", never as an error.
-
-        THE RANGES DIFFER AND THESE NAMES DO NOT SAY SO. Read `orders_by.scale`
-        on the stage rather than assuming `[0,1]`, which is the live mistake in
-        this family: `vec_norm` rescales a cosine distance as `1 - d/2` into
-        `[0,1]`, `region_score` rescales the identical operator as `1 - d` and
-        spans `[-0.57, 1.05]`, and `graph_score` is unbounded.
-
-        `[corrected — 2026-08-10, audit P2/9e]` `region_score` was stated here
-        and in the registry as `[-0.6, 1.0]` over a two-term formula. The
-        deployed function has a THIRD term — `alpha*sal_norm + beta*query_cos +
-        kappa*prior` — so the true span exceeds 1.0. Wrong at both ends, and
-        wrong in the dangerous direction at the top: it promised a ceiling a
-        real score can pass, which is exactly what a client normalising against
-        a declared range would break on.
-
-        NOTE on `region_score` since the ⟨3⟩ redesign: it appears on RESOURCE
-        rows (survey's members), where it is the score of the region that
-        admitted the row into the funnel — a property of the ENCLOSURE, not of
-        the row's own content. `orders_by.means` on the stage says so; for
-        content relevance, pipe into `find-about-within`.
-      type: string
-      examples: [fts_norm, vec_norm, graph_score, region_score]
+      # Which quantity a hit's score is, named so that combining two of different
+      # kinds reads as the category error it is.
+      #
+      # The values are the DEPLOYED column names the serving functions emit — not
+      # names invented here — so a caller who greps the SQL for one finds it, and
+      # each equals the `orders_by.field` of the act that produced the row.
+      #
+      # OPEN, like `ActName`: a new act brings a new quantity, and a closed
+      # vocabulary would make adding one a breaking change for every client.
+      # Openness costs nothing because the operation a client performs on this
+      # value is EQUALITY — *are these two scores the same kind?* — never
+      # exhaustive enumeration. Treat an unrecognized kind as "not comparable to
+      # anything I know", never as an error.
+      #
+      # THE RANGES DIFFER AND THESE NAMES DO NOT SAY SO. Read `orders_by.scale`
+      # on the stage rather than assuming `[0,1]`, which is the live mistake in
+      # this family: `vec_norm` rescales a cosine distance as `1 - d/2` into
+      # `[0,1]`, `region_score` rescales the identical operator as `1 - d` and
+      # spans `[-0.57, 1.05]`, and `graph_score` is unbounded.
+      #
+      # `[corrected — 2026-08-10, audit P2/9e]` `region_score` was stated here
+      # and in the registry as `[-0.6, 1.0]` over a two-term formula. The
+      # deployed function has a THIRD term — `alpha*sal_norm + beta*query_cos +
+      # kappa*prior` — so the true span exceeds 1.0. Wrong at both ends, and
+      # wrong in the dangerous direction at the top: it promised a ceiling a
+      # real score can pass, which is exactly what a client normalising against
+      # a declared range would break on.
+      #
+      # NOTE on `region_score` since the ⟨3⟩ redesign: it appears on RESOURCE
+      # rows (survey's members), where it is the score of the region that
+      # admitted the row into the funnel — a property of the ENCLOSURE, not of
+      # the row's own content. `orders_by.means` on the stage says so; for
+      # content relevance, pipe into `find-about-within`.
+      $ref: '../../openapi.json#/components/schemas/ScoreKind'
 
     Scoring:
-      description: |
-        How one hit scored, and by what measure. The kind travels WITH the
-        number, which is what lets a row be understood on its own.
-      type: object
-      required: [score_kind, score]
-      properties:
-        score_kind: { $ref: '#/components/schemas/ScoreKind' }
-        score:
-          description: |
-            Read `orders_by.scale` on the stage for this quantity's RANGE. It is
-            not carried per row because it is a property of the act, identical
-            for every row of a stage.
-          type: number
-          format: float
+      # How one hit scored, and by what measure. The kind travels WITH the
+      # number, which is what lets a row be understood on its own.
       # `located_at` is deliberately NOT here. A match location is a property of
       # the matched RESOURCE, not of how a row scored — and half the acts can
       # never fill one. An always-null field says "no match location" where the
@@ -1219,14 +961,14 @@ components:
       # denied the old `FtsHit` one. It lives on `ResourceHit`. (This schema was
       # also shared with the retired `RegionHit`, which sharpened the same
       # argument; the placement stands without it.)
-    ResourceHit:
-      description: |
-        One resource that matched, however it matched.
+      $ref: '../../openapi.json#/components/schemas/Scoring'
 
-        `ResourceView` is the same projection `list`/`show`/`create`/`update`/
-        `annotate` and both search arms answer in — six near-identical
-        projections collapsed into one. A hit adds scoring and nothing else.
-      type: object
+    ResourceHit:
+      # One resource that matched, however it matched.
+      #
+      # `ResourceView` is the same projection `list`/`show`/`create`/`update`/
+      # `annotate` and both search arms answer in — six near-identical
+      # projections collapsed into one. A hit adds scoring and nothing else.
       # `located_at` is REQUIRED and NULLABLE, which is the whole point of the
       # ⟨4⟩/8e ruling: the key is always present and its null is the declaration
       # that no act can fill it yet. An OMITTED key would be indistinguishable
@@ -1235,67 +977,34 @@ components:
       # and left the key optional, so every response containing any hit violated
       # the published schema, on 100% of rows, while the prose below and the
       # worked example both said `null`.
-      required: [resource, scoring, located_at]
-      properties:
-        resource: { $ref: '../../openapi.json#/components/schemas/ResourceView' }
-        scoring: { $ref: '#/components/schemas/Scoring' }
-        located_at:
-          description: |
-            WHERE in the resource the match was — the closest chunk's block.
 
-            Only the wide arm CAN fill this, and today NO act declares it:
-            `[ratified — 2026-08-09, Pete, ⟨4⟩/8e]` `MatchLocation` is
-            UNDECLARED until the wide fragments carry the winning chunk's
-            identity out — they currently compute which chunk was closest and
-            discard it collapsing to a per-resource score, and recovering it is
-            an argmin beside an aggregate that already runs. A declaration
-            describes the DEPLOYED system, so it returns (additively) with the
-            argmin, not ahead of it. Until then every `located_at` is null and
-            the null unambiguously means "not declared".
-
-            The asymmetry is structural, not lazy: `find-exact` cannot — its
-            index is one tsvector per RESOURCE, built by concatenating every
-            chunk into a single blob, so the block boundary is gone before the
-            query is asked. `follow-from` has no match position (nodes reached
-            by walking), and `survey`'s members are admitted by their region,
-            not matched at a position.
-          type: [object, "null"]
-          required: [block_id]
-          properties:
-            block_id:
-              description: The `kb_content_blocks` row the closest chunk belongs to.
-              type: string
-              format: uuid
-            header_path:
-              description: The heading trail to that chunk, when it has one.
-              type: [string, "null"]
-            snippet:
-              description: |
-                The chunk's own text, or the part of it that matched.
-
-                A snippet for the EXACT arm is DECLINED, not deferred:
-                `[ratified — 2026-08-09, Pete, 8d]` it would take a per-row
-                re-fetch of prose the query never touched (`ts_headline` over
-                text the index-only path deliberately avoids), and hits
-                legitimately differ in shape by how they were found. Additive to
-                revisit if the cost is ever measured and found cheap.
-              type: [string, "null"]
-
+      # -- rulings recorded on `properties`, whose SHAPE is now the generated one --
+      # Only the wide arm CAN fill this, and today NO act declares it:
+      # `[ratified — 2026-08-09, Pete, ⟨4⟩/8e]` `MatchLocation` is
+      # UNDECLARED until the wide fragments carry the winning chunk's
+      # identity out — they currently compute which chunk was closest and
+      # discard it collapsing to a per-resource score, and recovering it is
+      # an argmin beside an aggregate that already runs. A declaration
+      # describes the DEPLOYED system, so it returns (additively) with the
+      # argmin, not ahead of it. Until then every `located_at` is null and
+      # the null unambiguously means "not declared".
+      #
+      # A snippet for the EXACT arm is DECLINED, not deferred:
+      # `[ratified — 2026-08-09, Pete, 8d]` it would take a per-row
+      # re-fetch of prose the query never touched (`ts_headline` over
+      # text the index-only path deliberately avoids), and hits
+      # legitimately differ in shape by how they were found. Additive to
+      # revisit if the cost is ever measured and found cheap.
 
     # (`RegionHit` retired with `RegionsOutput` — see the block above.)
+      $ref: '../../openapi.json#/components/schemas/ResourceHit'
 
     CompositionTrace:
       # TRANSCRIBED from trace.rs:76-79, EXCEPT the stage key — see `StageTrace`.
       # `meta_detail` was required here (the request echo) — removed with the
       # field, ADJ-4 `[2026-08-10, Pete]`. The echo was the worse half: it made
       # the trace appear to confirm a budget that nothing applied.
-      type: object
-      required: [stages]
-      properties:
-        stages:
-          description: Ordered topologically. Every stage, never truncated.
-          type: array
-          items: { $ref: '#/components/schemas/StageTrace' }
+      $ref: '../../openapi.json#/components/schemas/CompositionTrace'
 
     StageTrace:
       # STAGE IDENTITY: this AMENDs the merged types. `[decided — 2026-08-08]`
@@ -1380,120 +1089,66 @@ components:
       # TRANSCRIBED from trace.rs:17-33, RENAMED from `BoundsSource` — it reports
       # where an input came from, which is direction-neutral, and the surrounding
       # fields no longer say "bounds".
-      description: |
-        Where this stage's input set came from: an earlier stage, or you.
-      oneOf:
-        - type: object
-          required: [source, stage]
-          properties:
-            source: { type: string, enum: [upstream] }
-            stage:
-              description: The earlier stage whose output this one was given.
-              $ref: '#/components/schemas/StageName'   # AMENDED — was an ordinal
-        - type: object
-          required: [source]
-          properties:
-            source:
-              description: |
-                `caller` — you supplied the ids directly.
-
-                `expression` is reserved and never emitted. There is no
-                expression language, so nothing can produce it. It stays in the
-                enum only because removing a value from a closed enum makes
-                adding it back a breaking change; do not write a client branch
-                for it.
-              type: string
-              enum: [expression, caller]
-      discriminator:
-        propertyName: source
+      # Where this stage's input set came from: an earlier stage, or you.
+      $ref: '../../openapi.json#/components/schemas/InputSource'
 
     NarrowedBy:
       # TRANSCRIBED from envelope.rs:55-64.
-      description: |
-        One filter this stage applied, echoed back — e.g.
-        `{"key": "doc_type", "value": "session"}`.
-      type: object
-      required: [key, value]
-      properties:
-        key: { type: string }
-        value: { type: string }
-        # `[corrected — 2026-08-10, audit P2]` These were spelled `[integer,
-        # "null"]`; the code OMITS the key. Both mean "not counted", but they
-        # are different bytes, and a client written from the old spelling does
-        # `admitted === null` (never true), or worse `admitted ?? 0`, which
-        # renders the very zero the rule below forbids.
-        #
-        # The apparent inconsistency with `located_at` — which IS present and
-        # explicitly null — is SETTLED and principled. See "ABSENT VERSUS NULL"
-        # in the header.
-        admitted:
-          description: |
-            How many rows this filter let through, when the act happened to
-            compute it anyway. ABSENT means not counted, never zero — counting
-            on demand would cost a second query.
-          type: integer
-          format: int64
-        excluded:
-          description: How many it removed. Absent means not counted, never zero.
-          type: integer
-          format: int64
+      # One filter this stage applied, echoed back — e.g.
+      # `{"key": "doc_type", "value": "session"}`.
+
+      # -- rulings recorded on `properties`, whose SHAPE is now the generated one --
+      # `[corrected — 2026-08-10, audit P2]` These were spelled `[integer,
+      # "null"]`; the code OMITS the key. Both mean "not counted", but they
+      # are different bytes, and a client written from the old spelling does
+      # `admitted === null` (never true), or worse `admitted ?? 0`, which
+      # renders the very zero the rule below forbids.
+      # The apparent inconsistency with `located_at` — which IS present and
+      # explicitly null — is SETTLED and principled. See "ABSENT VERSUS NULL"
+      # in the header.
 
     # =========================================================================
     # SHARED SCALARS — all TRANSCRIBED
     # =========================================================================
+      $ref: '../../openapi.json#/components/schemas/NarrowedBy'
 
     StageName:
-      description: |
-        `[a-z][a-z0-9_]{0,62}`. The only constructor validates, so a StageName is
-        evidence of validity — the compiler relies on that for SQL identifier
-        safety, and the required lowercase first character is what makes it
-        impossible for a caller-chosen stage to shadow a compiler-internal
-        relation.
-      type: string
-      pattern: '^[a-z][a-z0-9_]{0,62}$'
+      # `[a-z][a-z0-9_]{0,62}`. The only constructor validates, so a StageName is
+      # evidence of validity — the compiler relies on that for SQL identifier
+      # safety, and the required lowercase first character is what makes it
+      # impossible for a caller-chosen stage to shadow a compiler-internal
+      # relation.
+      $ref: '../../openapi.json#/components/schemas/StageName'
 
     ActName:
-      description: |
-        Asker-shaped, not mechanism-shaped: an act names what the asker holds,
-        and the mechanic currently serving it is evidence rather than identity.
-        OPEN discriminator — adding an act is additive.
-
-        `substantiate` and `admit` are declared members of the vocabulary and are
-        NOT composable — see the header.
-
-        SPELLED AS `examples`, NOT `enum` `[corrected — 2026-08-10, audit F9]`:
-        the Rust side is open (`Other(String)` degrades gracefully), and a
-        closed schema enum makes an unknown act a DESERIALIZER rejection at any
-        conformance-checking client — the same short-circuit the
-        `ReturnSpec.with` argument exists to avoid. Unknown values are refused
-        at validation, in contract vocabulary. `ScoreKind` was already spelled
-        this way; `IdKind` and `RefusalReason` are corrected with this one.
-      type: string
-      examples:
-        - find-exact             # I can quote the exact words.
-        - find-about-anywhere    # A concept, no exact words; search everything I can see.
-        - find-about-within      # A concept, plus a set to search inside.
-        - follow-from            # A found thing; I want its neighbours.
-        - survey                 # A question about what a scope knows. Answers in the
-                                 # scope's member RESOURCES; the region funnel that
-                                 # admitted them is trace disclosure (⟨3⟩, ratified).
-        - substantiate           # A claim; I want its defensibility. NOT COMPOSABLE.
-        - admit                  # The anti-act. NOT COMPOSABLE.
+      # Asker-shaped, not mechanism-shaped: an act names what the asker holds,
+      # and the mechanic currently serving it is evidence rather than identity.
+      # OPEN discriminator — adding an act is additive.
+      #
+      # `substantiate` and `admit` are declared members of the vocabulary and are
+      # NOT composable — see the header.
+      #
+      # SPELLED AS `examples`, NOT `enum` `[corrected — 2026-08-10, audit F9]`:
+      # the Rust side is open (`Other(String)` degrades gracefully), and a
+      # closed schema enum makes an unknown act a DESERIALIZER rejection at any
+      # conformance-checking client — the same short-circuit the
+      # `ReturnSpec.with` argument exists to avoid. Unknown values are refused
+      # at validation, in contract vocabulary. `ScoreKind` was already spelled
+      # this way; `IdKind` and `RefusalReason` are corrected with this one.
+      $ref: '../../openapi.json#/components/schemas/ActName'
 
     IdKind:
-      description: |
-        `region` REMAINS ON THE WIRE AND IS REFUSED AT VALIDATION — the same
-        wide-enum pattern as `ReturnSpec.with`: since the ⟨3⟩ redesign nothing
-        produces or accepts a region set (survey produces resources; its
-        matched regions are trace disclosure), but removing the word would turn
-        a caller's region set into a serde failure that short-circuits the
-        all-refusals-at-once promise. Kept deserializable, refused in contract
-        vocabulary alongside everything else. `[ratified — 2026-08-09, Pete]`
-
-        Spelled as `examples` per audit F9 — the Rust side is open; see
-        `ActName`.
-      type: string
-      examples: [resource, region, cogmap, context]
+      # `region` REMAINS ON THE WIRE AND IS REFUSED AT VALIDATION — the same
+      # wide-enum pattern as `ReturnSpec.with`: since the ⟨3⟩ redesign nothing
+      # produces or accepts a region set (survey produces resources; its
+      # matched regions are trace disclosure), but removing the word would turn
+      # a caller's region set into a serde failure that short-circuits the
+      # all-refusals-at-once promise. Kept deserializable, refused in contract
+      # vocabulary alongside everything else. `[ratified — 2026-08-09, Pete]`
+      #
+      # Spelled as `examples` per audit F9 — the Rust side is open; see
+      # `ActName`.
+      $ref: '../../openapi.json#/components/schemas/IdKind'
 
     IdSet:
       description: The one value that crosses a stage boundary. Membership, never rank.
@@ -1526,84 +1181,77 @@ components:
     # its field, ADJ-4 `[2026-08-10, Pete]`.
 
     Extent:
-      description: |
-        Is there more than you got back?
-
-          complete       No. Everything that matched is here.
-          partial        Yes. Ask for the next page.
-          indeterminate  Unanswerable, with a reason.
-
-        `survey` WAS the indeterminate case — its funnel produced a set rather
-        than selecting from one. The ratification redesign (⟨3⟩) retires that
-        example: survey's output is now the member resources of its matched
-        regions, so "is there more?" is answerable by counting members, and
-        survey answers `complete`/`partial` like everything else. The
-        `indeterminate` variant stays in the vocabulary (it is transcribed,
-        pre-contract), and it has one DOCUMENTED emitter today:
-        `[ruled — 2026-08-10, Pete, ADJ-5]` a REFUSED stage's extent is
-        `indeterminate` — nothing was asked of the corpus, so "is there more?"
-        has no answer; `complete` would read as an honest zero, which is the
-        empty/refused conflation ⟨2⟩ exists to prevent. The refusal's REASON
-        travels in the typed `refusal` field (ADJ-3), so the extent reason here
-        stays generic. (An earlier revision of this block said no act was known
-        to emit `indeterminate` — wrong about the refused arm, caught in audit.)
-
-        ── THE ENCODING: INTERNALLY TAGGED, LIKE EVERY OTHER UNION HERE ─────────
-
-        `[ruled — 2026-08-10, Pete, ADJ-8]` This block previously declared a
-        bare string OR an externally-tagged `{indeterminate: {reason}}`, and the
-        worked example printed the bare string — THREE spellings for one type,
-        none matching the code, which is and was internally tagged.
-
-        The contract moved, not the code, and provenance is why: `Extent` is
-        marked TRANSCRIBED — copied from merged Rust, never designed — so a
-        transcription that disagrees with its source is a mis-copy, not a
-        choice. Nobody ever ruled for the mixed form. And the convention is 5
-        of 5: `StageOutput`, `StageInput`, `InputSource`, `QuantityScale` and
-        `PropertyOp` are all internally tagged with an explicit discriminator,
-        and external tagging appears nowhere in this surface. The `extent.extent`
-        stutter is the cost, and it is already precedent — the worked example
-        below prints `"produced": {"produced": "resources"}`.
-      oneOf:
-        - type: object
-          required: [extent]
-          properties:
-            extent: { type: string, enum: [complete] }
-        - type: object
-          required: [extent]
-          properties:
-            extent: { type: string, enum: [partial] }
-        - type: object
-          required: [extent, reason]
-          properties:
-            extent: { type: string, enum: [indeterminate] }
-            reason:
-              description: Why the question has no answer for this stage.
-              type: string
-      discriminator:
-        propertyName: extent
+      # Is there more than you got back?
+      #
+      #   complete       No. Everything that matched is here.
+      #   partial        Yes. Ask for the next page.
+      #   indeterminate  Unanswerable, with a reason.
+      #
+      # `survey` WAS the indeterminate case — its funnel produced a set rather
+      # than selecting from one. The ratification redesign (⟨3⟩) retires that
+      # example: survey's output is now the member resources of its matched
+      # regions, so "is there more?" is answerable by counting members, and
+      # survey answers `complete`/`partial` like everything else. The
+      # `indeterminate` variant stays in the vocabulary (it is transcribed,
+      # pre-contract), and it has one DOCUMENTED emitter today:
+      # `[ruled — 2026-08-10, Pete, ADJ-5]` a REFUSED stage's extent is
+      # `indeterminate` — nothing was asked of the corpus, so "is there more?"
+      # has no answer; `complete` would read as an honest zero, which is the
+      # empty/refused conflation ⟨2⟩ exists to prevent. The refusal's REASON
+      # travels in the typed `refusal` field (ADJ-3), so the extent reason here
+      # stays generic. (An earlier revision of this block said no act was known
+      # to emit `indeterminate` — wrong about the refused arm, caught in audit.)
+      #
+      # ── THE ENCODING: INTERNALLY TAGGED, LIKE EVERY OTHER UNION HERE ─────────
+      #
+      # `[ruled — 2026-08-10, Pete, ADJ-8]` This block previously declared a
+      # bare string OR an externally-tagged `{indeterminate: {reason}}`, and the
+      # worked example printed the bare string — THREE spellings for one type,
+      # none matching the code, which is and was internally tagged.
+      #
+      # The contract moved, not the code, and provenance is why: `Extent` is
+      # marked TRANSCRIBED — copied from merged Rust, never designed — so a
+      # transcription that disagrees with its source is a mis-copy, not a
+      # choice. Nobody ever ruled for the mixed form. And the convention is 5
+      # of 5: `StageOutput`, `StageInput`, `InputSource`, `QuantityScale` and
+      # `PropertyOp` are all internally tagged, and external tagging appears
+      # nowhere in this surface. The `extent.extent` stutter is the cost, and it
+      # is already precedent — the worked example below prints
+      # `"produced": {"produced": "resources"}`.
+      #
+      # `[corrected — 2026-08-13, PR D]` This said "internally tagged with an
+      # EXPLICIT DISCRIMINATOR", and the `discriminator:` keys it described are
+      # gone from every block but `StageOutput`'s. They were not dropped for
+      # tidiness — five of the six were INVALID. A `discriminator` with no
+      # `mapping` requires the tag VALUE to name a schema, and these unions'
+      # arms are inline and unnamed, so `complete` resolved to nothing. It cost
+      # nothing while no generator ever read this file; D tried to publish them
+      # into `openapi.json` and the Ruby gem went from try-each-arm, which
+      # works, to `const_get("complete")`, which raises. Only `StageOutput`'s is
+      # well-formed, because its one arm is a `$ref` and it carries a `mapping`.
+      # Internal TAGGING is still the convention and is unaffected: the `oneOf`
+      # each arm pins with `required: [tag]` is already determinative.
+      $ref: '../../openapi.json#/components/schemas/Extent'
 
     StageDisposition:
-      description: |
-        How a stage ended.
-
-          answered  Rows came back.
-          empty     The question was asked and nothing matched. An honest zero.
-          withheld  Something is there and you are not being shown it.
-          refused   The act declined a well-formed question it cannot answer.
-
-        `empty` and `refused` are the pair to get right: `empty` means "asked, no
-        match", `refused` means "not asked, because this act cannot answer that".
-        Rephrasing helps the first and never the second.
-
-        `withheld` is rarer than it looks and is deliberately not used for the
-        obvious case. It says material exists, so it discloses existence — which
-        is only safe where you could already tell (a region you can read holding
-        a node you cannot). An id YOU supplied that you cannot see comes back as
-        `empty`, never `withheld`: otherwise you could pass one id, read the
-        disposition, and learn whether that id exists.
-      type: string
-      enum: [answered, empty, withheld, refused]
+      # How a stage ended.
+      #
+      #   answered  Rows came back.
+      #   empty     The question was asked and nothing matched. An honest zero.
+      #   withheld  Something is there and you are not being shown it.
+      #   refused   The act declined a well-formed question it cannot answer.
+      #
+      # `empty` and `refused` are the pair to get right: `empty` means "asked, no
+      # match", `refused` means "not asked, because this act cannot answer that".
+      # Rephrasing helps the first and never the second.
+      #
+      # `withheld` is rarer than it looks and is deliberately not used for the
+      # obvious case. It says material exists, so it discloses existence — which
+      # is only safe where you could already tell (a region you can read holding
+      # a node you cannot). An id YOU supplied that you cannot see comes back as
+      # `empty`, never `withheld`: otherwise you could pass one id, read the
+      # disposition, and learn whether that id exists.
+      $ref: '../../openapi.json#/components/schemas/StageDisposition'
 
     ActRefusal:
       # TRANSCRIBED from disposition.rs's `ActRefusal`.
@@ -1614,81 +1262,37 @@ components:
       # ADMIN_EVENT_TYPES failure — a second copy that drifts from the first."*
       # Two hand-maintained copies of a shape whose SAMENESS is a stated
       # invariant is that hazard exactly. One definition, two `$ref`s.
-      description: |
-        Why a stage refused, carried on the stage that refused. Distinct from
-        `PlanRefusal`: this one needs no `stage` field — you are already on it —
-        and it rides a 200, because the composition ran and one stage could not
-        answer. Today `embedding_unavailable` is the only reason that reaches
-        it; `RefusalReason` is open, and the ⟨2⟩ argument for one behaviour
-        rests on this field existing, so a second runtime reason costs no
-        client change.
-      type: object
-      required: [reason, detail]
-      properties:
-        reason: { $ref: '#/components/schemas/RefusalReason' }
-        detail:
-          description: Human-readable, at the depth your standing allows.
-          type: string
+      # Why a stage refused, carried on the stage that refused. Distinct from
+      # `PlanRefusal`: this one needs no `stage` field — you are already on it —
+      # and it rides a 200, because the composition ran and one stage could not
+      # answer. Today `embedding_unavailable` is the only reason that reaches
+      # it; `RefusalReason` is open, and the ⟨2⟩ argument for one behaviour
+      # rests on this field existing, so a second runtime reason costs no
+      # client change.
+      $ref: '../../openapi.json#/components/schemas/ActRefusal'
 
     PlanRefusal:
       # TRANSCRIBED from validate.rs:76-81.
-      description: |
-        One reason a composition was rejected before running. A 400 carries all of
-        them at once.
-      type: object
-      required: [reason, detail]
-      properties:
-        stage:
-          description: |
-            Which stage it attaches to. Absent for a refusal about the composition
-            as a whole — a cycle, a dangling stage reference, a duplicate name.
-          $ref: '#/components/schemas/StageName'
-        reason: { $ref: '#/components/schemas/RefusalReason' }
-        detail:
-          description: Human-readable, at the depth your standing allows.
-          type: string
+      # One reason a composition was rejected before running. A 400 carries all of
+      # them at once.
+      $ref: '../../openapi.json#/components/schemas/PlanRefusal'
 
     RefusalReason:
       # TRANSCRIBED from disposition.rs:57-95, plus one new variant — see below.
-      description: |
-        Why an act declined. OPEN — a new reason is additive, so match on the ones
-        you handle and treat anything else as an unrecognized refusal rather than
-        an error in your client.
-
-        ALL BUT ONE ARE STATIC. They are properties of the composition, decidable
-        before anything runs, which is why they arrive as a 400 and not as a
-        stage disposition.
-
-        The exception is `embedding_unavailable`, and it is the ONLY refusal that
-        can happen mid-run, and it is not a disposition anyone declares — see the
-        block below.
-
-        Spelled as `examples` per audit F9 — the description already said OPEN;
-        the closed `enum` spelling contradicted it. See `ActName`.
-      type: string
-      examples:
-        - unsupported_bound_kind     # this act does not narrow on that kind of id
-        - anchor_takes_one_id        # see below — a cogmap/context bound carrying anything but one
-        - unsupported_seed_kind      # this act does not grow from that kind of id
-        - missing_provenance         # RETIRED by ⟨3⟩: region sets now refuse as
-                                     # unsupported kinds and provenance is gone from
-                                     # the wire, so nothing can arrive without it.
-                                     # Emitted by code until the amendment lands
-                                     # there; the OPEN enum makes retiring additive.
-        - not_implemented            # the act is declared but has no mechanic
-        - missing_intention          # a find stage with no QUESTION threaded to it. Not about the
-                                     # vector — the server embeds. See `Composition.intention`.
-        - section_not_available      # `with` named a hydration section this door does not offer
-        - unknown_filter_value       # a typo must never come back as an honest empty
-        - filter_not_applicable      # a filter slot this act does not admit
-        - bound_term_not_applicable  # e.g. `regions` to `find-exact`, an act with no funnel.
-                                     # (This example was `limit` to `survey` — retracted by the
-                                     # ⟨3⟩ redesign, which admits limit/offset on survey. Also
-                                     # raised for an admitted term whose VALUE is out of range —
-                                     # negative, or beyond the 32-bit slot; see
-                                     # `ActInvocation.terms`.)
-        - not_separably_reachable    # the act exists; this surface cannot call its mechanic yet
-        - embedding_unavailable      # RUNTIME. see below.
+      # Why an act declined. OPEN — a new reason is additive, so match on the ones
+      # you handle and treat anything else as an unrecognized refusal rather than
+      # an error in your client.
+      #
+      # ALL BUT ONE ARE STATIC. They are properties of the composition, decidable
+      # before anything runs, which is why they arrive as a 400 and not as a
+      # stage disposition.
+      #
+      # The exception is `embedding_unavailable`, and it is the ONLY refusal that
+      # can happen mid-run, and it is not a disposition anyone declares — see the
+      # block below.
+      #
+      # Spelled as `examples` per audit F9 — the description already said OPEN;
+      # the closed `enum` spelling contradicted it. See `ActName`.
 
     # ── `anchor_takes_one_id` IS NOT `unsupported_bound_kind`, AND THAT IS THE POINT ──
     #
@@ -1765,127 +1369,36 @@ components:
     # IF A LATER RUNTIME REFUSAL GENUINELY WANTS A CHOICE, the field comes back as
     # an OPTIONAL addition, which is additive rather than breaking. Shipping it now
     # against one case whose two settings are indistinguishable is not.
+      $ref: '../../openapi.json#/components/schemas/RefusalReason'
 
     ActQuantity:
-      description: |
-        The quantity an act orders by, named so that summing it with another
-        act's reads as the category error it is.
-      type: object
-      required: [field, means, scale]
-      properties:
-        field:
-          description: |
-            The DEPLOYED column name the serving function emits. Not a name
-            invented here — a declaration is a description, so a caller who greps
-            the SQL for this string finds it.
-          type: string
-        means:
-          description: What the number measures, in this act's own terms.
-          type: string
-        scale: { $ref: '#/components/schemas/QuantityScale' }
+      # The quantity an act orders by, named so that summing it with another
+      # act's reads as the category error it is.
+      $ref: '../../openapi.json#/components/schemas/ActQuantity'
 
     QuantityScale:
-      oneOf:
-        - type: object
-          required: [scale]
-          properties:
-            scale: { type: string, enum: [unit_interval, unbounded] }
-        - type: object
-          required: [scale, bounds]
-          properties:
-            scale: { type: string, enum: [other_range] }
-            bounds: { type: string }
-      discriminator:
-        propertyName: scale
+      $ref: '../../openapi.json#/components/schemas/QuantityScale'
 
     ResourceFilter:
       # TRANSCRIBED from filter.rs:54-72. NOTE: this struct is a known stopgap —
       # a caller can address `doc_type` through the open property predicate AND
       # through this typed slot, and the overlap is a hole by decision. Closing it
       # belongs to the `temper resource list --properties` convergence.
-      type: object
-      properties:
-        doc_type: { type: array, items: { type: string }, default: [] }
-        tags:
-          description: AND-containment.
-          type: array
-          items: { type: string }
-          default: []
-        facets:
-          type: array
-          items:
-            type: object
-            required: [key, value]
-            properties:
-              key: { type: string }
-              value: { type: string }
-          default: []
-        stage: { type: [string, "null"] }
-        status: { type: [string, "null"] }
-        owner: { type: [string, "null"] }
-        title_contains: { type: [string, "null"] }
+      $ref: '../../openapi.json#/components/schemas/ResourceFilter'
 
     EdgeFilter:
       # TRANSCRIBED from filter.rs:26-31. `edge_kinds` is CLOSED because it
       # mirrors a DDL enum: CREATE TYPE edge_kind AS ENUM (...).
-      type: object
-      properties:
-        edge_kinds:
-          type: array
-          items: { type: string, enum: [express, contains, leads_to, near] }
-          default: []
-        labels:
-          type: array
-          items: { type: string }
-          default: []
+      $ref: '../../openapi.json#/components/schemas/EdgeFilter'
 
     PropertyPredicate:
       # TRANSCRIBED from filter.rs:140-144.
-      type: object
-      required: [subject, key, op]
-      properties:
-        subject:
-          description: |
-            What the property is attached to — `resource` or `edge` today.
-
-            Open rather than a fixed enum, unlike `edge_kinds`: the underlying
-            column is free text with no database-level enum behind it, so
-            declaring a closed set here would claim something the schema does not
-            enforce. An unrecognized subject is refused at validation.
-          type: string
-          examples: [resource, edge]
-        key: { type: string }
-        op: { $ref: '#/components/schemas/PropertyOp' }
+      $ref: '../../openapi.json#/components/schemas/PropertyPredicate'
 
     PropertyOp:
-      description: |
-        Two operators, and only two. Any key you like, but nothing beyond
-        "is it there" and "does it contain this" — there is no expression
-        language, by design.
-      oneOf:
-        - type: object
-          required: [op]
-          properties:
-            op:
-              description: Match anything that has this key at all, whatever its value.
-              type: string
-              enum: [has_key]
-        - type: object
-          required: [op, values]
-          properties:
-            op: { type: string, enum: [contains] }
-            values:
-              description: |
-                Match if the value contains ANY of these (OR within one
-                predicate).
-
-                Containment is exact about JSON shape and does not coerce: a
-                stored `["x"]` is NOT matched by `"x"`. If a key sometimes holds
-                a bare string and sometimes an array, list both forms.
-              type: array
-              items: {}
-      discriminator:
-        propertyName: op
+      # Two operators, and only two. Any key you like, but nothing beyond
+      # "is it there" and "does it contain this" — there is no expression
+      # language, by design.
 
 # =============================================================================
 # WORKED EXAMPLE — the canonical pipe
@@ -1898,12 +1411,43 @@ components:
 # and validate.rs refuses every `edge_filter` unconditionally — CORRECTLY,
 # because `follow-from` compiles to a deliberately-nonexistent placeholder, so
 # admitting the filter would mean accepting a narrowing and silently dropping
-# it. (Even without the filter, the stage would fail loudly at Postgres — the
-# placeholder is designed to.) The example stays as written because it is the
-# best demonstration of the seed relation, per-kind scoring, and the trace;
-# what it demonstrates becomes runnable when the follow-from mechanic lands —
-# see IMPLEMENTATION PENDING in the header. A client copying it today should
-# expect `filter_not_applicable` on `neighbours`, all refusals at once.
+# it. The example stays as written because it is the best demonstration of the
+# seed relation, per-kind scoring, and the trace; what it demonstrates becomes
+# runnable when the follow-from mechanic lands — see IMPLEMENTATION PENDING in
+# the header.
+#
+# `[corrected — 2026-08-13, PR D]` TWO REPAIRS, both measured rather than
+# reasoned — the request below was RUN through `temper query --check`.
+#
+#   1. The request carried an envelope-level `"intention"`. ⟨7⟩ moved it onto
+#      each `ActInvocation`, so as written every find stage came back
+#      `missing_intention` and the example could not succeed at all — a
+#      different and much duller failure than the one it exists to teach. It
+#      now carries a per-stage intention, and `Intention.embedded` is gone
+#      (`embedding` replaced it, deleted rather than relocated).
+#
+#   2. This said "even without the filter, the stage would fail loudly at
+#      Postgres — the placeholder is designed to." **It does not reach
+#      Postgres.** ⟨5⟩ took `follow-from` and `survey` out of
+#      `CALLABLE_FRAGMENTS`, so the stage is refused STATICALLY, and the
+#      expected refusals on `neighbours` are BOTH of these, at once:
+#
+#        not_separably_reachable  act mechanic … is not reachable from this
+#                                 surface yet          (capability.rs:162)
+#        filter_not_applicable    this door does not yet apply edge filters
+#                                                      (capability.rs:301)
+#
+# ── AND IT IS THE STANDING DEMONSTRATION OF EXPRESSIBLE ≠ RUNNABLE ───────────
+#
+# Once repair 1 is applied, `temper query --check` answers **`expressible:
+# true`, zero refusals** — while the server refuses it twice. That is not a bug
+# in `--check`: both refusals above are CAPABILITY refusals, and a local shape
+# pass structurally cannot see what the server has built. It is why `--check`
+# ships a disclosure on clean results and not only on failures — `expressible:
+# true` is precisely the answer an agent would otherwise read as "this will
+# run". This example is the sharpest case of that gap in the document, which is
+# a second reason to leave it in place rather than repair it into something
+# that runs.
 #
 # "Find the sessions about composable search fragments, then find what they lead
 #  to, and give me both."
@@ -1917,10 +1461,10 @@ components:
 #       { "stage": "neighbours" }
 #     ]
 #   },
-#   "intention": { "query": "composable search fragments", "embedded": true },
 #   "stages": [
 #     { "name": "seeds",
 #       "act": "find-about-anywhere",
+#       "intention": { "query": "composable search fragments" },
 #       "terms": { "limit": 10 },
 #       "resource_filter": { "doc_type": ["session"] } },
 #     { "name": "neighbours",
@@ -2027,3 +1571,4 @@ components:
 # found 2 unusable, and decide whether stage 2 was worth having.
 #
 # =============================================================================
+      $ref: '../../openapi.json#/components/schemas/PropertyOp'
