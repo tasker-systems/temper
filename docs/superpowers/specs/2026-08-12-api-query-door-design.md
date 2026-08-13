@@ -17,7 +17,8 @@ case by case. Nothing here re-opens its RATIFICATION block or the ADJ rulings.
 
 ## What was decided, and what it cost to decide
 
-Five rulings, in the order they were taken. Each names the argument that decided it, because the
+Seven rulings, in the order they were taken. `[was "Five" — ⟨6⟩ and ⟨7⟩ were both taken later, while
+planning the PR each of them displaces.]` Each names the argument that decided it, because the
 argument is the part that has to survive into implementation.
 
 ### ⟨1⟩ The CLI is a transport, not a composer
@@ -86,8 +87,16 @@ query::validate::capability   fn validate_stages(&Composition,
 query::validate               fn validate(&Composition)
                                   -> Result<ValidatedComposition, Vec<PlanRefusal>>
 query::validate               fn validate_shape(&Composition) -> Vec<PlanRefusal>
-                                  the public expressibility-only entry point; PR C's first caller
+                                  the public expressibility-only entry point
 ```
+
+**`validate_shape` is NOT reserved for PR C, and the line that said so was never a ruling.**
+`[corrected — 2026-08-13]` This block read *"PR C's first caller"*, and that phrase then travelled
+into a session hand-off as the constraint *"B must not consume it"* — an unsigned line in a code
+block hardening into a rule, which is precisely the class ⟨7⟩'s provenance finding names. **A2 calls
+it server-side** as the cheap structural gate ahead of embedding (⟨7⟩), and that makes C stronger
+rather than weaker: C ships a CLI flag over a function already exercised in production instead of
+one nothing has run.
 
 **Capability's two halves are gated differently, and that was a ruling rather than an
 implementation detail.** `[decided — 2026-08-12, Pete]` `validate_stages` reads the stage graph, so
@@ -339,14 +348,97 @@ muddier one.
 **It lands as its own PR before B**, mirroring A0: independent of the door, closing a declared
 shortfall, and leaving B's `door_coverage` untouched.
 
-## The cut: six PRs, each with one story
+---
+
+### ⟨7⟩ The intention moves onto the stage — and it was never ruled onto the envelope
+
+`[decided — 2026-08-12, Pete]` A find act's question — its text, and now its vector — is a
+**parameter of that act**, carried on `ActInvocation` beside `terms`, `resource_filter` and
+`properties`. `Composition.intention` goes away.
+
+**The argument is the DAG's own shape.** `ActInvocation` carries no text (`envelope.rs:21-50`), and
+the compiler states the consequence outright: *"find-exact needs the intention's query text — it
+becomes `p_query`, and there is nowhere else to source it"* (`query_plan.rs:322-326`). So a
+composition can ask exactly **one** question. Every find stage in a DAG interrogates the same
+string, and *"find A, find B, intersect them"* — two questions, one composition — is inexpressible.
+That is a composition, and a composition is what this door exists to serve.
+
+**The timing is forced, by ⟨4⟩'s argument exactly.** Nothing consumes this contract yet. Moving
+`query` from the envelope onto the stage is free now and a breaking change to every stored plan the
+moment `/api/query` publishes.
+
+**The vector rides with the text it embeds.** `Intention` gains `embedding: Option<Vec<f32>>`,
+mirroring `SearchParams.embedding`: the CLI precomputes (it links `temper-ingest`, and
+`actions/search.rs:11-20` is the incumbent path), and the server embeds when none arrives — which is
+`Intention`'s own standing ruling, *"The CLI can embed; the ruby gem, the TypeScript package and MCP
+structurally cannot"* `[decided — 2026-08-08, Pete]`. The reason a vector was kept off the wire —
+*"putting it in the envelope would be a wire contract nobody asked for"* — was about **response**
+bloat and does not apply: `CompositionTrace` is `{ stages }` (`trace.rs:93-98`) and never echoes an
+intention, so `Intention` is request-only. Pairing the two is what stops a vector and the text it was
+computed from drifting apart, which envelope-level placement permitted by construction.
+
+**What the envelope placement bought, and what replaces it.** Its stated purpose was that the
+intention is *"computed ONCE at composition start and threaded, so every find-about-\* stage
+provably interrogates the same intention rather than re-embedding a mutated string."* That property
+is **given up deliberately**: two stages may now ask different questions, which is the whole point.
+What replaces it is per-stage *disclosure* — each stage's question is declared where the stage is,
+so the trace can name it rather than the reader having to know that one envelope field fed
+everything.
+
+**It was never ruled onto the envelope.** `[found — 2026-08-12]` The placement entered in
+`3d73a70b` (2026-08-03, *"feat(query): the composition envelope and its per-stage trace"*), whose
+message argues it in the first person, and then hardened into the test name
+`the_intention_is_a_composition_level_field_not_a_per_stage_one`. The diagnostic is in the file:
+**every** other decision in `composition.rs` carries an attribution — `[decided — 2026-08-08, Pete]`
+on `Intention`'s absent-embedding rule and on the `on_stage_refusal` tombstone, `ADJ-4
+[2026-08-10, Pete]` on the `meta_detail` and `bounds` removals — and this one carries none. It is a
+commit narrative that read as a decision, the same shape ⟨6⟩ caught in this document's own
+*"cannot take a resource bound and will not"*. So ⟨7⟩ overturns nothing; it rules for the first time.
+
+**`Intention.embedded` is DELETED, not relocated.** `[decided — 2026-08-13, Pete]` `[was OPEN;
+ruled after the proposal to move it to `StageTrace` was put and declined]` The request `Intention`
+becomes `{ query, embedding }`.
+
+The field's own justification is *"Inspectable in the trace, which is what makes
+paraphrase-stability measurable from outside"* — and **nothing puts it in the trace**, because
+`CompositionTrace` carries only `stages`. Nothing measures paraphrase stability either; every clause
+of the frame register is still `declared-uncovered`. A field justified by a measurement nobody takes
+is a placeholder wearing a doc comment.
+
+**Work out what the boolean can actually distinguish, which is the argument that decided it.** A
+caller sent a vector and it was used; or sent none and the server embedded successfully; or sent
+none and the server *failed* — and that third case is already `EmbeddingUnavailable`, the contract's
+one runtime refusal. So it separates exactly the first two, only on the success path, and the
+actionable case was never its to carry.
+
+**The one hazard where embedding provenance genuinely bites is already handled, and not by a
+boolean.** A released CLI embedding with a different model than the server's corpus is real — it
+happened, and *"the index filled with vectors from two different models with nothing recording
+which"*. The guard is `temper-ingest/build.rs`, which derives the expected model sha256 from the
+LFS-pinned `model_quantized.onnx` and checks every model loaded against it. A `bool` cannot express
+model identity, so it is the wrong instrument for the only question that matters. Add that
+`embedded` is **caller-asserted and validated by nothing** — a required `bool` any client may lie
+about.
+
+This is the `ADJ-4` precedent applied unchanged: `meta_detail` and `bounds` were removed for *"a job
+nobody could state"*. **If real provenance is ever wanted it returns as a model identity on
+`StageTrace`** — additive, and answering a question the boolean could not.
+
+**It lands as its own PR (A2) before B** `[decided — 2026-08-12, Pete]`, on the A1 precedent: a
+contract reshape, independent of the door, with one story. B's story stays *"the door opens, end to
+end"*. `[The sequencing was first written into the cut table below as a consequence of precedent
+rather than as a question — flagged as an unratified agent decision in the same session and then
+ruled. Recorded because it is a specimen of the class ⟨7⟩'s provenance finding names.]`
+
+## The cut: seven PRs, each with one story
 
 | | Story | Touches | DB |
 |---|---|---|---|
 | **A0** | `temper search` can page | `temper-cli`, `registry.rs` | no |
 | **A1** | `/api/search` accepts a resource bound | `temper-substrate`, `temper-services`, `temper-core`, `temper-cli` | no — both twins already shipped |
 | **A** | The refusal vocabulary becomes two vocabularies, and the placeholder stops lying | `temper-core` | no |
-| **B** | The door opens, end to end | `temper-api`, `temper-cli`, `temper-client`, e2e | yes |
+| **A2** | A composition asks one question **per find act**, not one per composition | `temper-core`, `temper-substrate`, `temper-services` | no |
+| **B** | The door opens, end to end | `temper-api`, `temper-cli`, `temper-client`, `temper-services`, e2e | yes |
 | **C** | The CLI can check a plan offline | `temper-cli` | no |
 | **D** | The contract catches up to the code | `docs/api/query.openapi.yaml` | no |
 
@@ -405,11 +497,55 @@ move. Each test's actual subject is unchanged — only the act it is expressed o
 auth question: every route is authenticated, with two exceptions in the whole project
 (`/api/health`, the Slack OAuth callback).
 
-Handler: deserialize `Composition` → `validate()` → on refusals, `400` carrying **all** of them in
-`ErrorBody.error.details.refusals` → otherwise `run_composition(pool, principal, &validated,
-caller_embedding)`, which already answers in `QueryResponse`'s shape
-(`temper-services/src/backend/query_read.rs`). `openapi.json` regenerates in-commit — the
+Handler: deserialize `Composition` → `prepare()` → on refusals, `400` carrying **all** of them in
+`ErrorBody.error.details.refusals` → otherwise `run_composition(pool, principal, &validated)`, which
+already answers in `QueryResponse`'s shape. `openapi.json` regenerates in-commit — the
 `generated-artifacts` gate covers it.
+
+`[corrected — 2026-08-13, after A2 shipped]` This read `validate()` and
+`run_composition(…, caller_embedding)`. **Both halves moved and B is smaller for it**: the server
+embed has to happen before the plan is sealed (a `ValidatedComposition` is parse-don't-validate and
+cannot be given a vector afterwards), so A2 landed
+`temper_services::backend::query_read::prepare(Composition) -> Result<ValidatedComposition,
+Vec<PlanRefusal>>` — shape-gate → embed → `validate` — and `run_composition` lost its embedding
+parameter to ⟨7⟩. **B calls `prepare` and does not assemble that order itself**; spelling it in the
+handler would put the pipeline in two places the day C or MCP needs it too.
+
+**`ErrorBody.error.details.refusals` does not exist, and B is what widens it.** `[corrected against
+the shipped code — 2026-08-12, during B grounding]` `ErrorDetail.details` is
+`Option<serde_json::Value>` populated by exactly ONE arm — `SystemAccessRequired` — and declared to
+the generators as `Option<SystemAccessDetails>` via `#[schema(value_type = …)]`
+(`temper-services/src/error.rs:78-88`, `:143-148`). `ApiError::BadRequest(String)` cannot carry a
+refusal list at all. The repair is the one the file already names for this case: *"Should a second
+variant ever carry details, this becomes a `oneOf` — widen it then, deliberately"* — so B adds an
+`ApiError` arm carrying `Vec<PlanRefusal>` under its own code, and `details` becomes a `oneOf`.
+**Consequence for the cut table: B touches `temper-services`**, which this section previously did
+not list.
+
+`[decided — 2026-08-13, Pete]` — **re-confirmed in prose after being flagged.** `[This carried
+`[PROVISIONAL — 2026-08-12]` for a day: it was first chosen from a two-option prompt, and it changes
+`ErrorDetail`, which **every route in the project shares** — larger than the ratification it rested
+on. Recorded here as a worked instance of the re-confirmation habit, not because the outcome moved;
+it did not. See `.github/scripts/audit-unattributed-decisions.sh` and ⟨7⟩'s provenance finding.]`
+The alternative — a route-local 400 body — was declined for forking the error contract.
+
+**The `wants_a_vector` integration hole was B's to close. `[closed by A2 — 2026-08-13]`**
+`query_read.rs` recorded that a hardcoded `"search_wide"` survived the `served_by` repoint with no
+test going red because *"there is no find-about case in `query_run_composition_test.rs`, and
+`/api/query` has no route yet, so the door would have opened already broken."* The unit test over
+`search_family()` is a family assertion, not an end-to-end one, and nothing drove the embed and the
+compiler together.
+
+A2 took that line rather than leaving it for B, because A2 is the PR that rebuilt the embed and a
+regression on an unmerged branch must not outlive the branch:
+`query_run_composition_test.rs::server_side_embedding` drives a find-about stage through
+`prepare → compile → execute` against a real corpus, with a caller that supplies no vector. It is
+`test-embed`-gated — per trap 2, a run scoped `--features test-db` alone compiles it to nothing and
+reads green. **B still owes an e2e through the ROUTE**; what it no longer owes is the first
+end-to-end exercise of server-side embedding, which is the part that was silently broken.
+
+**The intention reshape is A2's, not B's.** ⟨7⟩ moves `Intention` onto `ActInvocation` and gives it
+`embedding`. B inherits the reshaped contract and adds no wire fields of its own.
 
 **CLI.** `temper query`, transport only. Plan source mirrors `temper resource update`'s body-source
 precedence rather than inventing one: `--plan @<path>` wins, `--plan -` always blocks-reads stdin,
@@ -458,6 +594,20 @@ and `survey` left `CALLABLE_FRAGMENTS`, so they now refuse **statically** as
 PR A** — the contract is provisional and D owns it — so the correction is recorded here rather than
 applied. Note it changes what a client copying the example should expect: `filter_not_applicable`
 **and** `not_separably_reachable` on `neighbours`, all refusals at once.
+
+**Seventh, added by PR A2 `[2026-08-13]` — the intention moved, so every request example is
+wrong.** ⟨7⟩ deleted `Composition.intention` and put `intention` on each `ActInvocation`, where it
+also now carries `embedding: Option<Vec<f32>>`. So, in the yaml: the `Composition` schema still
+declares an `intention` property it no longer has; **every worked example carrying an
+envelope-level `intention` sends a key the server now ignores**, and — because the acts those
+examples invoke are find acts — the same request comes back `missing_intention` on every one of
+those stages. That is the loudest of the seven: it is not a documentation nit, it is an example
+that cannot succeed as written. `Intention` itself also gains a property (`embedding`) and loses
+one (`embedded`, deleted rather than relocated — ⟨7⟩, and the argument against re-adding it is in
+the A2 plan's Task 5).
+
+Same call as A's: **`query.openapi.yaml` is not edited by A2.** The contract is provisional, D owns
+it, and a partial re-cut ahead of the door is churn against a file B will move again.
 
 Per the standing ruling the contract is **provisional** and alignment is bidirectional, so D
 adjudicates case by case rather than conforming code to the yaml.

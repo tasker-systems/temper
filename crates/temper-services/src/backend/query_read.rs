@@ -16,7 +16,7 @@
 //! twice. (`input_contributed` was a second derived number until ratification ⟨6⟩/9d removed the
 //! field — see the tombstone on `StageResult`.)
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -25,9 +25,10 @@ use crate::backend::substrate_read::{embed_query_text, QueryEmbed};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
-    applied_terms, declaration, emitted_fragment_for, ActName, ActRefusal, Extent, NarrowedBy,
-    PlanRefusal, QueryResponse, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput,
-    StageNode, StageOutput, StageRelation, StageResult, StageTrace, ValidatedComposition,
+    applied_terms, declaration, emitted_fragment_for, validate, validate_shape, ActName,
+    ActRefusal, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, ResourceHit,
+    ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageRelation,
+    StageResult, StageTrace, ValidatedComposition,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -37,22 +38,25 @@ use temper_substrate::readback::query_plan::{compile, EMIT_FIND_WIDE};
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
 ///
-/// `caller_embedding` is a vector the caller precomputed — the CLI can, because it links
-/// temper-ingest. **Its absence is not a refusal.** The ruby gem, the TypeScript package and MCP
-/// carry no embedding ability at all, so the server embeds on their behalf, exactly as
-/// `/api/search` does; only a FAILED attempt refuses, and it refuses the stages that needed a
-/// vector rather than the composition.
+/// **A caller's precomputed vector arrives on each stage's `intention.embedding`**, not as a
+/// parameter here — spec ⟨7⟩. The CLI computes one because it links temper-ingest; the ruby gem,
+/// the TypeScript package and MCP cannot, so the server embeds on their behalf, and **that step
+/// runs BEFORE `validate`** (a `ValidatedComposition` is sealed, and filling vectors into it after
+/// the fact would need a side-channel this contract refuses).
+///
+/// **This function does not perform that step — [`prepare`] does, and it is the only way to build
+/// the argument.** Taking a `ValidatedComposition` is what makes that structural rather than
+/// remembered: there is no way to reach here having skipped the embed, because there is no other
+/// constructor.
 pub async fn run_composition(
     pool: &PgPool,
     principal: ProfileId,
     v: &ValidatedComposition,
-    caller_embedding: Option<Vec<f32>>,
 ) -> ApiResult<QueryResponse> {
-    let embedding = resolve_embedding(v, caller_embedding).await;
     // A refusal from here is a compiler/validator contradiction, never a caller error — `validate`
     // has already refused everything a caller can get wrong. Rendering it as a 500 rather than a
     // 400 says so: telling a caller to fix a plan that is correct would send them in circles.
-    let compiled = compile(v, principal, embedding.as_deref()).map_err(|r: PlanRefusal| {
+    let compiled = compile(v, principal).map_err(|r: PlanRefusal| {
         ApiError::Internal(format!(
             "compiler refused a validated plan ({:?}): {}",
             r.reason, r.detail
@@ -78,28 +82,136 @@ fn opaque(e: anyhow::Error) -> ApiError {
     ApiError::Internal("An internal error occurred".to_string())
 }
 
-/// The vector, or the honest absence of one.
+/// Turn a caller's composition into one this server will run: shape-gate it, embed on its behalf,
+/// then seal it.
 ///
-/// Embedding is attempted only when some stage would USE it. Embedding for a composition of
-/// `find-exact` stages would pay ONNX inference to produce a value nothing binds — and worse, a
-/// failure would then refuse nothing while having cost the budget.
-async fn resolve_embedding(
-    v: &ValidatedComposition,
-    caller_embedding: Option<Vec<f32>>,
-) -> Option<Vec<f32>> {
-    if caller_embedding.is_some() {
-        return caller_embedding;
+/// ```text
+/// deserialize        serde — rejects a malformed body before anything here runs
+///   → validate_shape cheap, pure, no DB and no declarations (⟨3⟩'s expressibility pass)
+///   → embed          only the intentions that need a vector and did not carry one
+///   → validate       the full pass, capability included — the seal
+///   → compile        [`run_composition`]
+/// ```
+///
+/// **The shape gate is a COST gate and nothing else.** `[decided — 2026-08-13, Pete]` — *"if a
+/// composition is structurally invalid then we don't want to pay the onnx cost"*. It never decides
+/// what the caller is told: a plan it refuses still falls through to [`validate()`], which is the
+/// sole authority on refusals and returns **every** one of them rather than the first, so a plan
+/// with both a shape fault and a capability fault is still repaired in one round trip.
+///
+/// So shape is evaluated twice — once here, once inside [`validate()`]. A pure function over a small
+/// struct; named so it is not later "discovered" as a defect.
+///
+/// **Parse-don't-validate is our line, not an external law, and this is where we put the seal.**
+/// `[2026-08-13]` The alternative was to leave the seal ahead of the embed and hand `compile` a
+/// side-channel `BTreeMap<StageName, Vec<f32>>`. It was declined: that is two sources for one
+/// fact — the shape spec ⟨7⟩ removed from `compile`'s signature, reintroduced one layer down.
+pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
+    if validate_shape(&c).is_empty() {
+        embed_missing_intentions(&mut c).await;
     }
-    if !v.ordered().iter().any(wants_a_vector) {
+    validate(&c)
+}
+
+/// The query text this node needs the SERVER to embed, trimmed — or `None`, for any of four
+/// different reasons that must not be collapsed.
+///
+/// One definition, read twice by [`embed_missing_intentions`] (once to collect, once to write
+/// back), because a predicate spelled at both ends of that function is a predicate that can
+/// disagree with itself about which stages it just embedded for.
+///
+/// `None` means, in order: this act does not search by vector ([`wants_a_vector`]); it carries no
+/// question at all; the caller already sent a vector; or the question is empty. The last two of
+/// those are the properties `resolve_embedding` had and this had to keep:
+///
+///   * **Embed only when some stage would USE the vector.** A composition of `find-exact` stages
+///     paying ONNX produces a value nothing binds, and a failure then refuses nothing, having spent
+///     the budget.
+///   * **An empty or whitespace-only query is NOT an embedding attempt.** `shape.rs`'s
+///     `[widened — 2026-08-09]` note records what happens when it is: the caller is told
+///     `embedding_unavailable` — a server fault, for a question they never asked. Through
+///     [`prepare`] the shape pass has already refused that plan and no embed runs at all, so this
+///     arm is the property held **structurally**; it is spelled here anyway because it is this
+///     function's contract, not its caller's.
+///
+/// The text is TRIMMED, matching `substrate_read::embed_query_if_missing`. Two questions differing
+/// only in surrounding whitespace are one question, and embedding them separately would be two
+/// vectors for one string.
+fn text_to_embed(node: &StageNode) -> Option<&str> {
+    if !wants_a_vector(node) {
         return None;
     }
-    let query = v.composition().intention.as_ref().map(|i| i.query.trim())?;
-    if query.is_empty() {
+    let StageNode::Act(inv) = node else {
+        return None;
+    };
+    let intention = inv.intention.as_ref()?;
+    if intention.embedding.is_some() {
         return None;
     }
-    match embed_query_text(query).await {
-        QueryEmbed::Embedded(e) => Some(e),
-        QueryEmbed::Unavailable => None,
+    let query = intention.query.trim();
+    (!query.is_empty()).then_some(query)
+}
+
+/// Every DISTINCT question this composition needs embedded, in a stable order.
+///
+/// **Distinct query TEXT, not per stage** — the property this collection exists to hold, and it is
+/// two properties rather than one. Two stages naming the same string must not pay ONNX twice; and
+/// they must not be able to receive two *different* vectors for one question, which would make
+/// paraphrase-stability unmeasurable in exactly the way the retired envelope placement was trying
+/// to protect. A `BTreeSet` gives both, and gives a deterministic embed order for free.
+fn texts_to_embed(c: &Composition) -> BTreeSet<String> {
+    c.stages
+        .iter()
+        .filter_map(text_to_embed)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Fill in the vectors the caller could not compute, in place, before the plan is sealed.
+///
+/// `[replaced — 2026-08-13]` `resolve_embedding` used to sit here. It resolved ONE vector for the
+/// whole composition, from `Composition.intention` — the field spec ⟨7⟩ moved onto each stage — and
+/// handed it to `compile` as a parameter. Neither end of that survives, so this writes INTO the
+/// plan rather than beside it.
+///
+/// **The attempt is [`embed_query_text`], not a second one.** Its doc says why it was extracted:
+/// the query has to be embedded by the same plain `embed_text` path the corpus was ingested with,
+/// so it lands in the stored chunks' vector space. A second implementation here would be a second
+/// answer to *"which space is this vector in"*, and `/api/query` scores would quietly stop being
+/// comparable with `/api/search`'s.
+///
+/// **A failed attempt writes nothing and refuses nothing here.** The stage keeps its `None`, and
+/// `compile` renders it as [`temper_core::types::query::RefusalReason::EmbeddingUnavailable`]
+/// against that stage — the
+/// contract's one runtime refusal, reported where a reader is already looking. That is the split
+/// [`QueryEmbed`]'s own doc names: `/api/search` collapses the outcome into a `degraded` boolean
+/// because its arms are fixed, and this surface cannot.
+///
+/// One question that no stage can use is therefore **not** a failed composition: its siblings run,
+/// and the refusal is per stage.
+async fn embed_missing_intentions(c: &mut Composition) {
+    let mut vectors: HashMap<String, Vec<f32>> = HashMap::new();
+    for query in texts_to_embed(c) {
+        if let QueryEmbed::Embedded(vector) = embed_query_text(&query).await {
+            vectors.insert(query, vector);
+        }
+    }
+    if vectors.is_empty() {
+        return;
+    }
+
+    for node in &mut c.stages {
+        let Some(query) = text_to_embed(node).map(str::to_string) else {
+            continue;
+        };
+        let Some(vector) = vectors.get(&query) else {
+            continue;
+        };
+        if let StageNode::Act(inv) = node {
+            if let Some(intention) = inv.intention.as_mut() {
+                intention.embedding = Some(vector.clone());
+            }
+        }
     }
 }
 
@@ -109,8 +221,8 @@ async fn resolve_embedding(
 /// **Two hops, and the second one is why this is not a string comparison against `served_by`.**
 /// `[fixed — 2026-08-12]` This asked `served_by == "search_wide"`. `served_by` names what the
 /// deployed `/api/search` door calls, and that moved to `query_find_wide` when the door gained a
-/// resource bound — so this returned `false` for BOTH wide acts, [`resolve_embedding`] skipped
-/// server-side embedding, `compile` took its `None` arm, and every find-about stage refused
+/// resource bound — so this returned `false` for BOTH wide acts, [`text_to_embed`] found nothing to
+/// embed, `compile` took its `None` arm, and every find-about stage refused
 /// `EmbeddingUnavailable` for any caller that cannot precompute a vector. Which is the whole class
 /// of caller this module's own header says the server embeds on behalf of.
 ///
@@ -532,8 +644,8 @@ fn act_of(node: &StageNode) -> ActName {
 mod tests {
     use super::*;
     use temper_core::types::query::{
-        validate, ActInvocation, Composition, Intention, OutcomeDeclaration, RefusalReason,
-        ResourceFilter, ReturnSpec, StageName,
+        ActInvocation, Intention, OutcomeDeclaration, RefusalReason, ResourceFilter, ReturnSpec,
+        StageName,
     };
     use temper_substrate::readback::query_exec::{HitRow, TallyRow};
 
@@ -541,10 +653,25 @@ mod tests {
         StageName::parse(s).unwrap()
     }
 
+    /// A minimal legal act node, carrying a question because a find act is refused without one.
+    ///
+    /// **The query text is arbitrary here and is allowed to be**, which is worth saying out loud
+    /// given how this module got its `intention: None`. Every test below hand-builds its
+    /// [`QueryRows`] and asserts on `assemble`'s derivations; none compiles SQL and none consults a
+    /// corpus, so nothing can read this string. A test where the text IS load-bearing belongs in
+    /// `query_run_composition_test.rs`, against a real database that can disagree with it.
+    ///
+    /// `[2026-08-13]` The per-stage move left this helper at `intention: None`, and eleven of this
+    /// module's twelve tests panicked in `plan`'s `validate` — caught by running `--lib`, which the
+    /// hand-off's verified baseline did not include. Compile-clean, clippy-clean, and red.
     fn act_node(n: &str, act: ActName, input: Option<StageInput>) -> StageNode {
         StageNode::Act(ActInvocation {
             name: name(n),
             act,
+            intention: Some(Intention {
+                query: "a question this test never reads".to_string(),
+                embedding: None,
+            }),
             input,
             terms: Default::default(),
             resource_filter: None,
@@ -564,13 +691,147 @@ mod tests {
                     })
                     .collect(),
             },
-            intention: Some(Intention {
-                query: "composable".to_string(),
-                embedded: false,
-            }),
             stages,
         };
         validate(&c).expect("plan is valid")
+    }
+
+    /// A find-about stage asking a specific question — the act the server embeds for.
+    fn find_about(n: &str, query: &str) -> StageNode {
+        let mut node = act_node(n, ActName::FindAboutAnywhere, None);
+        if let StageNode::Act(a) = &mut node {
+            a.intention = Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            });
+        }
+        node
+    }
+
+    fn composition(stages: Vec<StageNode>) -> Composition {
+        let returns = stages
+            .iter()
+            .map(|n| ReturnSpec {
+                stage: n.name().clone(),
+                with: vec![],
+            })
+            .collect();
+        Composition {
+            outcome: OutcomeDeclaration { returns },
+            stages,
+        }
+    }
+
+    /// **A `find-exact` stage is never embedded for**, because nothing would bind the vector.
+    ///
+    /// Paying ONNX for a composition that binds no vector spends the budget for a value nothing
+    /// reads — and worse, a failure then *refuses nothing*, having spent it. This is the cheap,
+    /// model-free witness for that property; no test that actually runs the embedder can show that
+    /// a call did **not** happen.
+    #[test]
+    fn a_find_exact_stage_is_never_embedded_for_because_nothing_would_bind_the_vector() {
+        assert_eq!(
+            text_to_embed(&act_node("hits", ActName::FindExact, None)),
+            None
+        );
+        assert!(texts_to_embed(&composition(vec![act_node(
+            "hits",
+            ActName::FindExact,
+            None
+        )]))
+        .is_empty());
+    }
+
+    /// A caller who computed its own vector is not made to pay for a second one.
+    #[test]
+    fn a_vector_the_caller_supplied_is_never_recomputed() {
+        let mut node = find_about("hits", "kestrel");
+        if let StageNode::Act(a) = &mut node {
+            a.intention.as_mut().unwrap().embedding = Some(vec![0.5; 768]);
+        }
+        assert_eq!(text_to_embed(&node), None);
+    }
+
+    /// **An empty question is not an embedding attempt** — `[widened — 2026-08-09]`, `shape.rs`.
+    ///
+    /// Embedding it and failing tells the caller `embedding_unavailable`: a server fault, for a
+    /// question they never asked. Through [`prepare`] the shape pass refuses this plan and no embed
+    /// runs at all; this asserts the function's own contract, so the property does not depend on
+    /// every future caller remembering to gate.
+    #[test]
+    fn a_whitespace_only_question_is_not_an_embedding_attempt() {
+        assert_eq!(text_to_embed(&find_about("hits", "   \t ")), None);
+        assert_eq!(text_to_embed(&find_about("hits", "")), None);
+    }
+
+    /// **Once per distinct question, not once per stage.** Two stages naming the same string must
+    /// not pay ONNX twice — and must not be able to receive two DIFFERENT vectors for one question,
+    /// which is the property the retired envelope placement was protecting and the one thing
+    /// per-stage intentions could plausibly have cost.
+    #[test]
+    fn two_stages_asking_the_same_question_are_embedded_once() {
+        let texts = texts_to_embed(&composition(vec![
+            find_about("a", "kestrel"),
+            find_about("b", "kestrel"),
+        ]));
+        assert_eq!(texts.len(), 1, "one question, one embed: {texts:?}");
+    }
+
+    /// The whole point of the move: two stages, two questions, two vectors.
+    #[test]
+    fn two_stages_asking_different_questions_are_embedded_separately() {
+        let texts = texts_to_embed(&composition(vec![
+            find_about("a", "kestrel"),
+            find_about("b", "sourdough"),
+        ]));
+        assert_eq!(texts.len(), 2, "got: {texts:?}");
+    }
+
+    /// Whitespace is not part of a question. Matches `substrate_read::embed_query_if_missing`,
+    /// which trims before it embeds — two vectors for one string would otherwise be reachable by
+    /// nothing more than a stray space.
+    #[test]
+    fn questions_differing_only_in_surrounding_whitespace_are_one_question() {
+        let texts = texts_to_embed(&composition(vec![
+            find_about("a", "kestrel"),
+            find_about("b", "  kestrel\n"),
+        ]));
+        assert_eq!(texts, BTreeSet::from(["kestrel".to_string()]));
+    }
+
+    /// **The shape gate never decides what the caller is told.** A plan that is both inexpressible
+    /// AND asks for something this server has not built comes back with BOTH refusals, because
+    /// [`validate()`] runs whatever the gate concluded — the gate's only job is to keep an
+    /// inexpressible plan from paying ONNX.
+    #[tokio::test]
+    async fn a_shape_refusal_does_not_cost_the_caller_the_rest_of_its_refusals() {
+        // `find-about-within` with no intention: a shape refusal (`MissingIntention`). Returning
+        // an unknown stage: a capability refusal, raised by `validate_returns`.
+        let mut node = act_node("hits", ActName::FindAboutWithin, None);
+        if let StageNode::Act(a) = &mut node {
+            a.intention = None;
+        }
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: name("hits"),
+                    with: vec![ResourceSection::Body],
+                }],
+            },
+            stages: vec![node],
+        };
+
+        let refusals = prepare(c).await.expect_err("the plan is refused");
+        assert!(
+            refusals
+                .iter()
+                .any(|r| r.reason == RefusalReason::MissingIntention),
+            "the shape refusal: {refusals:?}"
+        );
+        assert!(
+            refusals.len() > 1,
+            "every refusal in one round trip, not just the one the gate saw: {refusals:?}"
+        );
     }
 
     fn tally(stage: &str, produced: i64, unusable: i64) -> TallyRow {
@@ -603,15 +864,10 @@ mod tests {
     fn the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran() {
         let asked =
             std::collections::BTreeMap::from([(BoundTerm::Limit, 999), (BoundTerm::Offset, 5)]);
-        let node = StageNode::Act(ActInvocation {
-            name: name("hits"),
-            act: ActName::FindExact,
-            input: None,
-            terms: asked.clone(),
-            resource_filter: None,
-            edge_filter: None,
-            properties: vec![],
-        });
+        let mut node = act_node("hits", ActName::FindExact, None);
+        if let StageNode::Act(a) = &mut node {
+            a.terms = asked.clone();
+        }
         let v = plan(vec![node], vec!["hits"]);
         let rows = QueryRows {
             hits: vec![],
@@ -789,15 +1045,10 @@ mod tests {
     /// `complete` over a truncated set would be a false claim about the corpus.
     #[test]
     fn a_stage_that_filled_its_page_reports_partial_rather_than_claiming_completeness() {
-        let node = StageNode::Act(ActInvocation {
-            name: name("hits"),
-            act: ActName::FindExact,
-            input: None,
-            terms: std::collections::BTreeMap::from([(BoundTerm::Limit, 2)]),
-            resource_filter: None,
-            edge_filter: None,
-            properties: vec![],
-        });
+        let mut node = act_node("hits", ActName::FindExact, None);
+        if let StageNode::Act(a) = &mut node {
+            a.terms = std::collections::BTreeMap::from([(BoundTerm::Limit, 2)]);
+        }
         let v = plan(vec![node], vec!["hits"]);
 
         let full = QueryRows {
@@ -1040,12 +1291,18 @@ mod tests {
     /// symptom is a plausible refusal rather than an error.**
     ///
     /// `wants_a_vector` is what decides whether the server embeds on the caller's behalf. Answer
-    /// `false` for a find-about stage and nothing fails loudly: [`resolve_embedding`] returns `None`,
-    /// `compile` takes its no-embedding arm, and the stage refuses `EmbeddingUnavailable` — which is
-    /// indistinguishable from outside from a genuine ONNX failure. That is how a hardcoded
+    /// `false` for a find-about stage and nothing fails loudly: [`text_to_embed`] finds nothing to
+    /// embed, `compile` takes its no-embedding arm, and the stage refuses `EmbeddingUnavailable` —
+    /// which is indistinguishable from outside from a genuine ONNX failure. That is how a hardcoded
     /// `"search_wide"` here survived the `served_by` repoint of 2026-08-12 with no test going red:
-    /// there is no find-about case in `query_run_composition_test.rs`, and `/api/query` has no route
-    /// yet, so the door would have opened already broken.
+    /// there was no find-about case in `query_run_composition_test.rs`, and `/api/query` had no
+    /// route, so the door would have opened already broken.
+    ///
+    /// `[closed — 2026-08-13]` `query_run_composition_test.rs::server_side_embedding` now drives a
+    /// find-about stage through `prepare → compile → execute` against a real corpus, so the same
+    /// drift reddens an integration test as well as this family assertion. **That does not retire
+    /// this one**: the integration test covers the two acts that exist, and this covers whichever
+    /// acts the family declares, which is the half that a NEW act added later falls into.
     ///
     /// **Derived from the family, not written as an act list**, so an act added later that the
     /// compiler emits the wide core for is covered with no edit here — and so the count assertion,

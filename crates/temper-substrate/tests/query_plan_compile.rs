@@ -25,6 +25,10 @@ fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
     StageNode::Act(ActInvocation {
         name: StageName::parse(name).unwrap(),
         act: ActName::FindExact,
+        intention: Some(Intention {
+            query: "salience".to_string(),
+            embedding: None,
+        }),
         input: Some(StageInput::Caller {
             relation: StageRelation::Bound,
             ids: IdSet {
@@ -49,6 +53,10 @@ fn find_from(name: &str, upstream: &str) -> StageNode {
     StageNode::Act(ActInvocation {
         name: StageName::parse(name).unwrap(),
         act: ActName::FindExact,
+        intention: Some(Intention {
+            query: "salience".to_string(),
+            embedding: None,
+        }),
         input: Some(StageInput::Upstream {
             relation: StageRelation::Bound,
             stage: StageName::parse(upstream).unwrap(),
@@ -77,10 +85,6 @@ fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
                 })
                 .collect(),
         },
-        intention: Some(Intention {
-            query: "salience".to_string(),
-            embedded: true,
-        }),
         stages,
     };
     validate(&c).expect("plan is valid")
@@ -173,7 +177,7 @@ fn every_caller_value_is_bound_and_none_is_interpolated() {
     // The security property, tested where it can be tested exhaustively: no database, no fixtures,
     // just the emitted text. A uuid appearing literally in the SQL is the failure.
     let (v, ids) = plan_with_caller_ids();
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     for id in ids {
         assert!(
             !c.sql.contains(&id.to_string()),
@@ -188,7 +192,7 @@ fn the_only_identifiers_emitted_are_validated_stage_names() {
     // StageName::parse is the gate (beat A). This asserts the emitter honours it rather than
     // formatting arbitrary strings into identifier position.
     let v = plan_two_stages("hits", "near");
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     assert!(c.sql.contains(r#""hits" AS ("#));
     assert!(c.sql.contains(r#""near" AS ("#));
     assert_eq!(c.cte_names.len(), 2);
@@ -211,8 +215,8 @@ fn the_visibility_relation_is_computed_once_no_matter_how_many_stages() {
     // appears EXACTLY ONCE in the emitted statement, at any stage count. The ungated cores
     // (`20260808000030`) do not call it, so any second occurrence means a stage went back to gating
     // for itself.
-    let one = compile(&plan_one_find(), test_profile(), None).expect("compiles");
-    let three = compile(&plan_three_finds(), test_profile(), None).expect("compiles");
+    let one = compile(&plan_one_find(), test_profile()).expect("compiles");
+    let three = compile(&plan_three_finds(), test_profile()).expect("compiles");
 
     assert_eq!(
         one.sql.matches("resources_visible_to(").count(),
@@ -243,7 +247,7 @@ fn a_downstream_stage_selects_ids_only_and_never_a_quantity() {
     // THE rule that keeps no-cross-act-ranking structural (spec §4). If a quantity can cross a
     // stage boundary, cross-act arithmetic becomes mechanically easy and nothing prevents it.
     let v = plan_two_stages("hits", "near");
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     let downstream = c
         .sql
         .split(r#""near" AS ("#)
@@ -290,7 +294,7 @@ fn hit_arm(sql: &str, stage: &str) -> Option<String> {
 #[test]
 fn every_stage_is_tallied_including_one_whose_rows_are_not_returned() {
     let v = plan_two_stages("hits", "near");
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     // `near` is the only returned stage; `hits` feeds it and reaches the caller only as a trace
     // entry — which it cannot have without a count.
     tally_arm(&c.sql, "hits");
@@ -308,7 +312,7 @@ fn a_tally_row_carries_no_id_so_a_non_returned_stages_rows_never_leave_the_datab
     // The tally discloses HOW MANY, never WHICH. A non-returned stage's ids are the pipe's internal
     // currency, and shipping them would hand back rows the caller did not ask for.
     let v = plan_two_stages("hits", "near");
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     let tally = tally_arm(&c.sql, "hits");
     assert!(
         tally.contains("NULL::uuid"),
@@ -326,7 +330,7 @@ fn a_caller_supplied_set_is_tallied_against_the_hoisted_visibility_relation() {
     // where the ids came from the CALLER, and it is counted against the relation that already
     // exists rather than by asking the gate a second time.
     let (v, _ids) = plan_with_caller_ids();
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     let tally = tally_arm(&c.sql, "hits");
     assert!(
         tally.contains("unnest(") && tally.contains("__temper_vis"),
@@ -345,7 +349,7 @@ fn an_upstream_fed_stage_tallies_zero_unusable_rather_than_re_gating_it() {
     // Not a shortcut: an upstream set is what a visibility-gated fragment returned, so every id in
     // it was usable by construction. Re-checking would cost a gate call to confirm a known answer.
     let v = plan_two_stages("hits", "near");
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     let tally = tally_arm(&c.sql, "near");
     assert!(
         !tally.contains("unnest("),
@@ -385,7 +389,7 @@ fn a_combinator_projects_membership_only_and_never_a_quantity() {
         ],
         vec!["a"],
     );
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     let body = c
         .sql
         .split(r#""merged" AS ("#)
@@ -412,7 +416,7 @@ fn stages_are_emitted_in_dependency_order() {
     // The compiler consumes ValidatedComposition::ordered(); a CTE referencing one declared later
     // would not parse.
     let v = plan_two_stages_declared_backwards("hits", "near");
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     let hits_at = c.sql.find(r#""hits" AS ("#).unwrap();
     let near_at = c.sql.find(r#""near" AS ("#).unwrap();
     assert!(hits_at < near_at);
@@ -427,9 +431,16 @@ use temper_core::types::query::{BoundTerm, Intention, RefusalReason};
 const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
 const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 
+/// A find stage carrying its own question. `[2026-08-12]` The question used to come from the
+/// composition envelope; spec ⟨7⟩ put it on the stage, so the builder supplies it — otherwise every
+/// plan here would refuse `MissingIntention` for a reason no test is about.
 fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode {
     StageNode::Act(ActInvocation {
         name: StageName::parse(name).unwrap(),
+        intention: Some(Intention {
+            query: "salience".to_string(),
+            embedding: None,
+        }),
         act,
         input,
         terms: Default::default(),
@@ -437,6 +448,33 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
         edge_filter: None,
         properties: vec![],
     })
+}
+
+/// [`find_stage`] with no question at all — for the test that asserts `MissingIntention`, which is
+/// now a property of the STAGE rather than of the composition.
+fn find_stage_without_intention(name: &str, act: ActName, input: Option<StageInput>) -> StageNode {
+    match find_stage(name, act, input) {
+        StageNode::Act(mut inv) => {
+            inv.intention = None;
+            StageNode::Act(inv)
+        }
+        other => other,
+    }
+}
+
+/// A find stage whose question carries a caller-supplied vector — the `find-about-*` case, where
+/// the compiler binds the vector rather than refusing `EmbeddingUnavailable`.
+fn find_stage_embedded(name: &str, act: ActName, input: Option<StageInput>) -> StageNode {
+    match find_stage(name, act, input) {
+        StageNode::Act(mut inv) => {
+            inv.intention = Some(Intention {
+                query: "salience".to_string(),
+                embedding: Some(an_embedding()),
+            });
+            StageNode::Act(inv)
+        }
+        other => other,
+    }
 }
 
 fn an_embedding() -> Vec<f32> {
@@ -453,7 +491,7 @@ fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstre
     let v = build(
         vec![
             find_root("seeds", vec![Uuid::now_v7()]),
-            find_stage(
+            find_stage_embedded(
                 "narrowed",
                 ActName::FindAboutWithin,
                 Some(StageInput::Upstream {
@@ -464,8 +502,7 @@ fn a_find_about_within_stage_compiles_to_the_bounded_core_narrowed_by_its_upstre
         ],
         vec!["narrowed"],
     );
-    let emb = an_embedding();
-    let c = compile(&v, test_profile(), Some(&emb)).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     assert!(
         c.sql.contains("__temper_ungated_find_wide("),
@@ -496,7 +533,7 @@ fn a_find_exact_stage_binds_its_query_text_and_targets_the_exact_core() {
         vec![find_stage("hits", ActName::FindExact, None)],
         vec!["hits"],
     );
-    let c = compile(&v, test_profile(), None).expect("find-exact needs no embedding");
+    let c = compile(&v, test_profile()).expect("find-exact needs no embedding");
 
     assert!(
         c.sql.contains("__temper_ungated_find_exact("),
@@ -553,7 +590,7 @@ fn a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_calle
         vec![find_stage("wide", ActName::FindAboutAnywhere, None)],
         vec!["wide"],
     );
-    let c = compile(&v, test_profile(), None).expect("a runtime refusal does not abort the plan");
+    let c = compile(&v, test_profile()).expect("a runtime refusal does not abort the plan");
 
     let [refusal] = c.refusals.as_slice() else {
         panic!("exactly one stage refuses; got {:?}", c.refusals)
@@ -575,10 +612,19 @@ fn a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_calle
         c.sql
     );
 
-    // And the same plan WITH an embedding compiles clean — so the refusal is about the embedding
-    // and not about the plan being malformed in some other way.
-    let emb = an_embedding();
-    let ok = compile(&v, test_profile(), Some(&emb)).expect("compiles");
+    // And the SAME plan whose stage carries a vector compiles clean — so the refusal is about the
+    // embedding and not about the plan being malformed in some other way. `[2026-08-12]` The
+    // control used to re-compile `v` with the vector passed as an argument; the vector is on the
+    // stage now, so the control differs from the subject in the intention and nowhere else.
+    let with_vector = build(
+        vec![find_stage_embedded(
+            "wide",
+            ActName::FindAboutAnywhere,
+            None,
+        )],
+        vec!["wide"],
+    );
+    let ok = compile(&with_vector, test_profile()).expect("compiles");
     assert!(ok.refusals.is_empty());
 }
 
@@ -595,7 +641,7 @@ fn one_stage_refusing_for_want_of_an_embedding_does_not_refuse_the_others() {
         ],
         vec!["exact", "wide"],
     );
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     assert_eq!(c.refusals.len(), 1, "only the wide stage refuses");
     assert_eq!(
@@ -634,7 +680,7 @@ fn a_stage_downstream_of_a_refusal_is_bounded_to_nothing_rather_than_unbounded()
         ],
         vec!["narrowed"],
     );
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     let refused = c
         .sql
@@ -684,8 +730,13 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
                 with: vec![],
             }],
         },
-        intention: None,
-        stages: vec![find_stage("quoted", ActName::FindExact, None)],
+        // The find stage carries no intention of its own — which is what `MissingIntention` is
+        // about now that the field is per stage. `[2026-08-12]`
+        stages: vec![find_stage_without_intention(
+            "quoted",
+            ActName::FindExact,
+            None,
+        )],
     };
     let refusals = validate(&c).expect_err("no intention is refused statically");
     assert!(refusals
@@ -727,10 +778,6 @@ fn the_unmodelled_acts_are_refused_before_the_compiler_ever_sees_them() {
                     with: vec![],
                 }],
             },
-            intention: Some(Intention {
-                query: "salience".to_string(),
-                embedded: true,
-            }),
             stages: vec![find_stage("s", act.clone(), None)],
         };
         let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
@@ -772,7 +819,7 @@ fn a_cogmap_bound_is_emitted_as_the_anchor_pair_not_as_a_resource_id_array() {
         )],
         vec!["hits"],
     );
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     assert!(
         c.sql.contains("'kb_cogmaps'::varchar"),
@@ -823,10 +870,6 @@ fn a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it() {
                 with: vec![],
             }],
         },
-        intention: Some(Intention {
-            query: "salience".to_string(),
-            embedded: true,
-        }),
         stages: vec![find_stage(
             "hits",
             ActName::FindExact,
@@ -867,7 +910,7 @@ fn a_term_above_its_published_ceiling_is_clamped_to_the_ceiling_that_was_publish
         a.terms.insert(BoundTerm::Limit, 500);
     }
     let v = build(vec![node], vec!["hits"]);
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     let ints: Vec<i64> = c
         .binds
@@ -896,7 +939,7 @@ fn a_term_below_its_ceiling_is_used_as_the_caller_asked() {
         a.terms.insert(BoundTerm::Limit, 7);
     }
     let v = build(vec![node], vec!["hits"]);
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
     assert!(c.binds.iter().any(|b| matches!(b, QueryBind::Int(7))));
 }
 
@@ -927,7 +970,7 @@ fn paging_terms_reach_the_fragment_as_binds_whether_declared_or_defaulted() {
         inv.terms.insert(BoundTerm::Offset, 20);
     }
     let v = build(vec![node], vec!["hits"]);
-    let c = compile(&v, test_profile(), None).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     let ints: Vec<i64> = c
         .binds
@@ -950,7 +993,7 @@ fn paging_terms_reach_the_fragment_as_binds_whether_declared_or_defaulted() {
         vec![find_stage("plain", ActName::FindExact, None)],
         vec!["plain"],
     );
-    let cb = compile(&bare, test_profile(), None).expect("compiles");
+    let cb = compile(&bare, test_profile()).expect("compiles");
     let bare_ints: Vec<i64> = cb
         .binds
         .iter()
@@ -1021,7 +1064,7 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     let v = build(
         vec![
             find_stage("hits", ActName::FindExact, None),
-            find_stage(
+            find_stage_embedded(
                 "narrowed",
                 ActName::FindAboutWithin,
                 Some(StageInput::Upstream {
@@ -1032,8 +1075,7 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
         ],
         vec!["narrowed"],
     );
-    let emb = an_embedding();
-    let c = compile(&v, test_profile(), Some(&emb)).expect("compiles");
+    let c = compile(&v, test_profile()).expect("compiles");
 
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
@@ -1086,7 +1128,7 @@ fn no_stage_can_be_named_after_the_hoisted_visibility_relation() {
     );
     // And the compiler really does use that unreachable name, so the guarantee above is about the
     // identifier actually emitted rather than about a name nothing uses.
-    let c = compile(&plan_one_stage(), test_profile(), None).expect("compiles");
+    let c = compile(&plan_one_stage(), test_profile()).expect("compiles");
     assert!(
         c.sql.contains("__temper_vis AS MATERIALIZED"),
         "got:\n{}",

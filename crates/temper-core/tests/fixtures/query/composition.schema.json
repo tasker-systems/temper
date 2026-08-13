@@ -1,7 +1,7 @@
 {
   "$defs": {
     "ActInvocation": {
-      "description": "One act, invoked — a named node in the composition DAG.",
+      "description": "One act, invoked — a named node in the composition DAG.\n\n**No `Eq`, only `PartialEq`** — [`Self::intention`] carries the query vector. See\n[`super::composition::Intention`].",
       "properties": {
         "act": {
           "$ref": "#/$defs/ActName"
@@ -26,6 +26,17 @@
             }
           ],
           "description": "Where this stage's set comes from, and what this act does with it: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose\n\"required whenever `input` is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid."
+        },
+        "intention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Intention"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The question this act asks: its text, and the caller's vector when there is one.\n\n**A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]**\n`[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then,\nwhich made a DAG able to ask only one question — every find stage reading the same string.\n\n`None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a\nfind act is `MissingIntention`, refused by the shape pass: `find-exact` sources its\n`p_query` from here and there is nowhere else to get it."
         },
         "name": {
           "description": "This node's name, referenced by downstream stages and by `returns`.",
@@ -273,19 +284,25 @@
       "type": "object"
     },
     "Intention": {
-      "description": "The question, computed once at composition start and threaded to every stage.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`",
+      "description": "One find act's question: its text, and the caller's vector when there is one.\n\n`[2026-08-12]` This line read *\"computed once at composition start and threaded to every\nstage\"* — the envelope-placement claim spec ⟨7⟩ retired. It is corrected rather than left\nstanding because **this doc comment IS a published schema description**\n(`tests/fixtures/query/intention.schema.json`), so a stale sentence here is a lie shipped to\nevery client that reads the contract.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`\n**This is a per-STAGE field, carried by [`super::envelope::ActInvocation`].** `[decided —\n2026-08-12, Pete]`, spec ⟨7⟩. It sat on the composition envelope until then, which meant a\ncomposition could ask exactly ONE question: every find stage in a DAG interrogated the same\nstring, and *\"find A, find B, intersect them\"* was inexpressible. That placement was never\nruled — it entered as a first-person commit paragraph and hardened into a test name.\n\n**No `Eq`, only `PartialEq`** — [`Self::embedding`] holds `f32`. Same reason\n[`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of\nfloats is well-defined enough for a test, total equality is not.",
       "properties": {
-        "embedded": {
-          "description": "Whether an embedding was computed for it. Inspectable in the trace, which is what makes\nparaphrase-stability measurable from outside.",
-          "type": "boolean"
+        "embedding": {
+          "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "query": {
           "type": "string"
         }
       },
       "required": [
-        "query",
-        "embedded"
+        "query"
       ],
       "type": "object"
     },
@@ -529,7 +546,7 @@
           "$ref": "#/$defs/CombineNode"
         }
       ],
-      "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes."
+      "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes.\n\n**No `Eq`, only `PartialEq`** — the act variant carries an intention, which carries the query\nvector. See [`Intention`]."
     },
     "StageRelation": {
       "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
@@ -548,18 +565,8 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A composition, declared before execution.",
+  "description": "A composition, declared before execution.\n\n**No `Eq`, only `PartialEq`** — it transitively holds the query vector. See [`Intention`].",
   "properties": {
-    "intention": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Intention"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "outcome": {
       "$ref": "#/$defs/OutcomeDeclaration"
     },
