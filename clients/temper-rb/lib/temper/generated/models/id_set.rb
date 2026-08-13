@@ -14,20 +14,21 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # The one value that crosses a stage boundary. Membership, never rank.
+  class IdSet < ApiModelBase
+    attr_accessor :ids
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
+    attr_accessor :kind
 
-    attr_accessor :message
+    # Required for `region`; absent for every other kind today.
+    attr_accessor :provenance
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'ids' => :'ids',
+        :'kind' => :'kind',
+        :'provenance' => :'provenance'
       }
     end
 
@@ -44,16 +45,16 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'ids' => :'Array<String>',
+        :'kind' => :'IdKind',
+        :'provenance' => :'IdProvenance'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
+        :'provenance'
       ])
     end
 
@@ -61,32 +62,34 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::IdSet` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::IdSet`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'ids')
+        if (value = attributes[:'ids']).is_a?(Array)
+          self.ids = value
+        end
       else
-        self.code = nil
+        self.ids = nil
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
+      if attributes.key?(:'kind')
+        self.kind = attributes[:'kind']
+      else
+        self.kind = nil
       end
 
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
-      else
-        self.message = nil
+      if attributes.key?(:'provenance')
+        self.provenance = attributes[:'provenance']
       end
     end
 
@@ -95,12 +98,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
+      if @ids.nil?
+        invalid_properties.push('invalid value for "ids", ids cannot be nil.')
       end
 
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @kind.nil?
+        invalid_properties.push('invalid value for "kind", kind cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +113,29 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @ids.nil?
+      return false if @kind.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # @param [Object] ids Value to be assigned
+    def ids=(ids)
+      if ids.nil?
+        fail ArgumentError, 'ids cannot be nil'
       end
 
-      @code = code
+      @ids = ids
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
+    # @param [Object] kind Value to be assigned
+    def kind=(kind)
+      if kind.nil?
+        fail ArgumentError, 'kind cannot be nil'
       end
 
-      @message = message
+      @kind = kind
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +143,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          ids == o.ids &&
+          kind == o.kind &&
+          provenance == o.provenance
     end
 
     # @see the `==` method
@@ -154,7 +157,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [ids, kind, provenance].hash
     end
 
     # Builds the object from hash

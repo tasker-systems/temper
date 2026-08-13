@@ -14,20 +14,23 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # Where in a resource a chunk-grain match landed.
+  class MatchLocation < ApiModelBase
+    # The `kb_content_blocks` row the closest chunk belongs to.
+    attr_accessor :block_id
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
+    # The heading trail to that chunk, when it has one.
+    attr_accessor :header_path
 
-    attr_accessor :message
+    # The chunk's own text, or the part of it that matched.  A snippet for the EXACT arm is a named remainder rather than a gap: it is possible without a new index via `ts_headline` over re-fetched text, but that is a per-row fetch of prose the query did not otherwise need, on a path that currently touches only the index. Nobody has measured it, and the retired `SearchResultRow` carried a snippet from the `unified_search` era whose cost was never isolated either.
+    attr_accessor :snippet
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'block_id' => :'block_id',
+        :'header_path' => :'header_path',
+        :'snippet' => :'snippet'
       }
     end
 
@@ -44,16 +47,17 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'block_id' => :'String',
+        :'header_path' => :'String',
+        :'snippet' => :'String'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
+        :'header_path',
+        :'snippet'
       ])
     end
 
@@ -61,32 +65,30 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::MatchLocation` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::MatchLocation`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'block_id')
+        self.block_id = attributes[:'block_id']
       else
-        self.code = nil
+        self.block_id = nil
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
+      if attributes.key?(:'header_path')
+        self.header_path = attributes[:'header_path']
       end
 
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
-      else
-        self.message = nil
+      if attributes.key?(:'snippet')
+        self.snippet = attributes[:'snippet']
       end
     end
 
@@ -95,12 +97,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
-      end
-
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @block_id.nil?
+        invalid_properties.push('invalid value for "block_id", block_id cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +108,18 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @block_id.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # @param [Object] block_id Value to be assigned
+    def block_id=(block_id)
+      if block_id.nil?
+        fail ArgumentError, 'block_id cannot be nil'
       end
 
-      @code = code
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
-      end
-
-      @message = message
+      @block_id = block_id
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +127,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          block_id == o.block_id &&
+          header_path == o.header_path &&
+          snippet == o.snippet
     end
 
     # @see the `==` method
@@ -154,7 +141,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [block_id, header_path, snippet].hash
     end
 
     # Builds the object from hash

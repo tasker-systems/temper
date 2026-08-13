@@ -14,20 +14,39 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ErrorDetail < ApiModelBase
-    attr_accessor :code
+  # `property_value @> $v` for any listed value. OR within the predicate, matching the established within-field OR of `doc_type` and `EdgeFilter.labels`.  The caller supplies the JSON shape they mean. Containment does not coerce: `'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.
+  class PropertyOpOneOf1 < ApiModelBase
+    attr_accessor :op
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
-    attr_accessor :details
+    attr_accessor :values
 
-    attr_accessor :message
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'code' => :'code',
-        :'details' => :'details',
-        :'message' => :'message'
+        :'op' => :'op',
+        :'values' => :'values'
       }
     end
 
@@ -44,16 +63,14 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'code' => :'String',
-        :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'op' => :'String',
+        :'values' => :'Array<Object>'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'details',
       ])
     end
 
@@ -61,32 +78,30 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ErrorDetail` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::PropertyOpOneOf1` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ErrorDetail`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::PropertyOpOneOf1`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'code')
-        self.code = attributes[:'code']
+      if attributes.key?(:'op')
+        self.op = attributes[:'op']
       else
-        self.code = nil
+        self.op = nil
       end
 
-      if attributes.key?(:'details')
-        self.details = attributes[:'details']
-      end
-
-      if attributes.key?(:'message')
-        self.message = attributes[:'message']
+      if attributes.key?(:'values')
+        if (value = attributes[:'values']).is_a?(Array)
+          self.values = value
+        end
       else
-        self.message = nil
+        self.values = nil
       end
     end
 
@@ -95,12 +110,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @code.nil?
-        invalid_properties.push('invalid value for "code", code cannot be nil.')
+      if @op.nil?
+        invalid_properties.push('invalid value for "op", op cannot be nil.')
       end
 
-      if @message.nil?
-        invalid_properties.push('invalid value for "message", message cannot be nil.')
+      if @values.nil?
+        invalid_properties.push('invalid value for "values", values cannot be nil.')
       end
 
       invalid_properties
@@ -110,29 +125,31 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @code.nil?
-      return false if @message.nil?
+      return false if @op.nil?
+      op_validator = EnumAttributeValidator.new('String', ["contains"])
+      return false unless op_validator.valid?(@op)
+      return false if @values.nil?
       true
     end
 
-    # Custom attribute writer method with validation
-    # @param [Object] code Value to be assigned
-    def code=(code)
-      if code.nil?
-        fail ArgumentError, 'code cannot be nil'
+    # Custom attribute writer method checking allowed values (enum).
+    # @param [Object] op Object to be assigned
+    def op=(op)
+      validator = EnumAttributeValidator.new('String', ["contains"])
+      unless validator.valid?(op)
+        fail ArgumentError, "invalid value for \"op\", must be one of #{validator.allowable_values}."
       end
-
-      @code = code
+      @op = op
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] message Value to be assigned
-    def message=(message)
-      if message.nil?
-        fail ArgumentError, 'message cannot be nil'
+    # @param [Object] values Value to be assigned
+    def values=(values)
+      if values.nil?
+        fail ArgumentError, 'values cannot be nil'
       end
 
-      @message = message
+      @values = values
     end
 
     # Checks equality by comparing each attribute.
@@ -140,9 +157,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          code == o.code &&
-          details == o.details &&
-          message == o.message
+          op == o.op &&
+          values == o.values
     end
 
     # @see the `==` method
@@ -154,7 +170,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [op, values].hash
     end
 
     # Builds the object from hash

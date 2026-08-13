@@ -19,6 +19,7 @@ pub mod invocations;
 pub mod machine_clients;
 pub mod meta;
 pub mod profiles;
+pub mod query;
 pub mod reassign;
 pub mod region;
 pub mod resources;

@@ -3,6 +3,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use temper_core::types::error_details::{ErrorDetails, PlanRefusalDetails};
+use temper_core::types::query::validate::PlanRefusal;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     /// Renders as the bare message, with no `Not found:` prefix — unlike `BadRequest` and
@@ -37,6 +40,15 @@ pub enum ApiError {
     },
     #[error("Bad request: {0}")]
     BadRequest(String),
+    /// A `400` that **names every static reason a composition will not run**, under the distinct
+    /// code [`temper_core::error::PLAN_REFUSED_CODE`].
+    ///
+    /// Not a [`Self::BadRequest`] carrying a joined string: `validate` returns *"every refusal, not
+    /// the first — a caller repairing a plan should see all of it in one round trip"*, and that
+    /// property survives to the caller only if the transport keeps the list a list. The distinct
+    /// code is what lets a client know a body carries refusals without sniffing `details`.
+    #[error("Plan refused: {} refusal(s)", .refusals.len())]
+    PlanRefused { refusals: Vec<PlanRefusal> },
     #[error("Conflict: {0}")]
     Conflict(String),
     /// Finalize's raw-bytes integrity check failed — the stored bytes do not hash to the caller's
@@ -75,15 +87,21 @@ impl ErrorBody {
 pub struct ErrorDetail {
     code: &'static str,
     message: String,
-    /// Present only on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed refusal; absent on
-    /// every other error.
+    /// Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on
+    /// `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every
+    /// other error.
     // Held as a `Value` because `IntoResponse` erases the variant before serializing, but declared
-    // to the generators as what it actually is: `SystemAccessRequired` is the ONLY arm that ever
-    // populates this (every other arm, and `ErrorBody::new`, sends `None`), so an untyped `details`
-    // described nothing while costing the SDKs their typed refusal. Should a second variant ever
-    // carry details, this becomes a `oneOf` — widen it then, deliberately.
+    // to the generators as what it actually is: an untyped `details` described nothing while
+    // costing the SDKs their typed refusal.
+    //
+    // `[widened — 2026-08-13]` This was declared as the bare `SystemAccessDetails` under a note
+    // saying "should a second variant ever carry details, this becomes a `oneOf` — widen it then,
+    // deliberately." B1 is that second variant, and this is that widening. Which ARM a body carries
+    // is told by `error.code`, never by sniffing the payload's shape — the two arms are
+    // distinguishable by required field (see `ErrorDetails`), but a client that leans on that is
+    // one all-optional arm away from silently misparsing.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<temper_core::types::access_gate::SystemAccessDetails>)]
+    #[schema(value_type = Option<ErrorDetails>)]
     details: Option<serde_json::Value>,
 }
 
@@ -101,6 +119,10 @@ impl IntoResponse for ApiError {
                 (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED")
             }
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
+            ApiError::PlanRefused { .. } => (
+                StatusCode::BAD_REQUEST,
+                temper_core::error::PLAN_REFUSED_CODE,
+            ),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             ApiError::ContentIntegrity(_) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "CONTENT_INTEGRITY")
@@ -135,15 +157,34 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, %message, "bad request");
             }
+            ApiError::PlanRefused { refusals } => {
+                // The count, not the refusals themselves — a composition is caller-authored content
+                // and its refusal details quote it back.
+                tracing::warn!(
+                    status_code,
+                    error_code = code,
+                    refusal_count = refusals.len(),
+                    "plan refused"
+                );
+            }
             ApiError::Internal(_) => {
                 tracing::error!(status_code, error_code = code, %message, "internal error");
             }
         }
 
+        // Two named arms and a catch-all, deliberately: widening the `_` into something clever is
+        // what would make a third details-carrying variant invisible when it arrives.
         let details_json = match &self {
-            ApiError::SystemAccessRequired { details } => {
-                Some(serde_json::to_value(details).unwrap_or_default())
-            }
+            ApiError::SystemAccessRequired { details } => Some(
+                serde_json::to_value(ErrorDetails::SystemAccess(details.clone()))
+                    .unwrap_or_default(),
+            ),
+            ApiError::PlanRefused { refusals } => Some(
+                serde_json::to_value(ErrorDetails::PlanRefusals(PlanRefusalDetails {
+                    refusals: refusals.clone(),
+                }))
+                .unwrap_or_default(),
+            ),
             _ => None,
         };
 
@@ -188,6 +229,18 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
+            // Degrades to the joined text rather than earning a `TemperError` arm of its own.
+            // This conversion is the server-side DbBackend → CLI-shaped-error path, which a route
+            // refusal never travels: `POST /api/query` renders `PlanRefused` straight to HTTP, and
+            // the CLI meets the refusal list as a `ClientError` parsed back off the wire. Adding an
+            // arm here would be a second, colder representation of the same list with no producer.
+            ApiError::PlanRefused { refusals } => TemperError::BadRequest(
+                refusals
+                    .iter()
+                    .map(|r| r.detail.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
             ApiError::Conflict(s) => TemperError::Conflict(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
             ApiError::Internal(s) => TemperError::Api(format!("internal: {s}")),
@@ -256,6 +309,116 @@ impl From<temper_core::error::TemperError> for ApiError {
 mod tests {
     use super::*;
     use temper_core::error::TemperError;
+
+    /// Render an `ApiError` the way axum will and hand back the status plus the parsed body, so a
+    /// test asserts on the BYTES a client receives rather than on the variant that produced them.
+    async fn rendered(err: ApiError) -> (StatusCode, serde_json::Value) {
+        let response = err.into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body collects");
+        (
+            status,
+            serde_json::from_slice(&bytes).expect("body is JSON"),
+        )
+    }
+
+    fn refusal(detail: &str) -> PlanRefusal {
+        use temper_core::types::query::disposition::RefusalReason;
+        PlanRefusal {
+            stage: None,
+            reason: RefusalReason::UnknownAct,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// The property Task B1.1 exists to make expressible: **every** refusal reaches the caller, on a
+    /// 400, under its own code. A single-refusal assertion would pass against a body that truncates.
+    #[tokio::test]
+    async fn a_refused_plan_renders_400_with_every_refusal_under_its_own_code() {
+        let (status, body) = rendered(ApiError::PlanRefused {
+            refusals: vec![refusal("first"), refusal("second"), refusal("third")],
+        })
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body["error"]["code"],
+            temper_core::error::PLAN_REFUSED_CODE,
+            "a refused plan must be distinguishable from a generic BAD_REQUEST by CODE — the \
+             client keys on it rather than sniffing the body's shape"
+        );
+
+        let refusals = body["error"]["details"]["refusals"]
+            .as_array()
+            .expect("details.refusals is an array — the wire path the spec names");
+        assert_eq!(
+            refusals.len(),
+            3,
+            "the refusal list was truncated in transit"
+        );
+        let details: Vec<&str> = refusals
+            .iter()
+            .map(|r| r["detail"].as_str().expect("detail is a string"))
+            .collect();
+        assert_eq!(details, ["first", "second", "third"]);
+    }
+
+    /// The regression boundary from the plan's *Declared risk*: `ErrorDetail` is on every route in
+    /// the project, so widening `details` into a `oneOf` must leave the shipped 403 body untouched
+    /// — status, code, and every byte of `details`. Asserted, not assumed.
+    #[tokio::test]
+    async fn widening_details_left_the_system_access_403_byte_identical() {
+        use temper_core::types::access_gate::SystemAccessDetails;
+        use temper_principal::Refusal;
+
+        let details = SystemAccessDetails {
+            email: Some("a@b.c".into()),
+            display_name: Some("A".into()),
+            refusal: Refusal::NoStanding,
+            request_url: Some("https://example.test/join".into()),
+            cli_command: Some("temper auth request-access".into()),
+        };
+        let (status, body) = rendered(ApiError::SystemAccessRequired {
+            details: Box::new(details.clone()),
+        })
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"]["code"], "SYSTEM_ACCESS_REQUIRED");
+        assert_eq!(
+            body["error"]["details"],
+            serde_json::to_value(&details).expect("details serialize"),
+            "the `oneOf` moved the access-refusal payload a shipped client already parses"
+        );
+    }
+
+    /// `details` stays absent — not `null` — on the arms that carry none. `skip_serializing_if` is
+    /// what makes that true, and a `oneOf` whose null arm leaked would add a key to every error
+    /// body in the project.
+    #[tokio::test]
+    async fn an_error_carrying_no_details_still_omits_the_key_entirely() {
+        let (status, body) = rendered(ApiError::BadRequest("missing field".into())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "BAD_REQUEST");
+        assert!(
+            body["error"].get("details").is_none(),
+            "details must be absent, not null, on an error that carries none"
+        );
+    }
+
+    #[test]
+    fn a_refused_plan_degrades_to_bad_request_when_crossing_into_temper_error() {
+        let t: TemperError = ApiError::PlanRefused {
+            refusals: vec![refusal("first"), refusal("second")],
+        }
+        .into();
+        match t {
+            TemperError::BadRequest(s) => assert_eq!(s, "first; second"),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
 
     #[test]
     fn api_error_forbidden_maps_to_temper_forbidden() {

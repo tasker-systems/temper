@@ -22,6 +22,7 @@ pub mod connection;
 pub mod context;
 pub mod device;
 pub mod element_trail;
+pub mod error_details;
 pub mod event;
 pub mod facet_requests;
 pub mod graph;

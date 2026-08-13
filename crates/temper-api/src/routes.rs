@@ -163,6 +163,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::events::cursor))
         .routes(routes!(handlers::events::element_trail))
         .routes(routes!(handlers::search::search))
+        .routes(routes!(handlers::query::query))
         .routes(routes!(handlers::slack_disconnect::admin_disconnect))
         // Operator-only re-embed trigger: enqueue embed jobs for chunks whose vector was produced by
         // a model that is no longer the one we embed with. The per-minute drain does the work; this is
@@ -548,6 +549,10 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     // Applied here, not via `ApiDoc`'s `modifiers(...)`: those run against the seed spec, whose
     // `paths` map is empty until the merges above populate it.
     crate::openapi::SurfaceHeaderAddon.modify(&mut spec);
+    // Same reason, for the component half: an open enum reached only through a route's
+    // request/response body is not in `components` until the merges above collect it, so a
+    // modifier registered on `ApiDoc` would run before the schema it repairs exists.
+    crate::openapi::OpenStringEnumAddon.modify(&mut spec);
     spec
 }
 
