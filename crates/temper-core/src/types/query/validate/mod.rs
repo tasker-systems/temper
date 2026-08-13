@@ -333,9 +333,10 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
 /// the dependency graph.) One function, so a plan checked locally and a plan checked by the server
 /// cannot disagree about what "well-formed" means.
 ///
-/// **What it deliberately still cannot see is capability**, which is why `--check` ships a
-/// disclosure rather than a verdict: a plan naming an act this deployment has not made reachable is
-/// shape-clean here and refused there.
+/// **What it still cannot see is capability** — spec §C: *"it reports expressibility and says so —
+/// it cannot speak to what the server has implemented and does not try."* That is why `--check`
+/// ships a disclosure rather than a verdict: a plan naming an act this deployment has not made
+/// reachable is shape-clean here and refused there.
 pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
     shape::validate_shape_indexed(c).0
 }
