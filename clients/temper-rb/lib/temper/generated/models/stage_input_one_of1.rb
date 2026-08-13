@@ -131,6 +131,11 @@ module Temper::Generated
         invalid_properties.push('invalid value for "stage", stage cannot be nil.')
       end
 
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if @stage !~ pattern
+        invalid_properties.push("invalid value for \"stage\", must conform to the pattern #{pattern}.")
+      end
+
       invalid_properties
     end
 
@@ -143,6 +148,7 @@ module Temper::Generated
       from_validator = EnumAttributeValidator.new('String', ["upstream"])
       return false unless from_validator.valid?(@from)
       return false if @stage.nil?
+      return false if @stage !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
       true
     end
 
@@ -171,6 +177,11 @@ module Temper::Generated
     def stage=(stage)
       if stage.nil?
         fail ArgumentError, 'stage cannot be nil'
+      end
+
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if stage !~ pattern
+        fail ArgumentError, "invalid value for \"stage\", must conform to the pattern #{pattern}."
       end
 
       @stage = stage

@@ -76,6 +76,8 @@ module Temper::Generated
 
       if attributes.key?(:'located_at')
         self.located_at = attributes[:'located_at']
+      else
+        self.located_at = nil
       end
 
       if attributes.key?(:'resource')

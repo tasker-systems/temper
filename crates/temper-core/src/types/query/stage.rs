@@ -19,6 +19,13 @@ use super::id_set::{IdKind, IdSet};
 /// then up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+// The published contract must carry the pattern, and the derive does not infer it from
+// [`StageName::parse`]. Without this the generated spec says "string" — so a client generated from
+// it can build a name the server is guaranteed to reject, and learns that only at the door. The
+// constraint is not cosmetic: a leading lowercase letter is what makes a caller-chosen stage unable
+// to shadow a compiler-internal relation, and the compiler relies on it for SQL identifier safety.
+// Keep this in step with `parse`; the two state one rule in two languages.
+#[cfg_attr(feature = "web-api", schema(pattern = "^[a-z][a-z0-9_]{0,62}$"))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]

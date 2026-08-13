@@ -179,6 +179,14 @@ pub struct ResourceHit {
     /// from a shape with no such field, which is exactly the distinction [`RegionHit`] exists to
     /// draw.
     #[serde(default)]
+    // **The published contract has to say PRESENT-null, and the derive says the opposite.** utoipa
+    // reads `Option<T>` as "may be omitted" and leaves the key out of `required` — but no
+    // `skip_serializing_if` sits here, deliberately (see the F4 paragraph above), so the key is
+    // ALWAYS written. A client generated from the underived spec treats an always-present key as
+    // optional and cannot rely on the very distinction F4 ruled the null exists to draw: a
+    // `located_at: null` on a resource hit means *no location declared*, where [`RegionHit`] has no
+    // such key at all. Verified by serializing, not by reading the derive.
+    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub located_at: Option<MatchLocation>,
 }
 

@@ -156,6 +156,11 @@ module Temper::Generated
         invalid_properties.push('invalid value for "name", name cannot be nil.')
       end
 
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if @name !~ pattern
+        invalid_properties.push("invalid value for \"name\", must conform to the pattern #{pattern}.")
+      end
+
       invalid_properties
     end
 
@@ -165,6 +170,7 @@ module Temper::Generated
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @act.nil?
       return false if @name.nil?
+      return false if @name !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
       true
     end
 
@@ -183,6 +189,11 @@ module Temper::Generated
     def name=(name)
       if name.nil?
         fail ArgumentError, 'name cannot be nil'
+      end
+
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if name !~ pattern
+        fail ArgumentError, "invalid value for \"name\", must conform to the pattern #{pattern}."
       end
 
       @name = name

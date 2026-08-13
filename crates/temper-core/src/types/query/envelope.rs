@@ -74,9 +74,18 @@ pub struct NarrowedBy {
     pub value: String,
     /// Counts are carried ONLY where the act computes them for free. Requiring them would
     /// re-introduce the second query `Extent` exists to avoid.
+    // **ABSENT, never null** — the other half of the rule [`super::hits::ResourceHit::located_at`]
+    // states from the opposite side. `skip_serializing_if` means the key is dropped entirely when
+    // the act cannot compute counts, so `null` is a value this field never takes; utoipa's default
+    // `["integer", "null"]` renders `Option` as nullable and publishes a value that is never sent.
+    // `value_type` states the type the field has WHEN PRESENT, and absence is carried by the key
+    // staying out of `required` — which is exactly the distinction the absent-versus-null rule
+    // draws. Verified by serializing `NarrowedBy { admitted: None, .. }`: no key appears.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(value_type = i64))]
     pub admitted: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(value_type = i64))]
     pub excluded: Option<i64>,
 }
 

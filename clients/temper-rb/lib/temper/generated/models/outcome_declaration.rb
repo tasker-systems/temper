@@ -83,6 +83,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "returns", returns cannot be nil.')
       end
 
+      if @returns.length < 1
+        invalid_properties.push('invalid value for "returns", number of items must be greater than or equal to 1.')
+      end
+
       invalid_properties
     end
 
@@ -91,6 +95,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @returns.nil?
+      return false if @returns.length < 1
       true
     end
 
@@ -99,6 +104,10 @@ module Temper::Generated
     def returns=(returns)
       if returns.nil?
         fail ArgumentError, 'returns cannot be nil'
+      end
+
+      if returns.length < 1
+        fail ArgumentError, 'invalid value for "returns", number of items must be greater than or equal to 1.'
       end
 
       @returns = returns

@@ -4021,9 +4021,9 @@ export interface components {
              * @description Counts are carried ONLY where the act computes them for free. Requiring them would
              *     re-introduce the second query `Extent` exists to avoid.
              */
-            admitted?: number | null;
+            admitted?: number;
             /** Format: int64 */
-            excluded?: number | null;
+            excluded?: number;
             key: string;
             value: string;
         };
@@ -4808,7 +4808,7 @@ export interface components {
          *     and nothing else.
          */
         ResourceHit: {
-            located_at?: null | components["schemas"]["MatchLocation"];
+            located_at: null | components["schemas"]["MatchLocation"];
             resource: components["schemas"]["ResourceView"];
             scoring: components["schemas"]["Scoring"];
         };

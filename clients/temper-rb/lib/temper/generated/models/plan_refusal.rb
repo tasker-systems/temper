@@ -105,6 +105,11 @@ module Temper::Generated
         invalid_properties.push('invalid value for "reason", reason cannot be nil.')
       end
 
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if !@stage.nil? && @stage !~ pattern
+        invalid_properties.push("invalid value for \"stage\", must conform to the pattern #{pattern}.")
+      end
+
       invalid_properties
     end
 
@@ -114,6 +119,7 @@ module Temper::Generated
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @detail.nil?
       return false if @reason.nil?
+      return false if !@stage.nil? && @stage !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
       true
     end
 
@@ -135,6 +141,17 @@ module Temper::Generated
       end
 
       @reason = reason
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] stage Value to be assigned
+    def stage=(stage)
+      pattern = Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      if !stage.nil? && stage !~ pattern
+        fail ArgumentError, "invalid value for \"stage\", must conform to the pattern #{pattern}."
+      end
+
+      @stage = stage
     end
 
     # Checks equality by comparing each attribute.
