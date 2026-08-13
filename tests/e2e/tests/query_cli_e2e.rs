@@ -1,0 +1,192 @@
+//! `temper query` through the real binary, against the real server.
+//!
+//! **What the route e2e already took, so this does not repeat it.** `query_route_e2e.rs` drives
+//! `POST /api/query` over HTTP: the gate, deserialization, hydration, and the 400 body's shape.
+//! What only this tier reaches is the CLI ↔ client ↔ API ↔ DB chain — the plan arriving on stdin
+//! through the non-TTY auto-detect branch, and the refusal list surviving `map_status_to_error`
+//! and reaching a human's terminal.
+//!
+//! **That last hop is the point.** `validate` returns every refusal rather than the first *"because
+//! a caller repairing a plan should see all of it in one round trip"*. Before the client's 400 arm,
+//! that property was real for raw HTTP and absent for the CLI — the door's headline consumer. These
+//! are the only tests in the arc that fail if the client silently drops `details`.
+//!
+//! `test-embed` gated: the happy path drives a **find-about** stage, so it needs the real ONNX
+//! model. A run scoped `--features test-db` alone compiles this file to nothing and reads green.
+//! Use `cargo make test-e2e-embed`.
+//!
+//! **Local runs need a fresh binary.** nextest builds this crate's lib, not temper-cli's separate
+//! `temper` bin target, so a new subcommand fails here as `unrecognized subcommand 'query'` against
+//! a stale `target/debug/temper`. Run `cargo build -p temper-cli --bin temper` first. CI is
+//! unaffected — its job builds the bin before the e2e step.
+#![cfg(all(feature = "test-db", feature = "test-embed"))]
+
+mod common;
+
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
+
+/// A plan whose single find-about stage asks a real question, as a caller would author it — JSON,
+/// not a Rust struct, because the point of this tier is that hand-written JSON reaches the server.
+const ANSWERABLE_PLAN: &str = r#"{
+  "stages": [
+    {
+      "name": "about",
+      "act": "find-about-anywhere",
+      "intention": { "query": "kubernetes deployment" }
+    }
+  ],
+  "outcome": { "returns": [{ "stage": "about", "with": [] }] }
+}"#;
+
+/// Two stages, each independently unrunnable: neither carries an intention, and a find act needs a
+/// question. A validator that stopped at the first would report one.
+const DOUBLY_REFUSED_PLAN: &str = r#"{
+  "stages": [
+    { "name": "one", "act": "find-about-anywhere" },
+    { "name": "two", "act": "find-about-anywhere" }
+  ],
+  "outcome": { "returns": [{ "stage": "one", "with": [] }, { "stage": "two", "with": [] }] }
+}"#;
+
+async fn ingest_semantic(app: &common::E2eTestApp, title: &str, slug: &str, content: &str) {
+    let packed = temper_ingest::pipeline::prepare_markdown(content).expect("prepare_markdown");
+    let payload = IngestPayload {
+        idempotency_key: None,
+        segmented: None,
+        goal: None,
+        title: title.to_string(),
+        origin_uri: format!("test://query-cli/{slug}"),
+        context_ref: "@me/qcli".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(content)),
+        content: content.to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&packed).expect("pack chunks")),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    app.client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest failed");
+}
+
+/// A plan piped on stdin runs, and its answer reaches stdout as JSON an agent can parse.
+///
+/// The assertion is on a hydrated title, not on a zero exit code: a stage that answered empty for
+/// some other reason would also exit zero, so only the seeded resource coming back proves the whole
+/// chain ran.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_plan_piped_on_stdin_runs_and_answers_on_stdout(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("qcli", None)
+        .await
+        .expect("context create");
+    ingest_semantic(
+        &app,
+        "Container Scheduling Primer",
+        "container-scheduling-primer",
+        "Pods, replicas, and self-healing workloads are placed and rescheduled automatically by \
+         the control plane.",
+    )
+    .await;
+
+    // No `--plan` flag: the implicit non-TTY auto-detect branch, which is how an agent pipes one.
+    let out = common::run_temper_cli_with_stdin(&app, ANSWERABLE_PLAN, &["query"])
+        .await
+        .expect("spawn temper query");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "temper query failed on a runnable plan\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON: {e}\n{stdout}"));
+    assert!(
+        stdout.contains("Container Scheduling Primer"),
+        "the seeded resource must come back through the CLI; got {parsed:#}"
+    );
+    assert!(
+        parsed["trace"].is_object(),
+        "every stage is traced, including ones not returned; got {parsed:#}"
+    );
+}
+
+/// **The CLI prints MORE THAN ONE refusal**, and exits non-zero.
+///
+/// The end-to-end witness for the client's 400 arm, and the only test in the arc that fails if the
+/// client silently drops `details`. A single-refusal assertion would pass against a CLI that shows
+/// one at a time — the experience the "every refusal" rule exists to prevent.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_refused_plan_prints_every_refusal_and_exits_non_zero(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let out = common::run_temper_cli_with_stdin(&app, DOUBLY_REFUSED_PLAN, &["query"])
+        .await
+        .expect("spawn temper query");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a plan that will not run must exit non-zero\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // Both stages named, so the caller can repair each. Counting mentions rather than asserting one
+    // substring is what makes this fail against a CLI that renders only the first refusal.
+    assert!(
+        stderr.contains("one:") && stderr.contains("two:"),
+        "both refused stages must be named in one run; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("2 refusal(s)"),
+        "the caller must be told how many refusals there are; got:\n{stderr}"
+    );
+
+    // A caller fault is not reported as a server error — the misclassification the client's 400 arm
+    // corrects. Before it, this arrived as `ClientError::Server { status: 400 }`.
+    assert!(
+        !stderr.to_lowercase().contains("server error"),
+        "a refused plan was reported as a SERVER fault; got:\n{stderr}"
+    );
+}
+
+/// A missing plan is an error rather than an empty request — the deliberate divergence from
+/// `resource update`, which treats absent stdin as "no body update requested".
+///
+/// `Command::output()` gives the child a null stdin: non-TTY and immediately at EOF, which is
+/// exactly the "a pipe with nothing in it" case.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_missing_plan_is_refused_before_any_request(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    let out = common::run_temper_cli(&app, &["query"])
+        .await
+        .expect("spawn temper query");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "an empty plan must not be sent");
+    assert!(
+        stderr.contains("no plan supplied"),
+        "the error must say what to pass; got:\n{stderr}"
+    );
+}

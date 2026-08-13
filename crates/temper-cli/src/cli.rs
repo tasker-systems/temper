@@ -283,7 +283,6 @@ pub enum Commands {
         action: ConfigAction,
     },
 
-    /// Search the knowledge base
     /// Run a composed query — declared acts, piped, answered in one round trip
     ///
     /// The plan is JSON. Source it like a resource body: `--plan @<path>` wins, `--plan -` always
@@ -295,6 +294,7 @@ pub enum Commands {
         plan: Option<String>,
     },
 
+    /// Search the knowledge base
     Search {
         /// Search query text
         query: String,

@@ -94,6 +94,30 @@ pub async fn run_temper_cli(
     run_temper_cli_with_env(app, &[], args).await
 }
 
+/// `run_temper_cli`, with `input` piped to the spawned process's stdin.
+///
+/// For the commands whose input arrives on stdin rather than in a flag — `resource update`'s body,
+/// `query`'s plan. Asserting those through the real binary is the only way to exercise the
+/// non-TTY auto-detect branch, which no in-process test can reach.
+pub async fn run_temper_cli_with_stdin(
+    app: &E2eTestApp,
+    input: &str,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("temper-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config TOML");
+    spawn_temper(
+        &app.base_url(),
+        &app.token,
+        &config_path,
+        &[],
+        args,
+        Some(input),
+    )
+    .await
+}
+
 /// `run_temper_cli`, plus extra environment for the spawned process.
 ///
 /// Exists for the cases where the *environment* is the thing under test rather than the command —
@@ -110,7 +134,7 @@ pub async fn run_temper_cli_with_env(
     let config_path = app.vault_dir.path().join("test-temper-config.toml");
     std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
 
-    spawn_temper(&app.base_url(), &app.token, &config_path, env, args).await
+    spawn_temper(&app.base_url(), &app.token, &config_path, env, args, None).await
 }
 
 /// Run the real `temper` binary against an arbitrary API URL and token.
@@ -127,7 +151,7 @@ pub async fn run_temper_cli_with_token(
     config_path: &std::path::Path,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
-    spawn_temper(api_url, token, config_path, &[], args).await
+    spawn_temper(api_url, token, config_path, &[], args, None).await
 }
 
 /// The one place the `temper` binary is actually spawned. Every helper above funnels here so the
@@ -139,12 +163,14 @@ async fn spawn_temper(
     config_path: &std::path::Path,
     env: &[(&str, &str)],
     args: &[&str],
+    stdin: Option<&str>,
 ) -> std::io::Result<std::process::Output> {
     let bin = temper_bin_path();
     let url = api_url.to_string();
     let token = token.to_string();
     let config_path = config_path.to_path_buf();
     let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    let stdin_owned: Option<String> = stdin.map(ToOwned::to_owned);
     let env_owned: Vec<(String, String)> = env
         .iter()
         .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
@@ -159,7 +185,23 @@ async fn spawn_temper(
         for (key, value) in &env_owned {
             cmd.env(key, value);
         }
-        cmd.output()
+        // `Command::output()` defaults stdin to `Stdio::null()` — a non-TTY that is immediately at
+        // EOF, which is what makes the no-stdin case well-defined rather than a hang. Piping is
+        // opt-in, and goes through this one spawn site so the env-var contract stays single-defined.
+        let Some(input) = stdin_owned else {
+            return cmd.output();
+        };
+        use std::io::Write as _;
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn()?;
+        child
+            .stdin
+            .take()
+            .expect("stdin was piped")
+            .write_all(input.as_bytes())?;
+        child.wait_with_output()
     })
     .await
     .expect("spawn_blocking join")
