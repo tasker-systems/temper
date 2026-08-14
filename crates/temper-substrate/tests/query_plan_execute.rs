@@ -96,7 +96,7 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
                 query: query.to_string(),
                 embedding: None,
             }),
-            input,
+            inputs: input.into_iter().collect(),
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -277,14 +277,17 @@ fn one_find_exact(query: &str, bound: Option<Vec<Uuid>>) -> ValidatedComposition
                 query: query.to_string(),
                 embedding: None,
             }),
-            input: bound.map(|ids| StageInput::Caller {
-                relation: StageRelation::Bound,
-                ids: IdSet {
-                    kind: IdKind::Resource,
-                    provenance: None,
-                    ids,
-                },
-            }),
+            inputs: bound
+                .map(|ids| StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: IdSet {
+                        kind: IdKind::Resource,
+                        provenance: None,
+                        ids,
+                    },
+                })
+                .into_iter()
+                .collect(),
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -311,7 +314,7 @@ fn find_exact_paged(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompo
                 query: query.to_string(),
                 embedding: None,
             }),
-            input: None,
+            inputs: vec![],
             terms: terms.into_iter().collect(),
             resource_filter: None,
             edge_filter: None,
@@ -557,7 +560,7 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
                     query: "kestrel".to_string(),
                     embedding: None,
                 }),
-                input,
+                inputs: input.into_iter().collect(),
                 terms: Default::default(),
                 resource_filter: None,
                 edge_filter: None,
@@ -654,7 +657,7 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
                 query: "kestrel".to_string(),
                 embedding: None,
             }),
-            input,
+            inputs: input.into_iter().collect(),
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -742,7 +745,7 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
                 query: query.to_string(),
                 embedding: None,
             }),
-            input: None,
+            inputs: vec![],
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -756,10 +759,13 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
             query: query.to_string(),
             embedding: None,
         }),
-        input: bind_to_wide.then(|| StageInput::Upstream {
-            relation: StageRelation::Bound,
-            stage: wide.clone(),
-        }),
+        inputs: bind_to_wide
+            .then(|| StageInput::Upstream {
+                relation: StageRelation::Bound,
+                stage: wide.clone(),
+            })
+            .into_iter()
+            .collect(),
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -890,7 +896,7 @@ fn one_find_about_anywhere(
                 query: query.to_string(),
                 embedding,
             }),
-            input: None,
+            inputs: vec![],
             terms: terms.into_iter().collect(),
             resource_filter: None,
             edge_filter: None,

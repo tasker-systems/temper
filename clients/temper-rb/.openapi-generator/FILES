@@ -261,6 +261,7 @@ lib/temper/generated/models/stage_disposition.rb
 lib/temper/generated/models/stage_input.rb
 lib/temper/generated/models/stage_input_one_of.rb
 lib/temper/generated/models/stage_input_one_of1.rb
+lib/temper/generated/models/stage_input_trace.rb
 lib/temper/generated/models/stage_node.rb
 lib/temper/generated/models/stage_output.rb
 lib/temper/generated/models/stage_output_one_of.rb

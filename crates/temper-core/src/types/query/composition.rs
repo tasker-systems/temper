@@ -187,10 +187,18 @@ impl StageNode {
     /// Every upstream stage name this node reads. Empty for a caller-fed or root act.
     pub fn upstream_names(&self) -> Vec<&StageName> {
         match self {
-            StageNode::Act(a) => match &a.input {
-                Some(super::stage::StageInput::Upstream { stage, .. }) => vec![stage],
-                _ => vec![],
-            },
+            // **Every upstream input, not the first.** `[widened — 2026-08-14]` A stage may now
+            // carry a seed and a bound at once, and both can name an upstream stage — so a
+            // first-match here would drop a real DAG edge, and the cycle check and the topological
+            // order are both built from this list.
+            StageNode::Act(a) => a
+                .inputs
+                .iter()
+                .filter_map(|i| match i {
+                    super::stage::StageInput::Upstream { stage, .. } => Some(stage),
+                    super::stage::StageInput::Caller { .. } => None,
+                })
+                .collect(),
             StageNode::Combine(c) => c.inputs.iter().collect(),
         }
     }
@@ -269,7 +277,7 @@ mod tests {
             name: StageName::parse("s").unwrap(),
             act,
             intention: None,
-            input: None,
+            inputs: vec![],
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -459,10 +467,10 @@ mod tests {
         let seeded = StageNode::Act(ActInvocation {
             name: StageName::parse("near").unwrap(),
             intention: None,
-            input: Some(StageInput::Upstream {
+            inputs: vec![StageInput::Upstream {
                 relation: StageRelation::Seed,
                 stage: StageName::parse("hits").unwrap(),
-            }),
+            }],
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -474,7 +482,7 @@ mod tests {
         let rooted = StageNode::Act(ActInvocation {
             name: StageName::parse("hits").unwrap(),
             intention: None,
-            input: None,
+            inputs: vec![],
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,

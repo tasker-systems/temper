@@ -1746,7 +1746,37 @@ export interface components {
         ActInvocation: {
             act: components["schemas"]["ActName"];
             edge_filter?: null | components["schemas"]["EdgeFilter"];
-            input?: null | components["schemas"]["StageInput"];
+            /**
+             * @description Where this stage's sets come from, and what this act does with each: caller-supplied ids or
+             *     an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root
+             *     act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
+             *     `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
+             *
+             *     There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
+             *     "required whenever an input is present" invariant lived in prose, which admitted a
+             *     meaningless state the validator then read as `bound`. The relation belongs to the edge, and
+             *     nesting it there makes the meaningless state unrepresentable rather than merely invalid.
+             *
+             *     # A LIST, and at most one per relation
+             *
+             *     `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**
+             *     relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from
+             *     *and* a bound to stay inside, at the same time, and a single slot can hold one or the other.
+             *     The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,
+             *     so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.
+             *
+             *     **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed
+             *     ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union
+             *     is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside
+             *     one. So the list is short by construction and is not a general fan-in.
+             *
+             *     **Why a list rather than a second `bound` field beside this one.** The relation already
+             *     distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give
+             *     it two — the new field, and this one with a `Bound` relation — which is the incumbent
+             *     literal `bounds: Option<IdSet>` shape this contract deliberately replaced, returning under a
+             *     different name.
+             */
+            inputs?: components["schemas"]["StageInput"][];
             intention?: null | components["schemas"]["Intention"];
             /** @description This node's name, referenced by downstream stages and by `returns`. */
             name: components["schemas"]["StageName"];
@@ -4499,7 +4529,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
         /** @description One region of a cognitive map. Produced by `survey`. */
         RegionHit: {
             /**
@@ -5501,6 +5531,25 @@ export interface components {
             stage: components["schemas"]["StageName"];
         };
         /**
+         * @description One set a stage was handed: what it was FOR, where it came from, and how big it was.
+         *
+         *     `[added — 2026-08-14]` with the widening of `ActInvocation::inputs`. It carries no `unusable`
+         *     count of its own — that stays one conflated number on the stage
+         *     ([`StageTrace::input_unusable`]), because splitting it per input would narrow what a caller can
+         *     probe with, and the whole reason the stage-level figure conflates invisible/nonexistent/malformed
+         *     is to keep it from being a single-probe existence oracle. A per-input split hands that back.
+         */
+        StageInputTrace: {
+            /**
+             * Format: int64
+             * @description How many ids this particular set held.
+             */
+            ids: number;
+            /** @description Whether this set NARROWED the stage or was REACHED from. */
+            relation: components["schemas"]["StageRelation"];
+            source: components["schemas"]["InputSource"];
+        };
+        /**
          * @description A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the
          *     name is a safe SQL identifier.
          *
@@ -5667,10 +5716,14 @@ export interface components {
             disposition: components["schemas"]["StageDisposition"];
             /**
              * Format: int64
-             * @description How many ids this stage was handed. Zero for a stage with no input.
+             * @description How many ids this stage was handed **in total, across every input**. Zero for a stage with
+             *     no input.
+             *
+             *     A sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one
+             *     conflated number by design and a total is the only thing the two can be compared against.
+             *     The per-input split is in [`Self::inputs`].
              */
             input_ids: number;
-            input_source?: null | components["schemas"]["InputSource"];
             /**
              * Format: int64
              * @description How many of them this stage could not use at all — invisible, nonexistent, or malformed.
@@ -5679,9 +5732,30 @@ export interface components {
              *     Naming the invisible case alone would make the trace a single-probe existence oracle.
              */
             input_unusable: number;
+            /**
+             * @description What this stage was handed, one entry per input.
+             *
+             *     A reader can then tell without knowing the act vocabulary — *"did stage 3 narrow or
+             *     expand?"* is the question `composition-is-legible` most obviously owes an answer to, and a
+             *     caller reading only the response has no other way to get it. Empty for a stage with no
+             *     input.
+             *
+             *     # This replaced a `relation` / `input_source` PAIR, and the pair could not be kept
+             *
+             *     `[widened — 2026-08-14]` with `ActInvocation::inputs`. Both were `Option`s describing *the*
+             *     input, which was a total description while a stage had one. A bounded walk has two — a seed
+             *     and a bound — and filling a single `relation` from whichever arrived first would answer
+             *     *"did this stage narrow or expand?"* with **half the truth and no marker saying so**. That is
+             *     worse than not answering: the field's whole job is to be the thing a caller trusts instead of
+             *     knowing the act vocabulary.
+             *
+             *     Keeping the two fields beside this list was the alternative and is the drift-by-construction
+             *     this contract keeps removing — two spellings of one fact, free to disagree the moment a
+             *     second input appears.
+             */
+            inputs?: components["schemas"]["StageInputTrace"][];
             narrowed_by: components["schemas"]["NarrowedBy"][];
             refusal?: null | components["schemas"]["ActRefusal"];
-            relation?: null | components["schemas"]["StageRelation"];
             stage: components["schemas"]["StageName"];
         };
         /**

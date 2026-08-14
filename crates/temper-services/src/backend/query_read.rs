@@ -27,10 +27,10 @@ use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, emitted_fragment_for, validate, validate_shape, ActName,
     ActRefusal, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, ResourceHit,
-    ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageRelation,
-    StageResult, StageTrace, ValidatedComposition,
+    ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageResult,
+    StageTrace, ValidatedComposition,
 };
-use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource};
+use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
 use temper_substrate::readback::query_exec::{execute, QueryRows};
@@ -358,8 +358,10 @@ struct StageNumbers {
     refusal: Option<ActRefusal>,
     input_ids: i64,
     input_unusable: i64,
-    relation: Option<StageRelation>,
-    input_source: Option<InputSource>,
+    /// One entry per input. `[widened — 2026-08-14]` was a `relation`/`input_source` pair
+    /// describing *the* input; a stage carrying a seed AND a bound has two, and a single relation
+    /// filled from whichever came first is half the truth with no marker saying so.
+    inputs: Vec<StageInputTrace>,
 }
 
 fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
@@ -367,28 +369,36 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
     let tally = rows.tally(name);
     let produced = tally.map(|t| t.produced).unwrap_or(0);
 
-    let (relation, input_source, input_ids) = match node {
-        StageNode::Act(inv) => match &inv.input {
-            Some(StageInput::Caller { relation, ids }) => (
-                Some(*relation),
-                Some(InputSource::Caller),
-                ids.ids.len() as i64,
-            ),
-            Some(StageInput::Upstream { relation, stage }) => (
-                Some(*relation),
-                Some(InputSource::Upstream {
-                    stage: stage.clone(),
-                }),
-                // The upstream stage's OWN tally — the count of what it produced is exactly the
-                // count of what this stage was handed. There is no second question to ask.
-                rows.tally(stage.as_str()).map(|t| t.produced).unwrap_or(0),
-            ),
-            None => (None, None, 0),
-        },
-        // A combinator's input is its own inputs' outputs; it declares no relation of its own.
+    let (inputs, input_ids): (Vec<StageInputTrace>, i64) = match node {
+        StageNode::Act(inv) => {
+            let traced: Vec<StageInputTrace> = inv
+                .inputs
+                .iter()
+                .map(|i| match i {
+                    StageInput::Caller { relation, ids } => StageInputTrace {
+                        relation: *relation,
+                        source: InputSource::Caller,
+                        ids: ids.ids.len() as i64,
+                    },
+                    StageInput::Upstream { relation, stage } => StageInputTrace {
+                        relation: *relation,
+                        source: InputSource::Upstream {
+                            stage: stage.clone(),
+                        },
+                        // The upstream stage's OWN tally — the count of what it produced is
+                        // exactly the count of what this stage was handed. There is no second
+                        // question to ask.
+                        ids: rows.tally(stage.as_str()).map(|t| t.produced).unwrap_or(0),
+                    },
+                })
+                .collect();
+            let total = traced.iter().map(|t| t.ids).sum();
+            (traced, total)
+        }
+        // A combinator's input is its own inputs' outputs; it declares no relation of its own — so
+        // it contributes a total and no per-input entries, exactly as it carried no relation before.
         StageNode::Combine(cn) => (
-            None,
-            None,
+            Vec::new(),
             cn.inputs
                 .iter()
                 .filter_map(|s| rows.tally(s.as_str()))
@@ -420,8 +430,7 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
         refusal,
         input_ids,
         input_unusable: tally.map(|t| t.unusable).unwrap_or(0),
-        relation,
-        input_source,
+        inputs,
     }
 }
 
@@ -537,8 +546,7 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         act: act_of(node),
         disposition: n.disposition,
         refusal: n.refusal,
-        relation: n.relation,
-        input_source: n.input_source,
+        inputs: n.inputs,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
         narrowed_by: narrowed_by(node),
@@ -685,7 +693,7 @@ mod tests {
     use super::*;
     use temper_core::types::query::{
         ActInvocation, Intention, OutcomeDeclaration, RefusalReason, ResourceFilter, ReturnSpec,
-        StageName,
+        StageName, StageRelation,
     };
     use temper_substrate::readback::query_exec::{HitRow, TallyRow};
 
@@ -712,7 +720,7 @@ mod tests {
                 query: "a question this test never reads".to_string(),
                 embedding: None,
             }),
-            input,
+            inputs: input.into_iter().collect(),
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,

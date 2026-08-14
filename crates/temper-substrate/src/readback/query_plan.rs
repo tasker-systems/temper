@@ -325,14 +325,17 @@ fn emit_act_body(
     // is a validator/compiler disagreement rather than a caller error — `bound_expr` says so and
     // errors instead of quietly narrowing.
     let bound_for_find = |inv: &temper_core::types::query::ActInvocation| {
-        narrowing
-            .bound_expr()
-            .map(str::to_string)
-            .map_err(|detail| PlanRefusal {
+        if narrowing.has_seed() {
+            return Err(PlanRefusal {
                 stage: Some(inv.name.clone()),
                 reason: RefusalReason::UnsupportedSeedKind,
-                detail: detail.to_string(),
-            })
+                detail: "this act narrows within a set and cannot grow from one; the validator \
+                         should have refused this stage as `unsupported_seed_kind` before \
+                         compilation"
+                    .to_string(),
+            });
+        }
+        Ok(narrowing.bound_expr().to_string())
     };
 
     match fragment_for(&inv.act) {
@@ -584,62 +587,93 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
     }
 }
 
-/// What one stage does with the set it was handed, and therefore which slot the set belongs in.
+/// What one stage does with the sets it was handed, and therefore which slot each belongs in.
 ///
-/// An enum rather than a struct of optional strings, because "never both" was previously prose
-/// over three sibling fields — and prose over sibling fields is what let `bounds_mode` be ignored
-/// in the first place. An act is handed ONE `IdSet`; the relation says what it is FOR and the
-/// kind says which slot serves it.
-enum StageNarrowing {
-    /// No input. `NULL::uuid[]`, never `'{}'` — the fragments read the two differently and
-    /// conflating them is exactly the substitution delta 3 forbids.
-    Unbounded,
+/// # It was an enum, and the widening retired the reason
+///
+/// `[widened — 2026-08-14]` This was `Unbounded | Bound(_) | Seed(_) | Anchor{..}`, and its comment
+/// said: *an enum rather than a struct of optional strings, because "never both" was previously
+/// prose over three sibling fields — and prose over sibling fields is what let `bounds_mode` be
+/// ignored in the first place.*
+///
+/// **"Never both" is exactly what `inputs: Vec<StageInput>` retires.** A bounded walk carries seeds
+/// AND a bound at once, so an enum can no longer express a well-formed stage, and keeping that
+/// sentence beside a type that now admits both would be the drift it warns about, one level up.
+///
+/// **What must NOT be retired with it is the property underneath: the RELATION picks the slot.**
+/// That is what the enum was really protecting, and it survives here structurally rather than by
+/// prose — [`narrowing_for`] is the only constructor, it writes each field from
+/// `StageInput::relation()`, and no other code assembles one. A seed cannot reach `p_bound_ids`
+/// because nothing but the `Seed` relation ever writes [`Self::seed`]. The failure this guards
+/// against is concrete and shipped once: routing a seed into `p_bound_ids` compiles a traversal
+/// that can only return what was already in its own seed set — a stage that looks like it worked
+/// and can never produce a neighbour.
+///
+/// A field left `None` means the slot is UNBOUNDED — `NULL::uuid[]`, never `'{}'`. The fragments
+/// read those two differently and conflating them is the substitution delta 3 forbids.
+#[derive(Default)]
+struct StageNarrowing {
     /// Narrow to within this set: the `p_bound_ids uuid[]` slot.
-    Bound(String),
+    bound: Option<String>,
     /// Grow from this set: the `p_seed_ids uuid[]` slot.
-    ///
-    /// **A different slot on a different fragment, which is the whole point of the fix.** Routing
-    /// a seed into `p_bound_ids` compiles a traversal that can only return what was already in its
-    /// own seed set — a stage that looks like it worked and can never produce a neighbour.
-    Seed(String),
+    seed: Option<String>,
     /// A `(table, id)` anchor pair — how the fragments take a cogmap or context scope. Holds
     /// exactly one id.
-    Anchor { table: String, id: String },
+    anchor: Option<(String, String)>,
 }
 
 impl StageNarrowing {
-    /// The `p_bound_ids` expression for a fragment that only narrows.
+    /// The `p_bound_ids` expression.
+    fn bound_expr(&self) -> &str {
+        self.bound.as_deref().unwrap_or("NULL::uuid[]")
+    }
+
+    /// The `p_seed_ids` expression.
     ///
-    /// A [`Self::Seed`] reaching here is a compiler-level contradiction, not a caller error: the
-    /// validator refuses a seed against an act declaring `accepts_seeds: []`, and the three find
-    /// acts all declare exactly that. It returns an error rather than silently narrowing, because
-    /// silently narrowing is the defect this enum was introduced to remove — if the two ever
-    /// disagree, the loud answer is the safe one.
-    fn bound_expr(&self) -> Result<&str, &'static str> {
-        match self {
-            StageNarrowing::Bound(b) => Ok(b),
-            StageNarrowing::Unbounded | StageNarrowing::Anchor { .. } => Ok("NULL::uuid[]"),
-            StageNarrowing::Seed(_) => Err(
-                "this act narrows within a set and cannot grow from one; the validator should \
-                 have refused this stage as `unsupported_seed_kind` before compilation",
-            ),
-        }
+    /// **No caller yet, and that is the state of the work rather than dead code.** `follow-from` is
+    /// the only seeding act and its emitter arm is not built — it still falls to the placeholder.
+    /// Kept because the pair is what makes the routing legible: a reader comparing `seed_expr` and
+    /// `bound_expr` sees two slots and one rule, where a lone `bound_expr` reads as though bounds
+    /// were the only kind of set there is.
+    // `cfg_attr(not(test))` because the in-module tests DO call it — an unconditional `expect` is
+    // unfulfilled under `--cfg test`, and `-D warnings` turns that into an error.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by follow-from's emitter arm, which lands next"
+        )
+    )]
+    fn seed_expr(&self) -> &str {
+        self.seed.as_deref().unwrap_or("NULL::uuid[]")
+    }
+
+    /// Whether this stage was handed a set to GROW from.
+    ///
+    /// Read by the find acts, which cannot: an act declaring `accepts_seeds: []` that reaches the
+    /// compiler holding a seed is a validator/compiler contradiction, and the loud answer is the
+    /// safe one. Previously this lived inside `bound_expr`'s `Result`; it moved out because the
+    /// two questions stopped being the same one when a stage could hold both.
+    fn has_seed(&self) -> bool {
+        self.seed.is_some()
     }
 
     fn anchor(&self) -> (&str, &str) {
-        match self {
-            StageNarrowing::Anchor { table, id } => (table, id),
-            _ => ("NULL", "NULL"),
-        }
+        self.anchor
+            .as_ref()
+            .map_or(("NULL", "NULL"), |(t, i)| (t.as_str(), i.as_str()))
     }
 
     /// The set expression a placeholder body echoes, whichever slot it came from.
+    ///
+    /// Seed before bound before anchor — an arbitrary order for a body that deliberately does not
+    /// exist, kept total so the placeholder still names *something* the reader can recognize.
     fn any_set_expr(&self) -> &str {
-        match self {
-            StageNarrowing::Bound(s) | StageNarrowing::Seed(s) => s,
-            StageNarrowing::Anchor { id, .. } => id,
-            StageNarrowing::Unbounded => "NULL::uuid[]",
-        }
+        self.seed
+            .as_deref()
+            .or(self.bound.as_deref())
+            .or(self.anchor.as_ref().map(|(_, i)| i.as_str()))
+            .unwrap_or("NULL::uuid[]")
     }
 }
 
@@ -679,35 +713,69 @@ fn narrowing_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
 ) -> Result<(StageNarrowing, String), PlanRefusal> {
-    let Some(input) = &inv.input else {
-        return Ok((StageNarrowing::Unbounded, NO_UNUSABLE.to_string()));
-    };
-    // Read once, up front. The relation is a property of the edge and is the same whether the set
-    // came from the caller or from an upstream stage — which is why it is not re-derived in each
-    // arm below.
-    let seeding = input.relation() == StageRelation::Seed;
-    let by_relation = |expr: String| {
-        if seeding {
-            StageNarrowing::Seed(expr)
-        } else {
-            StageNarrowing::Bound(expr)
-        }
-    };
+    let mut narrowing = StageNarrowing::default();
+    // One tally per caller-supplied resource set, SUMMED. `input_unusable` is one number per stage
+    // — "how many of the ids you handed me could not be used" — and a stage handing over two sets
+    // has one answer to that question, not two. Reporting only the first would under-report in
+    // exactly the direction that reads as reassurance.
+    let mut tallies: Vec<String> = Vec::new();
 
+    for input in &inv.inputs {
+        // Read per input. The relation is a property of the edge and is the same whether the set
+        // came from the caller or from an upstream stage — which is why it is not re-derived in
+        // each arm below.
+        let seeding = input.relation() == StageRelation::Seed;
+        // **The one place a relation becomes a slot.** Every write to `seed`/`bound` goes through
+        // here, which is what makes "the relation picks the slot" a property of this function
+        // rather than of everyone remembering.
+        let assign = |n: &mut StageNarrowing, expr: String| {
+            if seeding {
+                n.seed = Some(expr);
+            } else {
+                n.bound = Some(expr);
+            }
+        };
+
+        narrowing_one(inv, input, binds, &mut narrowing, &mut tallies, &assign)?;
+    }
+
+    let unusable = if tallies.is_empty() {
+        NO_UNUSABLE.to_string()
+    } else {
+        tallies.join(" + ")
+    };
+    Ok((narrowing, unusable))
+}
+
+/// One input, routed. Split out of [`narrowing_for`] only so the loop body stays readable; it holds
+/// no policy of its own beyond the arms it always had.
+fn narrowing_one(
+    inv: &temper_core::types::query::ActInvocation,
+    input: &StageInput,
+    binds: &mut Vec<QueryBind>,
+    narrowing: &mut StageNarrowing,
+    tallies: &mut Vec<String>,
+    assign: &dyn Fn(&mut StageNarrowing, String),
+) -> Result<(), PlanRefusal> {
     match input {
         // Ids only — no quantity from the upstream stage is ever in scope here, which is what keeps
         // `no-cross-act-ranking` structural rather than policed. An upstream set is always resource
         // ids (that is what these acts produce), so it is always an array slot; WHICH array slot is
         // the relation's business.
-        StageInput::Upstream { stage, .. } => Ok((
-            by_relation(format!(r#"ARRAY(SELECT id FROM "{}")"#, stage.as_str())),
-            NO_UNUSABLE.to_string(),
-        )),
+        StageInput::Upstream { stage, .. } => {
+            assign(
+                narrowing,
+                format!(r#"ARRAY(SELECT id FROM "{}")"#, stage.as_str()),
+            );
+            Ok(())
+        }
         StageInput::Caller { ids, .. } => match ids.kind {
             IdKind::Resource => {
                 let idx = binds.len() + 1;
                 binds.push(QueryBind::Uuids(ids.ids.clone()));
-                Ok((by_relation(format!("${idx}::uuid[]")), unusable_tally(idx)))
+                assign(narrowing, format!("${idx}::uuid[]"));
+                tallies.push(unusable_tally(idx));
+                Ok(())
             }
             // The anchor slot holds exactly ONE id. Spec §9 names this as an open cardinality gap
             // — "an IdSet holds N ids; an anchor slot holds one" — and the honest response to it is
@@ -740,17 +808,16 @@ fn narrowing_for(
                 };
                 let ai = binds.len() + 1;
                 binds.push(QueryBind::Uuids(vec![*id]));
-                Ok((
-                    StageNarrowing::Anchor {
-                        table: format!("'{table}'::varchar"),
-                        id: format!("(${ai}::uuid[])[1]"),
-                    },
-                    NO_UNUSABLE.to_string(),
-                ))
+                // The anchor is its own slot and is NOT routed by relation — a cogmap or context
+                // set is served by the `(table, id)` pair whichever relation carried it, which is
+                // how it behaved before the widening too.
+                narrowing.anchor =
+                    Some((format!("'{table}'::varchar"), format!("(${ai}::uuid[])[1]")));
+                Ok(())
             }
             // A region set reaching a find act is already refused by the validator against
             // `accepts_bounds`; unbounded here rather than a second, divergent opinion about it.
-            _ => Ok((StageNarrowing::Unbounded, NO_UNUSABLE.to_string())),
+            _ => Ok(()),
         },
     }
 }
@@ -1065,13 +1132,13 @@ mod tests {
     use super::*;
     use temper_core::types::query::{ActInvocation, ActName, IdSet, StageName};
 
-    fn inv(input: Option<StageInput>) -> ActInvocation {
+    fn inv(inputs: Vec<StageInput>) -> ActInvocation {
         ActInvocation {
             name: StageName::parse("s").unwrap(),
             act: ActName::FollowFrom,
             // `follow-from` asks no question of its own — it walks from a set it is handed.
             intention: None,
-            input,
+            inputs,
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -1079,29 +1146,29 @@ mod tests {
         }
     }
 
-    fn upstream(relation: StageRelation) -> Option<StageInput> {
-        Some(StageInput::Upstream {
+    fn upstream(relation: StageRelation) -> StageInput {
+        StageInput::Upstream {
             relation,
             stage: StageName::parse("hits").unwrap(),
-        })
+        }
     }
 
     /// The narrowing half of [`narrowing_for`]'s answer. The unusable-tally half is asserted at the
     /// emitted-SQL level (`tests/query_plan_compile.rs`), where the expression it produces can be
     /// read in the statement it has to be valid inside.
-    fn narrowing(input: Option<StageInput>, binds: &mut Vec<QueryBind>) -> StageNarrowing {
-        narrowing_for(&inv(input), binds).unwrap().0
+    fn narrowing(inputs: Vec<StageInput>, binds: &mut Vec<QueryBind>) -> StageNarrowing {
+        narrowing_for(&inv(inputs), binds).unwrap().0
     }
 
-    fn caller(relation: StageRelation) -> Option<StageInput> {
-        Some(StageInput::Caller {
+    fn caller(relation: StageRelation) -> StageInput {
+        StageInput::Caller {
             relation,
             ids: IdSet {
                 kind: IdKind::Resource,
                 provenance: None,
                 ids: vec![Uuid::now_v7()],
             },
-        })
+        }
     }
 
     /// **The defect this fix exists for, witnessed at the function that had it.**
@@ -1123,17 +1190,65 @@ mod tests {
     #[test]
     fn a_seed_routes_to_the_seed_slot_and_a_bound_to_the_bound_slot() {
         let mut binds = vec![];
+        let seeded = narrowing(vec![upstream(StageRelation::Seed)], &mut binds);
         assert!(
-            matches!(
-                narrowing(upstream(StageRelation::Seed), &mut binds),
-                StageNarrowing::Seed(_)
-            ),
+            seeded.seed.is_some() && seeded.bound.is_none(),
             "an upstream set declared `seed` must not land in the narrowing slot"
         );
-        assert!(matches!(
-            narrowing(upstream(StageRelation::Bound), &mut binds),
-            StageNarrowing::Bound(_)
-        ));
+        let bounded = narrowing(vec![upstream(StageRelation::Bound)], &mut binds);
+        assert!(bounded.bound.is_some() && bounded.seed.is_none());
+    }
+
+    /// **What the widening exists for**: one stage carrying a seed AND a bound, each routed by its
+    /// own relation.
+    ///
+    /// `[added — 2026-08-14]` This was inexpressible until `inputs` became a list — a stage held one
+    /// set and one relation, so a bounded walk could name where to start or where to stay, never
+    /// both. The two expressions must be DIFFERENT and land in different fields; asserting only
+    /// that each is populated would pass against a body that wrote the same set into both.
+    #[test]
+    fn a_stage_carries_a_seed_and_a_bound_at_once_each_in_its_own_slot() {
+        let mut binds = vec![];
+        let n = narrowing(
+            vec![upstream(StageRelation::Seed), caller(StageRelation::Bound)],
+            &mut binds,
+        );
+        assert_eq!(
+            n.seed_expr(),
+            r#"ARRAY(SELECT id FROM "hits")"#,
+            "the upstream set carried the Seed relation, so it is what the walk grows FROM"
+        );
+        assert_eq!(
+            n.bound_expr(),
+            "$1::uuid[]",
+            "the caller set carried the Bound relation, so it is what the walk stays WITHIN"
+        );
+        assert_ne!(
+            n.seed_expr(),
+            n.bound_expr(),
+            "two slots, two sets — writing one set into both would be a walk bounded to its own \
+             seeds, which is a different act"
+        );
+    }
+
+    /// The order of the inputs does not decide the slots — the relation does.
+    ///
+    /// The list is a wire array and a caller may write it either way round. A body that assigned by
+    /// POSITION would pass every test above and fail this one.
+    #[test]
+    fn the_slot_follows_the_relation_and_never_the_position_in_the_list() {
+        let mut binds_a = vec![];
+        let forward = narrowing(
+            vec![upstream(StageRelation::Seed), caller(StageRelation::Bound)],
+            &mut binds_a,
+        );
+        let mut binds_b = vec![];
+        let reversed = narrowing(
+            vec![caller(StageRelation::Bound), upstream(StageRelation::Seed)],
+            &mut binds_b,
+        );
+        assert_eq!(forward.seed_expr(), reversed.seed_expr());
+        assert_eq!(forward.bound_expr(), reversed.bound_expr());
     }
 
     /// The relation is read from the edge for a caller-supplied set too.
@@ -1144,14 +1259,12 @@ mod tests {
     #[test]
     fn the_relation_is_independent_of_where_the_set_came_from() {
         let mut binds = vec![];
-        assert!(matches!(
-            narrowing(caller(StageRelation::Seed), &mut binds),
-            StageNarrowing::Seed(_)
-        ));
-        assert!(matches!(
-            narrowing(caller(StageRelation::Bound), &mut binds),
-            StageNarrowing::Bound(_)
-        ));
+        assert!(narrowing(vec![caller(StageRelation::Seed)], &mut binds)
+            .seed
+            .is_some());
+        assert!(narrowing(vec![caller(StageRelation::Bound)], &mut binds)
+            .bound
+            .is_some());
     }
 
     /// An act with no input is UNBOUNDED, which is `NULL::uuid[]` and never `'{}'`.
@@ -1161,10 +1274,13 @@ mod tests {
     #[test]
     fn no_input_is_unbounded_and_that_is_not_an_empty_array() {
         let mut binds = vec![];
-        let n = narrowing(None, &mut binds);
-        assert!(matches!(n, StageNarrowing::Unbounded));
-        assert_eq!(n.bound_expr().unwrap(), "NULL::uuid[]");
-        assert_ne!(n.bound_expr().unwrap(), "'{}'");
+        let n = narrowing(vec![], &mut binds);
+        assert!(n.seed.is_none() && n.bound.is_none() && n.anchor.is_none());
+        assert_eq!(n.bound_expr(), "NULL::uuid[]");
+        assert_ne!(n.bound_expr(), "'{}'");
+        // Both slots, because the widening gave the seed one the same question to answer.
+        assert_eq!(n.seed_expr(), "NULL::uuid[]");
+        assert_ne!(n.seed_expr(), "'{}'");
     }
 
     /// A narrowing-only fragment handed a seed errors rather than silently narrowing.
@@ -1177,13 +1293,14 @@ mod tests {
     /// confident wrong answer, while an error is a loud one.
     #[test]
     fn a_narrowing_fragment_handed_a_seed_errors_rather_than_quietly_narrowing() {
+        let mut binds = vec![];
         assert!(
-            StageNarrowing::Seed("ARRAY(SELECT id FROM hits)".to_string())
-                .bound_expr()
-                .is_err()
+            narrowing(vec![upstream(StageRelation::Seed)], &mut binds).has_seed(),
+            "`has_seed` is what the find arms read to refuse; it must be true of a seeded stage"
         );
-        assert!(StageNarrowing::Bound("$2::uuid[]".to_string())
-            .bound_expr()
-            .is_ok());
+        assert!(
+            !narrowing(vec![caller(StageRelation::Bound)], &mut binds).has_seed(),
+            "and false of a purely bounded one, or every find stage would refuse"
+        );
     }
 }

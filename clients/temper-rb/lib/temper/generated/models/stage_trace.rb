@@ -20,21 +20,19 @@ module Temper::Generated
 
     attr_accessor :disposition
 
-    # How many ids this stage was handed. Zero for a stage with no input.
+    # How many ids this stage was handed **in total, across every input**. Zero for a stage with no input.  A sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one conflated number by design and a total is the only thing the two can be compared against. The per-input split is in [`Self::inputs`].
     attr_accessor :input_ids
-
-    attr_accessor :input_source
 
     # How many of them this stage could not use at all — invisible, nonexistent, or malformed.  Conflates the three on purpose — see [`super::envelope::StageResult::input_unusable`]. Naming the invisible case alone would make the trace a single-probe existence oracle.
     attr_accessor :input_unusable
+
+    # What this stage was handed, one entry per input.  A reader can then tell without knowing the act vocabulary — *\"did stage 3 narrow or expand?\"* is the question `composition-is-legible` most obviously owes an answer to, and a caller reading only the response has no other way to get it. Empty for a stage with no input.  # This replaced a `relation` / `input_source` PAIR, and the pair could not be kept  `[widened — 2026-08-14]` with `ActInvocation::inputs`. Both were `Option`s describing *the* input, which was a total description while a stage had one. A bounded walk has two — a seed and a bound — and filling a single `relation` from whichever arrived first would answer *\"did this stage narrow or expand?\"* with **half the truth and no marker saying so**. That is worse than not answering: the field's whole job is to be the thing a caller trusts instead of knowing the act vocabulary.  Keeping the two fields beside this list was the alternative and is the drift-by-construction this contract keeps removing — two spellings of one fact, free to disagree the moment a second input appears.
+    attr_accessor :inputs
 
     attr_accessor :narrowed_by
 
     # Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace covers every stage while results cover only returned ones, so this is the ONLY refusal record for an intermediate stage. **The pair rule**: identical to [`super::envelope::StageResult::refusal`], for the same reason as the input numbers.
     attr_accessor :refusal
-
-    # Whether this stage NARROWED or REACHED, echoed back.  A reader of the trace can then tell without knowing the act vocabulary — *\"did stage 3 narrow or expand?\"* is the question `composition-is-legible` most obviously owes an answer to, and a caller reading only the response has no other way to get it. Absent for a stage with no input.
-    attr_accessor :relation
 
     # A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the name is a safe SQL identifier.  The compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the whole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no `new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter, then up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).
     attr_accessor :stage
@@ -67,11 +65,10 @@ module Temper::Generated
         :'act' => :'act',
         :'disposition' => :'disposition',
         :'input_ids' => :'input_ids',
-        :'input_source' => :'input_source',
         :'input_unusable' => :'input_unusable',
+        :'inputs' => :'inputs',
         :'narrowed_by' => :'narrowed_by',
         :'refusal' => :'refusal',
-        :'relation' => :'relation',
         :'stage' => :'stage'
       }
     end
@@ -92,11 +89,10 @@ module Temper::Generated
         :'act' => :'ActName',
         :'disposition' => :'StageDisposition',
         :'input_ids' => :'Integer',
-        :'input_source' => :'InputSource',
         :'input_unusable' => :'Integer',
+        :'inputs' => :'Array<StageInputTrace>',
         :'narrowed_by' => :'Array<NarrowedBy>',
         :'refusal' => :'ActRefusal',
-        :'relation' => :'StageRelation',
         :'stage' => :'String'
       }
     end
@@ -104,9 +100,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'input_source',
         :'refusal',
-        :'relation',
       ])
     end
 
@@ -144,14 +138,16 @@ module Temper::Generated
         self.input_ids = nil
       end
 
-      if attributes.key?(:'input_source')
-        self.input_source = attributes[:'input_source']
-      end
-
       if attributes.key?(:'input_unusable')
         self.input_unusable = attributes[:'input_unusable']
       else
         self.input_unusable = nil
+      end
+
+      if attributes.key?(:'inputs')
+        if (value = attributes[:'inputs']).is_a?(Array)
+          self.inputs = value
+        end
       end
 
       if attributes.key?(:'narrowed_by')
@@ -164,10 +160,6 @@ module Temper::Generated
 
       if attributes.key?(:'refusal')
         self.refusal = attributes[:'refusal']
-      end
-
-      if attributes.key?(:'relation')
-        self.relation = attributes[:'relation']
       end
 
       if attributes.key?(:'stage')
@@ -301,11 +293,10 @@ module Temper::Generated
           act == o.act &&
           disposition == o.disposition &&
           input_ids == o.input_ids &&
-          input_source == o.input_source &&
           input_unusable == o.input_unusable &&
+          inputs == o.inputs &&
           narrowed_by == o.narrowed_by &&
           refusal == o.refusal &&
-          relation == o.relation &&
           stage == o.stage
     end
 
@@ -318,7 +309,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, disposition, input_ids, input_source, input_unusable, narrowed_by, refusal, relation, stage].hash
+      [act, disposition, input_ids, input_unusable, inputs, narrowed_by, refusal, stage].hash
     end
 
     # Builds the object from hash

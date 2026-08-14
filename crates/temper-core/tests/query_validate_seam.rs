@@ -103,6 +103,7 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("StageNotReturnable", 1),
         ("Cycle", 1),
         ("DanglingReference", 1),
+        ("DuplicateInputRelation", 1),
         ("DuplicateReturnStage", 1),
         ("DuplicateStageName", 1),
         ("EmptyContains", 1),

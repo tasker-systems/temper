@@ -139,7 +139,7 @@ fn one_find(
                 query: query.to_string(),
                 embedding: None,
             }),
-            input: None,
+            inputs: vec![],
             terms: Default::default(),
             resource_filter: (!doc_type.is_empty()).then(|| ResourceFilter {
                 doc_type,
@@ -173,7 +173,7 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
                 act: ActName::FindResourcesWith,
                 // No intention: a pure selection asks the corpus nothing.
                 intention: None,
-                input: None,
+                inputs: vec![],
                 terms: Default::default(),
                 resource_filter: Some(ResourceFilter {
                     doc_type: vec![doc_type.to_string()],
@@ -189,10 +189,10 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
                     query: query.to_string(),
                     embedding: None,
                 }),
-                input: Some(temper_core::types::query::StageInput::Upstream {
+                inputs: vec![temper_core::types::query::StageInput::Upstream {
                     relation: temper_core::types::query::StageRelation::Bound,
                     stage: sel,
-                }),
+                }],
                 terms: Default::default(),
                 resource_filter: None,
                 edge_filter: None,
@@ -219,7 +219,7 @@ fn selection_owned_by(owner: &str) -> ValidatedComposition {
                 name: sel.clone(),
                 act: ActName::FindResourcesWith,
                 intention: None,
-                input: None,
+                inputs: vec![],
                 terms: Default::default(),
                 resource_filter: Some(ResourceFilter {
                     owner: Some(owner.to_string()),
@@ -235,10 +235,10 @@ fn selection_owned_by(owner: &str) -> ValidatedComposition {
                     query: "composable".to_string(),
                     embedding: None,
                 }),
-                input: Some(temper_core::types::query::StageInput::Upstream {
+                inputs: vec![temper_core::types::query::StageInput::Upstream {
                     relation: temper_core::types::query::StageRelation::Bound,
                     stage: sel,
-                }),
+                }],
                 terms: Default::default(),
                 resource_filter: None,
                 edge_filter: None,
@@ -595,7 +595,7 @@ fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
                 query: "composable".to_string(),
                 embedding: None,
             }),
-            input: None,
+            inputs: vec![],
             terms: Default::default(),
             resource_filter: Some(ResourceFilter {
                 tags: vec!["x".to_string()],
@@ -644,7 +644,7 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
                 query: "composable".to_string(),
                 embedding: None,
             }),
-            input: None,
+            inputs: vec![],
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,
@@ -716,7 +716,7 @@ mod server_side_embedding {
                 query: query.to_string(),
                 embedding: None,
             }),
-            input: None,
+            inputs: vec![],
             terms: Default::default(),
             resource_filter: None,
             edge_filter: None,

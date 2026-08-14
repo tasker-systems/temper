@@ -363,6 +363,7 @@ mod tests {
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
     use crate::types::query::scalars::BoundTerm;
+    use uuid::Uuid;
     // Named here rather than reached through `super::*`: the checks that read them moved into
     // `shape` and `capability`, so this module no longer imports them for its own use.
     use crate::types::query::stage::{StageInput, StageRelation};
@@ -391,6 +392,96 @@ mod tests {
         act_with_relation(name, a, input, relation)
     }
 
+    /// A stage carrying MORE than one input — the shape `inputs: Vec<StageInput>` exists for.
+    fn act_with_inputs(name: &str, a: ActName, inputs: Vec<StageInput>) -> StageNode {
+        let intention = natural_intention(&a);
+        StageNode::Act(ActInvocation {
+            name: StageName::parse(name).unwrap(),
+            act: a,
+            intention,
+            inputs,
+            terms: BTreeMap::new(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
+    }
+
+    /// **Two inputs in the SAME relation is malformed, and is refused rather than unioned.**
+    ///
+    /// `[added — 2026-08-14]` with the widening. Merging them is `CombineOp::Union` — a stage the
+    /// caller declares, that shows up in the trace with its own `produced` count. Doing it inside
+    /// one act's input list would be the same merge with no stage, no tally and nothing saying so.
+    #[test]
+    fn two_inputs_in_the_same_relation_are_refused_rather_than_merged() {
+        let ids = |n: usize| IdSet {
+            kind: IdKind::Resource,
+            provenance: None,
+            ids: (0..n).map(|_| Uuid::now_v7()).collect(),
+        };
+        let node = act_with_inputs(
+            "hits",
+            ActName::FindExact,
+            vec![
+                StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: ids(2),
+                },
+                StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: ids(3),
+                },
+            ],
+        );
+        let result = validate(&plan(vec![node], vec!["hits"]));
+        let refusals = result.expect_err("two bounds on one stage is malformed");
+        assert!(
+            refusals
+                .iter()
+                .any(|e| e.reason == RefusalReason::DuplicateInputRelation),
+            "expected `duplicate_input_relation`; got {refusals:?}"
+        );
+    }
+
+    /// **One seed and one bound on the same stage is WELL-FORMED**, which is the whole point of the
+    /// widening — and the assertion that keeps the duplicate check above from being written as
+    /// "at most one input" by accident.
+    #[test]
+    fn a_seed_and_a_bound_on_one_stage_are_not_a_duplicate() {
+        let ids = IdSet {
+            kind: IdKind::Resource,
+            provenance: None,
+            ids: vec![Uuid::now_v7()],
+        };
+        let node = act_with_inputs(
+            "walk",
+            ActName::FollowFrom,
+            vec![
+                StageInput::Caller {
+                    relation: StageRelation::Seed,
+                    ids: ids.clone(),
+                },
+                StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids,
+                },
+            ],
+        );
+        let result = validate(&plan(vec![node], vec!["walk"]));
+        // `follow-from` is still refused for other reasons — it is absent from `CALLABLE_FRAGMENTS`
+        // and declares `accepts_bounds: []` — so this asserts the ABSENCE of the duplicate refusal
+        // rather than success. Naming the reason is what makes it survive those other refusals
+        // retiring.
+        if let Err(refusals) = result {
+            assert!(
+                !refusals
+                    .iter()
+                    .any(|e| e.reason == RefusalReason::DuplicateInputRelation),
+                "a seed and a bound are two relations, not a duplicate; got {refusals:?}"
+            );
+        }
+    }
+
     fn act_with_relation(
         name: &str,
         a: ActName,
@@ -406,7 +497,7 @@ mod tests {
             name: StageName::parse(name).unwrap(),
             act: a,
             intention,
-            input,
+            inputs: input.into_iter().collect(),
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,
@@ -1188,10 +1279,10 @@ mod tests {
         // returnable, which is also the shape a caller would really write.
         let mut sink = act("hits", ActName::FindExact, None);
         if let StageNode::Act(a) = &mut sink {
-            a.input = Some(StageInput::Upstream {
+            a.inputs = vec![StageInput::Upstream {
                 relation: StageRelation::Bound,
                 stage: StageName::parse("sel").unwrap(),
-            });
+            }];
         }
         let result = validate(&plan(vec![node, sink], vec!["hits"]));
         assert!(
@@ -1230,10 +1321,10 @@ mod tests {
             }
             let mut sink = act("hits", ActName::FindExact, None);
             if let StageNode::Act(a) = &mut sink {
-                a.input = Some(StageInput::Upstream {
+                a.inputs = vec![StageInput::Upstream {
                     relation: StageRelation::Bound,
                     stage: StageName::parse("sel").unwrap(),
-                });
+                }];
             }
             plan(vec![node, sink], vec!["hits"])
         };
@@ -1534,12 +1625,12 @@ mod tests {
             unreachable!()
         };
         assert_eq!(
-            up.input.as_ref().unwrap().relation(),
+            up.inputs[0].relation(),
             StageRelation::Seed,
             "an upstream edge carries its own relation"
         );
         assert_eq!(
-            ca.input.as_ref().unwrap().relation(),
+            ca.inputs[0].relation(),
             StageRelation::Bound,
             "so does a caller-supplied one"
         );

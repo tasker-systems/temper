@@ -554,6 +554,11 @@
           "type": "string"
         },
         {
+          "const": "duplicate_input_relation",
+          "description": "A stage carries two inputs in the same relation — two seeds, or two bounds.\n\n`[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list.\nThe list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a\ngeneral fan-in.\n\n**Refused rather than unioned, and that is the whole point of the variant.** Merging two\nseed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the\ntrace, and whose `produced` count a reader can see. Doing it implicitly inside one act's\ninput list would be the same merge with no stage, no tally and no disclosure, which is the\nsilent-substitution class this contract keeps closing.\n\nIt lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no\ndeclaration is consulted to decide it.",
+          "type": "string"
+        },
+        {
           "const": "stage_not_returnable",
           "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
           "type": "string"
@@ -863,6 +868,29 @@
         }
       ]
     },
+    "StageInputTrace": {
+      "description": "One set a stage was handed: what it was FOR, where it came from, and how big it was.\n\n`[added — 2026-08-14]` with the widening of `ActInvocation::inputs`. It carries no `unusable`\ncount of its own — that stays one conflated number on the stage\n([`StageTrace::input_unusable`]), because splitting it per input would narrow what a caller can\nprobe with, and the whole reason the stage-level figure conflates invisible/nonexistent/malformed\nis to keep it from being a single-probe existence oracle. A per-input split hands that back.",
+      "properties": {
+        "ids": {
+          "description": "How many ids this particular set held.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "relation": {
+          "$ref": "#/$defs/StageRelation",
+          "description": "Whether this set NARROWED the stage or was REACHED from."
+        },
+        "source": {
+          "$ref": "#/$defs/InputSource"
+        }
+      },
+      "required": [
+        "relation",
+        "source",
+        "ids"
+      ],
+      "type": "object"
+    },
     "StageOutput": {
       "description": "What a RETURNED stage produced, tagged by CURRENCY.\n\n# Two variants, and the tag answers exactly one question\n\n`[decided — 2026-08-09, Pete]` What was produced is resources, or regions. How they were scored\nis a different question, answered per row by [`super::hits::Scoring::score_kind`].\n\nAn earlier draft split this four ways — `fts_hits`, `vec_hits`, `graph_hits` — so that two acts'\nrows could not share a list type. That guard was real but the name was a misnomer: `vec_hits`\ndescribes the scoring, not what was produced, and it meant **a row could not be read without\nknowing which envelope carried it**. The quantity was the field name, so the envelope was load-\nbearing for interpreting the row. Now every hit is self-describing and there is one shape per\ncurrency instead of one per act.\n\nWhat still prevents `unified_search`'s conflation is structural and unchanged: arms are keyed\nseparately in the response, and there is no merged ordered list for two acts' rows to fall into.\nSee the module note on [`super::hits`] for the full argument.\n\n# There is no `ids` variant\n\nA returned stage is always hydrated. Ids remain the pipe's **internal** currency — the only\nvalue crossing a stage boundary is membership, and an intermediate stage that merely feeds a\ndownstream one is never hydrated at all. What is gone is `ids` as a thing a caller can ASK to be\ngiven back: subselecting a result set is a client concern with a good answer already\n(`temper … | jq`), and the principled version is a known later door (GraphQL over this surface).\nShipping one coarse \"just ids\" toggle now would occupy the space that door is for.\n\nNeither `PartialEq` nor `Eq`: [`crate::types::resource_view::ResourceView`] derives neither, and\nscores are floats. Tests compare the serialized form, which is what a client observes.",
       "oneOf": [
@@ -1017,24 +1045,21 @@
           "$ref": "#/$defs/StageDisposition"
         },
         "input_ids": {
-          "description": "How many ids this stage was handed. Zero for a stage with no input.",
+          "description": "How many ids this stage was handed **in total, across every input**. Zero for a stage with\nno input.\n\nA sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one\nconflated number by design and a total is the only thing the two can be compared against.\nThe per-input split is in [`Self::inputs`].",
           "format": "int64",
           "type": "integer"
-        },
-        "input_source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/InputSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "input_unusable": {
           "description": "How many of them this stage could not use at all — invisible, nonexistent, or malformed.\n\nConflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].\nNaming the invisible case alone would make the trace a single-probe existence oracle.",
           "format": "int64",
           "type": "integer"
+        },
+        "inputs": {
+          "description": "What this stage was handed, one entry per input.\n\nA reader can then tell without knowing the act vocabulary — *\"did stage 3 narrow or\nexpand?\"* is the question `composition-is-legible` most obviously owes an answer to, and a\ncaller reading only the response has no other way to get it. Empty for a stage with no\ninput.\n\n# This replaced a `relation` / `input_source` PAIR, and the pair could not be kept\n\n`[widened — 2026-08-14]` with `ActInvocation::inputs`. Both were `Option`s describing *the*\ninput, which was a total description while a stage had one. A bounded walk has two — a seed\nand a bound — and filling a single `relation` from whichever arrived first would answer\n*\"did this stage narrow or expand?\"* with **half the truth and no marker saying so**. That is\nworse than not answering: the field's whole job is to be the thing a caller trusts instead of\nknowing the act vocabulary.\n\nKeeping the two fields beside this list was the alternative and is the drift-by-construction\nthis contract keeps removing — two spellings of one fact, free to disagree the moment a\nsecond input appears.",
+          "items": {
+            "$ref": "#/$defs/StageInputTrace"
+          },
+          "type": "array"
         },
         "narrowed_by": {
           "items": {
@@ -1052,17 +1077,6 @@
             }
           ],
           "description": "Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace\ncovers every stage while results cover only returned ones, so this is the ONLY refusal\nrecord for an intermediate stage. **The pair rule**: identical to\n[`super::envelope::StageResult::refusal`], for the same reason as the input numbers."
-        },
-        "relation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StageRelation"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Whether this stage NARROWED or REACHED, echoed back.\n\nA reader of the trace can then tell without knowing the act vocabulary — *\"did stage 3\nnarrow or expand?\"* is the question `composition-is-legible` most obviously owes an answer\nto, and a caller reading only the response has no other way to get it. Absent for a stage\nwith no input."
         },
         "stage": {
           "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",

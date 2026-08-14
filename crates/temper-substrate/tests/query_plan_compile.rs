@@ -29,14 +29,14 @@ fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
             query: "salience".to_string(),
             embedding: None,
         }),
-        input: Some(StageInput::Caller {
+        inputs: vec![StageInput::Caller {
             relation: StageRelation::Bound,
             ids: IdSet {
                 kind: IdKind::Resource,
                 provenance: None,
                 ids,
             },
-        }),
+        }],
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -57,10 +57,10 @@ fn find_from(name: &str, upstream: &str) -> StageNode {
             query: "salience".to_string(),
             embedding: None,
         }),
-        input: Some(StageInput::Upstream {
+        inputs: vec![StageInput::Upstream {
             relation: StageRelation::Bound,
             stage: StageName::parse(upstream).unwrap(),
-        }),
+        }],
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -442,7 +442,7 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
             embedding: None,
         }),
         act,
-        input,
+        inputs: input.into_iter().collect(),
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -1159,7 +1159,7 @@ fn selection(name: &str) -> StageNode {
         // corpus nothing; the shape pass's requirement names three acts and this is not among them,
         // so an omitted intention here is well-formed rather than tolerated.
         intention: None,
-        input: None,
+        inputs: vec![],
         terms: Default::default(),
         resource_filter: Some(temper_core::types::query::ResourceFilter {
             doc_type: vec!["task".to_string(), "session".to_string()],

@@ -63,7 +63,7 @@ fn find_about(stage: &str, query: &str) -> StageNode {
             query: query.to_string(),
             embedding: None,
         }),
-        input: None,
+        inputs: vec![],
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,

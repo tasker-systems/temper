@@ -187,7 +187,11 @@ fn check_act(
     // whose "required whenever `input` is present" invariant lived in prose, so an input with no
     // relation fell through to `false` and was silently checked against `accepts_bounds`. The
     // relation now rides the input, is total, and cannot be absent.
-    if let Some(input) = &inv.input {
+    // **Every input, each against the list its OWN relation names.** `[widened — 2026-08-14]` A
+    // stage may now carry a seed and a bound at once, so this is a loop rather than a single
+    // `if let`. Checking one of them would admit the other unexamined — and the unexamined one is
+    // whichever slot a caller adopts second, which is the newest and least-exercised path.
+    for input in &inv.inputs {
         let incoming = match input {
             StageInput::Caller { ids, .. } => Some(ids.kind.clone()),
             StageInput::Upstream { stage, .. } => produced_kind_of(stage.as_str(), by_name),
@@ -236,7 +240,10 @@ fn check_act(
     // Read off the CALLER's set only, which is the same restriction the shape half carries: what an
     // upstream stage produces is a declared fact, and the anchor kinds are accepted but never
     // produced, so an upstream set is never anchor-kind.
-    if let Some(StageInput::Caller { ids, .. }) = &inv.input {
+    for ids in inv.inputs.iter().filter_map(|i| match i {
+        StageInput::Caller { ids, .. } => Some(ids),
+        StageInput::Upstream { .. } => None,
+    }) {
         if matches!(ids.kind, IdKind::Cogmap | IdKind::Context) && ids.ids.len() > 1 {
             errs.push(refusal(
                 Some(name),

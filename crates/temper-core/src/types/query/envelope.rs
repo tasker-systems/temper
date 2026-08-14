@@ -36,17 +36,36 @@ pub struct ActInvocation {
     /// `p_query` from here and there is nowhere else to get it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intention: Option<super::composition::Intention>,
-    /// Where this stage's set comes from, and what this act does with it: caller-supplied ids or
-    /// an upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root
+    /// Where this stage's sets come from, and what this act does with each: caller-supplied ids or
+    /// an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root
     /// act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
     /// `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
     ///
     /// There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
-    /// "required whenever `input` is present" invariant lived in prose, which admitted a
+    /// "required whenever an input is present" invariant lived in prose, which admitted a
     /// meaningless state the validator then read as `bound`. The relation belongs to the edge, and
     /// nesting it there makes the meaningless state unrepresentable rather than merely invalid.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<StageInput>,
+    ///
+    /// # A LIST, and at most one per relation
+    ///
+    /// `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**
+    /// relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from
+    /// *and* a bound to stay inside, at the same time, and a single slot can hold one or the other.
+    /// The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,
+    /// so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.
+    ///
+    /// **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed
+    /// ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union
+    /// is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside
+    /// one. So the list is short by construction and is not a general fan-in.
+    ///
+    /// **Why a list rather than a second `bound` field beside this one.** The relation already
+    /// distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give
+    /// it two — the new field, and this one with a `Bound` relation — which is the incumbent
+    /// literal `bounds: Option<IdSet>` shape this contract deliberately replaced, returning under a
+    /// different name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<StageInput>,
     /// Act-level bound terms. A term this act does not admit is refused STATICALLY
     /// (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -61,6 +80,28 @@ pub struct ActInvocation {
     /// unknown subject or an empty key/value is refused statically (spec §12).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyPredicate>,
+}
+
+impl ActInvocation {
+    /// The input this stage carries in the given relation, if any.
+    ///
+    /// **First match, and that is safe only because the shape pass refuses a duplicate relation.**
+    /// A plan reaching a compiler holds a `ValidatedComposition`, so "at most one" is established
+    /// before anything reads this. Written as `find` rather than as an assertion because the
+    /// refusal is the honest report and a panic here would be a second, worse one.
+    pub fn input_for(&self, relation: super::stage::StageRelation) -> Option<&StageInput> {
+        self.inputs.iter().find(|i| i.relation() == relation)
+    }
+
+    /// The set this act GROWS from — `p_seed_ids`.
+    pub fn seed_input(&self) -> Option<&StageInput> {
+        self.input_for(super::stage::StageRelation::Seed)
+    }
+
+    /// The set this act stays WITHIN — `p_bound_ids`, or the anchor pair for a cogmap/context kind.
+    pub fn bound_input(&self) -> Option<&StageInput> {
+        self.input_for(super::stage::StageRelation::Bound)
+    }
 }
 
 /// One act-specific threshold, and what applying it did.
@@ -266,7 +307,7 @@ mod tests {
             name: StageName::parse("wide").unwrap(),
             act: ActName::FindAboutAnywhere,
             intention: None,
-            input: None,
+            inputs: vec![],
             terms: BTreeMap::new(),
             resource_filter: None,
             edge_filter: None,

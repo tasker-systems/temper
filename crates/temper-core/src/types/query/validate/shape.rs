@@ -43,7 +43,7 @@ use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{PropertyOp, PropertySubject};
 use crate::types::query::id_set::IdKind;
-use crate::types::query::stage::{StageInput, StageName};
+use crate::types::query::stage::{StageInput, StageName, StageRelation};
 
 use super::{index_by_name, refusal, term_wire_name, PlanRefusal};
 
@@ -310,12 +310,50 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         return;
     }
 
+    // **At most one input per RELATION.** `[added — 2026-08-14]` with the widening of `inputs` from
+    // one slot to a list. The list exists so a stage can carry a seed AND a bound at once — the
+    // shape a bounded walk needs — and is deliberately not a general fan-in.
+    //
+    // Two seeds is refused rather than unioned: a union is `CombineOp::Union`, a stage the caller
+    // declares and a reader can see in the trace with its own `produced` count. Merging them here
+    // would be that same union with no stage, no tally and no disclosure.
+    //
+    // Shape rather than capability, and the test is the one this pass always applies: no
+    // declaration is consulted. Two seeds is malformed for an act that accepts seeds and for one
+    // that does not, and the kind-versus-relation question is [`super::capability`]'s.
+    {
+        let mut seen: Vec<StageRelation> = Vec::new();
+        for input in &inv.inputs {
+            let relation = input.relation();
+            if seen.contains(&relation) {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::DuplicateInputRelation,
+                    format!(
+                        "this stage carries more than one `{relation:?}` input; a stage takes at \
+                         most one set per relation. Combining two sets is a `union` stage, which \
+                         is declared and appears in the trace — doing it inside one act's inputs \
+                         would merge them with nothing saying so"
+                    ),
+                ));
+                break;
+            }
+            seen.push(relation);
+        }
+    }
+
     // What a CALLER-supplied set must be, whatever the act does with it. The upstream case has no
     // expressibility question — the kind an upstream stage produces is a declared fact, so both
     // checks below would need the registry to ask it, and neither applies: provenance is the
     // caller's responsibility (an upstream `survey` supplies it itself), and the anchor kinds are
     // accepted but never produced, so an upstream set is never anchor-kind.
-    if let Some(StageInput::Caller { ids, .. }) = &inv.input {
+    //
+    // **Every caller set, not the first.** A stage may now hold two, and checking one of them would
+    // be a gap that widens exactly as callers start using the second slot.
+    for ids in inv.inputs.iter().filter_map(|i| match i {
+        StageInput::Caller { ids, .. } => Some(ids),
+        StageInput::Upstream { .. } => None,
+    }) {
         let kind = &ids.kind;
         if *kind == IdKind::Region && ids.provenance.is_none() {
             errs.push(refusal(

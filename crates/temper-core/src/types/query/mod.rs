@@ -37,7 +37,7 @@ pub use id_set::{IdKind, IdProvenance, IdSet};
 pub use registry::{applied_terms, declaration, search_family};
 pub use scalars::{BoundTerm, Extent};
 pub use stage::{ProducedVariant, StageInput, StageName, StageOutput, StageRelation};
-pub use trace::{CompositionTrace, InputSource, StageTrace};
+pub use trace::{CompositionTrace, InputSource, StageInputTrace, StageTrace};
 // `validate_shape` rides here beside `validate` rather than being reached at
 // `validate::validate_shape`. It is a public entry point of the module — the one a client runs
 // against a server whose binary it does not share — and a public item reachable only by its full
