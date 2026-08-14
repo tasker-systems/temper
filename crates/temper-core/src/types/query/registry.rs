@@ -253,10 +253,18 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // was a split rather than a loosened assertion.
             served_by: None,
             build_state: BuildState::Unbuilt,
-            // Selection composes INTO a find act, not out of one: it narrows the corpus, so it has
-            // nothing to narrow within and nothing to grow from. Its whole output is the bound
-            // some later stage consumes.
-            accepts_bounds: vec![],
+            // **Anchors yes, resource sets no**, and the asymmetry is the point.
+            //
+            // A `Resource` bound would be a second spelling of `CombineOp::Intersect`: narrowing a
+            // selection by an upstream set is set intersection, the combinator already does it, and
+            // two selections piped together are just one selection carrying both predicates. This
+            // act composes INTO a find act — its output is the bound a later stage consumes.
+            //
+            // An ANCHOR is not an id set and cannot be reached that way. Nothing produces "the
+            // resources homed in this context" as a set, so without these two kinds *"every task in
+            // @me/temper"* is inexpressible — which is the capability this act exists to add,
+            // scoped. Served by the `(anchor_table, anchor_id)` pair exactly as the find acts are.
+            accepts_bounds: vec![IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
             // No `Limit`. A selection that truncates is not a selection — it is a sample, and a
             // sample piped into a find act would bound that act to an arbitrary subset while

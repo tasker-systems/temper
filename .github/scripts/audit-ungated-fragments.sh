@@ -80,8 +80,24 @@ PREFIX='__temper_ungated_'
 #   id set cannot express: "may this principal use this map or context as a scope" is one boolean per
 #   call and a property of no row. They take `p_anchor_reader` for it rather than a caller-asserted
 #   boolean, so the core cannot be lied to about that authorization.
+#
+# REVIEWED 2026-08-14 (selection becomes an act, task 01a0003c beat 2) — the third member.
+#   __temper_ungated_find_resources_with (migrations/20260814000010)
+#   VERDICT: the gated wrapper `query_find_resources_with` computes
+#     `resources_visible_to(p_principal)` and hands it down — the caller's own gate, same shape as
+#     `query_find_exact`. It keeps the anchor readability check for both kinds via
+#     `anchor_readable_by_profile` and takes `p_anchor_reader` for it, so it cannot be lied to about
+#     that authorization either.
+#   EMITTER: **not yet, and that is the honest answer.** Nothing in `query_plan.rs` emits this call
+#     — beat 3 wires it, and the act is `Unbuilt` in the registry and absent from
+#     `CALLABLE_FRAGMENTS`, so `validate` refuses it as `not_implemented` and no composition can
+#     reach it today. The Rust baseline below is unchanged for exactly that reason, and it is what
+#     will move when the emitter lands: the review owed at that point is that the call goes through
+#     `emit_ungated_core_call`, where the id source is fixed rather than passed.
+#   RESIDUE: unchanged and accepted. The prefix is source discipline, not a database permission.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
+__temper_ungated_find_resources_with
 __temper_ungated_find_wide
 EOF
 
@@ -136,9 +152,15 @@ sql_files_current() {
 # `anchor_readable_by_profile`) plus `query_find_exact` (the wide wrapper's guaranteed-empty CASE,
 # applied symmetrically). No new ungated function, no new caller — the function-name set above is
 # unchanged; only the file set grows.
+#
+# REVIEWED 2026-08-14 (task 01a0003c beat 2) — `20260814000010` defines the third ungated core and
+# its gated wrapper, both new. Two CREATE FUNCTION, no DROP and no replace: the whole point of the
+# act framing is that a narrowing expressed as a SET needs a new function rather than new parameters
+# on the shipped find fragments, which would have been shape-breaking and halted the deploy.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
+20260814000010_find_resources_with.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
