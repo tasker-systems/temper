@@ -270,8 +270,19 @@ existed in the walk.**
 
 ## 7. OPEN — `PropertyPredicate`'s container, and whether `PropertySubject` survives
 
-**Not settled `[2026-08-14]`.** Stated with its material so the next session inherits rather than
-re-derives, per the same rule §3 followed for the `via` fork.
+> **`[RESOLVED — 2026-08-14, later the same session]` Taken in
+> [Property conventions and the predicate container](./2026-08-14-property-conventions-and-predicate-container-design.md),
+> which is the argument for the "both halves" branch of §7.3.** The blocker was not knowing where a
+> key's convention lives; the answer is that the write path had already decided one axis of it —
+> shape conventions are **owner-agnostic** (an edge-owned facet already gets the inner-key grain,
+> `20260730000010:195`), projection conventions are **owner-scoped** (`:216`). A shape convention
+> therefore lives in an owner-agnostic view that the predicate reads instead of `kb_properties`, and
+> `PropertySubject` disappears. **The edge half is the easy one and is independently shippable** —
+> no conventions to preserve, zero live rows. The section below is kept as the material that was
+> inherited.
+
+**Not settled at the time of writing `[2026-08-14]`.** Stated with its material so the next session
+inherits rather than re-derives, per the same rule §3 followed for the `via` fork.
 
 ### 7.1 The rule that places edge predicates here
 
