@@ -190,6 +190,50 @@ embeds `migrations/` at compile time). Read the **`sqlx-query-cache`** skill bef
 
 ---
 
+### A′ — **DONE.** Committed `cd6e5152`
+
+The migration, its eleven witnesses, the ungated-gate baseline, and the build-time measurement.
+Two things landed that this plan did not predict:
+
+- **`via` costs +20.0%** (315.4 ms against 262.9 ms, depth 2, ~1 ms spread per arm), and the
+  **re-pointed incumbent pays it in full for a column it discards** — no pruning through the
+  recursive CTE. Both recorded in spec §10.
+- **The bound's witness was bite-probed**: flipping to the output-only reading fails exactly one
+  test and nothing else.
+
+---
+
+### B0 — widen the stage input **`[ruled — 2026-08-14, Pete]`, blocks B**
+
+**Filed as its own task:** [A stage carries one set](./01a001fd-956c-79b2-acf2-664272f54dbd)
+
+**Tag: AMEND.** Authorized by spec §9's build-time finding.
+
+`ActInvocation.input: Option<StageInput>` → `inputs: Vec<StageInput>`, **at most one per relation**.
+Without it a bounded walk is inexpressible — a stage carries one set and one relation, so seeds and
+a bound cannot both arrive, and `accepts_bounds: [Resource]` would declare a capability no caller
+can reach.
+
+Sites, all verified this session:
+
+| site | `file:line` | what changes |
+|---|---|---|
+| the field | `envelope.rs:48` | `Vec`, `#[serde(default, skip_serializing_if = "Vec::is_empty")]` |
+| shape pass | `shape.rs:318` | iterate the caller sets; **refuse a duplicate relation** |
+| capability pass | `capability.rs:196-220`, `:238` | per-input, each against its own relation's list |
+| graph edges | `composition.rs:190` | `upstream_names` returns every upstream, not the first |
+| compiler | `query_plan.rs` `narrowing_for`, `StageNarrowing` | the enum becomes a struct — **and its "never both" doc comment is the thing being retired, so it must be rewritten rather than left contradicting the type**. The safety property to preserve is that the RELATION picks the slot: a seed must still never land in `p_bound_ids`, and a find act receiving a seed must still error rather than narrow |
+| assembler | `query_read.rs:371` | `StageNumbers` goes plural |
+| trace | `trace.rs:74` | `input_source` and the relation are singular **on the wire** |
+
+Then generated artifacts (`generated-artifacts` skill), and the `?`-shaped test surface across
+`query_plan_compile.rs`, `query_plan_execute.rs`, `query_run_composition_test.rs`,
+`query_route_e2e.rs`.
+
+**Only after B0 does `accepts_bounds: vec![IdKind::Resource]` become true rather than aspirational.**
+
+---
+
 ### B — the act's declaration and the two refusals
 
 **Tag: AMEND** throughout — every item changes a shipped declaration. Authorized by spec §§2.3, 3.3, 6, 9.

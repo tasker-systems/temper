@@ -422,9 +422,30 @@ composed from outside it — which is why depth is a parameter and why edge pred
   `[verified — 20260814000010 declaration]`. Only the interior reading cannot be composed from
   outside the walk, and that is what earns it a parameter (§2.1, §8.2).
 
-  So `accepts_bounds` becomes `vec![IdKind::Resource]` and *"the one genuine foreclosure"* closes.
   **The observable difference is worth stating once**: seed → B ∉ bound → C ∈ bound returns C under
   the output-only reading and does not return it under this one.
+
+  > **`[found at build time — 2026-08-14]` The fragment can express this and THE WIRE CANNOT, so
+  > `accepts_bounds` does not close yet.** A bounded walk needs two sets at once — seeds to start
+  > from, a bound to stay inside — and a stage carries exactly one:
+  > `ActInvocation.input` is a single `Option<StageInput>` `[verified — envelope.rs:48]` holding one
+  > relation; `capability.rs:196-220` branches exclusively on it, checking against `accepts_seeds`
+  > **or** `accepts_bounds`; and `StageNarrowing` is an enum of `Seed(_)` **or** `Bound(_)`
+  > `[verified — query_plan.rs:590-608]`. Handed only a bound, the act has no seeds and walks
+  > nowhere.
+  >
+  > Declaring `accepts_bounds: [Resource]` against that wire would name a capability no caller can
+  > express — the same falsehood `DoorReach::Absent` was introduced to stop telling, one field over.
+  >
+  > **`[ruled — 2026-08-14, Pete]` The wire is widened: `input: Option<StageInput>` becomes
+  > `inputs: Vec<StageInput>`, at most one per relation.** The relation already distinguishes them,
+  > so a bound gets no second spelling — which is why this was taken over the additive
+  > `bound: Option<IdSet>` field beside `input`, that being the incumbent literal `bounds` shape
+  > this contract deliberately replaced. It reaches the **response** too: the trace's
+  > `input_source` and its relation are singular `[verified — trace.rs:74]`.
+  >
+  > Refused with it: **seeds doubling as the bound**. It needs no wire change and it is a different
+  > act chosen silently — every seeded walk would stop returning neighbours outside its own seeds.
 - **`survey` is out of scope** — a separate Phase 5 row, and the `sal_norm` re-allocation ruling
   must not be settled by accident here `[carried — task 01a00163]`.
 - **The MCP query tool is out of scope** — ⟨2⟩, deferred with the consolidation view.
