@@ -71,6 +71,7 @@ static MEMORIES_CLI_MD: &str = include_str!("../../skill-content/memories-cli.md
 static MEMORIES_MCP_MD: &str = include_str!("../../skill-content/mcp/memories.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
+static SESSION_WRAP_MD: &str = include_str!("../../skill-content/session-wrap.md");
 static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
@@ -827,6 +828,10 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "implementation-grounding.md".to_string(),
         IMPLEMENTATION_GROUNDING_MD.to_string(),
     );
+    // Same rule: it names no command, because every command it would name lives in
+    // `session-lifecycle.md`. That is a design choice rather than an accident — the wrap doc is
+    // about what to WRITE, and giving the mechanics two homes is how they drift.
+    files.insert("session-wrap.md".to_string(), SESSION_WRAP_MD.to_string());
 
     Ok(files)
 }
@@ -979,6 +984,7 @@ fn check_expected_files(skill_dir: &Path) {
         "implementation-grounding.md",
         "outcome-registers.md",
         "session-lifecycle.md",
+        "session-wrap.md",
         "cognitive-maps.md",
         "teams.md",
         "querying.md",
@@ -1116,6 +1122,7 @@ pub fn generate_skill_files_with_hash(
         "session-lifecycle.md".to_string(),
         render_session_lifecycle(SURFACE_CLI)?,
     );
+    files.insert("session-wrap.md".to_string(), SESSION_WRAP_MD.to_string());
     files.insert("memories.md".to_string(), MEMORIES_CLI_MD.to_string());
     files.insert(
         "cognitive-maps.md".to_string(),
@@ -1349,6 +1356,7 @@ mod tests {
                 "plan-verification.md",
                 "references/frontmatter.md",
                 "session-lifecycle.md",
+                "session-wrap.md",
                 "subagent-guidance.md",
             ],
             "the emitted set moved — the drift gate only ever compares what appears here, so a file \

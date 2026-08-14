@@ -100,7 +100,7 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("AnchorTakesOneId", 1),
         ("BoundTermNotApplicable", 1),
         ("CombinatorArity", 1),
-        ("CombinatorNotReturnable", 1),
+        ("StageNotReturnable", 1),
         ("Cycle", 1),
         ("DanglingReference", 1),
         ("DuplicateReturnStage", 1),

@@ -245,9 +245,29 @@ fn every_declared_reach_has_a_production_call_site() {
         match &act.served_by {
             Some(sql_fn) => {
                 let sites = sql_call_sites(&prod, sql_fn);
+                // `[widened — 2026-08-14]` **A literal `FROM <mechanic>(` is how ONE door reaches an
+                // act, and this gate had quietly taken it for the only one.**
+                //
+                // `/api/search` calls its mechanics from Rust, so `readback/mod.rs` carries
+                // `FROM query_find_exact($1, …)` and the scan finds it. `/api/query` composes its
+                // statement at runtime and emits the function name from a CONSTANT, so the literal
+                // `FROM __temper_ungated_…(` appears nowhere in any source file and never will —
+                // for a `/api/query`-only act the scan is guaranteed to return zero sites no matter
+                // how reachable the act is.
+                //
+                // Membership in `CALLABLE_FRAGMENTS` is that door's equivalent, and it is a fact
+                // about production Rust in the same way: the map is what `validate` reads to decide
+                // `NotSeparablyReachable`, and an act absent from it cannot be composed at all.
+                //
+                // **Both failure directions survive**, which is the property that made this an
+                // equality rather than two implications. Over-claiming still fails — `Serves` needs
+                // a literal site OR a mapped fragment, and an act with neither has no door. And
+                // under-claiming still fails: `Absent` beside either one is still a shipped
+                // affordance going unlisted.
+                let composable = temper_core::types::query::emitted_fragment_for(sql_fn).is_some();
                 assert_eq!(
                     serves_somewhere,
-                    !sites.is_empty(),
+                    !sites.is_empty() || composable,
                     "{:?} declares reach at {} door(s) and `{sql_fn}` has {} production call \
                      site(s): {sites:?}. Either the declaration overstates a door nobody can \
                      stand at, or a shipped affordance is unlisted.",
@@ -545,8 +565,20 @@ fn the_cells_tier_one_cannot_discriminate_are_exactly_these() {
         let Some(sql_fn) = &act.served_by else {
             continue;
         };
-        if sql_call_sites(&prod, sql_fn).is_empty() {
-            continue; // tier 1 speaks for this act: no caller, so every cell must be `Absent`.
+        // `[widened — 2026-08-14]` Was `sql_call_sites(...).is_empty()` alone, whose comment read
+        // *"tier 1 speaks for this act: no caller, so every cell must be `Absent`."* That inference
+        // is only sound when a literal call site is the ONLY way to reach an act, and it stopped
+        // being so when `find-resources-with` arrived: reachable through `/api/query`, declaring
+        // `Serves` at two doors, and carrying no literal `FROM` anywhere because the compiler emits
+        // its fragment name from a constant.
+        //
+        // Left alone, this test would have kept PASSING — the act would simply have been skipped —
+        // while the sentence above it was false about it. A silent skip is the failure mode a pinned
+        // set is supposed to prevent, so the reachability disjunction is the same one the gate uses.
+        let reachable = !sql_call_sites(&prod, sql_fn).is_empty()
+            || temper_core::types::query::emitted_fragment_for(sql_fn).is_some();
+        if !reachable {
+            continue; // tier 1 speaks for this act: unreachable, so every cell must be `Absent`.
         }
         for door in Door::ALL {
             uncovered.insert((format!("{:?}", act.name), door));
@@ -557,6 +589,7 @@ fn the_cells_tier_one_cannot_discriminate_are_exactly_these() {
         ActName::FindExact,
         ActName::FindAboutAnywhere,
         ActName::FindAboutWithin,
+        ActName::FindResourcesWith,
         ActName::Substantiate,
     ]
     .into_iter()

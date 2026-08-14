@@ -1072,6 +1072,13 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
                     stage: StageName::parse("hits").unwrap(),
                 }),
             ),
+            // `[added — 2026-08-14, found in adversarial review]` **The `Selection` arm was absent
+            // from the guard that carries this property's name.** `emit_ungated_core_call` became a
+            // two-variant enum when `find-resources-with` landed, and this test kept building only
+            // `Find` stages — so the invariant was verified for the shape that already existed and
+            // not for the one being added. Its first argument was checked only incidentally, inside
+            // a different test's expected-string.
+            selection("sel"),
         ],
         vec!["narrowed"],
     );
@@ -1080,9 +1087,16 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
         calls.len(),
-        2,
-        "both find stages must reach an ungated core; got {calls:?} in:\n{}",
+        3,
+        "both find stages AND the selection must reach an ungated core; got {calls:?} in:\n{}",
         c.sql
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains("__temper_ungated_find_resources_with")),
+        "the selection variant must be among the calls this guard inspects, or it verifies only \
+         the arm that already existed: {calls:?}"
     );
 
     // The literal is written out rather than imported so that changing the emitter's id source has
@@ -1133,5 +1147,91 @@ fn no_stage_can_be_named_after_the_hoisted_visibility_relation() {
         c.sql.contains("__temper_vis AS MATERIALIZED"),
         "got:\n{}",
         c.sql
+    );
+}
+
+/// A `find-resources-with` selection stage carrying every narrowing the act admits.
+fn selection(name: &str) -> StageNode {
+    StageNode::Act(ActInvocation {
+        name: StageName::parse(name).unwrap(),
+        act: ActName::FindResourcesWith,
+        // **No intention, and no builder threads one onto it.** This is the one act that asks the
+        // corpus nothing; the shape pass's requirement names three acts and this is not among them,
+        // so an omitted intention here is well-formed rather than tolerated.
+        intention: None,
+        input: None,
+        terms: Default::default(),
+        resource_filter: Some(temper_core::types::query::ResourceFilter {
+            doc_type: vec!["task".to_string(), "session".to_string()],
+            tags: vec!["ci".to_string()],
+            facets: vec![temper_core::types::query::FacetPredicate {
+                key: "domain".to_string(),
+                value: "search".to_string(),
+            }],
+            stage: Some("in-progress".to_string()),
+            status: None,
+            owner: Some("j-cole-taylor".to_string()),
+            title_contains: Some("door".to_string()),
+        }),
+        edge_filter: None,
+        properties: vec![],
+    })
+}
+
+#[test]
+fn the_selection_narrowings_bind_in_signature_order() {
+    // The one real hazard in `selection_narrowings_for` is that its arguments are POSITIONAL: eight
+    // slots, rendered by index, with no name at the call site to catch a transposition. The type
+    // system catches some of it — `text[]` into a `text` slot does not typecheck — but `stage`,
+    // `status`, `owner_handle` and `title_contains` are all `text`, so four of the eight are
+    // mutually swappable without a compile error and without a runtime error. Only a rendering
+    // assertion sees that.
+    //
+    // Asserting on the emitted SQL rather than on the bind vector alone is what makes it an
+    // ORDER assertion: the binds carry the values, the text carries which slot each landed in.
+    // A selection cannot be RETURNED — it orders nothing, so its rows have no quantity to score
+    // them — so the plan pipes it into a find act, which is the shape a caller would really write
+    // and the one the acceptance criterion names.
+    let v = build(
+        vec![selection("sel"), find_from("hits", "sel")],
+        vec!["hits"],
+    );
+    let q = compile(&v, test_profile()).expect("selection compiles");
+
+    let call = q
+        .sql
+        .lines()
+        // The CALL line, not the `-- act:` comment line above it, which also names the core.
+        .find(|l| l.contains("FROM __temper_ungated_find_resources_with("))
+        .expect("the selection stage emits the selection core");
+
+    // Signature order: doc_types, tags, facets, stage, status, owner_profile, owner_handle,
+    // title_contains — then the anchor pair, then the principal LAST.
+    let expected = "__temper_ungated_find_resources_with((SELECT ids FROM __temper_vis), \
+                    $2::text[], $3::text[], $4::jsonb, $5::text, NULL::text, NULL::uuid, \
+                    $6::text, $7::text, NULL, NULL, $1)";
+    assert!(
+        call.contains(expected),
+        "narrowings must render in signature order.\n  expected: {expected}\n  got: {call}"
+    );
+
+    // `status` and `owner_profile` are the two the plan left unset, and they render as TYPED nulls
+    // rather than bare ones: a bare NULL is ambiguous against a DEFAULTed parameter list.
+    assert!(call.contains("NULL::text, NULL::uuid"), "got: {call}");
+
+    // `owner` is ONE wire field and TWO slots. A handle takes the text slot and leaves the uuid one
+    // null; a UUID string would do the reverse. Nothing parses `@me` here — the principal is a
+    // bind, so a stage cannot be compiled to one profile's id and executed as another's.
+    assert!(
+        matches!(&q.binds[5], QueryBind::Text(t) if t == "j-cole-taylor"),
+        "the handle spelling fills the handle slot: {:?}",
+        q.binds
+    );
+
+    // And the whole point of the act: no quantity to rank on.
+    assert!(
+        q.sql.contains("NULL::double precision AS quantity"),
+        "a selection ranks nothing, so its stage-contract quantity is NULL: {}",
+        q.sql
     );
 }

@@ -141,7 +141,7 @@ properties: Array<PropertyPredicate>, };
  *
  * OPEN discriminator — adding an act is additive.
  */
-export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within" | "follow-from" | "survey" | "substantiate" | "admit" | string;
+export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within" | "find-resources-with" | "follow-from" | "survey" | "substantiate" | "admit" | string;
 
 /**
  * The quantity an act orders its answer by, named so that summing it with another act's reads as
@@ -594,7 +594,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "combinator_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
 
 /**
  * One region of a cognitive map. Produced by `survey`.

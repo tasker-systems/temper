@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # `property_value @> $v` for any listed value. OR within the predicate, matching the established within-field OR of `doc_type` and `EdgeFilter.labels`.  The caller supplies the JSON shape they mean. Containment does not coerce: `'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.
+  # `property_value @> $v` for any listed value. OR within the predicate, matching the established within-field OR of `doc_type` and `EdgeFilter.labels`.  **Containment is ASYMMETRIC, and the asymmetry runs the useful way.** `[corrected — 2026-08-14]` This said *\"containment does not coerce: `'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented special exception whereby a top-level array contains a primitive. The reverse is the false one:  ```text  '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)  '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array) ```  The row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows and the scalar-shaped ones, while an **array** probe matches only the array-shaped rows. The conclusion therefore survives inverted and weaker than it was stated: a type-unstable key needs the scalar shape, not both. Listing both is harmless — the values OR — but it is not what makes the predicate span the population, and a caller who lists only the array shape silently answers for one half of it.
   class PropertyOpOneOf1 < ApiModelBase
     attr_accessor :op
 

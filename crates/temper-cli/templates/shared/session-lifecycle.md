@@ -142,6 +142,60 @@ Tool: update_resource   Input: { "id": "<goal uuid>", "content": "<the amended r
 fragment — a partial body is a silent truncation of the goal, not an append.
 {%- endif %}
 
+## Handing Off to the Next Session
+
+**End by echoing the invocation that starts the next session, ready to paste.** The handoff is worth
+nothing if the user has to assemble it from four resource ids scattered through a note. What goes
+*in* the preamble is `session-wrap.md`'s subject; this is the literal form.
+
+Take the ids from the calls you just made — the session note's id comes back in the create response,
+so capture it rather than looking it up. **Full UUIDv7s, never abbreviated**: a prefix is a
+timestamp, so the goal and the task written a minute later share theirs.
+
+{% if surface == "cli" -%}
+```
+/temper session start --context @me/<ctx> \
+  --task <task-uuid> \
+  --goal <goal-uuid> \
+  --from-session <the-note-you-just-wrote> \
+  --note "<the preamble>"
+```
+
+**These are skill-command arguments, not `temper` CLI flags.** There is no `temper session start`
+binary subcommand; the router in `SKILL.md` reads them. Writing them as flags is a convention that
+makes the handoff copy-pasteable, nothing more.
+{%- else -%}
+There is no slash-command router on this surface, so the handoff is a block the user pastes as their
+next prompt. Same four facts, spelled as prose:
+
+```
+Continue in @me/<ctx>.
+Task:    <task-uuid>
+Goal:    <goal-uuid>
+Follows: <the session note you just wrote>
+
+<the preamble>
+```
+{%- endif %}
+
+**Every field is conditional, and an omitted one is an honest statement.** Carry the task only if a
+task genuinely continues, the goal only if the work sits under one, and the preceding session always,
+since you just wrote it. A handoff naming a task that closed points the next session at finished
+work.
+
+### When there is no next session, say that instead
+
+**Do not manufacture an invocation to fill the slot.** Some sessions end the work: a goal closes, a
+task is done and nothing succeeds it, the arc finishes. Emitting a `session start` line there implies
+work remains and sends the next reader looking for it.
+
+Say plainly that the thread is closed and what closed it. If something *else* is now the obvious next
+thing, name it as a new starting point rather than as a continuation of this one — those are
+different claims, and only the second is a handoff.
+
+This is the same rule as the all-clear below: an ending is information, and the habit of filling
+every slot is what suppresses it.
+
 ## Closing Notes Carry a Status, or They Don't Ship
 
 This governs the **summary you write to the user at the end of a session**, not the session

@@ -204,15 +204,35 @@ pub(super) fn validate_shape_indexed(
         // anyway, and the assembler dropped every row for want of a score kind — answering
         // `disposition: answered` with an empty list and a tally saying rows existed. Found in
         // review. Combining stays legal; asking for the combined rows back does not.
-        if matches!(by_name.get(ret.stage.as_str()), Some(StageNode::Combine(_))) {
+        // `[widened — 2026-08-14]` **The rule is about the CONSEQUENCE, and there are two routes
+        // to it.** This gated on `Combine` alone under the name `CombinatorNotReturnable`, which
+        // pinned the cause; `find-resources-with` reaches the identical defect by the other route,
+        // selecting a set and ranking nothing. Renamed rather than joined by a sibling reason: two
+        // reasons for one consequence would make a client's handling depend on which route
+        // produced it, when the repair is the same either way.
+        //
+        // **Named acts, not a declaration lookup** — this module may not consult the registry (see
+        // the header). The same shape as the intention check below, and safe under version skew
+        // for the same reason: an older client parses an act it does not know as
+        // `ActName::Other(..)`, matches nothing, and under-refuses. A client that over-refuses a
+        // plan a newer server would run is the failure this rule exists to prevent, and this
+        // cannot produce one.
+        let unreturnable: Option<&str> = match by_name.get(ret.stage.as_str()) {
+            Some(StageNode::Combine(_)) => Some(
+                "combines other stages, so its rows have no single act to score them; return the \
+                 stages it combines instead",
+            ),
+            Some(StageNode::Act(inv)) if matches!(inv.act, ActName::FindResourcesWith) => Some(
+                "selects a set and orders nothing, so its rows have no quantity to score them; \
+                 pipe it into a find act as a bound and return that instead",
+            ),
+            _ => None,
+        };
+        if let Some(why) = unreturnable {
             errs.push(refusal(
                 Some(&ret.stage),
-                RefusalReason::CombinatorNotReturnable,
-                format!(
-                    "stage `{}` combines other stages, so its rows have no single act to score \
-                     them; return the stages it combines instead",
-                    ret.stage.as_str()
-                ),
+                RefusalReason::StageNotReturnable,
+                format!("stage `{}` {why}", ret.stage.as_str()),
             ));
         }
         if !declared.contains(ret.stage.as_str()) {
@@ -331,7 +351,9 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         //
         // Supplying SEVERAL is refused only because today's fragments take the pair, which is a
         // parameter shape — so that arm is capability, and lives in [`super::capability`] beside
-        // the structurally identical `f.doc_type.len() > 1`.
+        // the structurally identical `f.doc_type.len() > 1` — which was RETIRED on 2026-08-14
+        // when `doc_type` stopped being a modifier, so the analogy names a check that no longer
+        // exists and survives only as this comparison.
         if matches!(kind, IdKind::Cogmap | IdKind::Context) && ids.ids.is_empty() {
             errs.push(refusal(
                 Some(name),

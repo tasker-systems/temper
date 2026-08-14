@@ -2,18 +2,24 @@
 //!
 //! Everything here may move as beats land, which is why none of it may be raised by a client
 //! against a server it does not share a binary with. Note that reading a declaration is NOT what
-//! makes a check belong here: the four "this door does not apply" `FilterNotApplicable` sites, the
+//! makes a check belong here: the `FilterNotApplicable` sites, the
 //! [`SectionNotAvailable`](RefusalReason::SectionNotAvailable) loop, and the more-than-one
 //! [`AnchorTakesOneId`](RefusalReason::AnchorTakesOneId) arm read no declaration at all and are
-//! pure door capability. Only two of them say *"does not yet apply"* outright; the rest read like
-//! permanent structural facts and are not. Six sites, and no two are retired by the same thing:
+//! pure door capability. Only some of them say *"does not yet apply"* outright; the rest read like
+//! permanent structural facts and are not. Five sites, and no two are retired by the same thing:
 //!
 //! - property predicates — Task 10b;
 //! - edge filters — Task 11;
-//! - the six-field resource narrowing — a compiler slot that does not exist yet;
-//! - the one-value doc-type narrowing — a fragment parameter a later fragment can widen;
-//! - the one-id anchor slot — the same class as the line above and a DIFFERENT parameter: the
-//!   fragments' `(anchor_table, anchor_id)` pair, retired by an `anchor_ids uuid[]`;
+//! - the seven-field resource narrowing on any act OTHER than `find-resources-with` — retired by
+//!   nothing, because it is no longer a shortfall. `[amended — 2026-08-14]` It was *"the six-field
+//!   resource narrowing — a compiler slot that does not exist yet"*, beside a seventh entry for
+//!   *"the one-value doc-type narrowing — a fragment parameter a later fragment can widen"*. **Both
+//!   descriptions are now wrong, and in opposite directions**: the slot exists (the selection
+//!   fragment applies all seven), and the doc-type site is gone entirely rather than widened — the
+//!   narrowing moved to an act, so on a find act it refuses like the other six. That is why the
+//!   count here went from six to five while the CAPABILITY grew;
+//! - the one-id anchor slot — the fragments' `(anchor_table, anchor_id)` pair, retired by an
+//!   `anchor_ids uuid[]`;
 //! - [`SectionNotAvailable`](RefusalReason::SectionNotAvailable) — a widened
 //!   [`ReturnSpec::ADMITTED_SECTIONS`].
 //!
@@ -25,7 +31,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::types::query::act::BuildState;
+use crate::types::query::act::{ActName, BuildState};
 use crate::types::query::composition::{Composition, ReturnSpec, StageNode};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
@@ -36,6 +42,14 @@ use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
 use super::{act_wire_name, emitted_fragment_for, refusal, term_wire_name, PlanRefusal};
+
+/// The most facet predicates one selection may carry.
+///
+/// Not a round number chosen for looks: real selections in this corpus carry one or two facets, and
+/// the measured cost cliff is three orders of magnitude above this — so the cap is far above any
+/// question anyone asks and far below anything that hurts. A caller who genuinely needs more is
+/// asking a different question and should say so with a second stage.
+const MAX_FACET_PREDICATES: usize = 32;
 
 /// The kind an upstream node produces, walking a combinator to its first input. `None` for a
 /// dangling reference (already refused as topology) or an act that produces nothing.
@@ -213,7 +227,9 @@ fn check_act(
     // `[split from the shape pass — 2026-08-12, Pete]` The zero case stays there: naming nothing to
     // scope to is malformed whatever the door. This one is not. `Cogmap` and `Context` bounds are
     // served by an `(anchor_table, anchor_id)` PAIR, and a pair holds one id — a fragment
-    // parameter's shape, exactly like `f.doc_type.len() > 1` below, and exactly what an
+    // parameter's shape — the class `f.doc_type.len() > 1` used to belong to before that check was
+    // retired on 2026-08-14 (the narrowing moved to an act, so the arity limit went with it) — and
+    // exactly what an
     // `anchor_ids uuid[]` would retire. Held in the shape pass it would let a client refuse a plan
     // a widened server runs.
     //
@@ -251,43 +267,87 @@ fn check_act(
     // `FilterNotApplicable`, whose name is imperfect here — the ACT admits these; it is this DOOR
     // that cannot apply them — so each detail says so explicitly. Whether that deserves its own
     // reason is an open question, not a silent choice.
+    // `[amended — 2026-08-14]` **The resource filter is now a PARAMETER OF ONE ACT, and every other
+    // act refuses all seven of its fields — `doc_type` included.**
+    //
+    // This block used to refuse six and let `doc_type` through, because `doc_type` was the one field
+    // the find fragments could apply. `find-resources-with` now applies all seven against real
+    // storage (`query_find_resources_with`, migration `20260814000010`), so the narrowing has an act
+    // and a modifier saying the same thing would be a second spelling — the drift-by-construction
+    // this contract keeps removing.
+    //
+    // **`doc_type`'s retirement REFUSES rather than being ignored, and that inversion is
+    // deliberate** `[decided — 2026-08-14, Pete]`. The established degradation for a retired field
+    // is accepted-and-ignored (`a_composition_that_still_carries_bounds_or_meta_detail_is_accepted_
+    // and_both_ignored`), and that is correct for a field that never did anything and WRONG here:
+    // `doc_type` works today, so a caller whose narrowing silently stopped applying would get more
+    // rows and no signal — precisely the substitution this act exists to remove. The detail names
+    // the replacement, because a refusal that does not say where the capability went is a dead end.
+    //
+    // Sequencing was part of the work: this fires in the same change that gives the act its
+    // mechanic, never before it.
     if let Some(f) = &inv.resource_filter {
-        let declared: &[(&str, bool)] = &[
-            ("tags", !f.tags.is_empty()),
-            ("facets", !f.facets.is_empty()),
-            ("stage", f.stage.is_some()),
-            ("status", f.status.is_some()),
-            ("owner", f.owner.is_some()),
-            ("title_contains", f.title_contains.is_some()),
-        ];
-        for field in declared
-            .iter()
-            .filter(|(_, present)| *present)
-            .map(|(field, _)| field)
-        {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::FilterNotApplicable,
-                format!(
-                    "this door does not apply the `{field}` narrowing — the act admits it, the \
-                     compiler has no slot for it, and ignoring it would answer a different question \
-                     than the one asked"
-                ),
-            ));
-        }
-        // The fragment's `p_doc_type` is a single `text`, not an array, so a multi-value doc-type
-        // filter is inexpressible rather than merely unimplemented. Same shape as the anchor slot:
-        // narrowing to the first of them would answer a different question and look like a
-        // successful narrowing.
-        if f.doc_type.len() > 1 {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::FilterNotApplicable,
-                format!(
-                    "this door's doc-type narrowing holds exactly one value; this stage supplied {}",
-                    f.doc_type.len()
-                ),
-            ));
+        if matches!(inv.act, ActName::FindResourcesWith) {
+            // The act whose parameter this is. Its fragment has a slot for every field, `doc_type`
+            // takes a set rather than one value, and there is nothing here to refuse — except the
+            // one field whose LENGTH is a cost multiplier rather than a narrowing.
+            //
+            // **`facets` is the only per-ROW multiplier on this surface.** `[added — 2026-08-14,
+            // found in adversarial review]` Its fragment predicate is a nested `NOT EXISTS` over
+            // this array, evaluated once per candidate row and short-circuiting on the first
+            // predicate that fails — so cost is `|visible set| × |facets|`, and an authenticated
+            // caller chooses the second factor. `tags` and `doc_type` do NOT have this shape:
+            // array containment and `= ANY` are single operations whatever their length.
+            //
+            // Refused rather than clamped, because clamping would silently answer a different
+            // question — the same reason a multi-value `doc_type` was refused rather than truncated
+            // to its first element while that slot held one value.
+            //
+            // **This closes the instance and not the class.** Nothing bounds a composition's stage
+            // count, no `statement_timeout` exists anywhere in the repo, and `acquire_timeout`
+            // bounds waiting for a connection rather than execution — so a caller can still spend
+            // arbitrary time by other means. That is task
+            // `01a000ee-9fec-7283-baa5-75cd1580f023`, which is not fixed here
+            // `[decided — 2026-08-14, Pete]`: a global execution bound is a decision about every
+            // query on the surface rather than about this act, and it may want a read/write path
+            // split rather than a single setting — so it gets a focused session, not a corner of
+            // this one.
+            if f.facets.len() > MAX_FACET_PREDICATES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    format!(
+                        "a selection admits at most {MAX_FACET_PREDICATES} facet predicates; this                          stage supplied {}. Each one is evaluated against every candidate row, so                          the list is a cost multiplier rather than a narrowing — narrow with the                          other fields first, or split the question",
+                        f.facets.len()
+                    ),
+                ));
+            }
+        } else {
+            let declared: &[(&str, bool)] = &[
+                ("doc_type", !f.doc_type.is_empty()),
+                ("tags", !f.tags.is_empty()),
+                ("facets", !f.facets.is_empty()),
+                ("stage", f.stage.is_some()),
+                ("status", f.status.is_some()),
+                ("owner", f.owner.is_some()),
+                ("title_contains", f.title_contains.is_some()),
+            ];
+            for field in declared
+                .iter()
+                .filter(|(_, present)| *present)
+                .map(|(field, _)| field)
+            {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    format!(
+                        "this act does not narrow by `{field}`; narrowing by what a resource IS is \
+                         the `find-resources-with` act — select with it and pipe the result in as a \
+                         bound. Applying it here would answer a different question than the one \
+                         asked"
+                    ),
+                ));
+            }
         }
     }
     if !inv.properties.is_empty() {
