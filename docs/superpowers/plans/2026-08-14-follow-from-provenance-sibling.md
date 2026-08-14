@@ -19,7 +19,7 @@ they are listed here only so no step has to be read against a stale draft.
 |---|---|
 | **Depth is definitional, fixed at 2** (§2.1, §5) | `BoundTerm` does **not** grow a variant. `accepts_bound_terms` stays `[Limit]`. No wire change, no openapi/ts-rs churn from this axis. The fragment still takes `p_depth`; the compiler passes the constant. |
 | **Three functions**, incumbent re-pointed (§10) | `search_graph_expand` → `query_follow_from` → `__temper_ungated_follow_from`. ONE BODY. **The core must carry `p_gamma`**, because the incumbent's signature has that slot and delegation passes it through. |
-| **`p_bound_ids` ships, constraining the whole walk** (§9) | Intermediates included. **The fragment ships it; the DECLARATION does not follow yet** — a stage carries one set and a bounded walk needs two, so `accepts_bounds` stays `vec![]` until **B0** widens the wire. Declaring it sooner would name a capability no caller can express. |
+| **`p_bound_ids` ships, constraining the whole walk** (§9) | Intermediates included. The fragment shipped it in A; the DECLARATION followed only after **B0** widened the wire, because a stage carried one set and a bounded walk needs two. `accepts_bounds: [Resource]` as of `fe14964e`. |
 | **`inputs: Vec<StageInput>`, at most one per relation** (§9, found at build time) | New deliverable **B0**, blocking B. The relation already distinguishes seed from bound, so a bound gets no second spelling. |
 | Gates: TDD · `generated-artifacts` skill · `sqlx-query-cache` skill · `/code-review` at the end | Step-level verification below; no completion claim without quoted output. |
 
@@ -105,10 +105,21 @@ argument for doing it (those tests become coverage of the real body) rather than
 
 ---
 
-## 2. Sequence
+## 2. Sequence — **ALL COMPLETE `[2026-08-14]`**
 
-Four deliverables. **A is a session; B+C are a session; D is a session.** Each ends green and
-committed; none leaves the tree with a half-wired act.
+| # | deliverable | commit |
+|---|---|---|
+| A | the migration and its witnesses | `cd6e5152` |
+| — | the wire gap, found and ruled | `1acc3e04` |
+| B0 | `inputs: Vec<StageInput>` | `7fc7562c` |
+| B+C | the declaration, both refusals, `via` through the compiler | `fe14964e` |
+| D | the walk through `/api/query` | `67f0c3c6` |
+
+Five deliverables, not four: **B0 was not in this plan when it was written.** It was found while
+reading the compiler before writing its arm — the fragment could express a bounded walk and the wire
+could not — and it is the reason the sequence has a gap in the middle.
+
+Each ends green and committed; none left the tree with a half-wired act.
 
 ---
 
