@@ -26,6 +26,8 @@ upfront; read only what the current task requires.
 - `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. Read when
   **authoring or amending a goal or sub-goal**, not to start a task
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
+- `session-wrap.md` — **Ending a session**: what the note must hold, and how to write the
+  handoff preamble the next session starts from. The mechanics stay in `session-lifecycle.md`
 - `memories.md` — Durable memories: what a `memory` resource is, how to **populate** the store from
   a machine's local files, and what generates and gates this machine's `MEMORY.md`
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
@@ -183,6 +185,7 @@ authoring or amending a goal or sub-goal.
 | `task resume <slug>` | On Task Resume |
 | `task create [--context @me/<ctx>]` | On Task Create |
 | `session start [--context @me/<ctx>]` | On Session Start |
+| `session wrap` | Read `session-wrap.md`, then follow *Session End* in `session-lifecycle.md` |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
@@ -349,6 +352,9 @@ Before dispatching any subagent:
 4. Include any user-selected plugin skills
 
 ## Session Lifecycle
+
+**Ending a session? Read `session-wrap.md` first** — it governs what the note must hold and how
+to write the handoff preamble; the calls themselves are below.
 
 Read `session-lifecycle.md` for:
 - Session start checklist
