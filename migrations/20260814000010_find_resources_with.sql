@@ -152,10 +152,39 @@ LANGUAGE sql STABLE AS $$
        -- Tags: AND-containment, both sides folded. A resource with no `tags` property aggregates to
        -- NULL and `NULL @> $` is NULL, so it is correctly excluded; three production resources carry
        -- `tags: []` and are likewise excluded for any non-empty filter.
+       --
+       -- **`tags` IS NOT ALWAYS AN ARRAY, and calling `jsonb_array_elements_text` on it directly
+       -- RAISES.** `[fixed — 2026-08-14, found in adversarial review]` open_meta convention v2
+       -- declares `tags` to be an array of strings **or a bare string**, and
+       -- `crates/temper-workflow/src/schema.rs` asserts both pass validation — its comment says
+       -- rejecting the bare form "would break existing callers". So a single schema-VALID resource
+       -- carrying `tags: "concept design"` made this predicate raise `cannot extract elements from
+       -- a scalar` for **every caller in the deployment**, including callers who cannot see it.
+       -- Availability, not disclosure: the error is redacted and names nothing.
+       --
+       -- The shape is normalized to an array BEFORE the set-returning function sees it, rather than
+       -- guarded with a `WHERE` — a `WHERE` beside a lateral SRF is evaluated after the expansion
+       -- that already raised.
+       --
+       -- A bare string is whitespace-split rather than taken whole, because that is what the same
+       -- value already means to the FTS half of the system: `20260711000060` space-joins the array
+       -- and passes the string through to a parser that tokenizes it, so `tags: "ci auth"` is
+       -- findable by searching `ci`. A filter that answered otherwise would make two doors disagree
+       -- about one value. Any other JSON type yields `[]` — fail closed, matching nothing, never
+       -- raising.
+       --
+       -- `filtered_visible_page` carries the identical defect and is fixed in the same change; this
+       -- function inherited it by conforming, which is what conforming to an unfixed incumbent buys.
        AND (p_tags IS NULL OR (
              SELECT coalesce(array_agg(DISTINCT lower(t)), '{}')
                FROM kb_properties tp
-               CROSS JOIN LATERAL jsonb_array_elements_text(tp.property_value) AS t
+               CROSS JOIN LATERAL jsonb_array_elements_text(
+                 CASE jsonb_typeof(tp.property_value)
+                   WHEN 'array'  THEN tp.property_value
+                   WHEN 'string' THEN to_jsonb(
+                     regexp_split_to_array(trim(tp.property_value #>> '{}'), '\s+'))
+                   ELSE '[]'::jsonb
+                 END) AS t
               WHERE tp.owner_table = 'kb_resources' AND tp.owner_id = r.id
                 AND tp.property_key = 'tags' AND NOT tp.is_folded
            ) @> ARRAY(SELECT lower(x) FROM unnest(p_tags) AS x))
@@ -169,8 +198,14 @@ LANGUAGE sql STABLE AS $$
        -- comment claimed it "silently becomes OR" there; that was an unverified rationale attached
        -- to a correct implementation, and both forms return false. The reason to prefer this one is
        -- that it says what it means, not that the other is wrong.
+       -- `jsonb_array_elements` RAISES on a non-array, so the argument is normalized the same way
+       -- `tags` is. Unreachable through the compiler today — `selection_narrowings_for` always
+       -- builds a `serde_json::Value::Array` — but this function is directly callable, and a slot
+       -- that turns a malformed filter into a 500 rather than an empty stage is the wrong default
+       -- to leave sitting for the next caller. Fail closed: a non-array narrows to nothing.
        AND (p_facets IS NULL OR NOT EXISTS (
-             SELECT 1 FROM jsonb_array_elements(p_facets) AS f
+             SELECT 1 FROM jsonb_array_elements(
+               CASE jsonb_typeof(p_facets) WHEN 'array' THEN p_facets ELSE '[]'::jsonb END) AS f
               WHERE NOT EXISTS (
                 SELECT 1 FROM kb_properties fp
                  WHERE fp.owner_table = 'kb_resources' AND fp.owner_id = r.id

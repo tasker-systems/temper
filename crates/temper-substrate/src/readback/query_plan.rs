@@ -543,7 +543,21 @@ enum CoreCall<'a> {
 /// validation rather than dropped here.
 /// The selection core takes the same two authorization inputs in the same two roles — the verdict
 /// first, the anchor reader last — so widening this to a second variant did not widen what a caller
-/// can influence. Both arms write `VISIBLE_IDS` and `PRINCIPAL_BIND` here and nowhere else.
+/// can influence.
+///
+/// `[corrected — 2026-08-14, found in adversarial review]` This read *"Both arms write
+/// `VISIBLE_IDS` and `PRINCIPAL_BIND` here and nowhere else."* **That sentence is false**, and a
+/// reviewer grepping to confirm it finds two more sites. The security property is intact — neither
+/// is a core-call ARGUMENT POSITION, which is the only thing a caller could influence:
+///
+///   * the `__temper_vis` CTE in `compile` *defines* the verdict — it is where the gate is
+///     computed, not where it is handed to a core;
+///   * `unusable_tally` *reads* it, to count ids an upstream stage produced that this principal
+///     cannot see.
+///
+/// Stated precisely because the imprecise version had already been copied into
+/// `audit-ungated-fragments.sh`'s reviewed baseline as that guard's verdict, and a security guard
+/// whose stated evidence fails on a grep is a guard people stop believing.
 fn emit_ungated_core_call(c: &CoreCall) -> String {
     match c {
         CoreCall::Find {
@@ -815,6 +829,21 @@ fn doc_type_for() -> String {
     "NULL".to_string()
 }
 
+/// Which of the two owner spellings a plan supplied, and whether it needs a bind at all.
+///
+/// An enum rather than an `Option<QueryBind>` because `@me` is a THIRD case that is neither "no
+/// owner filter" nor "a value to bind" — it is a reference to a bind that already exists.
+/// Collapsing it into either of the other two is exactly what produced the defect this type was
+/// added to fix.
+enum OwnerSlot {
+    /// No owner narrowing, or the handle spelling (which fills the other slot).
+    Absent,
+    /// A profile id the caller named literally.
+    Bind(QueryBind),
+    /// `@me` — the caller's own profile, resolved at execution through `PRINCIPAL_BIND`.
+    Principal,
+}
+
 /// The selection core's eight narrowing arguments, in signature order, each bound or a typed `NULL`.
 ///
 /// **A `NULL` here narrows NOTHING**, which is the opposite polarity from the `p_visible_ids` these
@@ -855,16 +884,28 @@ fn selection_narrowings_for(
         ))
     });
     // `owner` is ONE wire field and TWO fragment slots, because the incumbent resolves it two ways:
-    // `@me` becomes the caller's profile id, anything else matches a handle. Splitting it here
-    // rather than parsing inside the SQL keeps `filtered_visible_page`'s convention — and `@me` is
-    // deliberately NOT resolved in this compiler: the principal is `$1`, a bind, so a stage cannot
-    // be compiled to one profile's id and executed as another's.
+    // `@me` becomes the caller's profile id, anything else matches a handle
+    // (`substrate_read.rs`'s `owner_self` / `owner_handle` pair).
+    //
+    // `[fixed — 2026-08-14, found in adversarial review]` **`@me` fell through to the HANDLE slot
+    // and matched nothing.** Handles carry no sigil — `SELECT handle FROM kb_profiles` yields
+    // `system`, not `@system` — so `p.handle = '@me'` is unsatisfiable, and the most likely owner
+    // value anyone writes selected an empty set while `narrowed_by` echoed it back as an applied
+    // narrowing. That is the silent question substitution this act exists to remove, landing in the
+    // one act whose entire output is a narrowing.
+    //
+    // The comment here previously claimed this both kept the incumbent's convention AND that `@me`
+    // was "deliberately NOT resolved" — two clauses that cannot both be true, over code that did
+    // neither. The concern the second named is real and is now actually satisfied: `@me` resolves
+    // to `PRINCIPAL_BIND`, which is `$1`, so it binds at EXECUTION. A UUID literal baked into the
+    // plan would have the defect that clause feared; a reference to the principal bind does not.
     let (owner_profile, owner_handle) = match f.owner.as_deref() {
+        Some("@me") => (OwnerSlot::Principal, None),
         Some(o) => match uuid::Uuid::parse_str(o) {
-            Ok(id) => (Some(QueryBind::Id(id)), None),
-            Err(_) => (None, Some(QueryBind::Text(o.to_string()))),
+            Ok(id) => (OwnerSlot::Bind(QueryBind::Id(id)), None),
+            Err(_) => (OwnerSlot::Absent, Some(QueryBind::Text(o.to_string()))),
         },
-        None => (None, None),
+        None => (OwnerSlot::Absent, None),
     };
 
     [
@@ -879,7 +920,13 @@ fn selection_narrowings_for(
         slot(facets, "jsonb"),
         slot(f.stage.clone().map(QueryBind::Text), "text"),
         slot(f.status.clone().map(QueryBind::Text), "text"),
-        slot(owner_profile, "uuid"),
+        match owner_profile {
+            // `$1` is already bound as the principal at index 1; referencing it costs no new bind
+            // and resolves at execution rather than compile time.
+            OwnerSlot::Principal => format!("{PRINCIPAL_BIND}::uuid"),
+            OwnerSlot::Bind(b) => slot(Some(b), "uuid"),
+            OwnerSlot::Absent => slot(None, "uuid"),
+        },
         slot(owner_handle, "text"),
         slot(f.title_contains.clone().map(QueryBind::Text), "text"),
     ]

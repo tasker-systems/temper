@@ -668,9 +668,10 @@ mod tests {
         // `[moved — 2026-08-14]` `find-resources-with` joins, and it is the first member whose door
         // is `/api/query` rather than one of its own — served by `query_find_resources_with`
         // (migration `20260814000010`) and emitted through `CALLABLE_FRAGMENTS`. It went `Unbuilt`
-        // to `Served` in one branch on purpose: `Unbuilt` while only the contract existed was a TRUE
-        // statement about the deployed system, and holding it there once the fragment shipped would
-        // have been the same known-false declaration this field was added to stop.
+        // to `Served` within one branch, which is not a gap in the record: `Unbuilt` while only the
+        // contract existed was a TRUE statement about the deployed system, and holding it there
+        // once the fragment shipped would have been the same known-false declaration this field was
+        // added to stop.
         //
         // Kept as an EXACT set: an act acquiring or losing a door must be a deliberate edit here,
         // and `build_state` moving is BREAKING under the semver table (design §6.2). Order follows
@@ -1002,8 +1003,8 @@ mod tests {
     ///
     /// The companion the amendment above owes. Widening a gate from `produces` to `orders_by`
     /// silently admits every future act into the cell the old gate refused, and a cell nothing
-    /// names is a cell nobody reviews — so the population is pinned, and an act joining it is a
-    /// decision someone made on purpose rather than a default someone inherited.
+    /// names is a cell nobody reviews — so the population is pinned, and an act joining it has to
+    /// be stated here rather than inherited from a gate that stopped looking.
     ///
     /// **What lands in this cell is not returnable**, and that is the reason the pin is worth its
     /// brittleness. A stage whose act orders nothing has no quantity to score its rows; asked for

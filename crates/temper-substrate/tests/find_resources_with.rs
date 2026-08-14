@@ -23,11 +23,18 @@
 //!
 //! ## What is deliberately NOT witnessed here
 //!
-//! **Composition.** That a selection's ids reach a find act's `p_bound_ids` is beat 3's, because
-//! nothing compiles this act yet — `validate` refuses it as `not_implemented`, since the registry
-//! declares it `Unbuilt` and it is absent from `CALLABLE_FRAGMENTS`. Asserting composition here
-//! would need a hand-written statement that is not the one the compiler will emit, which witnesses
-//! the test's own SQL rather than the system's.
+//! **Composition.** That a selection's ids reach a find act's `p_bound_ids` is witnessed
+//! elsewhere, not here: `query_run_composition_test.rs::a_selection_bounds_the_find_act_it_is_piped_into`
+//! drives the real compiled statement end to end and reads the trace.
+//!
+//! `[corrected — 2026-08-14]` This said composition "is beat 3's, because nothing compiles this act
+//! yet — `validate` refuses it as `not_implemented`". Beat 3 landed **on this same branch**: the act
+//! is `Served`, it is in `CALLABLE_FRAGMENTS`, and the pipe is exercised. The paragraph outlived its
+//! subject by two commits, which is how a file comes to understate its own coverage.
+//!
+//! What stays true is the reason not to assert composition *here*: doing so would need a
+//! hand-written statement that is not the one the compiler emits, which witnesses the test's own SQL
+//! rather than the system's.
 
 mod common;
 
@@ -714,4 +721,145 @@ async fn the_core_admits_nothing_when_handed_a_null_visible_set(pool: sqlx::PgPo
             .any(|r| r.get::<Uuid, _>("resource_id") == _r),
         "the fixture is visible, so the empty above was the verdict and not the corpus"
     );
+}
+
+// ── Regressions from the adversarial security review ────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_bare_string_tags_value_does_not_raise_and_splits_on_whitespace(pool: sqlx::PgPool) {
+    // `[regression — 2026-08-14]` **This raised for EVERY caller in the deployment**, not just the
+    // owner of the offending row. open_meta convention v2 declares `tags` an array of strings OR a
+    // bare string, and `temper_workflow::schema` asserts both pass validation — so a single
+    // schema-VALID resource made `jsonb_array_elements_text` fail with `cannot extract elements
+    // from a scalar`, and the whole tag filter went down for everyone. Availability, not
+    // disclosure; the error names nothing.
+    //
+    // The split is on whitespace rather than taking the string whole, because that is what the
+    // same value already means to FTS — so `tags: "ci auth"` is filterable by `ci` exactly as it
+    // is searchable by `ci`, and the two doors do not disagree about one value.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "barestring").await);
+
+    let bare = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Bare",
+        "concept",
+        &[prop("tags", serde_json::json!("ci auth"))],
+    )
+    .await;
+    let arrayed = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Arrayed",
+        "concept",
+        &[prop("tags", serde_json::json!(["ci"]))],
+    )
+    .await;
+
+    // The call completing at all is half the assertion — before the fix it raised here.
+    let got = select(
+        &pool,
+        owner,
+        Narrow {
+            tags: Some(vec!["ci".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        got,
+        sorted(vec![bare, arrayed]),
+        "a bare-string tags value must be split, not raise and not be skipped"
+    );
+
+    // The second token is reachable too, or the split silently kept only the first.
+    let by_second = select(
+        &pool,
+        owner,
+        Narrow {
+            tags: Some(vec!["auth".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(by_second, vec![bare]);
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_second_principal_sees_none_of_another_principals_resources(pool: sqlx::PgPool) {
+    // `[added — 2026-08-14]` The suite had NO cross-principal test. Every case used one profile, so
+    // the closest thing to a visibility assertion was the degenerate NULL-verdict probe — and a
+    // regression that stopped the wrapper scoping at all would have passed the whole file.
+    //
+    // Both agents that reviewed this verified the property by hand and both named its absence.
+    // Verified-by-hand is not held; this holds it.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "mine").await);
+
+    let mine = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Private Thing",
+        "task",
+        &[
+            prop("tags", serde_json::json!(["secret"])),
+            prop("temper-stage", serde_json::json!("in-progress")),
+        ],
+    )
+    .await;
+
+    let stranger = ProfileId::from(common::insert_profile(&pool, "stranger").await);
+
+    // Every spelling, because a leak through any one of them is a leak.
+    for narrow in [
+        Narrow::default(),
+        Narrow {
+            doc_types: Some(vec!["task".into()]),
+            ..Default::default()
+        },
+        Narrow {
+            tags: Some(vec!["secret".into()]),
+            ..Default::default()
+        },
+        Narrow {
+            stage: Some("in-progress"),
+            ..Default::default()
+        },
+        Narrow {
+            title_contains: Some("Private"),
+            ..Default::default()
+        },
+        Narrow {
+            owner_handle: Some("system"),
+            ..Default::default()
+        },
+    ] {
+        let got = select(&pool, stranger, narrow).await;
+        assert!(
+            !got.contains(&mine),
+            "a stranger reached another principal's resource; got {got:?}"
+        );
+    }
+
+    // Positive control: the owner still sees it, so the empties above are the gate and not an
+    // empty corpus.
+    let owner_sees = select(
+        &pool,
+        owner,
+        Narrow {
+            tags: Some(vec!["secret".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(owner_sees, vec![mine], "the fixture must be real");
 }

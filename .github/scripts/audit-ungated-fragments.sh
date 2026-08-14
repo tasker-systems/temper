@@ -127,7 +127,12 @@ EOF
 #     call sites — the match arms emit through the constants and so never name the prefix — which is
 #     why 3 rather than 6 is the correct reading.
 #   VERDICT/EMITTER: the selection call goes through `emit_ungated_core_call`, which is still the
-#     ONE place `VISIBLE_IDS` and `PRINCIPAL_BIND` are written. That function became an enum to take
+#     ONE place `VISIBLE_IDS` and `PRINCIPAL_BIND` are written INTO A CORE CALL'S ARGUMENTS — which
+#     is the position a caller could influence, and the precise form of the claim. `[corrected —
+#     2026-08-14]` This said "the ONE place they are written", full stop, which is false: the
+#     `__temper_vis` CTE defines the verdict and `unusable_tally` reads it. Neither is an argument
+#     position, so the property holds — but a guard whose stated evidence fails on a grep is a guard
+#     people stop believing. That function became an enum to take
 #     a second call shape; a second EMITTER was rejected precisely because the security property is
 #     that there is one place, and the second one is the one nobody audits.
 read -r -d '' RUST_BASELINE <<'EOF' || true

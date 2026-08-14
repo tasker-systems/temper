@@ -351,7 +351,9 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         //
         // Supplying SEVERAL is refused only because today's fragments take the pair, which is a
         // parameter shape — so that arm is capability, and lives in [`super::capability`] beside
-        // the structurally identical `f.doc_type.len() > 1`.
+        // the structurally identical `f.doc_type.len() > 1` — which was RETIRED on 2026-08-14
+        // when `doc_type` stopped being a modifier, so the analogy names a check that no longer
+        // exists and survives only as this comparison.
         if matches!(kind, IdKind::Cogmap | IdKind::Context) && ids.ids.is_empty() {
             errs.push(refusal(
                 Some(name),

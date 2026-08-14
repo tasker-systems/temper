@@ -1201,6 +1201,56 @@ mod tests {
         );
     }
 
+    /// **The one filter field whose LENGTH is a cost multiplier is capped.**
+    ///
+    /// `[added — 2026-08-14]` Each facet predicate is evaluated against every candidate row, so cost
+    /// is `|visible set| × |facets|` and an authenticated caller picks the second factor. Refused
+    /// rather than clamped: clamping answers a different question silently, which is the whole thing
+    /// this act exists to stop.
+    ///
+    /// The boundary is asserted on both sides, so a cap that drifted to "any facets at all" or to
+    /// "no cap" both fail here rather than one of them passing quietly.
+    #[test]
+    fn a_selection_caps_the_facet_predicates_that_multiply_per_row_cost() {
+        let facets = |n: usize| {
+            (0..n)
+                .map(|i| FacetPredicate {
+                    key: format!("k{i}"),
+                    value: "v".to_string(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let plan_with = |n: usize| {
+            let mut node = act("sel", ActName::FindResourcesWith, None);
+            if let StageNode::Act(a) = &mut node {
+                a.resource_filter = Some(ResourceFilter {
+                    facets: facets(n),
+                    ..Default::default()
+                });
+            }
+            let mut sink = act("hits", ActName::FindExact, None);
+            if let StageNode::Act(a) = &mut sink {
+                a.input = Some(StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("sel").unwrap(),
+                });
+            }
+            plan(vec![node, sink], vec!["hits"])
+        };
+
+        assert!(
+            validate(&plan_with(32)).is_ok(),
+            "the cap itself must be admitted, or the boundary is off by one"
+        );
+        let errs = validate(&plan_with(33)).expect_err("one past the cap must refuse");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::FilterNotApplicable
+                    && e.detail.contains("facet predicates")),
+            "the refusal must name what it declined and why; got: {errs:?}"
+        );
+    }
+
     #[test]
     fn an_edge_filter_on_a_resource_only_act_is_declined_not_ignored() {
         let mut node = act("hits", ActName::FindExact, None);

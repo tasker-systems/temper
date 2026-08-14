@@ -35,6 +35,15 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
     (ProfileId::from(profile), EntityId::from(entity))
 }
 
+/// A second principal, so a test can tell an APPLIED owner narrowing from an inert one.
+async fn insert_profile(pool: &PgPool, handle: &str) -> Uuid {
+    sqlx::query_scalar("INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id")
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 async fn ctx(pool: &PgPool, owner: ProfileId, slug: &str) -> ContextId {
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
@@ -178,6 +187,52 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
                 act: ActName::FindExact,
                 intention: Some(Intention {
                     query: query.to_string(),
+                    embedding: None,
+                }),
+                input: Some(temper_core::types::query::StageInput::Upstream {
+                    relation: temper_core::types::query::StageRelation::Bound,
+                    stage: sel,
+                }),
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+            }),
+        ],
+    };
+    validate(&c).expect("plan is valid")
+}
+
+/// A selection narrowed by `owner`, piped into a find act so the plan has something returnable.
+fn selection_owned_by(owner: &str) -> ValidatedComposition {
+    let sel = StageName::parse("sel").unwrap();
+    let find = StageName::parse("hits").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: find.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            StageNode::Act(ActInvocation {
+                name: sel.clone(),
+                act: ActName::FindResourcesWith,
+                intention: None,
+                input: None,
+                terms: Default::default(),
+                resource_filter: Some(ResourceFilter {
+                    owner: Some(owner.to_string()),
+                    ..Default::default()
+                }),
+                edge_filter: None,
+                properties: vec![],
+            }),
+            StageNode::Act(ActInvocation {
+                name: find,
+                act: ActName::FindExact,
+                intention: Some(Intention {
+                    query: "composable".to_string(),
                     embedding: None,
                 }),
                 input: Some(temper_core::types::query::StageInput::Upstream {
@@ -423,6 +478,97 @@ async fn a_selection_bounds_the_find_act_it_is_piped_into(pool: PgPool) {
     assert!(
         hits_trace.narrowed_by.is_empty(),
         "the find act narrows by nothing now; the echo belongs to the act that applied it"
+    );
+}
+
+/// **`@me` resolves to the calling principal, and does so at EXECUTION.**
+///
+/// `[regression — 2026-08-14, found in adversarial review]` `@me` fell through to the handle slot
+/// and matched nothing: handles carry no sigil (`system`, not `@system`), so the most likely owner
+/// value anyone writes selected an empty set while `narrowed_by` echoed it back as an applied
+/// narrowing — the silent question substitution this act exists to remove, in the one act whose
+/// entire output is a narrowing.
+///
+/// Two assertions, because either alone would pass over a different bug: that `@me` selects the
+/// caller's own resources (it resolves at all), and that it is not compiled to a literal id (it
+/// resolves to whoever RUNS the plan, so the same compiled plan cannot answer for another profile).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn owner_at_me_resolves_to_the_calling_principal(pool: PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "atme").await;
+    let mine = mk_typed(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "A concept",
+        "composable fragments",
+        "concept",
+    )
+    .await;
+
+    // **A SECOND resource owned by someone else, or this test cannot tell "resolved" from
+    // "inert".** The first version of this test had one fixture, so an owner slot bound to NULL —
+    // no narrowing at all — produced the same single hit as a correctly resolved `@me`. It passed
+    // against the bug it was written for. Bite-probed after this change: reverting `@me` to the
+    // handle slot now reds it.
+    // Homed in the CALLER's context so it is visible, but OWNED by someone else — which is the
+    // only shape that makes the owner slot observable. A resource in the other principal's own
+    // context would be correctly invisible, and the contrast would then be visibility rather than
+    // ownership.
+    let theirs = ProfileId::from(insert_profile(&pool, "someone-else").await);
+    let not_mine = mk_typed(
+        &pool,
+        home,
+        theirs,
+        emitter,
+        "Their concept",
+        "composable fragments",
+        "concept",
+    )
+    .await;
+
+    // Precondition: unfiltered, the caller sees BOTH — so the contrast below is the owner slot.
+    let unfiltered = run_composition(&pool, owner, &one_find("composable", vec![], vec![]))
+        .await
+        .expect("runs");
+    assert_eq!(
+        hits(&unfiltered).len(),
+        2,
+        "precondition: both resources are visible and match, or the filter proves nothing"
+    );
+
+    let r = run_composition(&pool, owner, &selection_owned_by("@me"))
+        .await
+        .expect("runs");
+    let got = hits(&r);
+    assert_eq!(
+        got.len(),
+        1,
+        "`@me` must resolve to the caller — not match a literal handle (0 hits), and not go \
+         un-applied (2 hits); got: {got:?}"
+    );
+    assert_eq!(got[0].resource.id.uuid(), mine);
+    assert!(
+        !got.iter().any(|h| h.resource.id.uuid() == not_mine),
+        "another principal's resource must not survive an `@me` narrowing"
+    );
+
+    // A handle that exists but is not the caller's spelling of themselves still works, so the
+    // resolution above is `@me` specifically and not a filter that stopped narrowing.
+    let by_handle = run_composition(&pool, owner, &selection_owned_by("system"))
+        .await
+        .expect("runs");
+    assert_eq!(hits(&by_handle).len(), 1);
+
+    // And a handle nobody has is an honest empty — the `@me` fix did not make the owner slot inert.
+    let nobody = run_composition(&pool, owner, &selection_owned_by("nobody"))
+        .await
+        .expect("runs");
+    assert!(
+        hits(&nobody).is_empty(),
+        "an owner nobody has selects nothing"
     );
 }
 

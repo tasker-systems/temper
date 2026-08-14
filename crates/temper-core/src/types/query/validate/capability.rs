@@ -43,6 +43,14 @@ use crate::types::resource_view::ResourceSection;
 
 use super::{act_wire_name, emitted_fragment_for, refusal, term_wire_name, PlanRefusal};
 
+/// The most facet predicates one selection may carry.
+///
+/// Not a round number chosen for looks: real selections in this corpus carry one or two facets, and
+/// the measured cost cliff is three orders of magnitude above this — so the cap is far above any
+/// question anyone asks and far below anything that hurts. A caller who genuinely needs more is
+/// asking a different question and should say so with a second stage.
+const MAX_FACET_PREDICATES: usize = 32;
+
 /// The kind an upstream node produces, walking a combinator to its first input. `None` for a
 /// dangling reference (already refused as topology) or an act that produces nothing.
 ///
@@ -219,7 +227,9 @@ fn check_act(
     // `[split from the shape pass — 2026-08-12, Pete]` The zero case stays there: naming nothing to
     // scope to is malformed whatever the door. This one is not. `Cogmap` and `Context` bounds are
     // served by an `(anchor_table, anchor_id)` PAIR, and a pair holds one id — a fragment
-    // parameter's shape, exactly like `f.doc_type.len() > 1` below, and exactly what an
+    // parameter's shape — the class `f.doc_type.len() > 1` used to belong to before that check was
+    // retired on 2026-08-14 (the narrowing moved to an act, so the arity limit went with it) — and
+    // exactly what an
     // `anchor_ids uuid[]` would retire. Held in the shape pass it would let a client refuse a plan
     // a widened server runs.
     //
@@ -279,7 +289,39 @@ fn check_act(
     if let Some(f) = &inv.resource_filter {
         if matches!(inv.act, ActName::FindResourcesWith) {
             // The act whose parameter this is. Its fragment has a slot for every field, `doc_type`
-            // takes a set rather than one value, and there is nothing here to refuse.
+            // takes a set rather than one value, and there is nothing here to refuse — except the
+            // one field whose LENGTH is a cost multiplier rather than a narrowing.
+            //
+            // **`facets` is the only per-ROW multiplier on this surface.** `[added — 2026-08-14,
+            // found in adversarial review]` Its fragment predicate is a nested `NOT EXISTS` over
+            // this array, evaluated once per candidate row and short-circuiting on the first
+            // predicate that fails — so cost is `|visible set| × |facets|`, and an authenticated
+            // caller chooses the second factor. `tags` and `doc_type` do NOT have this shape:
+            // array containment and `= ANY` are single operations whatever their length.
+            //
+            // Refused rather than clamped, because clamping would silently answer a different
+            // question — the same reason a multi-value `doc_type` was refused rather than truncated
+            // to its first element while that slot held one value.
+            //
+            // **This closes the instance and not the class.** Nothing bounds a composition's stage
+            // count, no `statement_timeout` exists anywhere in the repo, and `acquire_timeout`
+            // bounds waiting for a connection rather than execution — so a caller can still spend
+            // arbitrary time by other means. That is task
+            // `01a000ee-9fec-7283-baa5-75cd1580f023`, which is not fixed here
+            // `[decided — 2026-08-14, Pete]`: a global execution bound is a decision about every
+            // query on the surface rather than about this act, and it may want a read/write path
+            // split rather than a single setting — so it gets a focused session, not a corner of
+            // this one.
+            if f.facets.len() > MAX_FACET_PREDICATES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    format!(
+                        "a selection admits at most {MAX_FACET_PREDICATES} facet predicates; this                          stage supplied {}. Each one is evaluated against every candidate row, so                          the list is a cost multiplier rather than a narrowing — narrow with the                          other fields first, or split the question",
+                        f.facets.len()
+                    ),
+                ));
+            }
         } else {
             let declared: &[(&str, bool)] = &[
                 ("doc_type", !f.doc_type.is_empty()),

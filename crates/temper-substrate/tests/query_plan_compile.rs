@@ -1072,6 +1072,13 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
                     stage: StageName::parse("hits").unwrap(),
                 }),
             ),
+            // `[added — 2026-08-14, found in adversarial review]` **The `Selection` arm was absent
+            // from the guard that carries this property's name.** `emit_ungated_core_call` became a
+            // two-variant enum when `find-resources-with` landed, and this test kept building only
+            // `Find` stages — so the invariant was verified for the shape that already existed and
+            // not for the one being added. Its first argument was checked only incidentally, inside
+            // a different test's expected-string.
+            selection("sel"),
         ],
         vec!["narrowed"],
     );
@@ -1080,9 +1087,16 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
         calls.len(),
-        2,
-        "both find stages must reach an ungated core; got {calls:?} in:\n{}",
+        3,
+        "both find stages AND the selection must reach an ungated core; got {calls:?} in:\n{}",
         c.sql
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains("__temper_ungated_find_resources_with")),
+        "the selection variant must be among the calls this guard inspects, or it verifies only \
+         the arm that already existed: {calls:?}"
     );
 
     // The literal is written out rather than imported so that changing the emitter's id source has
