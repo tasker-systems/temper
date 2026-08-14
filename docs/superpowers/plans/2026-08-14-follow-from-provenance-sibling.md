@@ -19,7 +19,8 @@ they are listed here only so no step has to be read against a stale draft.
 |---|---|
 | **Depth is definitional, fixed at 2** (§2.1, §5) | `BoundTerm` does **not** grow a variant. `accepts_bound_terms` stays `[Limit]`. No wire change, no openapi/ts-rs churn from this axis. The fragment still takes `p_depth`; the compiler passes the constant. |
 | **Three functions**, incumbent re-pointed (§10) | `search_graph_expand` → `query_follow_from` → `__temper_ungated_follow_from`. ONE BODY. **The core must carry `p_gamma`**, because the incumbent's signature has that slot and delegation passes it through. |
-| **`p_bound_ids` ships, constraining the whole walk** (§9) | Intermediates included. `accepts_bounds` becomes `[IdKind::Resource]`; the one genuine foreclosure closes. |
+| **`p_bound_ids` ships, constraining the whole walk** (§9) | Intermediates included. **The fragment ships it; the DECLARATION does not follow yet** — a stage carries one set and a bounded walk needs two, so `accepts_bounds` stays `vec![]` until **B0** widens the wire. Declaring it sooner would name a capability no caller can express. |
+| **`inputs: Vec<StageInput>`, at most one per relation** (§9, found at build time) | New deliverable **B0**, blocking B. The relation already distinguishes seed from bound, so a bound gets no second spelling. |
 | Gates: TDD · `generated-artifacts` skill · `sqlx-query-cache` skill · `/code-review` at the end | Step-level verification below; no completion claim without quoted output. |
 
 ---
