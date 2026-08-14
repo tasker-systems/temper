@@ -415,3 +415,52 @@ async fn a_walk_seeded_by_a_find_returns_its_provenance_through_the_route(pool: 
          {find_body}"
     );
 }
+
+/// **What the deserializer boundary already answers with, for ANY unparseable body.**
+///
+/// `[added — 2026-08-14]` Written to check a claim I had made without checking: that refusing an
+/// unknown key at the serde layer is "inconsistent" with the every-refusal-at-once contract. It is
+/// not — the door has always answered malformed bodies from the extractor, and a wrong TYPE on a
+/// known field takes exactly the same path. The refusal contract's promise is about plans that
+/// PARSE and then fail validation.
+///
+/// Pinned because the answer decides a design choice (`deny_unknown_fields` versus capture-and-
+/// refuse) and would otherwise have to be re-derived from axum's defaults by the next person.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unparseable_body_answers_from_the_extractor_not_the_refusal_contract(
+    pool: sqlx::PgPool,
+) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    // A wrong TYPE on a known field — nothing to do with unknown keys.
+    let bad_type = serde_json::json!({
+        "outcome": {"returns": [{"stage": "hits", "with": []}]},
+        "stages": [{"act": {"act": "find-exact", "name": "hits", "terms": "not-a-map"}}]
+    });
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/query"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .json(&bad_type)
+        .send()
+        .await
+        .expect("POST");
+    let status = resp.status();
+    let body = resp.text().await.expect("body");
+
+    assert!(
+        status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "a body that cannot be parsed into a plan is refused: {status} {body}"
+    );
+    assert!(
+        !body.contains("refusals"),
+        "and it does NOT carry the every-refusal-at-once envelope — that promise is about plans \
+         that parse. This is the pre-existing extractor boundary, which every type error already \
+         takes: {body}"
+    );
+}
