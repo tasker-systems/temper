@@ -312,7 +312,8 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
 
     // **At most one input per RELATION.** `[added — 2026-08-14]` with the widening of `inputs` from
     // one slot to a list. The list exists so a stage can carry a seed AND a bound at once — the
-    // shape a bounded walk needs — and is deliberately not a general fan-in.
+    // shape a bounded walk needs — and is deliberately not a general fan-in
+    // `[decided — 2026-08-14, Pete]`.
     //
     // Two seeds is refused rather than unioned: a union is `CombineOp::Union`, a stage the caller
     // declares and a reader can see in the trace with its own `produced` count. Merging them here

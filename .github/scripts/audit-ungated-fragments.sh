@@ -97,18 +97,30 @@ PREFIX='__temper_ungated_'
 #   RESIDUE: unchanged and accepted. The prefix is source discipline, not a database permission.
 #
 # REVIEWED 2026-08-14 (`__temper_ungated_follow_from`, migration 20260814000030, the follow-from
-# provenance sibling).
+# provenance sibling). **Reviewed TWICE, and the first note is kept below because being wrong that
+# way is the thing this header is for.**
+#
 #   VERDICT: `query_follow_from` computes `resources_visible_to(p_principal)` once and hands the
 #     array down. Same shape as `query_find_resources_with`.
-#   EMITTER: **not yet emitted from Rust.** This migration ships the SQL half only; the compiler arm
-#     that calls this core lands separately and must go through `emit_ungated_core_call` like the
-#     other three. So the Rust baseline below is deliberately UNCHANGED by this entry — a reviewer
-#     seeing it move later is seeing the wiring, which is the thing worth looking at.
+#   EMITTER: the call goes through `emit_ungated_core_call`'s `CoreCall::Walk` arm, which — like the
+#     other three — writes `VISIBLE_IDS` itself rather than taking it as a field. There is no wrong
+#     set to pass because there is no argument for it.
 #   RESIDUE: unchanged and accepted.
+#
+#   **The first pass said "EMITTER: not yet emitted from Rust", and told the next reviewer that the
+#   Rust baseline was "deliberately UNCHANGED by this entry — a reviewer seeing it move later is
+#   seeing the wiring, which is the thing worth looking at."** That was true of the migration commit
+#   and FALSE two commits later in the same branch, when the compiler arm landed and both Rust
+#   counts went 3 -> 4. A stale note in a security guard is worse than no note: this one pointed at
+#   the wiring and simultaneously explained away the very baseline movement that would have shown
+#   it. Recorded rather than overwritten, because "the reviewed note aged inside one PR" is a
+#   failure mode the next person should expect rather than rediscover.
+#
 #   NOTE A SECOND ID SET, which is new to this file and is the likeliest thing to get backwards:
 #     this core takes `p_bound_ids` beside `p_visible_ids`, and their NULL polarities are OPPOSITE —
 #     a NULL visible set admits NOTHING (fail-closed), a NULL bound is UNBOUNDED. They are not
-#     interchangeable and neither is a gate for the other.
+#     interchangeable and neither is a gate for the other. `CoreCall::Walk` is the only variant
+#     carrying both, so it is the only place they could be swapped.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
@@ -151,8 +163,8 @@ EOF
 #     a second call shape; a second EMITTER was rejected precisely because the security property is
 #     that there is one place, and the second one is the one nobody audits.
 read -r -d '' RUST_BASELINE <<'EOF' || true
-3 crates/temper-core/src/types/query/validate/mod.rs
-3 crates/temper-substrate/src/readback/query_plan.rs
+4 crates/temper-core/src/types/query/validate/mod.rs
+4 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 
 # The SQL half: ungated functions DEFINED in migrations. A definition is what creates the hazard; a

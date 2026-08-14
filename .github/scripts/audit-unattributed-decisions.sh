@@ -108,7 +108,7 @@ read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-core/src/types/query/act.rs
 5 crates/temper-core/src/types/query/composition.rs
 6 crates/temper-core/src/types/query/disposition.rs
-2 crates/temper-core/src/types/query/envelope.rs
+1 crates/temper-core/src/types/query/envelope.rs
 3 crates/temper-core/src/types/query/filter.rs
 2 crates/temper-core/src/types/query/id_set.rs
 1 crates/temper-core/src/types/query/mod.rs

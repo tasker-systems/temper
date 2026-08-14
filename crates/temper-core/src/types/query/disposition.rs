@@ -184,7 +184,7 @@ pub enum RefusalReason {
     ///
     /// `[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list.
     /// The list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a
-    /// general fan-in.
+    /// general fan-in `[decided — 2026-08-14, Pete]`.
     ///
     /// **Refused rather than unioned, and that is the whole point of the variant.** Merging two
     /// seed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the

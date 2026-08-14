@@ -383,7 +383,8 @@ fn check_act(
     // was dead while this one refused everything first, so retiring this one is what puts it in
     // service; the test that pins it is what makes the retirement safe rather than merely smaller.
     //
-    // `inv.properties` is deliberately NOT retired with it. Spec §7 is OPEN — where a property
+    // `inv.properties` is deliberately NOT retired with it `[decided — 2026-08-14, Pete]`: spec §7
+    // is OPEN — where a property
     // predicate's container lives is unsettled — and the compiler still emits no slot for one.
 
     // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution. A term

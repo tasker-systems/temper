@@ -21,6 +21,31 @@ use super::stage::{StageInput, StageName, StageOutput};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// **STRICT, and the only struct in this contract that is** `[decided — 2026-08-14, Pete]`.
+//
+// `[input] -> [inputs]` renamed a LOAD-BEARING field. Without this, a plan still sending the old
+// singular key deserializes to `inputs: []` and the stage compiles with `p_bound_ids => NULL` — an
+// UNBOUNDED find returning a confident full page instead of the caller's narrowed set. Verified,
+// not reasoned: the old payload was accepted with `inputs.len() == 0`. That is exactly the silent
+// substitution `capability.rs`'s "declined, never ignored" block exists to close, arriving through
+// the deserializer where no refusal can reach it.
+//
+// **It closes a wider class than the rename.** A typo'd `inpts` vanishes the same way, and always
+// did; nothing else in this contract would ever have caught it.
+//
+// **Why this does NOT contradict the remove-and-tolerate precedent.** `Composition` deliberately
+// ignores unknown keys — `on_stage_refusal`, `bounds`, `meta_detail`, removed by ADJ-4
+// `[2026-08-10, Pete]` — and keeps doing so; this
+// attribute is on the INVOCATION and changes nothing there. Both of those rulings also rest on a
+// premise they state outright: *"nothing ships against this contract yet — no route exists."* A
+// route exists now, with CLI and API declared `Serves`. And all three tolerated fields were INERT,
+// where this one decides which rows come back.
+//
+// The cost, stated rather than discovered: serde short-circuits before validation, so a plan
+// refused HERE comes back with a deserializer's message rather than the every-refusal-at-once body
+// the rest of the 400 path promises. That is a worse error for a case that should not occur, in
+// exchange for a wrong ANSWER never occurring.
+#[serde(deny_unknown_fields)]
 pub struct ActInvocation {
     /// This node's name, referenced by downstream stages and by `returns`.
     pub name: StageName,
@@ -41,7 +66,8 @@ pub struct ActInvocation {
     /// act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
     /// `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
     ///
-    /// There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
+    /// There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was
+    /// an `Option<BoundsMode>` whose
     /// "required whenever an input is present" invariant lived in prose, which admitted a
     /// meaningless state the validator then read as `bound`. The relation belongs to the edge, and
     /// nesting it there makes the meaningless state unrepresentable rather than merely invalid.
@@ -62,8 +88,8 @@ pub struct ActInvocation {
     /// **Why a list rather than a second `bound` field beside this one.** The relation already
     /// distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give
     /// it two — the new field, and this one with a `Bound` relation — which is the incumbent
-    /// literal `bounds: Option<IdSet>` shape this contract deliberately replaced, returning under a
-    /// different name.
+    /// literal `bounds: Option<IdSet>` shape this contract deliberately replaced
+    /// `[decided — 2026-08-14, Pete]`, returning under a different name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<StageInput>,
     /// Act-level bound terms. A term this act does not admit is refused STATICALLY
@@ -254,6 +280,61 @@ pub struct QueryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// **A plan sending the retired singular `input` key is REFUSED, not silently unbounded.**
+    ///
+    /// `[added — 2026-08-14, found in review]` Before `deny_unknown_fields`, this exact payload
+    /// deserialized cleanly to `inputs: []`, and the stage then compiled with
+    /// `p_bound_ids => NULL::uuid[]` — the caller's narrowing dropped, a full page returned, and
+    /// nothing anywhere saying so.
+    ///
+    /// Asserted on the payload rather than on the attribute, because the attribute is one line that
+    /// a later "let's be permissive" pass removes without ever seeing this consequence.
+    #[test]
+    fn the_retired_singular_input_key_is_refused_rather_than_dropped() {
+        let old_shape = r#"{
+            "name": "hits",
+            "act": "find-exact",
+            "intention": {"query": "x"},
+            "input": {"from": "caller", "as": "bound",
+                      "ids": {"kind": "resource",
+                              "ids": ["019fbb77-72a3-72e1-bbbd-13eb6aa64982"]}}
+        }"#;
+        let err = serde_json::from_str::<ActInvocation>(old_shape)
+            .expect_err("the retired key must not deserialize to an empty input list");
+        assert!(
+            err.to_string().contains("input"),
+            "the error must name the offending key, so a caller can find it: {err}"
+        );
+
+        // And the same plan spelled the CURRENT way still parses — otherwise this test would pass
+        // against a struct nothing can construct, which is the way a strictness check goes wrong.
+        let current = r#"{
+            "name": "hits",
+            "act": "find-exact",
+            "intention": {"query": "x"},
+            "inputs": [{"from": "caller", "as": "bound",
+                        "ids": {"kind": "resource",
+                                "ids": ["019fbb77-72a3-72e1-bbbd-13eb6aa64982"]}}]
+        }"#;
+        let inv: ActInvocation =
+            serde_json::from_str(current).unwrap_or_else(|e| panic!("current shape: {e}"));
+        assert_eq!(
+            inv.inputs.len(),
+            1,
+            "the bound survives the current spelling"
+        );
+    }
+
+    /// An unknown key that was never a field is refused too — the wider class the rename exposed.
+    #[test]
+    fn a_mistyped_field_name_is_refused_rather_than_ignored() {
+        let typo = r#"{"name": "hits", "act": "find-exact", "inpts": []}"#;
+        assert!(
+            serde_json::from_str::<ActInvocation>(typo).is_err(),
+            "`inpts` used to vanish silently, exactly as the retired key did"
+        );
+    }
+
     use crate::types::cognitive_maps::CogmapRegionRow;
     use crate::types::ids::{LensId, RegionId};
     use crate::types::query::disposition::StageDisposition;

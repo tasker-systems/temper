@@ -652,9 +652,6 @@ fn narrowed_by(node: &StageNode) -> Vec<NarrowedBy> {
     let StageNode::Act(inv) = node else {
         return vec![];
     };
-    let Some(f) = &inv.resource_filter else {
-        return vec![];
-    };
     let entry = |key: String, value: String| NarrowedBy {
         key,
         value,
@@ -662,22 +659,65 @@ fn narrowed_by(node: &StageNode) -> Vec<NarrowedBy> {
         excluded: None,
     };
 
+    // **The edge filter is echoed too, and it did not used to be** `[fixed — 2026-08-14, found in
+    // review]`. This function returned early unless a `resource_filter` was present, so a walk
+    // narrowed to `edge_kinds: [contains]` came back with a smaller result set and nothing in the
+    // response saying which narrowing produced it.
+    //
+    // That is the exact MIRROR of the defect the "narrowings this door declares but does not apply"
+    // block in `capability.rs` was written for: there a filter was echoed and not applied, here it
+    // was applied and not echoed. Both leave a caller unable to reconcile the rows with the
+    // question, and the second is the one that survives every refusal test — the answer is correct,
+    // only the disclosure is missing.
+    //
+    // It became reachable in this same change: the unconditional `edge_filter` refusal retired when
+    // `follow-from` gained a fragment that binds `p_edge_kinds`/`p_labels`, so before that no stage
+    // carrying one ever ran.
+    let mut out: Vec<NarrowedBy> = inv
+        .edge_filter
+        .iter()
+        .flat_map(|e| {
+            e.edge_kinds
+                .iter()
+                // The WIRE spelling, via serde — `format!("{k:?}").to_lowercase()` yields
+                // `leadsto` where the contract says `leads_to`, and a disclosure that echoes a
+                // value the caller cannot have sent is worse than a missing one.
+                .map(|k| {
+                    entry(
+                        "edge_kind".to_string(),
+                        serde_json::to_string(k)
+                            .map(|s| s.trim_matches('"').to_string())
+                            .unwrap_or_default(),
+                    )
+                })
+                .chain(
+                    e.labels
+                        .iter()
+                        .map(|l| entry("edge_label".to_string(), l.clone())),
+                )
+        })
+        .collect();
+
+    let Some(f) = &inv.resource_filter else {
+        return out;
+    };
+
     // One entry PER VALUE for the repeated fields, which is the shape the incumbent `doc_type` loop
     // already had. A comma-joined single entry would be shorter and would make `a,b` — one tag
     // containing a comma — indistinguishable from two tags.
-    let mut out: Vec<NarrowedBy> = f
-        .doc_type
-        .iter()
-        .map(|v| entry("doc_type".to_string(), v.clone()))
-        .chain(f.tags.iter().map(|v| entry("tags".to_string(), v.clone())))
-        // The facet's own key rides in the disclosure key, so `facet:domain = search` says which
-        // facet was narrowed on rather than just that one was.
-        .chain(
-            f.facets
-                .iter()
-                .map(|p| entry(format!("facet:{}", p.key), p.value.clone())),
-        )
-        .collect();
+    out.extend(
+        f.doc_type
+            .iter()
+            .map(|v| entry("doc_type".to_string(), v.clone()))
+            .chain(f.tags.iter().map(|v| entry("tags".to_string(), v.clone())))
+            // The facet's own key rides in the disclosure key, so `facet:domain = search` says which
+            // facet was narrowed on rather than just that one was.
+            .chain(
+                f.facets
+                    .iter()
+                    .map(|p| entry(format!("facet:{}", p.key), p.value.clone())),
+            ),
+    );
     for (key, value) in [
         ("stage", f.stage.as_ref()),
         ("status", f.status.as_ref()),
@@ -724,6 +764,62 @@ mod tests {
     /// `[2026-08-13]` The per-stage move left this helper at `intention: None`, and eleven of this
     /// module's twelve tests panicked in `plan`'s `validate` — caught by running `--lib`, which the
     /// hand-off's verified baseline did not include. Compile-clean, clippy-clean, and red.
+    /// **An APPLIED edge filter is echoed, and the echo uses the wire spelling.**
+    ///
+    /// `[added — 2026-08-14, with the fix it witnesses]` `narrowed_by` returned early unless a
+    /// `resource_filter` was present, so a walk narrowed by `edge_kinds` came back smaller with
+    /// nothing recording why. The mirror of the defect `capability.rs`'s "declared but not applied"
+    /// block exists for — and the harder one to notice, because the ANSWER is correct and only the
+    /// disclosure is missing, so every refusal test stays green.
+    ///
+    /// The spelling half is asserted separately because it fails silently in the other direction: a
+    /// `{:?}` of `EdgeKind::LeadsTo` is `LeadsTo`, and lowercased it is `leadsto` — a value no
+    /// caller could have sent, echoed back as though they had.
+    #[test]
+    fn an_applied_edge_filter_is_echoed_in_the_narrowing_disclosure() {
+        use temper_core::types::graph::EdgeKind;
+        use temper_core::types::query::EdgeFilter;
+
+        let mut node = act_node("near", ActName::FollowFrom, None);
+        if let StageNode::Act(a) = &mut node {
+            a.edge_filter = Some(EdgeFilter {
+                edge_kinds: vec![EdgeKind::LeadsTo, EdgeKind::Contains],
+                labels: vec!["cites".to_string()],
+            });
+        }
+
+        let disclosed = narrowed_by(&node);
+        let pairs: Vec<(&str, &str)> = disclosed
+            .iter()
+            .map(|n| (n.key.as_str(), n.value.as_str()))
+            .collect();
+
+        assert!(
+            pairs.contains(&("edge_kind", "leads_to")),
+            "the WIRE spelling, not the Rust variant name; got {pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("edge_kind", "contains")),
+            "one entry per value, not a comma-joined one; got {pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("edge_label", "cites")),
+            "the label axis is disclosed too; got {pairs:?}"
+        );
+        assert_eq!(
+            disclosed.len(),
+            3,
+            "two kinds and one label, and nothing invented; got {pairs:?}"
+        );
+    }
+
+    /// A stage with neither filter discloses nothing — an empty list, not an entry saying so.
+    #[test]
+    fn a_stage_that_narrowed_by_nothing_discloses_an_empty_list() {
+        let node = act_node("hits", ActName::FindExact, None);
+        assert!(narrowed_by(&node).is_empty());
+    }
+
     fn act_node(n: &str, act: ActName, input: Option<StageInput>) -> StageNode {
         StageNode::Act(ActInvocation {
             name: name(n),

@@ -1752,7 +1752,8 @@ export interface components {
              *     act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
              *     `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
              *
-             *     There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
+             *     There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was
+             *     an `Option<BoundsMode>` whose
              *     "required whenever an input is present" invariant lived in prose, which admitted a
              *     meaningless state the validator then read as `bound`. The relation belongs to the edge, and
              *     nesting it there makes the meaningless state unrepresentable rather than merely invalid.
@@ -1773,8 +1774,8 @@ export interface components {
              *     **Why a list rather than a second `bound` field beside this one.** The relation already
              *     distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give
              *     it two — the new field, and this one with a `Bound` relation — which is the incumbent
-             *     literal `bounds: Option<IdSet>` shape this contract deliberately replaced, returning under a
-             *     different name.
+             *     literal `bounds: Option<IdSet>` shape this contract deliberately replaced
+             *     `[decided — 2026-08-14, Pete]`, returning under a different name.
              */
             inputs?: components["schemas"]["StageInput"][];
             intention?: null | components["schemas"]["Intention"];
@@ -6154,7 +6155,7 @@ export interface components {
          *     are `inverse`, and 87% of `contains` edges are** — so an entry omitting it would report the
          *     majority of containment relationships backwards.
          *
-         *     # It carries no numbers, deliberately
+         *     # It carries no numbers, deliberately `[decided — 2026-08-14, Pete]`
          *
          *     A per-parent score is nearly free to compute at this grain and is **refused**: provenance is
          *     structure rather than quantity, and a scored entry would be a second ranking axis inside a row

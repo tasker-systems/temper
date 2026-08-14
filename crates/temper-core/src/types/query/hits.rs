@@ -168,7 +168,7 @@ pub struct MatchLocation {
 /// are `inverse`, and 87% of `contains` edges are** — so an entry omitting it would report the
 /// majority of containment relationships backwards.
 ///
-/// # It carries no numbers, deliberately
+/// # It carries no numbers, deliberately `[decided — 2026-08-14, Pete]`
 ///
 /// A per-parent score is nearly free to compute at this grain and is **refused**: provenance is
 /// structure rather than quantity, and a scored entry would be a second ranking axis inside a row

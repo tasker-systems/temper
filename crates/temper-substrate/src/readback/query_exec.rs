@@ -38,9 +38,14 @@ pub struct HitRow {
     ///
     /// **Raw `jsonb` at this layer, typed at the assembler.** This crate has no dependency on
     /// `temper-core`'s wire types and should not grow one to carry a column through; the typed
-    /// [`temper_core::types::query::ViaEntry`] is where a caller reads it, and the parse failing is
-    /// an error rather than a silent empty — "this walk reported no provenance" and "we could not
-    /// read the provenance it reported" are opposite claims.
+    /// `ViaEntry` is where a caller reads it.
+    ///
+    /// **A malformed payload becomes an EMPTY list there, not an error** — see the note at that
+    /// conversion for why, and for the cost it accepts. `[corrected — 2026-08-14, found in review]`
+    /// This doc used to claim the opposite ("the parse failing is an error rather than a silent
+    /// empty"), which was the behaviour I would have preferred and never the behaviour that
+    /// shipped. A doc that describes a stricter contract than the code is worse than none: it is
+    /// read as a guarantee.
     pub via: Option<serde_json::Value>,
 }
 
