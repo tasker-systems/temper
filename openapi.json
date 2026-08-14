@@ -7261,6 +7261,13 @@
           },
           {
             "type": "string",
+            "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+            "enum": [
+              "find-resources-with"
+            ]
+          },
+          {
+            "type": "string",
             "description": "*A found thing; I want its neighbours.*",
             "enum": [
               "follow-from"
@@ -11255,7 +11262,7 @@
           },
           {
             "type": "object",
-            "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\nThe caller supplies the JSON shape they mean. Containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.",
+            "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
             "required": [
               "values",
               "op"
@@ -12084,9 +12091,9 @@
           },
           {
             "type": "string",
-            "description": "A combinator's rows come from more than one act, so they have no single act to score them.",
+            "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
             "enum": [
-              "combinator_not_returnable"
+              "stage_not_returnable"
             ]
           },
           {

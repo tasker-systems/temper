@@ -180,8 +180,15 @@ pub enum RefusalReason {
     DanglingReference,
     /// A stage is named more than once in `returns`.
     DuplicateReturnStage,
-    /// A combinator's rows come from more than one act, so they have no single act to score them.
-    CombinatorNotReturnable,
+    /// A returned stage's rows have no single ordering quantity to score them.
+    ///
+    /// `[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a
+    /// combinator, whose rows come from two or more acts — when the rule is about the consequence,
+    /// and a second cause arrived: `find-resources-with` selects a set and orders nothing, so a
+    /// stage running it has no quantity either. Two reasons for one consequence would make a
+    /// client's handling depend on which route produced it, when the repair is the same: return
+    /// something that ranks, and use this stage as its input.
+    StageNotReturnable,
     /// `returns` names a stage that was never declared.
     UnknownReturnStage,
     /// The composition contains a cycle; a query DAG must be acyclic.
@@ -368,7 +375,7 @@ mod tests {
             RefusalReason::CombinatorArity,
             RefusalReason::DanglingReference,
             RefusalReason::DuplicateReturnStage,
-            RefusalReason::CombinatorNotReturnable,
+            RefusalReason::StageNotReturnable,
             RefusalReason::UnknownReturnStage,
             RefusalReason::Cycle,
             RefusalReason::UnknownAct,

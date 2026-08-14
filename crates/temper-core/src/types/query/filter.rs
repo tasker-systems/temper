@@ -130,8 +130,24 @@ pub enum PropertyOp {
     /// `property_value @> $v` for any listed value. OR within the predicate, matching the
     /// established within-field OR of `doc_type` and `EdgeFilter.labels`.
     ///
-    /// The caller supplies the JSON shape they mean. Containment does not coerce:
-    /// `'["x"]'::jsonb @> '"x"'::jsonb` is FALSE, so a type-unstable key needs both shapes listed.
+    /// **Containment is ASYMMETRIC, and the asymmetry runs the useful way.**
+    /// `[corrected — 2026-08-14]` This said *"containment does not coerce:
+    /// `'["x"]'::jsonb @> '"x"'::jsonb` is FALSE, so a type-unstable key needs both shapes
+    /// listed."* Measured against Postgres 18, that expression is **TRUE** — it is the documented
+    /// special exception whereby a top-level array contains a primitive. The reverse is the false
+    /// one:
+    ///
+    /// ```text
+    ///  '["x"]'::jsonb @> '"x"'::jsonb   -> t     (array contains scalar)
+    ///  '"x"'::jsonb   @> '["x"]'::jsonb -> f     (scalar does not contain array)
+    /// ```
+    ///
+    /// The row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows
+    /// and the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.
+    /// The conclusion therefore survives inverted and weaker than it was stated: a type-unstable
+    /// key needs the scalar shape, not both. Listing both is harmless — the values OR — but it is
+    /// not what makes the predicate span the population, and a caller who lists only the array
+    /// shape silently answers for one half of it.
     Contains { values: Vec<serde_json::Value> },
 }
 
@@ -274,10 +290,19 @@ mod tests {
     }
 
     #[test]
-    fn contains_carries_a_list_so_one_predicate_spans_a_type_unstable_key() {
-        // Measured: `derived_from` is an array on 112 resources and a string on 21. Containment does
-        // not coerce, so a single-shape predicate silently answers for one population and not the
-        // other. The list is what lets a caller ask for both.
+    fn contains_carries_a_list_so_one_predicate_spans_several_values() {
+        // `[re-argued — 2026-08-14]` This was named
+        // `..._spans_a_type_unstable_key` and rested on *"containment does not coerce, so a
+        // single-shape predicate silently answers for one population and not the other."* Measured
+        // against Postgres 18, that is backwards — `'["x"]' @> '"x"'` is TRUE, so the SCALAR probe
+        // alone already spans both populations of a type-unstable key. See `PropertyOp::Contains`.
+        //
+        // The list survives because its real job is the one the old rationale never mentioned:
+        // OR across genuinely DIFFERENT values, matching the within-field OR that `doc_type` and
+        // `EdgeFilter.labels` already have. `derived_from` (an array on 112 resources, a string on
+        // 21) is still the fixture, because it is the case that would have gone wrong under the
+        // old reading — a caller listing only the array shape answers for 112 and silently misses
+        // 21.
         let p = PropertyPredicate {
             subject: PropertySubject::Resource,
             key: "derived_from".to_string(),

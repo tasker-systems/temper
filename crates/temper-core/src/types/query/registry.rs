@@ -244,6 +244,52 @@ pub fn search_family() -> Vec<ActDeclaration> {
             scoring_revision: 2,
         },
         ActDeclaration {
+            name: ActName::FindResourcesWith,
+            asker_holds: "I can say what these things ARE; I have no question about what they mean"
+                .to_string(),
+            // Unbuilt until `query_find_resources_with` lands. Declared ahead of its mechanic
+            // deliberately: this act's arrival is what forces the selects-vs-orders split in the
+            // invariants below, and making that split against a real declaration is what proves it
+            // was a split rather than a loosened assertion.
+            served_by: None,
+            build_state: BuildState::Unbuilt,
+            // Selection composes INTO a find act, not out of one: it narrows the corpus, so it has
+            // nothing to narrow within and nothing to grow from. Its whole output is the bound
+            // some later stage consumes.
+            accepts_bounds: vec![],
+            accepts_seeds: vec![],
+            // No `Limit`. A selection that truncates is not a selection — it is a sample, and a
+            // sample piped into a find act would bound that act to an arbitrary subset while
+            // looking like a narrowing. Whatever ceiling applies belongs on the act that RETURNS
+            // rows, where the caller can see it disclosed.
+            accepts_bound_terms: vec![],
+            accepts_filters: vec![FilterField::Resource],
+            bound_ceilings: BTreeMap::new(),
+            produces: Some(IdKind::Resource),
+            // Selects without scoring. `discloses` describes what a stage says about its own
+            // output beyond the rows, and this stage has no rows — only ids.
+            discloses: vec![],
+            // Absent everywhere until the mechanic exists, on the same principle that put
+            // `follow-from` and `survey` here: a declaration describes the DEPLOYED system, and an
+            // act nothing can invoke reaches no door. Restores to `Serves` at `/api/query` when
+            // beat 2 lands, which is additive.
+            door_coverage: BTreeMap::from([
+                (Door::Cli, DoorReach::Absent),
+                (Door::Api, DoorReach::Absent),
+                (Door::Mcp, DoorReach::Absent),
+            ]),
+            // THE POINT OF THIS ACT, stated where the invariants read it. It orders nothing —
+            // there is no quantity, because "has doc_type task" is not more or less true of one
+            // resource than another. A selection returns a SET; ranking it would require inventing
+            // a preference the caller never expressed.
+            orders_by: None,
+            // Follows `orders_by`, as `an_act_that_orders_nothing_classifies_no_ordering_fragment`
+            // requires: the field describes the fragment that ORDERS this act's output, and there
+            // is no such fragment.
+            visibility_profile: None,
+            scoring_revision: 0,
+        },
+        ActDeclaration {
             name: ActName::FollowFrom,
             asker_holds: "a found thing; I want its neighbours".to_string(),
             served_by: Some("search_graph_expand".to_string()),
@@ -549,15 +595,20 @@ mod tests {
     // registry itself no longer imports it.
     use crate::types::query::act::Disclosure;
 
+    /// `[widened — 2026-08-14]` Eight, was seven. `find-resources-with` is the family's first act
+    /// that asks the corpus nothing — every other member carries a question about meaning, or (in
+    /// `follow-from`'s and `survey`'s case) a shape to walk. Worth naming rather than bumping the
+    /// count past: a selection is a different KIND of member, not a seventh of the same kind.
     #[test]
-    fn the_search_family_declares_seven_acts_including_the_anti_act() {
+    fn the_search_family_declares_eight_acts_including_the_anti_act() {
         let acts = search_family();
-        assert_eq!(acts.len(), 7);
+        assert_eq!(acts.len(), 8);
         let names: Vec<&ActName> = acts.iter().map(|a| &a.name).collect();
         for expected in [
             ActName::FindExact,
             ActName::FindAboutAnywhere,
             ActName::FindAboutWithin,
+            ActName::FindResourcesWith,
             ActName::FollowFrom,
             ActName::Survey,
             ActName::Substantiate,
@@ -869,17 +920,32 @@ mod tests {
         }
     }
 
-    /// Every selecting act declares a score kind the response side RECOGNIZES.
+    /// Every act that ORDERS declares a score kind the response side RECOGNIZES.
     ///
     /// `score_kind` derives from `orders_by.field` — the deployed column name — rather than from a
     /// table keyed on the act name, so this is what catches a scoring column renamed without its
     /// declaration following. The failure would otherwise be quiet and late: the promise and the
     /// rows would agree with each other (both read the same field) while both named a quantity no
     /// client has ever heard of.
+    ///
+    /// `[amended — 2026-08-14]` **The gate was `produces.is_some()` and is now `orders_by`.** That
+    /// is a split, not a loosening: the old predicate was a PROXY for "this act orders", correct
+    /// only while every act that selected also scored. `find-resources-with` breaks the proxy —
+    /// it selects a set and ranks nothing — so under the old gate a selection-only act failed an
+    /// invariant about scoring columns, which was never a statement about it.
+    ///
+    /// The same distinction was already drawn once, by
+    /// `an_act_that_orders_nothing_classifies_no_ordering_fragment`, which reads `orders_by` to
+    /// decide whether `visibility_profile` may be present. This is that cut applied to the field
+    /// beside it, and the precedent is why it is an amendment rather than an exception.
+    ///
+    /// Nothing is lost in the direction that mattered. A renamed scoring column still moves
+    /// `orders_by.field`, which is still what is checked; what stops being checked is an act with
+    /// no ordering quantity, which had no column to rename.
     #[test]
-    fn every_selecting_act_declares_a_known_score_kind() {
+    fn every_ordering_act_declares_a_known_score_kind() {
         for d in search_family() {
-            if d.produces.is_some() {
+            if d.orders_by.is_some() {
                 let kind = d.score_kind();
                 assert!(
                     kind.as_ref()
@@ -891,6 +957,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The acts that SELECT without ORDERING are exactly these.
+    ///
+    /// The companion the amendment above owes. Widening a gate from `produces` to `orders_by`
+    /// silently admits every future act into the cell the old gate refused, and a cell nothing
+    /// names is a cell nobody reviews — so the population is pinned, and an act joining it is a
+    /// decision someone made on purpose rather than a default someone inherited.
+    ///
+    /// **What lands in this cell is not returnable**, and that is the reason the pin is worth its
+    /// brittleness. A stage whose act orders nothing has no quantity to score its rows; asked for
+    /// in `returns`, the assembler drops every row for want of a score kind and reports
+    /// `disposition: answered` over an empty list. That is not hypothetical — it is verbatim the
+    /// defect `CombinatorNotReturnable` was minted to close (`validate/shape.rs:202-216`), arriving
+    /// a second time by a different route. An act added here without the matching returns-refusal
+    /// reopens it.
+    ///
+    /// Failing this test is not a defect. It means the cell gained a member, and the question to
+    /// answer is whether that member is unreturnable too.
+    #[test]
+    fn the_acts_that_select_without_ordering_are_exactly_these() {
+        let selecting_unordered: Vec<ActName> = search_family()
+            .into_iter()
+            .filter(|d| d.produces.is_some() && d.orders_by.is_none())
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(
+            selecting_unordered,
+            vec![ActName::FindResourcesWith],
+            "the set of acts that produce a set but rank nothing has moved; each member must also \
+             be refused in `returns`, or its rows are dropped while the stage reports `answered`"
+        );
     }
 
     /// And an act that selects NOTHING predicts nothing.

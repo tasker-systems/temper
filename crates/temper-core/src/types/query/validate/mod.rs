@@ -1713,7 +1713,7 @@ mod tests {
         let errs = validate(&c).expect_err("a combinator may not be returned");
         assert!(
             errs.iter()
-                .any(|e| e.reason == RefusalReason::CombinatorNotReturnable
+                .any(|e| e.reason == RefusalReason::StageNotReturnable
                     && e.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
             "got: {errs:?}"
         );

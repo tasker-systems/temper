@@ -18,6 +18,11 @@
           "type": "string"
         },
         {
+          "const": "find-resources-with",
+          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+          "type": "string"
+        },
+        {
           "const": "follow-from",
           "description": "*A found thing; I want its neighbours.*",
           "type": "string"

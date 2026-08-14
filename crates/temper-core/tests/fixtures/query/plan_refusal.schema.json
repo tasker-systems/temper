@@ -93,8 +93,8 @@
           "type": "string"
         },
         {
-          "const": "combinator_not_returnable",
-          "description": "A combinator's rows come from more than one act, so they have no single act to score them.",
+          "const": "stage_not_returnable",
+          "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
           "type": "string"
         },
         {

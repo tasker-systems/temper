@@ -29,6 +29,19 @@ pub enum ActName {
     /// *A concept, plus a set to search inside.*
     #[serde(rename = "find-about-within")]
     FindAboutWithin,
+    /// *I can say what these things ARE; I have no question about what they mean.*
+    ///
+    /// The only act with no intention — a pure selection. It narrows by what is known about a
+    /// resource and orders nothing, so it SELECTS without SCORING, which is the distinction
+    /// [`ActDeclaration::orders_by`] carries and which the registry's invariants had folded
+    /// together under `produces.is_some()` until this act arrived.
+    ///
+    /// Its output is a set to pipe, never rows to read: a stage running it cannot appear in
+    /// `returns`, for the same reason a combinator cannot — rows with no ordering quantity have
+    /// nothing to score them, and the assembler would drop every one while reporting
+    /// `disposition: answered`.
+    #[serde(rename = "find-resources-with")]
+    FindResourcesWith,
     /// *A found thing; I want its neighbours.*
     #[serde(rename = "follow-from")]
     FollowFrom,
@@ -423,6 +436,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ActName::FindAboutWithin).unwrap(),
             "\"find-about-within\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ActName::FindResourcesWith).unwrap(),
+            "\"find-resources-with\""
         );
         assert_eq!(
             serde_json::to_string(&ActName::FollowFrom).unwrap(),
