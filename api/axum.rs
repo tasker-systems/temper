@@ -32,6 +32,28 @@ async fn main() -> Result<(), vercel_runtime::Error> {
     // headroom under the function timeout. The client retries the resulting
     // transient error (temper-client `should_retry`), so the next invocation
     // hits a warm DB.
+    //
+    // **`acquire_timeout` IS NOT AN EXECUTION BOUND, and reading it as one inverts what it does.**
+    // It bounds how long *this* caller waits to be handed a connection. It says nothing about how
+    // long a statement may run once it has one — a query that acquires instantly and then runs for
+    // ten minutes never touches this setting. So its effect under load is the opposite of
+    // protective: while one expensive statement occupies a connection, `acquire_timeout` is what
+    // makes the *next* caller fail, faster, having done nothing wrong.
+    //
+    // Nothing in this deployment bounds execution. `[measured — 2026-08-14, prod, read-only]`
+    // `statement_timeout = 0` and `lock_timeout = 0`, both `source = default`; the only ambient
+    // bound is `idle_in_transaction_session_timeout = 300000`, which comes from Neon's
+    // configuration file rather than from us and governs a different axis (an idle open
+    // transaction, not a running statement).
+    //
+    // Picking that execution bound is deliberately deferred until it can be measured rather than
+    // guessed — see task `01a000ee-9fec-7283-baa5-75cd1580f023` and migration `20260814000020`,
+    // which installs the `pg_stat_statements` the measurement needs. Note for whoever takes it:
+    // the obvious `.after_connect(… SET statement_timeout …)` hook is the wrong instrument here,
+    // because runtime traffic goes through Neon's pooled endpoint, which is "PgBouncer in
+    // transaction mode, which does not keep a session pinned to a client"
+    // (`scripts/vercel-build.sh:65-66`) — session-level state set that way is not reliably the
+    // state a later transaction sees.
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(8))
