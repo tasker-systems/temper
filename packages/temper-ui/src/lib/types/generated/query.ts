@@ -5,6 +5,7 @@ import type { CogmapRegionRow } from "./cognitive_maps";
 import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
 import type { JsonValue } from "./serde_json/JsonValue";
+import type { Polarity } from "./graph";
 import type { ResourceSection } from "./ResourceSection";
 import type { ResourceView } from "./resource_view";
 
@@ -280,7 +281,7 @@ export type CompositionTrace = { stages: Array<StageTrace>, };
  * whereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking
  * change, and should be.
  */
-export type Disclosure = "match_location" | "filter_counts";
+export type Disclosure = "input_contribution" | "match_location" | "filter_counts";
 
 /**
  * One of Temper's three surfaces. Named as doors rather than as transports because the question
@@ -693,7 +694,43 @@ export type ResourceHit = { resource: ResourceView, scoring: Scoring,
  * from a shape with no such field, which is exactly the distinction [`RegionHit`] exists to
  * draw.
  */
-located_at: MatchLocation | null, };
+located_at: MatchLocation | null, 
+/**
+ * How a walk reached this resource — one entry per edge it was reached by.
+ *
+ * **Filled only by `follow-from`**, and declared in advance rather than discovered: the act's
+ * [`super::act::ActDeclaration::discloses`] carries
+ * [`super::act::Disclosure::InputContribution`], which the enum predicted would *"return when
+ * a walk carries origin"*.
+ *
+ * # EVERY parent, and the score corresponds to only one of them
+ *
+ * `graph_score` is a `MAX` over paths; this is a union over **all** of them. They disagree by
+ * construction — a node reached both by a strong one-hop edge and a weak three-hop chain names
+ * both and scores from one. **The non-correspondence is declared here rather than repaired**,
+ * exactly as [`RegionHit::region`] carries `salience` beside `region_score` and says outright
+ * that the two are not rivals. Naming every parent is the more useful and the clearer answer;
+ * naming only the winning path's would make this field a second, silent statement about rank.
+ *
+ * # ABSENT rather than null, which is the opposite of [`Self::located_at`]
+ *
+ * The two look like the same question and are not, and F4's rule is what separates them.
+ * `located_at` is PRESENT-null because its null carries a *claim* — *no location declared* —
+ * that a missing key could not make. A collection has no such claim to carry: `[]` and absent
+ * would both mean "no provenance", so a null adds a third spelling of one fact. The key is
+ * therefore dropped for every act that is not a walk, and its presence means the same thing as
+ * the act's `discloses` already promised.
+ *
+ * # No cap, and the reason is structural rather than "the corpus is small"
+ *
+ * `[measured on prod — 2026-08-14]` at the deliberate worst case (25 highest-degree seeds,
+ * depth 3) the whole walk holds 9,434 entries with 124 on one node, while **the page that
+ * ships carries 125 in total and at most 9 on any row**. Nodes with enormous parent sets are
+ * reached by many long weak paths, so the score ranks them out and the limit sheds them before
+ * they are ever described. Capping would silently truncate provenance, which is the one thing
+ * this field exists to be trusted about.
+ */
+via: Array<ViaEntry>, };
 
 /**
  * One stage whose rows come back, and how much of each row.
@@ -1033,6 +1070,60 @@ order: Array<StageName>,
  * **This is the part the schema cannot say for itself.**
  */
 will_return: { [key in StageName]?: WillReturn }, };
+
+/**
+ * One edge a walk reached a node by — **the edge as asserted**, and no quantity.
+ *
+ * `[added — 2026-08-14]` with `follow-from`'s provenance-carrying mechanic
+ * (`20260814000030`), design `docs/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`
+ * §4.
+ *
+ * # Why source and target rather than a parent plus a direction
+ *
+ * The walk is **undirected over a directed graph**: the fragment's `adj` unions both orientations,
+ * so a traversal runs with or against the stored `source → target`. A `from_id` plus a
+ * which-way-round flag is two fields that must agree, and two fields that must agree are two
+ * fields that can drift. The edge as stored cannot contradict itself, and the parent is derivable
+ * from it — so the derivable thing is the one left out.
+ *
+ * # Polarity rides because the two arrows disagree in practice
+ *
+ * [`Polarity`] exists because the structural arrow and the semantic one can differ — its own
+ * example is a `depends_on` edge asserted source=dependant/target=dependency, whose causal arrow
+ * runs the other way. `[measured on prod — 2026-08-14]` **1,099 of 4,454 resource-resource edges
+ * are `inverse`, and 87% of `contains` edges are** — so an entry omitting it would report the
+ * majority of containment relationships backwards.
+ *
+ * # It carries no numbers, deliberately
+ *
+ * A per-parent score is nearly free to compute at this grain and is **refused**: provenance is
+ * structure rather than quantity, and a scored entry would be a second ranking axis inside a row
+ * whose one quantity is [`Scoring::score`]. See the note on [`ResourceHit::via`] for the
+ * non-correspondence that goes with it.
+ */
+export type ViaEntry = { 
+/**
+ * Which of the caller's seeds this node descends from.
+ *
+ * The act's `orders_by.means` says the score is the best path **from any seed**, and the act
+ * takes a seed SET — so without this a multi-seed walk answers "here are the neighbours of the
+ * things you found" with a list that cannot say which. That is the reason `via` exists at all.
+ */
+seed_id: string, 
+/**
+ * The edge's own `source_id`, as stored.
+ */
+source_id: string, 
+/**
+ * The edge's own `target_id`, as stored.
+ */
+target_id: string, edge_kind: EdgeKind, 
+/**
+ * The edge's label. **Nullable in the DDL and populated on every edge in prod today**
+ * (`kb_edges.label` is `TEXT` with no `NOT NULL`), so the `None` is real and unobserved rather
+ * than impossible — and an `edge_filter` naming labels silently excludes unlabelled edges.
+ */
+label: string | null, polarity: Polarity, };
 
 /**
  * Where the principal constraint applies to **the fragment that produces this act's ordering** —

@@ -6,10 +6,10 @@
 //! [`SectionNotAvailable`](RefusalReason::SectionNotAvailable) loop, and the more-than-one
 //! [`AnchorTakesOneId`](RefusalReason::AnchorTakesOneId) arm read no declaration at all and are
 //! pure door capability. Only some of them say *"does not yet apply"* outright; the rest read like
-//! permanent structural facts and are not. Five sites, and no two are retired by the same thing:
+//! permanent structural facts and are not. **Four sites** `[was five — 2026-08-14]`, and no two are
+//! retired by the same thing:
 //!
 //! - property predicates — Task 10b;
-//! - edge filters — Task 11;
 //! - the seven-field resource narrowing on any act OTHER than `find-resources-with` — retired by
 //!   nothing, because it is no longer a shortfall. `[amended — 2026-08-14]` It was *"the six-field
 //!   resource narrowing — a compiler slot that does not exist yet"*, beside a seventh entry for
@@ -18,6 +18,14 @@
 //!   fragment applies all seven), and the doc-type site is gone entirely rather than widened — the
 //!   narrowing moved to an act, so on a find act it refuses like the other six. That is why the
 //!   count here went from six to five while the CAPABILITY grew;
+//!
+//!   **and then from five to four**, when the unconditional `edge_filter` site retired
+//!   `[2026-08-14]`. That one WAS a "does not yet apply" — Task 11 — and `20260814000030` plus
+//!   `follow-from`'s emitter arm is what retired it: the walk applies both of `EdgeFilter`'s axes.
+//!   What remains is the per-act check in [`check_act`], which refuses an edge filter on every act
+//!   that does not traverse an edge; it was unreachable while the unconditional site refused
+//!   everything first, so this retirement is what put it into service rather than merely deleting a
+//!   check;
 //! - the one-id anchor slot — the fragments' `(anchor_table, anchor_id)` pair, retired by an
 //!   `anchor_ids uuid[]`;
 //! - [`SectionNotAvailable`](RefusalReason::SectionNotAvailable) — a widened
@@ -365,14 +373,18 @@ fn check_act(
              them, and a predicate that narrows nothing is a silent substitution",
         ));
     }
-    if inv.edge_filter.is_some() {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            "this door does not yet apply edge filters — the only act that admits one still \
-             compiles to the absent placeholder",
-        ));
-    }
+    // **The unconditional `edge_filter` refusal is RETIRED** `[2026-08-14]`. It read: "this door
+    // does not yet apply edge filters — the only act that admits one still compiles to the absent
+    // placeholder". Both halves have stopped being true: `follow-from` compiles to
+    // `__temper_ungated_follow_from`, whose `p_edge_kinds`/`p_labels` are `EdgeFilter`'s two axes.
+    //
+    // What survives is the PER-ACT check further down — `accepts_filters.contains(&FilterField::
+    // Edge)` — which refuses an edge filter on every act that does not traverse an edge. That check
+    // was dead while this one refused everything first, so retiring this one is what puts it in
+    // service; the test that pins it is what makes the retirement safe rather than merely smaller.
+    //
+    // `inv.properties` is deliberately NOT retired with it. Spec §7 is OPEN — where a property
+    // predicate's container lives is unsettled — and the compiler still emits no slot for one.
 
     // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution. A term
     // outside the range the fragment can express IS a refusal, and must be one HERE. The negative
@@ -419,11 +431,24 @@ fn check_act(
             "act does not admit a resource filter",
         ));
     }
+    // **The surviving edge-filter refusal, and the only one now** `[2026-08-14]`. It was
+    // unreachable while an unconditional site above refused every edge filter first; retiring that
+    // site is what put this one into service.
+    //
+    // Its message was "act does not admit an edge filter" — true, and it named neither the
+    // narrowing nor where the capability lives, which the contract's own rule ("declined, never
+    // ignored", naming what was declined) asks for and every neighbouring refusal does.
     if inv.edge_filter.is_some() && !decl.accepts_filters.contains(&FilterField::Edge) {
         errs.push(refusal(
             Some(name),
             RefusalReason::FilterNotApplicable,
-            "act does not admit an edge filter",
+            format!(
+                "act `{}` does not traverse edges, so it cannot apply edge filters; narrowing \
+                 which edges a walk follows belongs to `follow-from`, whose `edge_filter` \
+                 constrains the hops themselves. Applying it here would answer a different \
+                 question than the one asked",
+                act_wire_name(&inv.act)
+            ),
         ));
     }
 }

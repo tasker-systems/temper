@@ -66,17 +66,22 @@ use super::stage::{ProducedVariant, StageName};
 /// so keying on that discriminant would agree with this map about those two by coincidence. One
 /// direction, said as one direction.
 ///
-/// `follow-from` and `survey` are ABSENT rather than mapped to the deliberately-absent placeholder
-/// (`__temper_unbound_act`), which is what they carried through beat C. Mapped, they validated
-/// clean and then failed at EXECUTION — invisible while nothing executed a composition outside its
-/// own tests, and a 500 the moment a door opened. Absent, they refuse statically as
+/// **`survey` is ABSENT** rather than mapped to the deliberately-absent placeholder
+/// (`__temper_unbound_act`), which it carried through beat C. Mapped, it validated clean and then
+/// failed at EXECUTION — invisible while nothing executed a composition outside its own tests, and
+/// a 500 the moment a door opened. Absent, it refuses statically as
 /// [`RefusalReason::NotSeparablyReachable`], which is what keeps `registry.rs`'s `DoorReach::Absent`
-/// TRUE at all three doors: mapped, both `Absent` and its promised restoration to `Serves` would
-/// have been false at once — reachable through the door, and unable to answer.
+/// TRUE for it at all three doors: mapped, both `Absent` and its promised restoration to `Serves`
+/// would have been false at once — reachable through the door, and unable to answer.
 ///
-/// They cannot simply be wired up instead: their fragments take arguments no slot supplies
-/// (`p_depth`/`p_gamma` for `search_graph_expand`, `p_lens` for `wayfind_region_scores`). The
-/// edge-provenance spike is what unblocks `follow-from`; `survey` waits on a lens slot.
+/// It cannot simply be wired up: `wayfind_region_scores` takes a `p_lens` no slot supplies.
+///
+/// `[joined — 2026-08-14]` **`follow-from` left that company.** It was absent for the same reason —
+/// `search_graph_expand` takes `p_depth`/`p_gamma` no slot supplies — and the answer was not a slot
+/// for either. Both are DEFINITIONAL rather than caller inputs (the act fixes depth at 2 and gamma
+/// at the rate its `orders_by` sentence describes), so `query_follow_from` takes them and the
+/// compiler passes constants. What the act needed a slot for was the seed set it already had, and
+/// the bound it did not — `20260814000030` plus `inputs: Vec<StageInput>`.
 ///
 /// `[added — 2026-08-14]` `find-resources-with` joins as the third member. It is the first entry
 /// whose fragment takes NO intention and returns NO quantity — the map says nothing about either,
@@ -88,6 +93,7 @@ const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
         "__temper_ungated_find_resources_with",
     ),
     ("query_find_wide", "__temper_ungated_find_wide"),
+    ("query_follow_from", "__temper_ungated_follow_from"),
 ];
 
 /// The fragment the compiler emits for a declared mechanic, or `None` if this surface cannot reach
@@ -1214,6 +1220,12 @@ mod tests {
                 "property predicates",
             ),
             (
+                // `[changed — 2026-08-14]` The refusal moved. It came from an UNCONDITIONAL site
+                // ("this door does not yet apply edge filters"), which is retired now that
+                // `follow-from` compiles to a fragment carrying both of `EdgeFilter`'s axes. What
+                // refuses here is the PER-ACT check, which was dead code while the unconditional
+                // one ran first — so this case now witnesses a different, narrower rule: a find act
+                // does not traverse an edge, so it cannot filter one.
                 "an edge filter",
                 Box::new(|a: &mut ActInvocation| {
                     a.edge_filter = Some(EdgeFilter {
@@ -1221,7 +1233,7 @@ mod tests {
                         labels: vec![],
                     })
                 }),
-                "edge filters",
+                "cannot apply edge filters",
             ),
         ];
 
@@ -1535,13 +1547,35 @@ mod tests {
         // `DoorReach::Absent` at all three doors and promises they restore to `Serves` when this
         // door lands. Had the placeholder survived, BOTH would have been false: reachable through
         // the door, and unable to answer.
-        for act in [ActName::FollowFrom, ActName::Survey] {
-            let c = a_legal_single_stage_plan_over(act.clone());
-            let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
+        // `[narrowed to survey — 2026-08-14]` `follow-from` was the other member and has left:
+        // `query_follow_from` is in `CALLABLE_FRAGMENTS` and `registry.rs` now declares `Serves` at
+        // CLI and API, which is the restoration the comment above promised. The pairing is what
+        // made the promise checkable, so the assertion follows the act out rather than being
+        // loosened to keep it passing.
+        let c = a_legal_single_stage_plan_over(ActName::Survey);
+        let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
+            "survey must refuse as unreachable rather than compile to an absent function; \
+             got {errs:?}"
+        );
+    }
+
+    /// The other half of the flip above: **`follow-from` no longer refuses**, and the reason it
+    /// stopped is the one the map records rather than a general loosening `[2026-08-14]`.
+    ///
+    /// Without this, the test above could be made to pass by deleting an act from a list, and
+    /// nothing would notice that the act had become reachable for a bad reason — or not at all.
+    #[test]
+    fn follow_from_is_no_longer_refused_as_unreachable() {
+        let c = a_legal_single_stage_plan_over(ActName::FollowFrom);
+        if let Err(errs) = validate(&c) {
             assert!(
-                errs.iter()
+                !errs
+                    .iter()
                     .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
-                "{act:?} must refuse as unreachable rather than compile to an absent function; \
+                "`query_follow_from` is in CALLABLE_FRAGMENTS, so this surface can emit it; \
                  got {errs:?}"
             );
         }
@@ -1551,9 +1585,16 @@ mod tests {
 
     #[test]
     fn asking_an_act_to_reach_beyond_a_set_it_can_only_narrow_within_is_refused() {
-        // The negative face of carrying the relation on the wire at all. Across the seven acts
-        // `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is fully determined
-        // by the act and could have been derived — and deriving it is precisely the mistake. A
+        // The negative face of carrying the relation on the wire at all.
+        //
+        // **The argument for it used to be principle and is now also FORCE** `[2026-08-14]`. This
+        // read: "across the seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the
+        // relation is fully determined by the act and could have been derived — and deriving it is
+        // precisely the mistake." They are no longer disjoint: `follow-from` accepts a `Resource`
+        // seed AND a `Resource` bound, and carries both at once. So a derived relation is not
+        // merely wrong in principle, it is now unable to answer — which is worth recording, because
+        // a design decision taken on principle and later vindicated by necessity is one nobody
+        // should have to re-argue. A
         // caller writing `seed` against `find-exact` asked to reach BEYOND their set; `find-exact`
         // can only narrow within one. Derived, this would have silently executed the narrowing:
         // their question answered as a different question, with a confident page of results.
@@ -1635,14 +1676,41 @@ mod tests {
             "so does a caller-supplied one"
         );
 
-        // And `follow-from` accepts seeds, not bounds — so the second plan is refused for the
-        // relation. It is the only act that accepts a seed at all, which is why it stays the
-        // subject after the flip; its `NotSeparablyReachable` rides along, and the assertion names
-        // the reason it is about.
-        assert!(validate(&plan(vec![caller_bound], vec!["hits"]))
-            .unwrap_err()
-            .iter()
-            .any(|e| e.reason == RefusalReason::UnsupportedBoundKind));
+        // **The negative half needed a new subject** `[2026-08-14]`. It used to be this same
+        // `follow-from` plan: the act accepted seeds and not bounds, so a `Bound` relation refused
+        // as `UnsupportedBoundKind`. It now accepts BOTH — a resource seed to grow from and a
+        // resource bound to stay within — so that plan is legal and the assertion would have had to
+        // be deleted to go green.
+        //
+        // Re-pointed instead, at an act that genuinely does not take a resource bound: `survey`
+        // accepts `[Cogmap, Context]`, which are served by the anchor pair. The rule under test is
+        // the relation being READ, and it needs a case where reading it changes the answer.
+        let survey_resource_bound = act_with_relation(
+            "regions",
+            ActName::Survey,
+            Some(caller_ids(IdKind::Resource)),
+            StageRelation::Bound,
+        );
+        assert!(
+            validate(&plan(vec![survey_resource_bound], vec!["regions"]))
+                .unwrap_err()
+                .iter()
+                .any(|e| e.reason == RefusalReason::UnsupportedBoundKind),
+            "survey scopes to a cogmap or a context, never to a set of resources"
+        );
+
+        // And the plan that used to be refused is now WELL-FORMED as far as the relation goes —
+        // asserted as the absence of that refusal, so this reads as a capability that opened rather
+        // than as a check that was dropped.
+        if let Err(errs) = validate(&plan(vec![caller_bound], vec!["hits"])) {
+            assert!(
+                !errs
+                    .iter()
+                    .any(|e| e.reason == RefusalReason::UnsupportedBoundKind),
+                "follow-from now accepts a resource bound — it constrains the whole walk; \
+                 got {errs:?}"
+            );
+        }
     }
 
     // ---- Hydration sections -----------------------------------------------------------------

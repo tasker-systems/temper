@@ -284,6 +284,7 @@ require 'temper/generated/models/unbind_team_outcome'
 require 'temper/generated/models/unrecognized_standing'
 require 'temper/generated/models/unshare_context_outcome'
 require 'temper/generated/models/vault_config'
+require 'temper/generated/models/via_entry'
 require 'temper/generated/models/wide_arm'
 require 'temper/generated/models/wide_hit'
 

@@ -1018,3 +1018,163 @@ async fn the_wide_arms_ten_slot_call_executes_and_the_query_vector_reaches_its_s
          that survives is the best one rather than whichever the draw returned first"
     );
 }
+
+// ─── The walk, executed ─────────────────────────────────────────────────────────────────────────
+
+/// **The layer the compile suite cannot reach, and the one the wire gap hid in.**
+///
+/// `[added — 2026-08-14]` `follow-from`'s bound was shipped in `20260814000030` with a witness at
+/// the SQL level and none through a composition — and it was exactly at the composition layer that
+/// `ActInvocation.input` turned out to carry one set. So this is not a duplicate of
+/// `search_graph_expand.rs`'s bound test: that one calls the fragment, this one asks whether a
+/// PLAN can say it.
+///
+/// `a — b — c`, bound to `{a, c}`. `b` is not walkable, so `c` is unreachable and does not return —
+/// the interior reading. Under the refused output-only reading `c` would come back, having been
+/// walked straight through a node the caller excluded.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_bounded_walk_through_a_composition_constrains_intermediate_nodes(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "walkexec").await;
+    let a = mk(&pool, home, owner, emitter, "wa", "alpha").await;
+    let b = mk(&pool, home, owner, emitter, "wb", "beta").await;
+    let c = mk(&pool, home, owner, emitter, "wc", "gamma").await;
+    edge(&pool, a, b, home, emitter).await;
+    edge(&pool, b, c, home, emitter).await;
+
+    let unbounded = walk_ids(&pool, owner, vec![a], None).await;
+    assert!(
+        unbounded.contains(&c),
+        "control: an unbounded walk reaches c at hop 2 through b; got {unbounded:?}"
+    );
+
+    let bounded = walk_ids(&pool, owner, vec![a], Some(vec![a, c])).await;
+    assert!(
+        !bounded.contains(&c),
+        "a bound constrains INTERMEDIATE nodes: b is excluded, so the a-b-c path cannot be walked. \
+         Returning c here is the output-only reading, which is CombineOp::Intersect and was \
+         refused. got {bounded:?}"
+    );
+}
+
+/// The `via` column survives the whole path — fragment, stage contract, executor row.
+///
+/// The compile suite asserts the column is EMITTED; only this can say it comes back with content.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_walk_returns_its_provenance_through_the_executor(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "viaexec").await;
+    let a = mk(&pool, home, owner, emitter, "va", "alpha").await;
+    let b = mk(&pool, home, owner, emitter, "vb", "beta").await;
+    edge(&pool, a, b, home, emitter).await;
+
+    let compiled = compile(&walk_plan(vec![a], None), owner).unwrap();
+    let rows = execute(&pool, &compiled).await.unwrap();
+    let hit = rows
+        .hits
+        .iter()
+        .find(|h| h.id == b)
+        .expect("b is a's neighbour");
+
+    let via = hit.via.as_ref().expect("a walk row carries provenance");
+    let entries = via.as_array().expect("via is a jsonb array");
+    assert_eq!(entries.len(), 1, "one edge reached b; got {via}");
+    assert_eq!(
+        entries[0]["seed_id"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap(),
+        a,
+        "the entry names the seed this node descends from; got {via}"
+    );
+
+    // And a NON-walk stage's rows carry no provenance — the column is NULL for every other act,
+    // which is what keeps the shared column list honest rather than merely wide.
+    let find = compile(&one_find_exact("alpha", None), owner).unwrap();
+    let find_rows = execute(&pool, &find).await.unwrap();
+    assert!(
+        find_rows.hits.iter().all(|h| h.via.is_none()),
+        "find-exact does not walk, so it discloses no origin"
+    );
+}
+
+/// One `leads_to` edge, weight 1.0.
+async fn edge(pool: &sqlx::PgPool, src: Uuid, tgt: Uuid, home: ContextId, emitter: EntityId) {
+    use temper_substrate::affinity::EdgeKind;
+    use temper_substrate::events::{fire, EdgeHome, SeedAction};
+    use temper_substrate::ids::ResourceId;
+    use temper_substrate::payloads::EdgePolarity;
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: ResourceId::from(src),
+            tgt: ResourceId::from(tgt),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("rel"),
+            weight: 1.0,
+            home: EdgeHome::Context(home),
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .relationship()
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// A one-stage `follow-from` plan: seeds always, a bound when one is given.
+fn walk_plan(seeds: Vec<Uuid>, bound: Option<Vec<Uuid>>) -> ValidatedComposition {
+    let set = |kind_ids: Vec<Uuid>, relation: StageRelation| StageInput::Caller {
+        relation,
+        ids: IdSet {
+            kind: IdKind::Resource,
+            provenance: None,
+            ids: kind_ids,
+        },
+    };
+    let mut inputs = vec![set(seeds, StageRelation::Seed)];
+    if let Some(b) = bound {
+        inputs.push(set(b, StageRelation::Bound));
+    }
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![StageNode::Act(ActInvocation {
+            name: StageName::parse("near").unwrap(),
+            act: ActName::FollowFrom,
+            intention: None,
+            inputs,
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })],
+    };
+    validate(&c).expect("a seeded walk is well-formed")
+}
+
+async fn walk_ids(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    seeds: Vec<Uuid>,
+    bound: Option<Vec<Uuid>>,
+) -> Vec<Uuid> {
+    let compiled = compile(&walk_plan(seeds, bound), owner).unwrap();
+    execute(pool, &compiled)
+        .await
+        .unwrap()
+        .hits
+        .iter()
+        .map(|h| h.id)
+        .collect()
+}

@@ -142,6 +142,11 @@
       "description": "One optional piece of per-stage disclosure that some acts can produce and others cannot.\n\n**One class with two members, not two special cases.** Each names a response field that is\nfilled for some acts and null for others, and in every case a null means *not declared*, never\nzero — which is the whole reason the class exists. Note that `match_location` is currently\ndeclared by NO act (see the registry): a declaration describes the DEPLOYED system, and the\nexecutor hard-codes `located_at: None` today.\n\nCLOSED, unlike [`super::disposition::RefusalReason`]. The two openness rules differ for the\nreason they always do here: a consumer branches exhaustively on which disclosures an act offers,\nwhereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking\nchange, and should be.",
       "oneOf": [
         {
+          "const": "input_contribution",
+          "description": "Which seed each returned thing descends from, and via which edge — `ResourceHit.via`.\n\n**Removed, and now returned on the condition it named.** It led this enum until ratification\n⟨6⟩/9d `[2026-08-09, Pete]`, which struck it along with the `input_contributed` field and\nsaid it *\"returns when a walk carries origin\"*. `20260814000030` is that walk\n`[2026-08-14]`.\n\nWhat it names is **not** the field that was struck. `input_contributed` was a COUNT, and the\nreason it went is recorded on `StageResult`: redundant where filled (a bound's contributed\ncount equals its produced count by construction — the same fact twice, free to disagree) and\nnull where interesting, since the only seeding act discarded origin. This is the structure\nitself rather than a tally of it, so neither objection carries over: it is not derivable from\nanother field, and the case that made the old one useless is exactly the case it serves.",
+          "type": "string"
+        },
+        {
           "const": "match_location",
           "description": "Where in the resource the match was — `ResourceHit.located_at`.",
           "type": "string"

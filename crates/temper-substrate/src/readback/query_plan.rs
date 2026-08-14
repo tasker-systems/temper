@@ -118,6 +118,29 @@ const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 pub const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
 pub const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 pub const EMIT_FIND_RESOURCES_WITH: &str = "__temper_ungated_find_resources_with";
+/// The walk's depth, FIXED — not a bound term and not a caller input.
+///
+/// `[ruled — 2026-08-14, Pete]` *"Depth 3 is too large for a neighborhood traversal of this kind"*
+/// is a claim about what `follow-from` MEANS, which puts it in gamma's category rather than
+/// `limit`'s: `BoundTerm` does not grow a variant and `accepts_bound_terms` stays `[Limit]`. The
+/// measurement behind the 2 is spec §5 — path rows went 4,134 to 33,684 for one extra hop.
+///
+/// It lives HERE, at the one place a walk is emitted, rather than as a fragment default, so there is
+/// exactly one answer to "how deep is a neighbourhood" and it is in the compiler that decides it.
+const WALK_DEPTH: &str = "2";
+
+/// The walk's decay rate, FIXED.
+///
+/// `orders_by.means` is a fixed sentence describing what `graph_score` IS. A caller-set rate makes
+/// it *"decayed at whatever rate you asked for"* — still true, no longer interpretable — and nothing
+/// would stop `gamma > 1`, which inverts the meaning so that distant nodes outscore near ones under
+/// a declaration saying "best path". Matches the value the retired `unified_search` used.
+const WALK_GAMMA: &str = "0.5::double precision";
+
+/// The provenance-carrying walk (`20260814000030`). Unlike the three above it returns a THIRD
+/// column, `via`, which rides the stage contract beside `id`/`kind`/`quantity` — see the final
+/// select's shared column list, which every act stage and every tally arm must match.
+pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from";
 
 /// **Every emitted identifier is double-quoted**, here and at each CTE definition and reference.
 /// `[fixed — 2026-08-09]` `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`,
@@ -292,14 +315,19 @@ struct StageTally {
 fn refused_body(act: &str) -> String {
     format!(
         "  -- act: {act} REFUSED (no rows, and an EMPTY set for anything bounded by it)\n  \
-         SELECT NULL::uuid AS id, NULL::text AS kind, NULL::double precision AS quantity \
-         WHERE false"
+         SELECT NULL::uuid AS id, NULL::text AS kind, NULL::double precision AS quantity, \
+         NULL::jsonb AS via WHERE false"
     )
 }
 
-/// A placeholder act body in the `(id, kind, quantity)` stage-contract shape. IDs only cross a stage
-/// boundary — a downstream stage references its upstream as `SELECT id FROM <stage>`, never a
-/// quantity, which is what keeps `no-cross-act-ranking` structural (spec §4).
+/// A placeholder act body in the `(id, kind, quantity, via)` stage-contract shape. IDs only cross a
+/// stage boundary — a downstream stage references its upstream as `SELECT id FROM <stage>`, never a
+/// quantity and never `via`, which is what keeps `no-cross-act-ranking` structural (spec §4).
+///
+/// **Every act stage projects all four columns, and the ones that are not walks project
+/// `NULL::jsonb AS via`** `[2026-08-14]`. Uniform rather than per-act, because [`final_select`]
+/// shares one column list across hit arms, tally arms and the empty fallback — a stage missing a
+/// column would fail at UNION time with an error naming the arity rather than the act.
 fn emit_act_body(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
@@ -363,7 +391,7 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_EXACT}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 fts_norm::double precision AS quantity\n    \
+                 fts_norm::double precision AS quantity, NULL::jsonb AS via\n    \
                  FROM {call}"
             )))
         }
@@ -392,7 +420,7 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 NULL::double precision AS quantity\n    \
+                 NULL::double precision AS quantity, NULL::jsonb AS via\n    \
                  FROM {call}"
             )))
         }
@@ -438,14 +466,48 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_WIDE}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 vec_norm::double precision AS quantity\n    \
+                 vec_norm::double precision AS quantity, NULL::jsonb AS via\n    \
                  FROM {call}"
             )))
         }
-        // **Unreachable through `validate`, and emitted anyway.** `follow-from` and `survey` used to
-        // reach here; they left `CALLABLE_FRAGMENTS` because their fragments take arguments no slot
-        // supplies (`p_depth`/`p_gamma`, `p_lens`), and `validate` now refuses them with
-        // `NotSeparablyReachable` before a `ValidatedComposition` can exist. Every act this arm
+        Some(EMIT_FOLLOW_FROM) => {
+            // **The seed slot, and the reason `narrowing_for` reads the relation at all.** Routing
+            // a seed into `p_bound_ids` compiles a walk that can only return what was already in
+            // its own seed set — a stage that looks like it worked and can never reach a neighbour.
+            //
+            // A walk with no seed is not refused here: `p_seed_ids` NULL reaches nowhere and
+            // returns zero rows, which is the honest answer to "walk from nothing" and matches what
+            // the fragment does. The act's `accepts_seeds` is what makes a seed expressible; making
+            // one MANDATORY is a different rule and is not one anything declares.
+            let (edge_kinds, labels) = edge_filter_for(inv, binds);
+            let call = emit_ungated_core_call(&CoreCall::Walk {
+                core: EMIT_FOLLOW_FROM,
+                seeds: narrowing.seed_expr(),
+                depth: WALK_DEPTH,
+                gamma: WALK_GAMMA,
+                edge_kinds,
+                labels,
+                // Constrains the WHOLE walk, intermediates included — the fragment applies it
+                // where visibility is applied. NULL is unbounded here, which is the opposite
+                // polarity from the visible set beside it.
+                bound: narrowing.bound_expr(),
+                limit: &limit,
+            });
+            // **`via` crosses into the stage contract as a fourth column.** Every other act emits
+            // `NULL::jsonb` for it — see `final_select`, which shares one column list across hit
+            // arms, tally arms and the empty fallback.
+            Ok(emitted(format!(
+                "  -- act: {act} -> {EMIT_FOLLOW_FROM}\n  \
+                 SELECT resource_id AS id, 'resource'::text AS kind, \
+                 graph_score::double precision AS quantity, via\n    \
+                 FROM {call}"
+            )))
+        }
+        // **Unreachable through `validate`, and emitted anyway.** `survey` used to reach here; it
+        // left `CALLABLE_FRAGMENTS` because its fragment takes an argument no slot supplies
+        // (`p_lens`), and `validate` now refuses it with `NotSeparablyReachable` before a
+        // `ValidatedComposition` can exist. (`follow-from` was the other, and rejoined the map on
+        // 2026-08-14 — its `p_depth`/`p_gamma` turned out to want constants rather than slots.) Every act this arm
         // could still catch is one that declared itself into `search_family()` with a `served_by`
         // this builder has no case for — an internal inconsistency, not a caller error. It emits a
         // function that deliberately does not exist so Postgres errors loudly, rather than guessing
@@ -466,7 +528,7 @@ fn emit_act_body(
         // not covered.
         _ => Ok(emitted(format!(
             "  -- act: {act} (placeholder body; this builder emits no fragment for it yet)\n  \
-             SELECT id, kind, quantity FROM {PLACEHOLDER_FN}({})",
+             SELECT id, kind, quantity, NULL::jsonb AS via FROM {PLACEHOLDER_FN}({})",
             narrowing.any_set_expr(),
         ))),
     }
@@ -501,6 +563,26 @@ enum CoreCall<'a> {
         anchor_id: &'a str,
         limit: &'a str,
         offset: &'a str,
+    },
+    /// The walk: a seed set, the two definitional constants, both edge axes, a bound, and a limit.
+    ///
+    /// **`depth` and `gamma` are constants this compiler writes, not slots a caller fills.** The
+    /// act fixes both — depth at 2, gamma at the rate its `orders_by` sentence describes — so they
+    /// are `&'static str` literals here rather than bound parameters. The fragment takes them
+    /// because the incumbent `search_graph_expand` signature has both and delegates through them
+    /// (`20260814000030`), which is a fact about the SQL family rather than about the act.
+    ///
+    /// It is the only variant carrying BOTH a seed and a bound, which is what
+    /// `ActInvocation::inputs` became a list for.
+    Walk {
+        core: &'a str,
+        seeds: &'a str,
+        depth: &'a str,
+        gamma: &'a str,
+        edge_kinds: String,
+        labels: String,
+        bound: &'a str,
+        limit: &'a str,
     },
     /// The selection core: eight narrowing slots, an anchor pair, and nothing else.
     ///
@@ -584,6 +666,21 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
         } => format!(
             "{core}({VISIBLE_IDS}, {narrowings}, {anchor_table}, {anchor_id}, {PRINCIPAL_BIND})"
         ),
+        // No `PRINCIPAL_BIND`: the walk reads no anchor, so it needs no `p_anchor_reader`. The
+        // visible set is still the first argument, and is still written only here.
+        CoreCall::Walk {
+            core,
+            seeds,
+            depth,
+            gamma,
+            edge_kinds,
+            labels,
+            bound,
+            limit,
+        } => format!(
+            "{core}({VISIBLE_IDS}, {seeds}, {depth}, {gamma}, {edge_kinds}, {labels}, {bound}, \
+             {limit})"
+        ),
     }
 }
 
@@ -628,22 +725,7 @@ impl StageNarrowing {
         self.bound.as_deref().unwrap_or("NULL::uuid[]")
     }
 
-    /// The `p_seed_ids` expression.
-    ///
-    /// **No caller yet, and that is the state of the work rather than dead code.** `follow-from` is
-    /// the only seeding act and its emitter arm is not built — it still falls to the placeholder.
-    /// Kept because the pair is what makes the routing legible: a reader comparing `seed_expr` and
-    /// `bound_expr` sees two slots and one rule, where a lone `bound_expr` reads as though bounds
-    /// were the only kind of set there is.
-    // `cfg_attr(not(test))` because the in-module tests DO call it — an unconditional `expect` is
-    // unfulfilled under `--cfg test`, and `-D warnings` turns that into an error.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by follow-from's emitter arm, which lands next"
-        )
-    )]
+    /// The `p_seed_ids` expression. Read by `follow-from`'s arm, the only act that grows from a set.
     fn seed_expr(&self) -> &str {
         self.seed.as_deref().unwrap_or("NULL::uuid[]")
     }
@@ -820,6 +902,49 @@ fn narrowing_one(
             _ => Ok(()),
         },
     }
+}
+
+/// The two `EdgeFilter` axes, bound — a closed DDL enum beside open free text.
+///
+/// They are not merged, and `20260805`'s §8 says why: on live data a kind and a label are different
+/// vocabularies, and one slot taking both would have to guess which a caller meant.
+///
+/// **An empty vector is NULL, never `'{}'`** — the fragment reads a NULL axis as "no narrowing" and
+/// an empty array would be the same thing spelled a second way. `EdgeFilter` derives `Default`, so a
+/// caller who names the filter and fills neither axis gets the same walk as one who names no filter,
+/// which is the honest reading of "narrow by nothing".
+///
+/// **The label axis silently excludes UNLABELLED edges.** `kb_edges.label` is nullable in the DDL
+/// and populated on every edge in prod today, so the case is real and unobserved; `label = ANY(...)`
+/// is NULL for it, so the neighbour it reaches drops out. Correct, and stated rather than left to be
+/// discovered — see spec §4.3.
+fn edge_filter_for(
+    inv: &temper_core::types::query::ActInvocation,
+    binds: &mut Vec<QueryBind>,
+) -> (String, String) {
+    let Some(f) = &inv.edge_filter else {
+        return ("NULL::text[]".to_string(), "NULL::text[]".to_string());
+    };
+    let mut bind_texts = |values: Vec<String>| {
+        if values.is_empty() {
+            return "NULL::text[]".to_string();
+        }
+        let idx = binds.len() + 1;
+        binds.push(QueryBind::Texts(values));
+        format!("${idx}::text[]")
+    };
+    // The kind is a closed enum on BOTH sides — Rust's `EdgeKind` and Postgres's `edge_kind` — and
+    // the fragment compares `e.edge_kind::text`, so the wire spelling is what crosses. Taken from
+    // serde rather than from a hand-written match, which would be a second place for the two
+    // vocabularies to disagree.
+    let kinds = f
+        .edge_kinds
+        .iter()
+        .filter_map(|k| serde_json::to_string(k).ok())
+        .map(|s| s.trim_matches('"').to_string())
+        .collect();
+    let labels = f.labels.clone();
+    (bind_texts(kinds), bind_texts(labels))
 }
 
 /// How many of the ids bound at `$idx` the principal cannot use — **invisible, nonexistent and
@@ -1079,8 +1204,9 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
 /// separately would answer from a **different snapshot**, and a trace that disagrees with the rows
 /// beside it is worse than no trace: it reads as disclosure and is not.
 ///
-/// A tally carries **how many, never which**. Its id, kind and quantity columns are NULL by
-/// construction, so an intermediate stage's membership stays the pipe's internal currency.
+/// A tally carries **how many, never which**. Its id, kind, quantity and `via` columns are NULL by
+/// construction, so an intermediate stage's membership stays the pipe's internal currency — and
+/// `via` most of all, since it names the very edges a tally is refusing to disclose.
 ///
 /// The two classes share one column list because they are one statement's result set. `row_class`
 /// is what the executor switches on; it is a literal in the SQL rather than an inferred property of
@@ -1093,7 +1219,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         .map(|r| {
             let s = r.stage.as_str();
             format!(
-                "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, \
+                "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, via, \
                  NULL::bigint AS produced, NULL::bigint AS unusable FROM \"{s}\""
             )
         })
@@ -1103,7 +1229,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         let unusable = &t.unusable;
         format!(
             "SELECT 'tally'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
-             NULL::text AS kind, NULL::double precision AS quantity, \
+             NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
              (SELECT count(*) FROM \"{s}\")::bigint AS produced, {unusable} AS unusable"
         )
     }));
@@ -1113,8 +1239,8 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         // added 2026-08-09 after review found the gap). Kept because `compile` is public and a
         // zero-arm UNION is not valid SQL.
         return "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
-                NULL::text AS kind, NULL::double precision AS quantity, NULL::bigint AS produced, \
-                NULL::bigint AS unusable WHERE false"
+                NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
+                NULL::bigint AS produced, NULL::bigint AS unusable WHERE false"
             .to_string();
     }
     arms.join("\nUNION ALL\n")

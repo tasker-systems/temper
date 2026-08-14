@@ -286,6 +286,7 @@ mod tests {
             resource: inert_resource(),
             scoring: Scoring { score_kind, score },
             located_at: None,
+            via: vec![],
         }
     }
 

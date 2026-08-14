@@ -28,7 +28,7 @@ use temper_core::types::query::{
     applied_terms, declaration, emitted_fragment_for, validate, validate_shape, ActName,
     ActRefusal, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, ResourceHit,
     ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageResult,
-    StageTrace, ValidatedComposition,
+    StageTrace, ValidatedComposition, ViaEntry,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -498,6 +498,18 @@ fn stage_result(
                 // closest chunk is not emitted. A named remainder — `discloses` says which acts
                 // COULD, and this is where the "could" is still not "does".
                 located_at: None,
+                // **The one place raw `jsonb` becomes the typed contract.** A malformed payload
+                // yields an EMPTY list rather than a partial one — `serde_json` fails the whole
+                // array if any entry is wrong, and half a provenance trail is worse than none,
+                // because the caller cannot tell which half is missing. That is a deliberate
+                // trade and its cost is stated: an unparseable `via` is indistinguishable here
+                // from a walk that reached nothing, and the fragment is the only writer, so the
+                // case means the two have drifted rather than that a caller did anything.
+                via: h
+                    .via
+                    .clone()
+                    .and_then(|v| serde_json::from_value::<Vec<ViaEntry>>(v).ok())
+                    .unwrap_or_default(),
             })
         })
         .collect();
@@ -896,6 +908,7 @@ mod tests {
             id,
             kind: "resource".to_string(),
             quantity: Some(q),
+            via: None,
         }
     }
 

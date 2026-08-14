@@ -34,6 +34,14 @@ pub struct HitRow {
     /// `resource` or `region` — the currency, as the stage contract carries it.
     pub kind: String,
     pub quantity: Option<f64>,
+    /// How a walk reached this row — the raw `via` column, `None` for every act that is not one.
+    ///
+    /// **Raw `jsonb` at this layer, typed at the assembler.** This crate has no dependency on
+    /// `temper-core`'s wire types and should not grow one to carry a column through; the typed
+    /// [`temper_core::types::query::ViaEntry`] is where a caller reads it, and the parse failing is
+    /// an error rather than a silent empty — "this walk reported no provenance" and "we could not
+    /// read the provenance it reported" are opposite claims.
+    pub via: Option<serde_json::Value>,
 }
 
 /// One stage's disclosure numbers, for EVERY stage — including the ones whose rows nobody asked
@@ -147,6 +155,7 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
                 id: row.try_get("id")?,
                 kind: row.try_get("kind")?,
                 quantity: row.try_get("quantity")?,
+                via: row.try_get("via")?,
             });
         } else {
             out.tallies.push(TallyRow {
@@ -173,6 +182,7 @@ mod tests {
             stage: stage.to_string(),
             id: Uuid::from_u128(id),
             kind: "resource".to_string(),
+            via: None,
             quantity: q,
         }
     }
