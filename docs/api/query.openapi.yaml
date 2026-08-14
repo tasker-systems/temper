@@ -673,6 +673,8 @@ components:
     #
     #   find-exact           --resource/bound--> find-exact, find-about-within
     #   find-exact           --resource/seed --> follow-from
+    #   find-resources-with  --resource/bound--> find-exact, find-about-within
+    #   find-resources-with  --resource/seed --> follow-from
     #   find-about-anywhere  --resource/bound--> find-exact, find-about-within
     #   find-about-anywhere  --resource/seed --> follow-from
     #   find-about-within    --resource/bound--> find-exact, find-about-within
@@ -694,6 +696,19 @@ components:
     #   * `find-about-anywhere` is SOURCE-ONLY — it accepts nothing, which is
     #     correct by its own definition ("search everything I can see").
     #
+    #   * `find-resources-with` `[added — 2026-08-14]` is source-only IN THIS
+    #     TABLE and NOT for the same reason. It accepts `cogmap` and `context`
+    #     bounds — so "every task in @me/temper" is expressible — but no
+    #     RESOURCE bound, because narrowing a selection by an upstream set is
+    #     set intersection and `CombineOp::Intersect` already says it. Two
+    #     selections piped together are one selection carrying both predicates.
+    #
+    #     It is also the only act with NO intention: it asks the corpus nothing,
+    #     so it selects without scoring. That is why it may not appear in
+    #     `outcome.returns` — a stage with no ordering quantity has nothing to
+    #     score its rows, and `stage_not_returnable` refuses it. Its output is a
+    #     set to pipe, never rows to read.
+    #
     #   * `cogmap` and `context` are accepted but never PRODUCED, so they can
     #     only arrive as `from: caller`, land in the anchor pair, and a set of
     #     more than one refuses (the anchor slot holds exactly one id).
@@ -702,6 +717,9 @@ components:
     #
     #   fuzzy → traverse → exact
     #     find-about-anywhere --seed--> follow-from --bound--> find-exact
+    #
+    #   select, then rank within the selection
+    #     find-resources-with --bound--> find-about-within
     #
     #   big picture → smaller → smallest
     #     find-about-anywhere --bound--> find-about-within --bound--> find-about-within
@@ -895,8 +913,14 @@ components:
     ResourcesOutput:
       description: |
         Produced by every composable act: `find-exact`, both `find-about-*`
-        acts, `follow-from`, and — since the ratification redesign — `survey`,
-        whose rows are the member resources of its matched regions.
+        acts, `find-resources-with`, `follow-from`, and — since the ratification
+        redesign — `survey`, whose rows are the member resources of its matched
+        regions.
+
+        `find-resources-with` produces this currency and yet can never RETURN
+        it: it orders nothing, so `outcome.returns` refuses it as
+        `stage_not_returnable`. Producing a currency and being returnable are
+        different properties, and this is the act that separates them.
       type: object
       required: [produced, hits]
       properties:
