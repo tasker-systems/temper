@@ -88,12 +88,12 @@ PREFIX='__temper_ungated_'
 #     `query_find_exact`. It keeps the anchor readability check for both kinds via
 #     `anchor_readable_by_profile` and takes `p_anchor_reader` for it, so it cannot be lied to about
 #     that authorization either.
-#   EMITTER: **not yet, and that is the honest answer.** Nothing in `query_plan.rs` emits this call
-#     — beat 3 wires it, and the act is `Unbuilt` in the registry and absent from
-#     `CALLABLE_FRAGMENTS`, so `validate` refuses it as `not_implemented` and no composition can
-#     reach it today. The Rust baseline below is unchanged for exactly that reason, and it is what
-#     will move when the emitter lands: the review owed at that point is that the call goes through
-#     `emit_ungated_core_call`, where the id source is fixed rather than passed.
+#   EMITTER: `query_plan.rs::emit_ungated_core_call`, the same sole emitter the other two go
+#     through, which is where the visible set and the principal are fixed rather than passed.
+#     `[amended — 2026-08-14]` This entry first read *"not yet — beat 3 wires it, and the Rust
+#     baseline below is unchanged for exactly that reason."* True when written and false one commit
+#     later; corrected here rather than left, because a stale sentence inside a security guard is
+#     read as its current reasoning. The Rust review it promised is recorded below.
 #   RESIDUE: unchanged and accepted. The prefix is source discipline, not a database permission.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
@@ -116,9 +116,23 @@ EOF
 #     they do not name the prefix — which is why a count of 2 rather than 4 is the correct reading
 #     and not a scan that is missing half the file. `emit_ungated_core_call` is the sole emitter and
 #     the place the visible set and the principal are fixed rather than passed.
+#
+# REVIEWED 2026-08-14 (selection becomes an act, task 01a0003c beat 3) — both counts move by one,
+# and this is the review the SQL baseline above said would come due when the emitter landed.
+#   validate/mod.rs 2 -> 3: `CALLABLE_FRAGMENTS` gains
+#     `query_find_resources_with -> __temper_ungated_find_resources_with`. Naming a core here still
+#     does NOT call one — this crate has no database access and the map only decides which acts are
+#     reachable from this surface.
+#   query_plan.rs 2 -> 3: a third `EMIT_*` constant, and nothing else. The count is constants, not
+#     call sites — the match arms emit through the constants and so never name the prefix — which is
+#     why 3 rather than 6 is the correct reading.
+#   VERDICT/EMITTER: the selection call goes through `emit_ungated_core_call`, which is still the
+#     ONE place `VISIBLE_IDS` and `PRINCIPAL_BIND` are written. That function became an enum to take
+#     a second call shape; a second EMITTER was rejected precisely because the security property is
+#     that there is one place, and the second one is the one nobody audits.
 read -r -d '' RUST_BASELINE <<'EOF' || true
-2 crates/temper-core/src/types/query/validate/mod.rs
-2 crates/temper-substrate/src/readback/query_plan.rs
+3 crates/temper-core/src/types/query/validate/mod.rs
+3 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 
 # The SQL half: ungated functions DEFINED in migrations. A definition is what creates the hazard; a

@@ -247,12 +247,8 @@ pub fn search_family() -> Vec<ActDeclaration> {
             name: ActName::FindResourcesWith,
             asker_holds: "I can say what these things ARE; I have no question about what they mean"
                 .to_string(),
-            // Unbuilt until `query_find_resources_with` lands. Declared ahead of its mechanic
-            // deliberately: this act's arrival is what forces the selects-vs-orders split in the
-            // invariants below, and making that split against a real declaration is what proves it
-            // was a split rather than a loosened assertion.
-            served_by: None,
-            build_state: BuildState::Unbuilt,
+            served_by: Some("query_find_resources_with".to_string()),
+            build_state: BuildState::Served,
             // **Anchors yes, resource sets no**, and the asymmetry is the point.
             //
             // A `Resource` bound would be a second spelling of `CombineOp::Intersect`: narrowing a
@@ -277,13 +273,40 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // Selects without scoring. `discloses` describes what a stage says about its own
             // output beyond the rows, and this stage has no rows — only ids.
             discloses: vec![],
-            // Absent everywhere until the mechanic exists, on the same principle that put
-            // `follow-from` and `survey` here: a declaration describes the DEPLOYED system, and an
-            // act nothing can invoke reaches no door. Restores to `Serves` at `/api/query` when
-            // beat 2 lands, which is additive.
+            // **The first act whose doors are `/api/query`'s rather than `/api/search`'s**, which is
+            // why this is written out instead of routing through `unified_doors` — that helper's
+            // three doors are `temper search`, `POST /api/search` and the MCP `search` tool, and
+            // none of them reaches this act. [`Door`] names a SURFACE, not an endpoint, so the same
+            // three variants answer for a different endpoint here.
+            //
+            // CLI and API serve it in full. `temper query` takes a raw JSON plan
+            // (`query_cmd.rs` → `resolve_plan`), so every wire field is reachable from it by
+            // construction and there is no term, bound kind or filter it cannot express — which is
+            // a stronger statement than the find acts' empty shortfall lists, and true for a
+            // different reason: theirs is a flag surface that had to be brought level, this is a
+            // document.
+            //
+            // **MCP is `Absent`, and that is the shortfall worth naming**: the MCP server exposes a
+            // `search` tool and no `query` tool, so the door agents use cannot compose at all. Same
+            // shape as `substantiate` being absent from exactly the door that most needs it. Not a
+            // gap this act introduces, and not one it can close.
             door_coverage: BTreeMap::from([
-                (Door::Cli, DoorReach::Absent),
-                (Door::Api, DoorReach::Absent),
+                (
+                    Door::Cli,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
+                (
+                    Door::Api,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
                 (Door::Mcp, DoorReach::Absent),
             ]),
             // THE POINT OF THIS ACT, stated where the invariants read it. It orders nothing —
@@ -627,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn the_served_set_is_the_three_find_acts_plus_substantiate() {
+    fn the_served_set_is_the_four_query_acts_plus_substantiate() {
         // WAS `substantiate_is_the_only_act_with_a_door_of_its_own`, and before that
         // `nothing_in_the_search_family_is_served`, whose comment read "every mechanic is reachable
         // only through unified_search". That sentence was FALSE about the deployed system while its
@@ -641,6 +664,13 @@ mod tests {
         // `/api/search` gained a resource bound, and `served_by` above followed it. The CLAIM is
         // unchanged (a door of its own, nothing fused); only the function it names moved.
         // `substantiate` keeps the door it has had since Set 5 (`GET /api/resources/{id}/evidence`).
+        //
+        // `[moved — 2026-08-14]` `find-resources-with` joins, and it is the first member whose door
+        // is `/api/query` rather than one of its own — served by `query_find_resources_with`
+        // (migration `20260814000010`) and emitted through `CALLABLE_FRAGMENTS`. It went `Unbuilt`
+        // to `Served` in one branch on purpose: `Unbuilt` while only the contract existed was a TRUE
+        // statement about the deployed system, and holding it there once the fragment shipped would
+        // have been the same known-false declaration this field was added to stop.
         //
         // Kept as an EXACT set: an act acquiring or losing a door must be a deliberate edit here,
         // and `build_state` moving is BREAKING under the semver table (design §6.2). Order follows
@@ -656,6 +686,7 @@ mod tests {
                 ActName::FindExact,
                 ActName::FindAboutAnywhere,
                 ActName::FindAboutWithin,
+                ActName::FindResourcesWith,
                 ActName::Substantiate,
             ]
         );

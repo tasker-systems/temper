@@ -143,6 +143,57 @@ fn one_find(
     validate(&c).expect("plan is valid")
 }
 
+/// A `find-resources-with` selection piped into a `find-exact` as a bound.
+///
+/// The selection is NOT returned — it orders nothing, so asking for its rows is
+/// `stage_not_returnable`. Its work shows up in the find stage's `input_ids` and in its own trace
+/// entry, which is exactly the disclosure a caller needs to tell a real narrowing from a costume.
+fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
+    let sel = StageName::parse("sel").unwrap();
+    let find = StageName::parse("hits").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: find.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            StageNode::Act(ActInvocation {
+                name: sel.clone(),
+                act: ActName::FindResourcesWith,
+                // No intention: a pure selection asks the corpus nothing.
+                intention: None,
+                input: None,
+                terms: Default::default(),
+                resource_filter: Some(ResourceFilter {
+                    doc_type: vec![doc_type.to_string()],
+                    ..Default::default()
+                }),
+                edge_filter: None,
+                properties: vec![],
+            }),
+            StageNode::Act(ActInvocation {
+                name: find,
+                act: ActName::FindExact,
+                intention: Some(Intention {
+                    query: query.to_string(),
+                    embedding: None,
+                }),
+                input: Some(temper_core::types::query::StageInput::Upstream {
+                    relation: temper_core::types::query::StageRelation::Bound,
+                    stage: sel,
+                }),
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+            }),
+        ],
+    };
+    validate(&c).expect("plan is valid")
+}
+
 fn hits(
     response: &temper_core::types::query::QueryResponse,
 ) -> &Vec<temper_core::types::query::ResourceHit> {
@@ -269,10 +320,28 @@ async fn a_resource_the_principal_cannot_see_is_not_in_the_answer(pool: PgPool) 
 /// passed while the compiler was dropping the filter entirely and the response was reporting it as
 /// applied. It codified the defect instead of catching it. Two doc types now, and the assertion is
 /// on which rows come back.
+/// **The pipe: a selection bounds a find act, end to end, and the trace says so.**
+///
+/// `[rewritten — 2026-08-14]` This was
+/// `a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_that_ran`, which put
+/// `doc_type` on the find stage as a MODIFIER. That is no longer expressible: narrowing by what a
+/// resource IS is the `find-resources-with` act, and a find act carrying a resource filter is
+/// refused (`filter_not_applicable`) rather than ignored.
+///
+/// **Rewritten rather than deleted, because the property it witnessed did not go away — it moved.**
+/// The old test proved a declared narrowing actually excluded rows and was echoed honestly. Both
+/// halves are asserted here, one stage later: the selection excludes the session, the find act
+/// returns only what the selection admitted, and `narrowed_by` reports the narrowing on the stage
+/// that applied it. The refusal that replaced the old spelling is witnessed separately, below.
+///
+/// **`find-exact` downstream, not `find-about-within`.** The acceptance criterion names the latter;
+/// the wide arm needs a query embedding, this suite is `test-db` with no embedder, and a stage the
+/// compiler refuses for want of one emits a refused body carrying no bound at all — so the pipe
+/// would be untestable here for a reason that has nothing to do with the pipe. The property under
+/// test is that an upstream selection reaches stage two's `p_bound_ids`, and that is the same
+/// property whichever find act consumes it.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_that_ran(
-    pool: PgPool,
-) {
+async fn a_selection_bounds_the_find_act_it_is_piped_into(pool: PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home = ctx(&pool, owner, "filtered").await;
@@ -306,25 +375,54 @@ async fn a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_th
         "precondition: both match the query, or the contrast below proves nothing"
     );
 
-    let r = run_composition(
-        &pool,
-        owner,
-        &one_find("composable", vec![], vec!["concept".to_string()]),
-    )
-    .await
-    .expect("runs");
+    let r = run_composition(&pool, owner, &selection_then_find("concept", "composable"))
+        .await
+        .expect("runs");
 
     let got = hits(&r);
-    assert_eq!(got.len(), 1, "the session must be excluded; got: {got:?}");
+    assert_eq!(
+        got.len(),
+        1,
+        "the session is outside the selection, so the find act must not return it; got: {got:?}"
+    );
     assert_eq!(got[0].resource.id.uuid(), concept);
 
-    let narrowed = &r.returned[&StageName::parse("hits").unwrap()].narrowed_by;
-    assert_eq!(narrowed.len(), 1);
-    assert_eq!(narrowed[0].key, "doc_type");
-    assert_eq!(narrowed[0].value, "concept");
+    // **The trace is where a composition is legible**, and it carries every stage — including the
+    // selection, whose rows are never returned. `input_ids` is the field that answers "did my pipe
+    // actually do anything": a bound stage showing 0 narrowed nothing and its answer is the
+    // unbounded one wearing a composition's costume.
+    let sel = StageName::parse("sel").unwrap();
+    let sel_trace = r
+        .trace
+        .stages
+        .iter()
+        .find(|t| t.stage == sel)
+        .expect("the selection stage appears in the trace even though it returns nothing");
+    let hits_trace = r
+        .trace
+        .stages
+        .iter()
+        .find(|t| t.stage == StageName::parse("hits").unwrap())
+        .expect("the find stage appears in the trace");
     assert_eq!(
-        narrowed[0].admitted, None,
-        "counts ride only where an act computes them for free; absent is not zero"
+        hits_trace.input_ids, 1,
+        "the bound must REACH stage two — one id, the concept the selection admitted"
+    );
+
+    // And the echo: the narrowing is reported on the stage that applied it, with counts absent
+    // rather than zero, because no fragment computes what it dropped.
+    assert_eq!(
+        sel_trace.narrowed_by.len(),
+        1,
+        "got: {:?}",
+        sel_trace.narrowed_by
+    );
+    assert_eq!(sel_trace.narrowed_by[0].key, "doc_type");
+    assert_eq!(sel_trace.narrowed_by[0].value, "concept");
+    assert_eq!(sel_trace.narrowed_by[0].admitted, None);
+    assert!(
+        hits_trace.narrowed_by.is_empty(),
+        "the find act narrows by nothing now; the echo belongs to the act that applied it"
     );
 }
 

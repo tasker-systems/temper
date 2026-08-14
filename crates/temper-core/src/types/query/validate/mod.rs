@@ -77,8 +77,16 @@ use super::stage::{ProducedVariant, StageName};
 /// They cannot simply be wired up instead: their fragments take arguments no slot supplies
 /// (`p_depth`/`p_gamma` for `search_graph_expand`, `p_lens` for `wayfind_region_scores`). The
 /// edge-provenance spike is what unblocks `follow-from`; `survey` waits on a lens slot.
+///
+/// `[added — 2026-08-14]` `find-resources-with` joins as the third member. It is the first entry
+/// whose fragment takes NO intention and returns NO quantity — the map says nothing about either,
+/// which is why it needed no widening to admit one.
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ("query_find_exact", "__temper_ungated_find_exact"),
+    (
+        "query_find_resources_with",
+        "__temper_ungated_find_resources_with",
+    ),
     ("query_find_wide", "__temper_ungated_find_wide"),
 ];
 
@@ -1032,7 +1040,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                "`tags` narrowing",
+                "narrow by `tags`",
             ),
             (
                 "facets",
@@ -1045,7 +1053,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                "`facets` narrowing",
+                "narrow by `facets`",
             ),
             (
                 "stage",
@@ -1055,7 +1063,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                "`stage` narrowing",
+                "narrow by `stage`",
             ),
             (
                 "status",
@@ -1065,7 +1073,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                "`status` narrowing",
+                "narrow by `status`",
             ),
             (
                 "owner",
@@ -1075,7 +1083,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                "`owner` narrowing",
+                "narrow by `owner`",
             ),
             (
                 "title_contains",
@@ -1085,17 +1093,23 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                "`title_contains` narrowing",
+                "narrow by `title_contains`",
             ),
             (
-                "two doc types",
+                // `[changed — 2026-08-14]` Was "two doc types", expecting *"holds exactly one
+                // value"* — a refusal about the FRAGMENT's single `text` slot, which admitted one
+                // value and refused several. `doc_type` is no longer a modifier at all, so the case
+                // is now ONE value and the refusal is about the field rather than its arity. Kept as
+                // a changed case rather than a new one beside a deleted one, so the diff shows a
+                // refusal that widened and not a witness that vanished.
+                "doc_type",
                 Box::new(|a: &mut ActInvocation| {
                     a.resource_filter = Some(ResourceFilter {
-                        doc_type: vec!["task".to_string(), "session".to_string()],
+                        doc_type: vec!["task".to_string()],
                         ..Default::default()
                     })
                 }),
-                "holds exactly one value",
+                "narrow by `doc_type`",
             ),
             (
                 "a property predicate",
@@ -1121,7 +1135,7 @@ mod tests {
         ];
 
         // The denominator, stated so a shrinking case list is a failure rather than a quieter test.
-        assert_eq!(cases.len(), 9, "nine narrowings this door drops");
+        assert_eq!(cases.len(), 9, "nine narrowings a find act drops");
 
         for (label, supply, expected) in cases {
             let mut node = act("hits", ActName::FindExact, None);
@@ -1137,6 +1151,54 @@ mod tests {
                 "supplying {label} must be DECLINED, naming what it declined; got: {errs:?}"
             );
         }
+    }
+
+    /// The other half of the rule above: **the seven that moved are ADMITTED on the act they moved
+    /// to.**
+    ///
+    /// `[added — 2026-08-14]` Without this, the amendment that stopped `doc_type` from being a
+    /// modifier reads as a refusal getting stricter, and a later reader could satisfy the test above
+    /// by refusing the resource filter EVERYWHERE — including on the one act whose parameter it now
+    /// is. That would pass the whole suite and delete the feature.
+    ///
+    /// A refusal that stops firing has to be shown to have stopped for the right reason, and the
+    /// right reason here is that the narrowing has a home rather than that it was dropped.
+    #[test]
+    fn the_narrowings_a_find_act_refuses_are_admitted_on_find_resources_with() {
+        let mut node = act("sel", ActName::FindResourcesWith, None);
+        if let StageNode::Act(a) = &mut node {
+            // Every field at once, including a MULTI-VALUE doc_type — the case the find fragments
+            // called inexpressible, and the capability this act was built to add.
+            a.resource_filter = Some(ResourceFilter {
+                doc_type: vec!["task".to_string(), "session".to_string()],
+                tags: vec!["ci".to_string()],
+                facets: vec![FacetPredicate {
+                    key: "domain".to_string(),
+                    value: "search".to_string(),
+                }],
+                stage: Some("in-progress".to_string()),
+                status: Some("active".to_string()),
+                owner: Some("@someone".to_string()),
+                title_contains: Some("door".to_string()),
+            });
+        }
+        // Returned nowhere: a selection orders nothing, so asking for its rows is
+        // `StageNotReturnable`. This plan is about what the FILTER does, so it returns no stage —
+        // which `NoReturns` would refuse, so the selection is piped into a find act that IS
+        // returnable, which is also the shape a caller would really write.
+        let mut sink = act("hits", ActName::FindExact, None);
+        if let StageNode::Act(a) = &mut sink {
+            a.input = Some(StageInput::Upstream {
+                relation: StageRelation::Bound,
+                stage: StageName::parse("sel").unwrap(),
+            });
+        }
+        let result = validate(&plan(vec![node, sink], vec!["hits"]));
+        assert!(
+            result.is_ok(),
+            "every resource narrowing is a parameter of `find-resources-with`, and a plan \
+             selecting with one and piping it into a find act is legal; got: {result:?}"
+        );
     }
 
     #[test]

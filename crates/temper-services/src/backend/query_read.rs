@@ -613,19 +613,59 @@ fn extent_of(
 /// Counts are absent, never zero: `admitted`/`excluded` ride only where an act computes them for
 /// free, and none does — the fragments apply their filters inside a single scan and do not count
 /// what they dropped. Requiring them would reintroduce the second query `Extent` exists to avoid.
+/// `[widened — 2026-08-14]` **This reported `doc_type` and nothing else, because `doc_type` was the
+/// only narrowing anything applied.** The other six were refused at validation, so a stage carrying
+/// one never ran and had nothing to disclose. `find-resources-with` applies all seven, and a
+/// disclosure that named one of them would be worse than none: a caller reading
+/// `narrowed_by: [doc_type]` on a stage that also narrowed by stage, owner and three tags would
+/// conclude those had not been applied.
+///
+/// **Where this surfaces is the point.** A selection stage is refused in `returns`
+/// (`StageNotReturnable`), so its `StageResult` never exists — but `stage_trace` builds a
+/// `StageTrace` for EVERY stage, returned or not, and that is where a composition's intermediate
+/// work is legible. Without this, the one act whose entire output is a narrowing would be the one
+/// act whose narrowing the trace could not describe.
+///
+/// Counts stay absent rather than zero: no fragment computes what it dropped, and requiring it would
+/// reintroduce the second query `Extent` exists to avoid.
 fn narrowed_by(node: &StageNode) -> Vec<NarrowedBy> {
     let StageNode::Act(inv) = node else {
         return vec![];
     };
-    let mut out = Vec::new();
-    if let Some(f) = &inv.resource_filter {
-        for dt in &f.doc_type {
-            out.push(NarrowedBy {
-                key: "doc_type".to_string(),
-                value: dt.clone(),
-                admitted: None,
-                excluded: None,
-            });
+    let Some(f) = &inv.resource_filter else {
+        return vec![];
+    };
+    let entry = |key: String, value: String| NarrowedBy {
+        key,
+        value,
+        admitted: None,
+        excluded: None,
+    };
+
+    // One entry PER VALUE for the repeated fields, which is the shape the incumbent `doc_type` loop
+    // already had. A comma-joined single entry would be shorter and would make `a,b` — one tag
+    // containing a comma — indistinguishable from two tags.
+    let mut out: Vec<NarrowedBy> = f
+        .doc_type
+        .iter()
+        .map(|v| entry("doc_type".to_string(), v.clone()))
+        .chain(f.tags.iter().map(|v| entry("tags".to_string(), v.clone())))
+        // The facet's own key rides in the disclosure key, so `facet:domain = search` says which
+        // facet was narrowed on rather than just that one was.
+        .chain(
+            f.facets
+                .iter()
+                .map(|p| entry(format!("facet:{}", p.key), p.value.clone())),
+        )
+        .collect();
+    for (key, value) in [
+        ("stage", f.stage.as_ref()),
+        ("status", f.status.as_ref()),
+        ("owner", f.owner.as_ref()),
+        ("title_contains", f.title_contains.as_ref()),
+    ] {
+        if let Some(v) = value {
+            out.push(entry(key.to_string(), v.clone()));
         }
     }
     out
@@ -1262,27 +1302,69 @@ mod tests {
         ));
     }
 
+    /// `[moved to the selection act — 2026-08-14]` This built the filter on a `find-exact` stage,
+    /// which no longer validates: a resource filter on any act but `find-resources-with` is refused
+    /// rather than applied. The property is unchanged and so is the assertion — an echoed narrowing
+    /// carries no count, because no fragment computes what it dropped and a zero would be a number
+    /// nobody measured.
+    ///
+    /// It also now covers the WHOLE filter rather than `doc_type` alone, which is the half that was
+    /// untestable before: with six of the seven fields refused, a `narrowed_by` that reported only
+    /// `doc_type` was indistinguishable from one that reported everything it was given.
     #[test]
     fn a_filter_is_echoed_back_without_counts_it_never_measured() {
-        let mut node = act_node("hits", ActName::FindExact, None);
+        let mut node = act_node("sel", ActName::FindResourcesWith, None);
         if let StageNode::Act(a) = &mut node {
             a.resource_filter = Some(ResourceFilter {
-                doc_type: vec!["session".to_string()],
+                doc_type: vec!["session".to_string(), "task".to_string()],
+                tags: vec!["ci".to_string()],
+                stage: Some("in-progress".to_string()),
                 ..Default::default()
             });
         }
-        let v = plan(vec![node], vec!["hits"]);
+        // **The selection is not RETURNED, and cannot be** — it orders nothing, so its rows have no
+        // quantity to score them and `returns` refuses it as `stage_not_returnable`. Its echo lives
+        // in the TRACE, which carries every stage regardless. That is not a workaround for this
+        // test; it is the whole reason `narrowed_by` had to keep working for non-returned stages,
+        // since the one act whose entire output is a narrowing is the one act whose narrowing would
+        // otherwise be undescribable.
+        let sink = act_node(
+            "hits",
+            ActName::FindExact,
+            Some(StageInput::Upstream {
+                relation: StageRelation::Bound,
+                stage: name("sel"),
+            }),
+        );
+        let v = plan(vec![node, sink], vec!["hits"]);
         let rows = QueryRows {
             hits: vec![],
-            tallies: vec![tally("hits", 0, 0)],
+            tallies: vec![tally("sel", 0, 0), tally("hits", 0, 0)],
             refusals: vec![],
         };
         let r = assemble(&v, &rows, &Hydrated::default());
-        let n = &r.returned[&name("hits")].narrowed_by;
-        assert_eq!(n.len(), 1);
-        assert_eq!(n[0].key, "doc_type");
+        let n = &r
+            .trace
+            .stages
+            .iter()
+            .find(|t| t.stage == name("sel"))
+            .expect("the selection appears in the trace though it returns nothing")
+            .narrowed_by;
+        // One entry PER VALUE: two doc types, one tag, one stage.
+        assert_eq!(n.len(), 4, "got: {n:?}");
         assert_eq!(
-            n[0].admitted, None,
+            n.iter().filter(|e| e.key == "doc_type").count(),
+            2,
+            "a multi-value field echoes once per value, so `a,b` cannot be read as one value \
+             containing a comma"
+        );
+        assert!(n.iter().any(|e| e.key == "tags" && e.value == "ci"));
+        assert!(n
+            .iter()
+            .any(|e| e.key == "stage" && e.value == "in-progress"));
+        assert!(
+            n.iter()
+                .all(|e| e.admitted.is_none() && e.excluded.is_none()),
             "absent, never a zero it did not measure"
         );
     }

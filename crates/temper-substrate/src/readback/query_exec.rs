@@ -125,6 +125,9 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
             QueryBind::Text(t) => q.bind(t.clone()),
             QueryBind::Int(i) => q.bind(*i),
             QueryBind::Embedding(e) => q.bind(super::format_pgvector(e)),
+            QueryBind::Texts(t) => q.bind(t.clone()),
+            QueryBind::Id(u) => q.bind(*u),
+            QueryBind::Json(j) => q.bind(j.clone()),
         };
     }
 

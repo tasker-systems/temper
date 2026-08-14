@@ -79,6 +79,18 @@ pub enum QueryBind {
     /// Rendered through `format_pgvector` and bound as `$n::vector`, the same treatment `search_wide`
     /// gives its embedding.
     Embedding(Vec<f32>),
+    /// `text[]` — the selection core's `p_doc_types` and `p_tags`.
+    ///
+    /// Distinct from [`Self::Text`] rather than a comma-joined string, because a joined string is a
+    /// value the caller can put a comma inside. The list endpoint carries that hazard deliberately
+    /// (a GET's query string cannot encode sequences) and states it as a constraint on the tag
+    /// vocabulary; this transport is a JSON body and has no such excuse.
+    Texts(Vec<String>),
+    /// A single `uuid` — the selection core's `p_owner_profile`. [`Self::Uuids`] is the `uuid[]`
+    /// slots, and binding a one-element array into a scalar slot would not typecheck.
+    Id(Uuid),
+    /// `jsonb` — the selection core's `p_facets`, a list of `{key, value}` objects.
+    Json(serde_json::Value),
 }
 
 /// The placeholder function name the fallback act body targets — not any act body: the three find
@@ -105,6 +117,7 @@ const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 /// in a third place is what produced that, so the export exists to stop there being a third place.
 pub const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
 pub const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
+pub const EMIT_FIND_RESOURCES_WITH: &str = "__temper_ungated_find_resources_with";
 
 /// **Every emitted identifier is double-quoted**, here and at each CTE definition and reference.
 /// `[fixed — 2026-08-09]` `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`,
@@ -306,7 +319,7 @@ fn emit_act_body(
     let (anchor_table, anchor_id) = narrowing.anchor();
     let (anchor_table, anchor_id) = (anchor_table.to_string(), anchor_id.to_string());
     let (limit, offset) = paging_for(inv, binds);
-    let doc_type = doc_type_for(inv, binds);
+    let doc_type = doc_type_for();
 
     // The find acts narrow and never seed, so each takes the bound expression. A seed reaching one
     // is a validator/compiler disagreement rather than a caller error — `bound_expr` says so and
@@ -334,7 +347,7 @@ fn emit_act_body(
             })?;
             let qi = binds.len() + 1;
             binds.push(QueryBind::Text(q.to_string()));
-            let call = emit_ungated_core_call(&CoreCall {
+            let call = emit_ungated_core_call(&CoreCall::Find {
                 core: EMIT_FIND_EXACT,
                 doc_type: doc_type.clone(),
                 intent_args: format!("${qi}"),
@@ -348,6 +361,35 @@ fn emit_act_body(
                 "  -- act: {act} -> {EMIT_FIND_EXACT}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
                  fts_norm::double precision AS quantity\n    \
+                 FROM {call}"
+            )))
+        }
+        Some(EMIT_FIND_RESOURCES_WITH) => {
+            // **No intention, and that is not an omission to guard against.** This is the one act
+            // that asks the corpus nothing, so there is no `p_query` and no embedding to source;
+            // the shape pass's intention requirement lists three acts by name and this is not among
+            // them, so a plan omitting one here is well-formed rather than tolerated.
+            //
+            // **`NULL::double precision AS quantity`** — the stage contract is `(id, kind,
+            // quantity)` and a selection has no quantity, exactly as `refused_body` has none. That
+            // NULL is why a stage running this act is refused in `returns` as `StageNotReturnable`:
+            // the assembler scores rows by their act's `orders_by`, and this one has none, so a
+            // returned selection would come back `answered` over an empty list.
+            //
+            // No `bound_for_find` and no paging: the fragment has neither slot, because narrowing a
+            // selection by an upstream set is `CombineOp::Intersect` and a selection that truncates
+            // is a sample. An anchor IS honoured, which is why `narrowing.anchor()` is read.
+            let narrowings = selection_narrowings_for(inv, binds);
+            let call = emit_ungated_core_call(&CoreCall::Selection {
+                core: EMIT_FIND_RESOURCES_WITH,
+                narrowings,
+                anchor_table: &anchor_table,
+                anchor_id: &anchor_id,
+            });
+            Ok(emitted(format!(
+                "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
+                 SELECT resource_id AS id, 'resource'::text AS kind, \
+                 NULL::double precision AS quantity\n    \
                  FROM {call}"
             )))
         }
@@ -380,7 +422,7 @@ fn emit_act_body(
             binds.push(QueryBind::Embedding(emb.to_vec()));
             let ki = binds.len() + 1;
             binds.push(QueryBind::Int(i64::from(ANN_DRAW_K)));
-            let call = emit_ungated_core_call(&CoreCall {
+            let call = emit_ungated_core_call(&CoreCall::Find {
                 core: EMIT_FIND_WIDE,
                 doc_type: doc_type.clone(),
                 intent_args: format!("${ei}::vector, ${ki}::int"),
@@ -429,22 +471,50 @@ fn emit_act_body(
 
 /// Everything an ungated-core call needs that is NOT an authorization input.
 ///
-/// Note what is absent: there is no field for the visible-id set and none for the anchor reader.
-/// That absence is the design — see [`emit_ungated_core_call`].
-struct CoreCall<'a> {
-    core: &'a str,
-    /// The arm-specific arguments between the visible set and the narrowing slots: the bound query
-    /// text for the exact arm, the embedding and draw width for the wide one.
-    intent_args: String,
-    bound: &'a str,
-    /// The `p_doc_type` argument — a bound `$n::text`, or `NULL` where the plan declares none. The
-    /// fragment's slot holds ONE value, which is why a multi-value doc-type filter is refused at
-    /// validation rather than silently narrowed to its first element.
-    doc_type: String,
-    anchor_table: &'a str,
-    anchor_id: &'a str,
-    limit: &'a str,
-    offset: &'a str,
+/// Note what is absent from BOTH variants: there is no field for the visible-id set and none for
+/// the anchor reader. That absence is the design — see [`emit_ungated_core_call`].
+///
+/// `[widened to an enum — 2026-08-14]` It was a struct shaped for the find cores' one signature.
+/// `__temper_ungated_find_resources_with` has a different one — no intention, no bound, no paging,
+/// and eight narrowing slots — so the choice was a second emitter or a second variant.
+///
+/// **A second emitter was the wrong answer**, and not on style grounds: the whole security property
+/// of [`emit_ungated_core_call`] is that it is *the one place* `VISIBLE_IDS` and `PRINCIPAL_BIND`
+/// are written, so no caller has a wrong set to pass. Two emitters would be two places, and the
+/// second one would be the one nobody audits.
+enum CoreCall<'a> {
+    /// The find cores: an intention, a bound, one doc-type slot, and paging.
+    Find {
+        core: &'a str,
+        /// The arm-specific arguments between the visible set and the narrowing slots: the bound
+        /// query text for the exact arm, the embedding and draw width for the wide one.
+        intent_args: String,
+        bound: &'a str,
+        /// The `p_doc_type` argument — a bound `$n::text`, or `NULL` where the plan declares none.
+        /// The fragment's slot holds ONE value, which is why a multi-value doc-type filter is
+        /// refused at validation rather than silently narrowed to its first element.
+        doc_type: String,
+        anchor_table: &'a str,
+        anchor_id: &'a str,
+        limit: &'a str,
+        offset: &'a str,
+    },
+    /// The selection core: eight narrowing slots, an anchor pair, and nothing else.
+    ///
+    /// No `bound` and no paging, matching the fragment: narrowing a selection by an upstream set is
+    /// `CombineOp::Intersect`, and a selection that truncates is a sample. Both absences are the
+    /// act's declaration (`accepts_bounds: [Context, Cogmap]`, `accepts_bound_terms: []`) showing
+    /// through, so a slot appearing here later would mean the declaration moved first.
+    Selection {
+        core: &'a str,
+        /// The eight narrowing expressions in signature order, each a bound `$n::type` or a typed
+        /// `NULL`. Rendered as one string rather than nine fields because they are positional and
+        /// uniform — eight `&'a str` fields would invite a caller to mis-order them silently, which
+        /// is the failure this whole module is shaped against.
+        narrowings: String,
+        anchor_table: &'a str,
+        anchor_id: &'a str,
+    },
 }
 
 /// **The one place an ungated core is called, and the only place its authorization inputs are
@@ -471,11 +541,33 @@ struct CoreCall<'a> {
 /// surface exists against, made worse by the echo, because the echo is the evidence a caller would
 /// use to trust the answer. Every other narrowing slot the plan can declare is now refused at
 /// validation rather than dropped here.
+/// The selection core takes the same two authorization inputs in the same two roles — the verdict
+/// first, the anchor reader last — so widening this to a second variant did not widen what a caller
+/// can influence. Both arms write `VISIBLE_IDS` and `PRINCIPAL_BIND` here and nowhere else.
 fn emit_ungated_core_call(c: &CoreCall) -> String {
-    format!(
-        "{}({VISIBLE_IDS}, {}, {}, {}, {}, {PRINCIPAL_BIND}, {}, {}, {})",
-        c.core, c.intent_args, c.bound, c.anchor_table, c.anchor_id, c.doc_type, c.limit, c.offset
-    )
+    match c {
+        CoreCall::Find {
+            core,
+            intent_args,
+            bound,
+            doc_type,
+            anchor_table,
+            anchor_id,
+            limit,
+            offset,
+        } => format!(
+            "{core}({VISIBLE_IDS}, {intent_args}, {bound}, {anchor_table}, {anchor_id}, \
+             {PRINCIPAL_BIND}, {doc_type}, {limit}, {offset})"
+        ),
+        CoreCall::Selection {
+            core,
+            narrowings,
+            anchor_table,
+            anchor_id,
+        } => format!(
+            "{core}({VISIBLE_IDS}, {narrowings}, {anchor_table}, {anchor_id}, {PRINCIPAL_BIND})"
+        ),
+    }
 }
 
 /// What one stage does with the set it was handed, and therefore which slot the set belongs in.
@@ -701,26 +793,97 @@ fn paging_for(
     )
 }
 
-/// The declared doc-type narrowing, bound — or `NULL` where the plan declares none.
+/// The find fragments' `p_doc_type` slot, which is now **always `NULL`** — and that is deliberate,
+/// not a regression to the defect this function was written to fix.
 ///
-/// One value, because the fragment's slot is one `text`. A plan naming more than one is refused at
-/// validation (`FilterNotApplicable`), so reaching here with several is a validator/compiler
-/// contradiction; taking the first would answer a different question and look like a narrowing.
-fn doc_type_for(
+/// `[retired — 2026-08-14]` It used to bind a single declared `doc_type` from the invocation's
+/// resource filter. `doc_type` is no longer a modifier on a find act: narrowing by what a resource
+/// IS is the `find-resources-with` act, and `validate` refuses the filter on every other act
+/// (`capability.rs`) rather than ignoring it. So nothing can reach here with one to bind.
+///
+/// **A slot nothing binds is exactly the silhouette of the original bug**, which is why this is a
+/// documented constant rather than a hardcoded `NULL` inlined at the call site. `[fixed —
+/// 2026-08-09]` `p_doc_type` was a literal `NULL` here while `validate` ACCEPTED a `doc_type`, so a
+/// caller asking for sessions about X got anything about X and the response echoed the filter back
+/// as evidence. The difference now is the other half of that pair: the accept is gone. A `NULL`
+/// beside a refusal is honest; a `NULL` beside an accept is the defect.
+///
+/// The parameter itself stays in the fragment signatures. Removing it means new functions — DROP +
+/// CREATE — which is shape-breaking and would halt the deploy at `--additive-only`, buying nothing:
+/// the argument is already the fragment's own "no doc-type narrowing" value.
+fn doc_type_for() -> String {
+    "NULL".to_string()
+}
+
+/// The selection core's eight narrowing arguments, in signature order, each bound or a typed `NULL`.
+///
+/// **A `NULL` here narrows NOTHING**, which is the opposite polarity from the `p_visible_ids` these
+/// arguments sit beside. That asymmetry is why the visible set is not among them and cannot be:
+/// this function's whole job is turning absent narrowings into permissive `NULL`s, and one slip
+/// applying that rule to the verdict would open the corpus.
+///
+/// Order is the fragment's, and it is positional — the one real hazard in this function. It is
+/// mitigated by the arguments being typed differently enough that a transposition does not
+/// typecheck (`text[]`, `jsonb`, `text`, `uuid`), which is a property of the SIGNATURE rather than
+/// of care here, and by `the_selection_narrowings_bind_in_signature_order` asserting the rendering
+/// directly.
+fn selection_narrowings_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
 ) -> String {
-    let Some([dt]) = inv
-        .resource_filter
-        .as_ref()
-        .map(|f| f.doc_type.as_slice())
-        .filter(|d| d.len() == 1)
-    else {
-        return "NULL".to_string();
+    let f = inv.resource_filter.clone().unwrap_or_default();
+
+    // A bound `$n::type`, or a typed NULL when the caller declared nothing for this slot. The cast
+    // is never optional: an untyped NULL is ambiguous against a DEFAULTed parameter list, which is
+    // the same reason `20260808000030` casts `NULL::uuid[]` explicitly.
+    let mut slot = |bind: Option<QueryBind>, ty: &str| -> String {
+        match bind {
+            Some(b) => {
+                binds.push(b);
+                format!("${}::{ty}", binds.len())
+            }
+            None => format!("NULL::{ty}"),
+        }
     };
-    let idx = binds.len() + 1;
-    binds.push(QueryBind::Text(dt.clone()));
-    format!("${idx}::text")
+
+    let facets = (!f.facets.is_empty()).then(|| {
+        QueryBind::Json(serde_json::Value::Array(
+            f.facets
+                .iter()
+                .map(|p| serde_json::json!({ "key": p.key, "value": p.value }))
+                .collect(),
+        ))
+    });
+    // `owner` is ONE wire field and TWO fragment slots, because the incumbent resolves it two ways:
+    // `@me` becomes the caller's profile id, anything else matches a handle. Splitting it here
+    // rather than parsing inside the SQL keeps `filtered_visible_page`'s convention — and `@me` is
+    // deliberately NOT resolved in this compiler: the principal is `$1`, a bind, so a stage cannot
+    // be compiled to one profile's id and executed as another's.
+    let (owner_profile, owner_handle) = match f.owner.as_deref() {
+        Some(o) => match uuid::Uuid::parse_str(o) {
+            Ok(id) => (Some(QueryBind::Id(id)), None),
+            Err(_) => (None, Some(QueryBind::Text(o.to_string()))),
+        },
+        None => (None, None),
+    };
+
+    [
+        slot(
+            (!f.doc_type.is_empty()).then(|| QueryBind::Texts(f.doc_type.clone())),
+            "text[]",
+        ),
+        slot(
+            (!f.tags.is_empty()).then(|| QueryBind::Texts(f.tags.clone())),
+            "text[]",
+        ),
+        slot(facets, "jsonb"),
+        slot(f.stage.clone().map(QueryBind::Text), "text"),
+        slot(f.status.clone().map(QueryBind::Text), "text"),
+        slot(owner_profile, "uuid"),
+        slot(owner_handle, "text"),
+        slot(f.title_contains.clone().map(QueryBind::Text), "text"),
+    ]
+    .join(", ")
 }
 
 /// The composition threaded no QUESTION. Static, and the validator refuses it first — this is the
