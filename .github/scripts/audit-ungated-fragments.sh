@@ -95,10 +95,25 @@ PREFIX='__temper_ungated_'
 #     later; corrected here rather than left, because a stale sentence inside a security guard is
 #     read as its current reasoning. The Rust review it promised is recorded below.
 #   RESIDUE: unchanged and accepted. The prefix is source discipline, not a database permission.
+#
+# REVIEWED 2026-08-14 (`__temper_ungated_follow_from`, migration 20260814000030, the follow-from
+# provenance sibling).
+#   VERDICT: `query_follow_from` computes `resources_visible_to(p_principal)` once and hands the
+#     array down. Same shape as `query_find_resources_with`.
+#   EMITTER: **not yet emitted from Rust.** This migration ships the SQL half only; the compiler arm
+#     that calls this core lands separately and must go through `emit_ungated_core_call` like the
+#     other three. So the Rust baseline below is deliberately UNCHANGED by this entry — a reviewer
+#     seeing it move later is seeing the wiring, which is the thing worth looking at.
+#   RESIDUE: unchanged and accepted.
+#   NOTE A SECOND ID SET, which is new to this file and is the likeliest thing to get backwards:
+#     this core takes `p_bound_ids` beside `p_visible_ids`, and their NULL polarities are OPPOSITE —
+#     a NULL visible set admits NOTHING (fail-closed), a NULL bound is UNBOUNDED. They are not
+#     interchangeable and neither is a gate for the other.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
 __temper_ungated_find_wide
+__temper_ungated_follow_from
 EOF
 
 # The reviewed Rust baseline: <count> <path>, sorted by path. Every production file that NAMES an
@@ -180,6 +195,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
 20260814000010_find_resources_with.sql
+20260814000030_follow_from_provenance_sibling.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded

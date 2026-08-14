@@ -1,7 +1,16 @@
 # `follow-from`'s mechanic — the provenance-carrying walk, design
 
-**Status:** design in progress, session 2026-08-14. Ships nothing by itself. **One section is
-deliberately OPEN** (§7) and is named as a hole rather than filled — see §9.
+**Status:** design complete. Ships nothing by itself. **One section is deliberately OPEN** (§7) and
+is named as a hole rather than filled — see §9.
+
+**`[ruled — 2026-08-14, Pete]` at the start of the build session, before any code.** Four questions
+the design left to the builder, each answered where it was raised rather than in a list here:
+**depth is definitional and fixed at 2** — no `BoundTerm::Depth`, `accepts_bound_terms` stays
+`[Limit]` (§2.1, §5) · **three functions**, the incumbent re-pointed so there is one body (§10) ·
+**`p_bound_ids` ships, constraining the whole walk including intermediates**, closing the one
+genuine foreclosure (§9). Two conclusions this document previously reached are **retracted** at
+their sites rather than quietly edited: §2.1's *"fits `BoundTerm`'s existing model"* and §5's
+*"default of 2 with a ceiling of 3"*.
 
 **Task:** [follow-from's mechanic — the walk already carries provenance, so build the sibling that
 projects it](./01a00163-c0bb-7651-909f-73e3f33d8a46), under
@@ -60,11 +69,27 @@ caller configure a walk" question:
 
 | knob | decides | nature |
 |---|---|---|
-| `depth` | **membership** — a node three hops out is not in the answer at depth 2 | the caller's reach |
+| `depth` | **membership** — a node three hops out is not in the answer at depth 2 | **the definition of the neighbourhood** `[ruled — 2026-08-14, Pete]` — see §2.1 |
 | `gamma` | **rank only** — monotone in hop count, so it reorders without changing the set | the definition of the quantity |
 | `limit` | how much of the ranked set returns | already declared (`BoundTerm::Limit`, ceiling 50) `[verified — registry.rs:332-334]` |
 
-### 2.1 Depth is a parameter of the act, and the reason is structural
+### 2.1 Depth cannot be composed from outside the walk — and it is not a caller input either
+
+> **`[ruled — 2026-08-14, Pete]` Depth is DEFINITIONAL, fixed at 2. `BoundTerm` does not grow a
+> `Depth` variant and `accepts_bound_terms` stays `[Limit]`.** *"Depth 3 seems too large for a
+> neighborhood traversal of this kind"* — which is a claim about what `follow-from` **means**, not
+> about what a caller may ask for, and that puts depth in gamma's category (§2.2) rather than
+> `limit`'s. The structural argument below is unchanged and still load-bearing; what it establishes
+> is that depth cannot be **composed**, not that it must be **exposed**. An earlier draft of this
+> section concluded the second from the first, and that conclusion is retracted here.
+>
+> The SQL still carries `p_depth` — the incumbent's signature has that slot (§10's three-level
+> ruling re-points it), so the parameter exists at every level and the compiler passes the constant.
+> **Fixing it in the definition rather than in the fragment is the point**: one place says 2, and
+> `orders_by.means` is where a reader finds out.
+>
+> A caller-settable depth returns additively if it is ever wanted (§1) — a new `BoundTerm` variant is
+> additive on the wire, and clamp-and-disclose is already the mechanism.
 
 `[decided — 2026-08-14, Pete]` The tempting alternative is that depth needs no slot, because a
 composition can chain `follow-from` → `follow-from`, one hop each. It is *more* expressive in one
@@ -78,8 +103,12 @@ around.** Only ids cross a stage boundary — a downstream stage reads
 **set** with stage 2's scores recomputed from its own seeds, all at hop 1. **The decayed-path
 quantity the act declares it orders by is destroyed at the seam.**
 
-Depth is an integer, has a natural cost ceiling, and fits `BoundTerm`'s existing model with nothing
-invented.
+**So a chained walk is not a deeper walk, and that is why the constant lives inside the fragment
+rather than being assembled from outside it.** It is the same structural fact as §8.2: things that
+must happen *inside* the walk cannot be composed from outside it.
+
+What this argument does **not** establish is that the caller should choose the number. That step was
+taken in an earlier draft and is retracted above.
 
 ### 2.2 Gamma is not a caller input, and the blocker is concrete before it is philosophical
 
@@ -246,8 +275,13 @@ be trusted about.
 
 **And it confirms §2's split.** Path rows went 4,134 → 33,684 for one extra hop (×8, the `b^d`
 term); 33,684 path rows collapse to 9,434 distinct tuples, aggregated over rows the walk already
-holds. **Depth is the cost parameter; `via` is not.** On this evidence a depth **default of 2 with a
-ceiling of 3** is defensible; depth 4 would be ~8× again.
+holds. **Depth is the cost parameter; `via` is not.**
+
+> **`[ruled — 2026-08-14, Pete]` Depth is fixed at 2 and is not a caller input at all** (§2.1). This
+> section's numbers are what set the constant: the ×8 step to depth 3 is the cost, and *"depth 3
+> seems too large for a neighborhood traversal of this kind"* is the meaning. An earlier draft read
+> this table as recommending *"default 2 with a ceiling of 3"* — the measurement supports the 2 and
+> never argued for the ceiling, which was the draft's own step.
 
 ---
 
@@ -373,10 +407,24 @@ composed from outside it — which is why depth is a parameter and why edge pred
   mechanism is unbuilt carries **a declared hole, not a filed task**.
 - **The open-key resource property half has no filed task**, and this document does not file one —
   it belongs to whoever takes §7's fork.
-- **Bounded `follow-from` is untouched.** `accepts_bounds: vec![]` — *"the one genuine
-  foreclosure"* `[verified — registry.rs:328-330]`. Whether the sibling carries a `p_bound_ids` slot
-  is a live question with a real semantic problem attached (**does a bound constrain intermediate
-  nodes on the walk, or only the returned set?**), and §1 removes the pressure to pre-install it.
+- **Bounded `follow-from` is CLOSED, and the semantic half was answered rather than assumed.**
+  `[ruled — 2026-08-14, Pete]` The sibling **carries `p_bound_ids`**, and a bound **constrains the
+  whole walk — every node on it, intermediates included** — not merely the returned set.
+
+  Three things decide it, and the first is that the declaration had already said so: the incumbent
+  reads *"walk from these seeds but **stay inside this set**"* `[verified — registry.rs:328-330]`.
+  The second is that the walk already has one set-shaped constraint behaving exactly this way —
+  `adj` admits an edge only when **both** endpoints are visible `[verified — 20260711000030:37-38]`,
+  so visibility constrains intermediates and a bound that did not would be the odd one out. The
+  third rules the alternative out rather than merely preferring against it: an output-only bound
+  **is `CombineOp::Intersect`**, and a slot for it would be a second spelling of a combinator — the
+  precedent being `find-resources-with`, which was given no `p_bound_ids` for that exact reason
+  `[verified — 20260814000010 declaration]`. Only the interior reading cannot be composed from
+  outside the walk, and that is what earns it a parameter (§2.1, §8.2).
+
+  So `accepts_bounds` becomes `vec![IdKind::Resource]` and *"the one genuine foreclosure"* closes.
+  **The observable difference is worth stating once**: seed → B ∉ bound → C ∈ bound returns C under
+  the output-only reading and does not return it under this one.
 - **`survey` is out of scope** — a separate Phase 5 row, and the `sal_norm` re-allocation ruling
   must not be settled by accident here `[carried — task 01a00163]`.
 - **The MCP query tool is out of scope** — ⟨2⟩, deferred with the consolidation view.
@@ -384,14 +432,59 @@ composed from outside it — which is why depth is a parameter and why edge pred
 
 ## 10. What is not measured
 
-- **The with-`via` versus without-`via` execution delta.** A hand-written approximation of the walk
-  would measure *that query*, not the mechanic — GD-2's *"executing a claim is not the same as
-  validating it."* The comparison belongs at build time, against the real function, through
-  `pg_stat_statements` (installed by `20260814000020`, PR #675).
+- ~~**The with-`via` versus without-`via` execution delta.**~~ **`[measured at build time —
+  2026-08-14]` `via` costs +20.0% execution.** Depth 2 (the shipped constant), 25 highest-degree
+  seeds, limit 50, ungated: median **315.4 ms with `via`** against **262.9 ms without**, five
+  alternating runs per arm with ~1 ms run-to-run spread inside each — so the delta is far outside
+  noise. At depth 3 the ratio holds (4,786 ms against 3,954 ms, +21%).
+
+  **What was measured and what was not.** The real function body, not an approximation — that was
+  the objection this bullet originally recorded, and building it removed it. The *without* arm is
+  the same body with only the `via` subquery deleted, because an arm that merely projects two of the
+  three columns measures column pruning rather than the work. **Not** `pg_stat_statements` and
+  **not** prod: the extension is preloaded on Neon and absent from the local Docker image, and the
+  function is not deployed anywhere with a real corpus. The corpus is synthetic, matched to §5's
+  measured shape on edge count (4,454), p50 (2), p95 (11) and max degree (87), with a **heavier p99
+  tail (33 against prod's 20)** — so the *absolute* milliseconds are this corpus's, while the
+  *ratio* is robust because both arms run the identical corpus and seed set. A first attempt used an
+  uncapped skew, produced a single node of degree **604**, and was discarded rather than reported:
+  a hub 7× prod's heaviest dominates every timing, and being wrong in the direction that makes the
+  number look worse is not conservatism.
+
+- **`[found while measuring — 2026-08-14]` The re-pointed incumbent pays for `via` and throws it
+  away.** `search_graph_expand` projects two of the core's three columns, and the planner does
+  **not** prune the discarded one through the recursive CTE: 314.8 ms projecting two columns against
+  321.5 ms projecting three — i.e. it pays the full +20%, not a fraction of it.
+
+  **This is a consequence of §10's three-function ruling that the ruling did not name**, and it is
+  accepted rather than fixed: the incumbent's only callers are temper-substrate's own tests, so
+  nobody pays it. It is recorded because *the reason it is free is a fact about today's callers* —
+  the moment `search_graph_expand` acquires a real one, that caller inherits a 20% surcharge for a
+  column it cannot see. The alternative was letting the incumbent keep its own body, which is the
+  drift the ruling exists to prevent; paying 20% on a function nothing calls is the cheaper side of
+  that trade, and saying so is what stops a later reader mistaking it for an oversight.
 - **Anything under a visibility gate.** §5's numbers are ungated upper bounds; a real walk sees a
   subset.
-- **Whether the sibling should be two functions or three.** The find family is three because
-  `/api/search` must keep its shape `[carried — 20260808000030 header]`. `search_graph_expand` has
-  no door to preserve, so the middle level may have no job — unexamined here. What is **not** open:
-  the core takes `p_visible_ids uuid[]` and never `p_principal`, or an N-stage composition pays N
-  `Recursive Union` team closures, which the hoist exists to prevent.
+- ~~**Whether the sibling should be two functions or three.**~~ **`[ruled — 2026-08-14, Pete]`
+  THREE**, and the third level's job here is not the find family's.
+
+  There, the top level exists because `/api/search` must keep its shape
+  `[carried — 20260808000030 header]`. Here `search_graph_expand` has no door and no production
+  caller at all — *"nothing outside temper-substrate's tests calls it"*
+  `[verified — registry.rs:356, 20260806000010:104]`. Its top level earns its place for the **other**
+  reason that migration gives: **ONE BODY PER ARM.** Left alone, the incumbent is a second walk that
+  must agree with the new one and is linked to it by nothing — *"two bodies drift, and the drift is
+  silent because both keep returning plausible rows"*. Re-pointed by `CREATE OR REPLACE` at its
+  byte-identical signature, it delegates, and its existing tests start exercising the real body.
+
+  So: `search_graph_expand` → `query_follow_from` (gated) → `__temper_ungated_follow_from` (core).
+
+  **The consequence to design for, not around: the core must carry `p_gamma`,** because the
+  incumbent's signature has that slot and delegation means passing it through. That does not
+  re-open §2.2 — gamma stays fixed in the act's definition and the compiler passes the constant. A
+  parameter the fragment accepts and the act never exposes is exactly what §2.1 now also says about
+  `p_depth`.
+
+  What was **not** open, and still is not: the core takes `p_visible_ids uuid[]` and never
+  `p_principal`, or an N-stage composition pays N `Recursive Union` team closures, which the hoist
+  exists to prevent.
