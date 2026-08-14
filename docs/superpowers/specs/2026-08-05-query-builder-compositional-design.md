@@ -221,13 +221,67 @@ two of them are the point of a knowledge-graph surface and the third is a rebuil
 > **The rule that separates 2 from 3: a row may NAME its parents; it may not EMBED them.** A `via`
 > entry carries ids and edge metadata, never a hydrated resource.
 
-**The open check, stated as unverified rather than assumed.** A node reachable from two seeds via two
-edges has more than one parent, and `follow-from`'s mechanic is a `MAX(score) GROUP BY node` over the
-walk `[carried — decision 019fd2ea]` — it **collapses paths by construction**. Whether
-`search_graph_expand` can emit path provenance without a change to its body is **not verified here**,
-and beat C owns finding out. If it can, `via` is an array; first-wins would be a silent lossy pick and
-is the wrong answer. `search_graph_expand` is untouched by phase 1, so any change to it belongs to
-this phase and collides with nothing.
+**The check, answered — `[verified — 2026-08-14]`, Task 11, against the deployed body on prod
+(read-only).** The question was whether `search_graph_expand` can emit path provenance, given that
+`follow-from`'s mechanic is a `MAX(score) GROUP BY node` over the walk `[carried — decision
+019fd2ea]` and therefore **collapses paths by construction**.
+
+**The answer is STATE 2 — available with an additive change.** The collapse is real but it is a
+property of the **final projection only**; the recursion retains everything needed:
+
+```sql
+walk AS (
+  SELECT s.id AS node, 1.0::double precision AS score, 0 AS hop, ARRAY[s.id] AS path
+    FROM unnest(p_seed_ids) AS s(id) WHERE s.id IN (SELECT id FROM visible)
+  UNION ALL
+  SELECT nb.node, w.score * p_gamma * nb.weight, w.hop + 1, w.path || nb.node
+    FROM walk w JOIN LATERAL (...) nb ON true
+   WHERE w.hop < p_depth AND NOT nb.node = ANY(w.path)
+)
+SELECT node, MAX(score)::real FROM walk WHERE hop > 0 GROUP BY node;   -- ← the only collapse
+```
+
+`path` is carried through the entire walk, so per walk row the **seed** (`path[1]`), the **immediate
+parent** (`path[array_length(path,1)-1]`) and the full ancestry are all already present. **State 3 is
+ruled out: the walk needs no restructuring**, and `via` therefore does not have to be deferred.
+
+Two things do stand in the way, and both are additive:
+
+1. **Edge metadata is discarded, not absent.** The `adj` CTE projects `(a, b, weight)` only, dropping
+   `e.edge_kind` and `e.label` — both of which exist on `kb_edges` (`edge_kind` the enum, `label`
+   `text`). Carrying them widens `adj` and the walk row by two columns.
+2. **A sibling function is forced, not chosen.** `RETURNS TABLE(resource_id uuid, graph_score real)`
+   cannot be widened in place — `CREATE OR REPLACE` raises *"cannot change return type of existing
+   function / Row type defined by OUT parameters is different"* `[probed — 2026-08-14]`, and
+   `DROP`+`CREATE` is shape-breaking, which the additive-only build gate rejects on `main`. So
+   provenance ships beside the incumbent, which is also the safest shape: the deployed walk stays
+   byte-identical and no current caller can be disturbed.
+
+**`via` as an array is reachable, as this section requires.** Because every path survives in `walk`,
+aggregating the distinct `(parent, edge_kind, label)` triples per node yields the true parent set —
+so first-wins, correctly named here as a silent lossy pick, is not forced by the mechanic.
+
+**Two constraints the mechanic must carry, discovered by this spike and belonging to its spec:**
+
+- **`MAX(score)` per node must survive unchanged.** A provenance variant that ranked differently
+  from the incumbent would leave two functions disagreeing about ordering — the drift this codebase
+  has repeatedly spent migrations removing.
+- **Cost scales with PATH count, not parent count.** `walk` holds one row per path; at depth *d* and
+  branching *b* that grows ~*b^d*, while the distinct parents it collapses to stay small. Cheap on
+  the community corpus (`kb_edges` 4,852 rows over 3,738 resources, average degree ≈2.6) and the
+  term that grows on a dense graph. **Now measurable per-statement** — `pg_stat_statements` was
+  never installed until migration `20260814000020` (PR #675).
+
+**OPEN, and deliberately not settled by this spike** — whether the variant emits **one row per node
+with a `via` array** or **flat `(node, parent, …)` rows aggregated above it**. Phase 5's rule is that
+*"the spike precedes its mechanic"*, so this belongs to the mechanic's own spec. The material it
+should inherit: flat rows put the contract *"one row per node, score is the max, `via` is the parent
+set"* in two places that nothing links, and — the stronger argument — **in a composition an arm's
+output IS the next stage's input**, so path-count rows would inflate every downstream stage's
+cardinality and multiply a node's rank by how many ways it was reached. That points at the array,
+from the composability premise rather than from cost.
+
+`search_graph_expand` remains untouched by phase 1, so any change to it collides with nothing.
 
 ### `union` narrows to an intermediate
 
