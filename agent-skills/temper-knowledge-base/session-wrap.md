@@ -116,6 +116,30 @@ The preamble is what prevents that. It is short, it is imperative, and it is **n
 *Would a cold agent, given only this, avoid the specific wrong turns available to it here?* If the
 preamble does not name a wrong turn, it is probably a summary wearing a preamble's costume.
 
+### Ship it ready to paste
+
+A preamble the user has to assemble from ids scattered through a note is a preamble that does not get
+used. End the session by echoing the next session's starting invocation with the ids filled in —
+context, the task if one continues, the goal if the work sits under one, the note you just wrote, and
+the preamble itself.
+
+`session-lifecycle.md` carries the literal form, because it differs by surface: one has a
+slash-command router and the other does not. What belongs here is the judgment about **when not to
+emit one at all** — see below.
+
+### Some sessions have no next session, and should say so
+
+**Do not produce a handoff to fill the slot.** A goal closes; a task finishes with nothing succeeding
+it; an arc ends. An invocation emitted there is a claim that work remains, and the next reader will
+go looking for it.
+
+Say what closed, and that it closed. If something else is now the obvious next thing, name it as a
+**new** starting point rather than as a continuation — those are different claims, and dressing the
+first as the second loses the fact that a thread ended cleanly.
+
+The self-check is the one the closing-note rule already uses, pointed at the handoff: *am I writing
+this because there is genuinely a next step, or because a wrap feels unfinished without one?*
+
 ## Closing the loop before you stop
 
 Three things go stale the moment a session ends, and each is cheap now and expensive later:
