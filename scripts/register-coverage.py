@@ -67,6 +67,29 @@ from dataclasses import dataclass, field
 # name — a reader must be able to tell those two apart.
 CLAUSE_RE = re.compile(r"^#{2,4}\s+(~~)?`([a-z0-9]+(?:-[a-z0-9]+)+)`(~~)?")
 
+# The same clause written in prose rather than as a heading. THREE forms are in live use and none
+# of them is wrong — this was checked across four registers before the pattern was written, not
+# inferred from the one that prompted the fix:
+#
+#   - **no-cross-act-ranking** — No single ordered result ranks…        (bulleted, plain bold)
+#   - ~~**claims-carry-standing**~~ — RETIRED …                          (bulleted, withdrawn)
+#   **`subject-decides-the-door`** — an act's door set follows…          (unbulleted, backticked)
+#
+# The heading form was the only one recognised, so a register written entirely in prose form parsed
+# as ZERO clauses. The script reported that honestly — it refuses to infer coverage from absence —
+# and therefore cost nothing except never running, which is why it went unnoticed on the search-acts
+# register for six weeks. **A tool that fails closed is safe and silent, and silence reads as a pass.**
+#
+# **The trailing ` — ` is load-bearing, not decoration.** The obvious pattern — bold kebab-case
+# inside a clause section — over-matches, because `saw_clause_section` latches on and never resets,
+# so every bold hyphenated phrase in the rest of the body becomes a candidate: a decision title, a
+# term of art, and in particular the `| **clause-name** | covered |` rows of the register's own
+# declared-coverage table. Requiring the separator that *"name — statement"* has in all three forms
+# excludes every one of those, because none of them is followed by an em dash.
+CLAUSE_PROSE_RE = re.compile(
+    r"^\s*(?:[-*]\s+)?(~~)?\*\*(~~)?`?([a-z0-9]+(?:-[a-z0-9]+)+)`?(~~)?\*\*(~~)?\s+—\s"
+)
+
 # Section headings that introduce clauses. Used only to sanity-check that the
 # body looks like a register at all before reporting a clause count.
 CLAUSE_SECTION_RE = re.compile(
@@ -153,6 +176,16 @@ def parse_clauses(body: str) -> tuple[dict, bool]:
             name = match.group(2)
             if name not in clauses:
                 clauses[name] = Clause(name=name, withdrawn=bool(match.group(1)))
+            continue
+        # Gated on having seen a clause section AND on the ` — ` separator; see CLAUSE_PROSE_RE.
+        # The section flag alone is not enough — it latches and never resets.
+        if saw_clause_section:
+            prose = CLAUSE_PROSE_RE.match(line)
+            if prose:
+                name = prose.group(3)
+                if name not in clauses:
+                    withdrawn = bool(prose.group(1) or prose.group(2))
+                    clauses[name] = Clause(name=name, withdrawn=withdrawn)
     return clauses, saw_clause_section
 
 
@@ -190,6 +223,43 @@ def collect_citations(context_ref: str, goal_id: str) -> list:
                 )
             )
     return citations
+
+
+def uncited_advancing_tasks(goal_ref: str, cited_ids: set) -> list:
+    """Tasks linked to this goal by an `advances` edge that cite NOTHING.
+
+    **This is the blind spot the script shipped with, and it is the one that bit.** The population
+    for every other check comes from `collect_citations`, which filters `open_meta` for a
+    `witnesses`/`enables` block. A task carrying the edge and NEITHER key never enters that
+    population at all — so no check could fire on it, in any direction. It is not that the
+    comparison was wrong; it is that the task was invisible to the comparison.
+
+    Measured on the search-acts register `[2026-08-14]`: seventeen tasks, thirteen of them carrying
+    an `advances` edge and no citation whatever — including every build task of a seven-PR arc. The
+    register's coverage table read clean throughout, because the instrument that would have said
+    otherwise could not see them.
+
+    Sourced from `list --goal`, which reads the edge — one call, not one per task, so this costs a
+    round trip rather than N.
+    """
+    listing = run_temper(
+        ["resource", "list", "--type", "task", "--goal", goal_ref, "--with", "open-meta", "--all"]
+    )
+    if listing.get("truncated"):
+        raise SystemExit(
+            "goal task listing was truncated; refusing to report uncited tasks from a partial page"
+        )
+    uncited = []
+    for row in listing.get("rows", []):
+        if row["id"] in cited_ids:
+            continue
+        open_meta = row.get("open_meta") or {}
+        if any(isinstance(open_meta.get(k), dict) for k in ("witnesses", "enables")):
+            # Cites SOMETHING, just not this goal — that is a different finding, and
+            # `collect_citations` plus the integrity check already own it.
+            continue
+        uncited.append(row)
+    return uncited
 
 
 def advances_targets(task_id: str) -> list:
@@ -231,6 +301,8 @@ def build_report(goal_ref: str) -> dict:
             verdict = "DIVERGES"
         integrity.append((citation, verdict, targets))
 
+    uncited = uncited_advancing_tasks(goal_ref, {c.task_id for c in citations})
+
     return {
         "goal": goal,
         "clauses": clauses,
@@ -238,6 +310,7 @@ def build_report(goal_ref: str) -> dict:
         "citations": citations,
         "dangling": dangling,
         "integrity": integrity,
+        "uncited": uncited,
     }
 
 
@@ -258,7 +331,13 @@ def print_report(report: dict) -> None:
         print("  Reporting no coverage would infer coverage from absence. Nothing is claimed here.")
         return
 
-    print("── Coverage " + "─" * 68)
+    print("── Coverage, as CITED BY TASKS " + "─" * 49)
+    print("  This measures one thing: whether a task declares itself a witness. It is NOT")
+    print("  the register's own declared coverage state, which is a table in the goal body")
+    print("  and may cite evidence — tests, measurements — that no task ever pointed at.")
+    print("  The two can legitimately disagree, and where they do the register's table is")
+    print("  the record; this is the check on whether the citation habit is being kept.")
+    print()
     print("  `enables` tasks build a clause's mechanism. They are listed, and they are")
     print("  deliberately NOT counted as coverage — that would be the false positive")
     print("  `no-clause-is-uncovered-silently` forbids.")
@@ -313,6 +392,26 @@ def print_report(report: dict) -> None:
     print(f"  {clean}/{len(report['integrity'])} citations agree with their edge")
     print()
 
+    print("── Advancing but uncited " + "─" * 55)
+    print("  Tasks with an `advances` edge to this goal that declare neither `witnesses`")
+    print("  nor `enables`. Every other check above starts from the citation, so these")
+    print("  were invisible to all of them — this is the one direction the script could")
+    print("  not fail in until 2026-08-14.")
+    print()
+    if report["uncited"]:
+        for row in report["uncited"]:
+            stage = (row.get("managed_meta") or {}).get("temper-stage", "-")
+            print(f"  UNCITED  {row['id']}  ({stage})")
+            print(f"           {row.get('title', '')[:70]}")
+        print()
+        print(f"  {len(report['uncited'])} advancing task(s) cite nothing.")
+        print("  Not automatically a defect — a task may legitimately advance a goal without")
+        print("  evidencing or enabling any single clause. It IS the reason a coverage table")
+        print("  can read clean while the work that would fill it goes unrecorded.")
+    else:
+        print("  none")
+    print()
+
     print("── Closure staleness " + "─" * 59)
     print("  OUT OF DOMAIN — this check is a set difference against the project taxonomy")
     print("  (`domain` resources), which does not exist yet. A register that enumerates its")
@@ -327,7 +426,10 @@ def main() -> int:
         "--strict",
         action="store_true",
         help="exit non-zero on integrity defects (dangling citations, missing/diverging edges). "
-        "Uncovered clauses never affect the exit code — they are frequently correct.",
+        "Uncovered clauses never affect the exit code — they are frequently correct. Neither do "
+        "advancing-but-uncited tasks: a task may legitimately advance a goal without evidencing or "
+        "enabling any single clause, so they are reported and never adjudicated. Said explicitly "
+        "because --strict looks like it means 'fail on everything', and it deliberately does not.",
     )
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
     args = parser.parse_args()
@@ -356,6 +458,14 @@ def main() -> int:
                     "integrity": [
                         {"task": c.task_id, "verdict": v, "advances": t}
                         for c, v, t in report["integrity"]
+                    ],
+                    # Emitted here as well as on stdout, and the omission was nearly shipped: a
+                    # finding that appears only in the human report is invisible to whatever reads
+                    # `--json`, which would see a clean object for the exact defect this check was
+                    # added to surface.
+                    "uncited": [
+                        {"task": row["id"], "title": row.get("title", "")}
+                        for row in report["uncited"]
                     ],
                     "closure_staleness": "out-of-domain: no project taxonomy",
                 },
