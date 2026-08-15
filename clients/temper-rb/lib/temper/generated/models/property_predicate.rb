@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.  `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction so that the transitional type carries the transitional name: when the open-key resource half lands and deletes it, nothing is renamed a second time.
+  # A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an [`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the resource's own, and nothing else has to be said.  `[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the invocation is **deleted**, along with the `PropertySubject` tag it carried and the `UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is [`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing with a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields` and removing the field would route a stale caller into a deserializer 400 outside the `ErrorBody` shape — a worse answer than the one being replaced.
   class PropertyPredicate < ApiModelBase
     attr_accessor :key
 

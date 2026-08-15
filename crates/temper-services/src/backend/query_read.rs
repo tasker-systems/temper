@@ -635,7 +635,8 @@ fn extent_of(
 /// what they dropped. Requiring them would reintroduce the second query `Extent` exists to avoid.
 /// `[widened — 2026-08-14]` **This reported `doc_type` and nothing else, because `doc_type` was the
 /// only narrowing anything applied.** The other six were refused at validation, so a stage carrying
-/// one never ran and had nothing to disclose. `find-resources-with` applies all seven, and a
+/// one never ran and had nothing to disclose. `find-resources-with` applies all EIGHT
+/// `[widened again — 2026-08-15, the open-key slot]`, and a
 /// disclosure that named one of them would be worse than none: a caller reading
 /// `narrowed_by: [doc_type]` on a stage that also narrowed by stage, owner and three tags would
 /// conclude those had not been applied.
@@ -732,6 +733,23 @@ fn narrowed_by(node: &StageNode) -> Vec<NarrowedBy> {
                 f.facets
                     .iter()
                     .map(|p| entry(format!("facet:{}", p.key), p.value.clone())),
+            )
+            // **The open-key slot is echoed for the same reason every other field is**
+            // `[2026-08-15]`. It narrows the returned SET, so leaving it out recreates the
+            // applied-but-not-echoed defect this block was written for — and recreates it
+            // silently, because every refusal test stays green when the answer is correct and only
+            // the disclosure is missing. It is the field most exposed to that, since it is the one
+            // whose key the caller invents: a reader who cannot see `derived_from` in the trace
+            // has no way to tell a predicate that ran from one that was dropped.
+            //
+            // The value is the KEY, not the whole predicate — the same call the edge sibling
+            // makes, for the same two reasons. The operator is in the request the caller still
+            // holds, and rendering `values` would put caller-supplied JSON of arbitrary size into
+            // every response's disclosure.
+            .chain(
+                f.properties
+                    .iter()
+                    .map(|p| entry("property".to_string(), p.key.clone())),
             ),
     );
     for (key, value) in [
@@ -1456,6 +1474,10 @@ mod tests {
     /// It also now covers the WHOLE filter rather than `doc_type` alone, which is the half that was
     /// untestable before: with six of the seven fields refused, a `narrowed_by` that reported only
     /// `doc_type` was indistinguishable from one that reported everything it was given.
+    ///
+    /// `[2026-08-15]` The filter is EIGHT fields now, and the eighth is carried here for the reason
+    /// this test exists: a field applied by the fragment and absent from the echo passes every
+    /// refusal test, because the answer is correct and only the disclosure is missing.
     #[test]
     fn a_filter_is_echoed_back_without_counts_it_never_measured() {
         let mut node = act_node("sel", ActName::FindResourcesWith, None);
@@ -1464,6 +1486,14 @@ mod tests {
                 doc_type: vec!["session".to_string(), "task".to_string()],
                 tags: vec!["ci".to_string()],
                 stage: Some("in-progress".to_string()),
+                // The open-key slot `[2026-08-15]`. It is the field most exposed to the
+                // applied-but-not-echoed defect, because its key is one the CALLER invents: a
+                // reader who cannot find `derived_from` in the trace cannot tell a predicate that
+                // ran from one that was dropped.
+                properties: vec![temper_core::types::query::PropertyPredicate {
+                    key: "derived_from".to_string(),
+                    op: temper_core::types::query::PropertyOp::HasKey,
+                }],
                 ..Default::default()
             });
         }
@@ -1495,8 +1525,8 @@ mod tests {
             .find(|t| t.stage == name("sel"))
             .expect("the selection appears in the trace though it returns nothing")
             .narrowed_by;
-        // One entry PER VALUE: two doc types, one tag, one stage.
-        assert_eq!(n.len(), 4, "got: {n:?}");
+        // One entry PER VALUE: two doc types, one tag, one stage, one open-key predicate.
+        assert_eq!(n.len(), 5, "got: {n:?}");
         assert_eq!(
             n.iter().filter(|e| e.key == "doc_type").count(),
             2,
@@ -1507,6 +1537,12 @@ mod tests {
         assert!(n
             .iter()
             .any(|e| e.key == "stage" && e.value == "in-progress"));
+        // The KEY is the value, matching the edge sibling: the operator is in the request the
+        // caller still holds, and echoing `values` would put caller-supplied JSON of arbitrary
+        // size into every response's disclosure.
+        assert!(n
+            .iter()
+            .any(|e| e.key == "property" && e.value == "derived_from"));
         assert!(
             n.iter()
                 .all(|e| e.admitted.is_none() && e.excluded.is_none()),

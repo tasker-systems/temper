@@ -29,7 +29,7 @@ module Temper::Generated
     # This node's name, referenced by downstream stages and by `returns`.
     attr_accessor :name
 
-    # Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An unknown subject or an empty key/value is refused statically (spec §12).  # Every predicate here is refused, and the edge arm now says where to go instead  `[2026-08-15]` The edge half has a container: [`super::filter::EdgeFilter::properties`]. A predicate arriving here with `subject: edge` is refused with a **redirect** naming it, rather than the flat \"this door does not yet apply property predicates\" every arm used to get.  The `resource` arm keeps that flat refusal, because it is still true — the open-key resource half is task `01a00502-a774-7001-b5b2-0ce462158f1c`, and **67 of the 70 live property keys remain unreachable by any narrowing on any act** `[measured on prod — 2026-08-14]`.  **This field is scheduled for deletion, with [`super::filter::PropertySubject`], by that task.** It survives so a stale caller reaches a named refusal; see [`SubjectedPropertyPredicate`] for why deleting it early would answer worse.
+    # # A tombstone  Every predicate here is refused, and the refusal says where the capability went.  **Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first heading LINE as the schema `title` and the remainder as `description`, so a heading that wraps ships a truncated sentence as the title and an orphan word as the start of the description — into `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical constraint of the generator, not a style preference.  `[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s `properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a home that names its own subject, and this field has nothing left to mean. The subject tag it carried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open arm existed to raise, and the subject-tagged predicate type are all **deleted**.  **The field is not deleted with them, and that is the whole decision** `[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde short-circuits before `validate` runs — so removing the field would turn a named `FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A stale caller would go from being told where to move their predicate to being told their body is unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no `deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is ignored and the redirect still fires.  **The residue:** with the tag gone the redirect cannot name *which* container, so it names both and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as the price of deleting the type.
     attr_accessor :properties
 
     # Narrowing by what a thing IS. At most one slot applies per act; supplying the other is `RefusalReason::FilterNotApplicable`.
@@ -70,7 +70,7 @@ module Temper::Generated
         :'inputs' => :'Array<StageInput>',
         :'intention' => :'Intention',
         :'name' => :'String',
-        :'properties' => :'Array<SubjectedPropertyPredicate>',
+        :'properties' => :'Array<PropertyPredicate>',
         :'resource_filter' => :'ResourceFilter',
         :'terms' => :'Hash<String, Integer>'
       }

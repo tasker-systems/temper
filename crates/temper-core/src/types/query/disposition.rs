@@ -103,28 +103,33 @@ pub enum RefusalReason {
     /// is worth more than a deserializer's "unknown variant". It also keeps the promise that every
     /// refusal comes back at once: serde failures short-circuit before validation runs.
     SectionNotAvailable,
-    /// A filter value outside a genuinely CLOSED vocabulary. Refused rather than returned as an
-    /// empty page: a value that cannot possibly match must never be reportable as an absence.
-    ///
-    /// `[corrected — 2026-08-10, ADJ-10]` This said *"an unknown `doc_type`, `stage` or `status`"*
-    /// and was false about all three. This door raises it for exactly one thing: an unrecognized
-    /// **property subject** ([`super::filter::PropertySubject::Other`]). `stage` and `status` are
-    /// refused wholesale here as `FilterNotApplicable` and have **no closed vocabulary in Rust at
-    /// all** — both are free-form `Option<String>`, so there was never a set to be outside of.
-    /// `doc_type` IS admitted and applied, and is deliberately **not** checked.
-    ///
-    /// **The distinction the old wording collapsed** `[ruled — 2026-08-10, Pete]`: *"an unknown
-    /// value in a closed set"* and *"a string that may be perfectly legitimate but matches nothing
-    /// in the scope you asked about"* are different answers, and only the first is a refusal — the
-    /// second is an honest empty. A `doc_type` is a `kb_properties` row, not a forced commitment;
-    /// any resource may carry any value, and increasingly does over time. So this door checks the
-    /// types it natively supports and does not try to infer what the caller meant by the ones it
-    /// does not. Two facts hold that ruling in place rather than convenience: `DocType::ALL` lives
-    /// in `temper-workflow` and is unreachable from here (the dependency runs workflow → core), and
-    /// its own header records that a later task loosens the parse gate to an open tail — so
-    /// checking against it would bet against the direction of travel and buy a refusal that becomes
-    /// wrong.
-    UnknownFilterValue,
+    // `[deleted — 2026-08-15]` **`UnknownFilterValue` was here, and it is gone with the last
+    // thing that could raise it.** By the time it went it had exactly one site — an unrecognized
+    // `PropertySubject`, the tag that disambiguated a property predicate floating free on the
+    // invocation. Both halves have containers now, so the tag is deleted and no path anywhere
+    // produces this reason.
+    //
+    // **Removed rather than left in place.** A wire variant nothing can emit is a refusal a caller
+    // can write handling for and never see, and no test pins "every variant is raised somewhere",
+    // so it would have gone dead silently. Its own doc had already been corrected once
+    // (`[ADJ-10 — 2026-08-10]`) for describing three things it did not cover.
+    //
+    // **The skew consequence is BENIGN, and this note first said the opposite**
+    // `[corrected — 2026-08-15, found in review]`. It read: *"This enum is CLOSED and clients
+    // deserialize it, so a client built AFTER this change talking to a server built BEFORE it
+    // cannot parse `unknown_filter_value` … a Rust client fails the parse."*
+    //
+    // **This enum is not closed.** `Other(String)` below is `#[serde(untagged)]` and exists for
+    // precisely this case — *"a reason from a producer newer than this consumer"* — and the
+    // direction runs both ways: an OLDER producer's retired reason lands in `Other` just as a newer
+    // one does. So `unknown_filter_value` from a not-yet-deployed server deserializes cleanly,
+    // `is_known` answers `false`, and the caller degrades instead of losing the response. Asserted
+    // rather than argued, by `deleted_reason_skew` at the foot of this file.
+    //
+    // Recorded rather than quietly deleted, because the wrong version is the dangerous kind: a
+    // confident hazard claim gets cited later to justify a removal that genuinely WOULD break a
+    // parse — and the thing that makes removal safe here is a property of this type that the false
+    // note obscured.
     /// A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the
     /// reverse). Declined, never ignored.
     FilterNotApplicable,
@@ -434,6 +439,34 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RefusalReason::MissingIntention).unwrap(),
             "\"missing_intention\""
+        );
+    }
+}
+
+#[cfg(test)]
+mod deleted_reason_skew {
+    use super::RefusalReason;
+
+    /// **A deleted reason does NOT break a newer client's parse**, and this asserts it rather than
+    /// reasoning about it `[2026-08-15]`. `RefusalReason` carries `#[serde(untagged)] Other(String)`,
+    /// so `unknown_filter_value` — removed in this change — deserializes into `Other` on a client
+    /// built after the removal and talking to a server built before it. `is_known` answers `false`
+    /// and the caller degrades instead of losing the whole response.
+    ///
+    /// Written because the deletion note above first claimed the OPPOSITE — that a Rust client
+    /// would fail the parse — which was a confident, wrong statement of exactly the kind that gets
+    /// cited later to justify a removal that genuinely would break one. Found in review.
+    #[test]
+    fn a_reason_this_binary_no_longer_names_degrades_rather_than_failing_the_parse() {
+        let r: RefusalReason = serde_json::from_str("\"unknown_filter_value\"")
+            .expect("the escape hatch must absorb it");
+        assert_eq!(r, RefusalReason::Other("unknown_filter_value".to_string()));
+        assert!(!r.is_known());
+        // And it round-trips as the BARE STRING it arrived as, not as a re-tagged object — which is
+        // what makes the degradation invisible to a downstream consumer rather than corrupting.
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            "\"unknown_filter_value\""
         );
     }
 }

@@ -184,7 +184,6 @@ lib/temper/generated/models/property_op.rb
 lib/temper/generated/models/property_op_one_of.rb
 lib/temper/generated/models/property_op_one_of1.rb
 lib/temper/generated/models/property_predicate.rb
-lib/temper/generated/models/property_subject.rb
 lib/temper/generated/models/provenance_source.rb
 lib/temper/generated/models/provenance_source_one_of.rb
 lib/temper/generated/models/provenance_source_one_of1.rb
@@ -271,7 +270,6 @@ lib/temper/generated/models/stage_result.rb
 lib/temper/generated/models/stage_trace.rb
 lib/temper/generated/models/standing.rb
 lib/temper/generated/models/standing_shape.rb
-lib/temper/generated/models/subjected_property_predicate.rb
 lib/temper/generated/models/subscription.rb
 lib/temper/generated/models/subscription_override.rb
 lib/temper/generated/models/system_access_details.rb

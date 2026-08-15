@@ -264,6 +264,22 @@ sql_files_current() {
 #   caller was handed. It cannot widen the candidate set, because it appears in no FROM clause that
 #   produces one. A future edit that lifted it into the outer FROM would change that, and is the
 #   thing this entry exists to make a reviewer look for.
+# `20260815000040` widens `__temper_ungated_find_resources_with` with `p_properties`, reviewed
+# 2026-08-15 against this file's own three questions:
+#   1. VERDICT — unchanged. `p_visible_ids` is still the first argument and still the only
+#      authorization input; the added parameter is a NARROWING, whose NULL narrows nothing (the
+#      opposite polarity from the verdict, whose NULL admits nothing). Its two callers are the
+#      gated wrapper, which computes `resources_visible_to(p_principal)`, and the compiler, which
+#      passes the hoisted `__temper_vis` CTE.
+#   2. EMITTER — yes. `CoreCall::Selection` routes through `emit_ungated_core_call`, and the new
+#      `resource_properties_for` can only push a `QueryBind::Json` of the caller's predicate list;
+#      it has no way to write `VISIBLE_IDS` or `PRINCIPAL_BIND`, which that emitter still fixes.
+#   3. RESIDUE — unchanged; still source discipline rather than a database permission.
+# The predicate correlates on `rp.resource_id = r.id` where `r` is already joined to
+# `unnest(p_visible_ids)`, so it reads properties only of already-admitted rows. Witnessed rather
+# than reasoned about, since a leak would be an existence oracle over a caller-chosen key:
+# `find_resources_with.rs::a_second_principal_sees_none_of_another_principals_resources` now probes
+# both open-key spellings.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -272,6 +288,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260815000010_edge_property_predicates.sql
 20260815000020_facets_fail_closed.sql
 20260815000030_property_elements_and_tag_normalization.sql
+20260815000040_resource_property_predicates.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded

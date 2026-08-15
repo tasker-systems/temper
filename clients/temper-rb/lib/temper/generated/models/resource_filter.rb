@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized [`PropertySubject`] — and its own doc carries the ruling.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
+  # Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on this struct raises it.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
   class ResourceFilter < ApiModelBase
     # `kb_properties` where `property_key = 'doc_type'`.
     attr_accessor :doc_type
@@ -23,6 +23,9 @@ module Temper::Generated
     attr_accessor :facets
 
     attr_accessor :owner
+
+    # `kb_properties` rows owned by the resource itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of the seventy live property keys were narrowable by nothing on any act `[measured on prod — 2026-08-14]`.  **The container is the point, and it is the same container `EdgeFilter` has.** This is where a resource property predicate lives; it moved off `ActInvocation::properties`, where the same field meant different things depending on which act carried it. Given a container the subject tag has no job, which is why the tag no longer exists.  **`Contains` reads the value WHOLE — `kb_resource_properties`, never `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently narrow the operator: an array-shaped probe matches the whole value and matches *nothing* against an exploded element, and a `[]`-valued key is a row in the one and no rows in the other. The element view continues to serve `tags` and `facets`, whose semantics genuinely are AND-containment over elements.
+    attr_accessor :properties
 
     attr_accessor :stage
 
@@ -39,6 +42,7 @@ module Temper::Generated
         :'doc_type' => :'doc_type',
         :'facets' => :'facets',
         :'owner' => :'owner',
+        :'properties' => :'properties',
         :'stage' => :'stage',
         :'status' => :'status',
         :'tags' => :'tags',
@@ -62,6 +66,7 @@ module Temper::Generated
         :'doc_type' => :'Array<String>',
         :'facets' => :'Array<FacetPredicate>',
         :'owner' => :'String',
+        :'properties' => :'Array<PropertyPredicate>',
         :'stage' => :'String',
         :'status' => :'String',
         :'tags' => :'Array<String>',
@@ -111,6 +116,12 @@ module Temper::Generated
         self.owner = attributes[:'owner']
       end
 
+      if attributes.key?(:'properties')
+        if (value = attributes[:'properties']).is_a?(Array)
+          self.properties = value
+        end
+      end
+
       if attributes.key?(:'stage')
         self.stage = attributes[:'stage']
       end
@@ -153,6 +164,7 @@ module Temper::Generated
           doc_type == o.doc_type &&
           facets == o.facets &&
           owner == o.owner &&
+          properties == o.properties &&
           stage == o.stage &&
           status == o.status &&
           tags == o.tags &&
@@ -168,7 +180,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [doc_type, facets, owner, stage, status, tags, title_contains].hash
+      [doc_type, facets, owner, properties, stage, status, tags, title_contains].hash
     end
 
     # Builds the object from hash

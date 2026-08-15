@@ -115,6 +115,8 @@ struct Narrow<'a> {
     owner_handle: Option<&'a str>,
     title_contains: Option<&'a str>,
     anchor: Option<(&'a str, Uuid)>,
+    /// The open-key slot (`20260815000040`): the serialization of `Vec<PropertyPredicate>`.
+    properties: Option<serde_json::Value>,
 }
 
 /// Ids from `query_find_resources_with`, sorted so a comparison never depends on an order this act
@@ -126,7 +128,7 @@ async fn select(pool: &sqlx::PgPool, principal: ProfileId, n: Narrow<'_>) -> Vec
         None => (None, None),
     };
     let mut ids: Vec<Uuid> = sqlx::query(
-        "SELECT resource_id FROM query_find_resources_with($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+        "SELECT resource_id FROM query_find_resources_with($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
     )
     .bind(principal.uuid())
     .bind(n.doc_types)
@@ -139,6 +141,7 @@ async fn select(pool: &sqlx::PgPool, principal: ProfileId, n: Narrow<'_>) -> Vec
     .bind(n.title_contains)
     .bind(anchor_table)
     .bind(anchor_id)
+    .bind(n.properties)
     .fetch_all(pool)
     .await
     .unwrap()
@@ -1052,6 +1055,7 @@ async fn a_second_principal_sees_none_of_another_principals_resources(pool: sqlx
         &[
             prop("tags", serde_json::json!(["secret"])),
             prop("temper-stage", serde_json::json!("in-progress")),
+            prop("derived_from", serde_json::json!(["secret-spec"])),
         ],
     )
     .await;
@@ -1081,6 +1085,25 @@ async fn a_second_principal_sees_none_of_another_principals_resources(pool: sqlx
             owner_handle: Some("system"),
             ..Default::default()
         },
+        // **The open-key slot** `[2026-08-15]`. It is the spelling most worth asserting, because
+        // it is the one whose predicate reads a SECOND relation: the value lives in
+        // `kb_resource_properties`, not on `kb_resources`. The correlation is `rp.resource_id =
+        // r.id` and `r` is already joined to `unnest(p_visible_ids)`, so the predicate can only
+        // read properties of rows the verdict already admitted — but "can only" is the kind of
+        // claim `audit-ungated-fragments.sh` exists to make someone witness rather than reason
+        // about, since a leak here would be an existence oracle over an arbitrary caller-chosen
+        // key.
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["secret-spec"])
+            )])),
+            ..Default::default()
+        },
+        Narrow {
+            properties: Some(serde_json::json!([has_key("derived_from")])),
+            ..Default::default()
+        },
     ] {
         let got = select(&pool, stranger, narrow).await;
         assert!(
@@ -1101,4 +1124,490 @@ async fn a_second_principal_sees_none_of_another_principals_resources(pool: sqlx
     )
     .await;
     assert_eq!(owner_sees, vec![mine], "the fixture must be real");
+
+    // And the open-key spelling specifically, so its empty above is the visibility gate rather
+    // than a predicate that matches nothing for anyone.
+    let owner_sees_by_property = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["secret-spec"])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(owner_sees_by_property, vec![mine]);
+}
+
+// ── The open-key slot (`20260815000040`) ────────────────────────────────────────────────────────
+//
+// Sixty-seven of the seventy live property keys were unreachable by any narrowing on any act. These
+// witness the slot that reaches them, and — more importantly — the GRAIN ruling behind it: the
+// predicate reads `kb_resource_properties` (value whole), never `kb_property_elements`. Three of
+// these arms fail under the element grain and are the reason the ruling is a ruling.
+
+/// One `PropertyPredicate`, in the wire shape the fragment parses (`PropertyOp` is internally
+/// tagged inside a field named `op`).
+fn contains(key: &str, values: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "key": key, "op": { "op": "contains", "values": values } })
+}
+
+fn has_key(key: &str) -> serde_json::Value {
+    serde_json::json!({ "key": key, "op": { "op": "has_key" } })
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_key_that_is_none_of_doc_type_tags_or_facet_is_narrowable(pool: sqlx::PgPool) {
+    // Acceptance criterion 1, witnessed against a real one of the sixty-seven rather than a
+    // synthetic key: `derived_from` carries 112 array-shaped and 21 string-shaped rows on prod
+    // `[measured — 2026-08-15]`, so it exercises type-instability rather than a tidy fixture.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "openkey").await);
+
+    let derived = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Derived",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-a"]))],
+    )
+    .await;
+    let other = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Other",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-b"]))],
+    )
+    .await;
+    let none = mk(&pool, home, owner, emitter, "None", "concept", &[]).await;
+
+    let got = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["spec-a"])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(got, vec![derived]);
+    assert!(!got.contains(&other) && !got.contains(&none));
+
+    // The fixture is real and the slot NARROWS rather than merely erroring into emptiness: with no
+    // predicate at all all three come back. A superset check, not an equality — `seed_system` also
+    // seeds the L0 telos resource, which is legitimately visible here.
+    let unnarrowed = select(&pool, owner, Narrow::default()).await;
+    for id in [derived, other, none] {
+        assert!(unnarrowed.contains(&id), "the fixture must be real");
+    }
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_array_shaped_probe_matches_an_array_shaped_row(pool: sqlx::PgPool) {
+    // **This is the grain ruling's witness, and it FAILS under the element grain.**
+    // `'["a"]'::jsonb @> '["a"]'` is true; `'"a"'::jsonb @> '["a"]'` is false — so exploding the
+    // row to elements first turns this probe from "matches" into "matches nothing", silently, for
+    // the 1,228 array-shaped rows on prod `[measured — 2026-08-15]`.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "grain").await);
+
+    let arr = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Array",
+        "concept",
+        &[prop(
+            "derived_from",
+            serde_json::json!(["spec-a", "spec-b"]),
+        )],
+    )
+    .await;
+
+    let got = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!([["spec-a"]])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        got,
+        vec![arr],
+        "an array-shaped probe must match the whole value; matching nothing is the element grain"
+    );
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_scalar_probe_spans_both_populations_of_a_type_unstable_key(pool: sqlx::PgPool) {
+    // Containment is asymmetric with the row's value on the LEFT, so the SCALAR probe is the one
+    // that spans a key stored both ways — which is what makes `derived_from` answerable at all.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "unstable").await);
+
+    let as_array = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "AsArray",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-a"]))],
+    )
+    .await;
+    let as_string = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "AsString",
+        "concept",
+        &[prop("derived_from", serde_json::json!("spec-a"))],
+    )
+    .await;
+
+    let scalar = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["spec-a"])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        scalar,
+        sorted(vec![as_array, as_string]),
+        "a scalar probe must reach both shapes of a type-unstable key"
+    );
+
+    // The other half of the asymmetry, asserted rather than assumed: the ARRAY probe answers for
+    // only the array-shaped half. This is a property of the operator, not a defect — a caller who
+    // lists only the array shape silently answers for half the population.
+    let array_probe = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!([["spec-a"]])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(array_probe, vec![as_array]);
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn has_key_witnesses_an_empty_array_that_the_element_relation_cannot_see(pool: sqlx::PgPool) {
+    // **The second half of the grain ruling.** An empty array explodes to NO rows, so
+    // `kb_property_elements` cannot distinguish `derived_from: []` from no `derived_from` row at
+    // all — eleven such rows exist on prod. Reading `kb_resource_properties` keeps the row, so both
+    // operators of the closed set read ONE relation.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "haskey").await);
+
+    let empty = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "EmptyArray",
+        "concept",
+        &[prop("derived_from", serde_json::json!([]))],
+    )
+    .await;
+    let absent = mk(&pool, home, owner, emitter, "NoSuchKey", "concept", &[]).await;
+
+    let got = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([has_key("derived_from")])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        got,
+        vec![empty],
+        "has_key must see a []-valued key; seeing nothing is the element grain"
+    );
+    assert!(!got.contains(&absent));
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn predicates_and_across_the_list_and_or_within_one_predicates_values(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "andor").await);
+
+    let both = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Both",
+        "concept",
+        &[
+            prop("derived_from", serde_json::json!(["spec-a"])),
+            prop("preceded_by", serde_json::json!(["pr-1"])),
+        ],
+    )
+    .await;
+    let only_one = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "OnlyOne",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-a"]))],
+    )
+    .await;
+    let other_value = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "OtherValue",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-z"]))],
+    )
+    .await;
+
+    // AND across the list: only the resource carrying BOTH keys.
+    let anded = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([
+                contains("derived_from", serde_json::json!(["spec-a"])),
+                contains("preceded_by", serde_json::json!(["pr-1"])),
+            ])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(anded, vec![both]);
+
+    // OR within one predicate's values: either value admits.
+    let ored = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["spec-a", "spec-z"])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ored, sorted(vec![both, only_one, other_value]));
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_malformed_or_unknown_open_key_argument_narrows_to_nothing_rather_than_everything(
+    pool: sqlx::PgPool,
+) {
+    // Fail closed, in all three directions the fragment guards separately: a non-array argument, a
+    // predicate whose `values` is not an array, and an operator the closed set does not have. Each
+    // must narrow to ZERO. The dangerous failure is the other one — a guard that lets a malformed
+    // argument through as "no narrowing" returns the whole corpus while the response's own
+    // disclosure says it was filtered.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "failclosed").await);
+
+    let r = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Present",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-a"]))],
+    )
+    .await;
+
+    for (label, arg) in [
+        (
+            "not an array at all",
+            serde_json::json!({"key": "derived_from"}),
+        ),
+        ("a bare string", serde_json::json!("derived_from")),
+        (
+            "values is not an array",
+            serde_json::json!([{"key": "derived_from", "op": {"op": "contains", "values": "spec-a"}}]),
+        ),
+        (
+            "an operator the closed set lacks",
+            serde_json::json!([{"key": "derived_from", "op": {"op": "starts_with", "values": ["spec"]}}]),
+        ),
+        (
+            "no key at all",
+            serde_json::json!([{"op": {"op": "has_key"}}]),
+        ),
+    ] {
+        let got = select(
+            &pool,
+            owner,
+            Narrow {
+                properties: Some(arg),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            got.is_empty(),
+            "{label}: a malformed open-key argument must narrow to nothing, got {got:?}"
+        );
+    }
+
+    // Positive control, so the empties above are the guards and not an empty corpus — and the
+    // NULL polarity, which is the opposite one: an absent argument narrows NOTHING.
+    let unnarrowed = select(&pool, owner, Narrow::default()).await;
+    assert!(unnarrowed.contains(&r), "the fixture must be real");
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_open_key_predicate_does_not_reach_another_owner_kinds_property(pool: sqlx::PgPool) {
+    // What the VIEW is for. `kb_properties` is polymorphic and property keys are NOT unique across
+    // owner kinds, so a predicate that forgets `owner_table` matches a content block's property of
+    // the same name. `kb_resource_doc_type`'s comment records a hand-written copy dropping exactly
+    // this filter once, which `20260806000020` had to restore.
+    //
+    // No key is shared across owner tables in production today (`kb_content_blocks` carries only
+    // `block_role`, 37 rows `[measured — 2026-08-15]`), so this guards a future collision rather
+    // than a present one — which is why it must live where it cannot be forgotten.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "polymorphic").await);
+
+    let r = mk(&pool, home, owner, emitter, "Resource", "concept", &[]).await;
+
+    // A block-owned property with the SAME owner_id and the SAME key. `kb_properties.owner_id`
+    // carries no foreign key precisely because it is polymorphic, so this row is well-formed
+    // storage — it is the view's filter, not the schema, that keeps it out of the answer.
+    let ev: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY id DESC LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value,
+                                    weight, asserted_by_event_id, last_event_id)
+         VALUES (uuid_generate_v7(), 'kb_content_blocks', $1, 'derived_from', $2, 1.0, $3, $3)",
+    )
+    .bind(r)
+    .bind(serde_json::json!(["spec-a"]))
+    .bind(ev)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let got = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["spec-a"])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        got.is_empty(),
+        "a block-owned property reached a resource predicate; the owner_table filter is gone"
+    );
+
+    // The same row asserted on the RESOURCE does match — so the empty above is the owner filter
+    // and not a broken fixture.
+    sqlx::query("UPDATE kb_properties SET owner_table = 'kb_resources' WHERE owner_id = $1")
+        .bind(r)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let now_matches = select(
+        &pool,
+        owner,
+        Narrow {
+            properties: Some(serde_json::json!([contains(
+                "derived_from",
+                serde_json::json!(["spec-a"])
+            )])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(now_matches, vec![r]);
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_folded_property_is_not_narrowable(pool: sqlx::PgPool) {
+    // The view's second filter. A folded row is history, and history must not answer a live
+    // question — the same rule `kb_resources_live` makes structural for resources.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "folded").await);
+
+    let r = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Folded",
+        "concept",
+        &[prop("derived_from", serde_json::json!(["spec-a"]))],
+    )
+    .await;
+
+    let probe = || {
+        select(
+            &pool,
+            owner,
+            Narrow {
+                properties: Some(serde_json::json!([contains(
+                    "derived_from",
+                    serde_json::json!(["spec-a"])
+                )])),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(probe().await, vec![r], "the fixture must be real first");
+
+    sqlx::query("UPDATE kb_properties SET is_folded = true WHERE owner_id = $1 AND property_key = 'derived_from'")
+        .bind(r)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(probe().await.is_empty(), "a folded property still answered");
 }

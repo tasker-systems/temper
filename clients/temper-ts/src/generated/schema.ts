@@ -1782,25 +1782,36 @@ export interface components {
             /** @description This node's name, referenced by downstream stages and by `returns`. */
             name: components["schemas"]["StageName"];
             /**
-             * @description Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An
-             *     unknown subject or an empty key/value is refused statically (spec §12).
+             * @description # A tombstone
              *
-             *     # Every predicate here is refused, and the edge arm now says where to go instead
+             *     Every predicate here is refused, and the refusal says where the capability went.
              *
-             *     `[2026-08-15]` The edge half has a container:
-             *     [`super::filter::EdgeFilter::properties`]. A predicate arriving here with `subject: edge` is
-             *     refused with a **redirect** naming it, rather than the flat "this door does not yet apply
-             *     property predicates" every arm used to get.
+             *     **Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first
+             *     heading LINE as the schema `title` and the remainder as `description`, so a heading that wraps
+             *     ships a truncated sentence as the title and an orphan word as the start of the description —
+             *     into `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical
+             *     constraint of the generator, not a style preference.
              *
-             *     The `resource` arm keeps that flat refusal, because it is still true — the open-key resource
-             *     half is task `01a00502-a774-7001-b5b2-0ce462158f1c`, and **67 of the 70 live property keys
-             *     remain unreachable by any narrowing on any act** `[measured on prod — 2026-08-14]`.
+             *     `[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s
+             *     `properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a
+             *     home that names its own subject, and this field has nothing left to mean. The subject tag it
+             *     carried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open
+             *     arm existed to raise, and the subject-tagged predicate type are all **deleted**.
              *
-             *     **This field is scheduled for deletion, with [`super::filter::PropertySubject`], by that
-             *     task.** It survives so a stale caller reaches a named refusal; see
-             *     [`SubjectedPropertyPredicate`] for why deleting it early would answer worse.
+             *     **The field is not deleted with them, and that is the whole decision**
+             *     `[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde
+             *     short-circuits before `validate` runs — so removing the field would turn a named
+             *     `FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A
+             *     stale caller would go from being told where to move their predicate to being told their body
+             *     is unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no
+             *     `deny_unknown_fields`, keeps a stale `{"subject":…,"key":…,"op":…}` parsing: the tag is
+             *     ignored and the redirect still fires.
+             *
+             *     **The residue:** with the tag gone the redirect cannot name *which* container, so it names
+             *     both and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as
+             *     the price of deleting the type.
              */
-            properties?: components["schemas"]["SubjectedPropertyPredicate"][];
+            properties?: components["schemas"]["PropertyPredicate"][];
             resource_filter?: null | components["schemas"]["ResourceFilter"];
             /**
              * @description Act-level bound terms. A term this act does not admit is refused STATICALLY
@@ -2999,7 +3010,7 @@ export interface components {
              *
              *     **This is where an edge property predicate lives, and the container is the point.** It moved
              *     off [`super::ActInvocation::properties`], where the same field meant different things
-             *     depending on which act carried it — which is what a [`PropertySubject`] tag existed to
+             *     depending on which act carried it — which is what a `PropertySubject` tag existed to
              *     disambiguate. Given a container the tag has no job; the subject is the container.
              *
              *     **Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,
@@ -4267,26 +4278,21 @@ export interface components {
         };
         /**
          * @description A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an
-         *     [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.
+         *     [`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the
+         *     resource's own, and nothing else has to be said.
          *
-         *     `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on
-         *     the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction so that the
-         *     transitional type carries the transitional name: when the open-key resource half lands and
-         *     deletes it, nothing is renamed a second time.
+         *     `[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the
+         *     invocation is **deleted**, along with the `PropertySubject` tag it carried and the
+         *     `UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is
+         *     [`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing
+         *     with a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`
+         *     and removing the field would route a stale caller into a deserializer 400 outside the
+         *     `ErrorBody` shape — a worse answer than the one being replaced.
          */
         PropertyPredicate: {
             key: string;
             op: components["schemas"]["PropertyOp"];
         };
-        /**
-         * @description What a [`SubjectedPropertyPredicate`] addresses.
-         *
-         *     OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a
-         *     closed set here would be a claim the schema does not make. This is the OPPOSITE call from
-         *     [`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its
-         *     closedness is a *fact about the database*; `owner_table` mirrors nothing.
-         */
-        PropertySubject: "resource" | "edge" | string;
         /** @description Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec). */
         ProvenanceSource: {
             /** @enum {string} */
@@ -4572,7 +4578,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
         /** @description One region of a cognitive map. Produced by `survey`. */
         RegionHit: {
             /**
@@ -4840,8 +4846,9 @@ export interface components {
          *     vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three
          *     is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as
          *     `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value
-         *     for. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized
-         *     [`PropertySubject`] — and its own doc carries the ruling.
+         *     for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an
+         *     unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on
+         *     this struct raises it.
          *
          *     The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,
          *     because it can never match; *a string that may be perfectly legitimate and matches nothing in the
@@ -4853,6 +4860,28 @@ export interface components {
             /** @description `kb_properties` where `property_key = 'facet'`. */
             facets?: components["schemas"]["FacetPredicate"][];
             owner?: string | null;
+            /**
+             * @description `kb_properties` rows owned by the resource itself: open key space, closed operator set.
+             *     AND across the list, OR within a [`PropertyOp::Contains`].
+             *
+             *     **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of
+             *     the seventy live property keys were narrowable by nothing on any act
+             *     `[measured on prod — 2026-08-14]`.
+             *
+             *     **The container is the point, and it is the same container `EdgeFilter` has.** This is where
+             *     a resource property predicate lives; it moved off `ActInvocation::properties`, where the same
+             *     field meant different things depending on which act carried it. Given a container the subject
+             *     tag has no job, which is why the tag no longer exists.
+             *
+             *     **`Contains` reads the value WHOLE — `kb_resource_properties`, never
+             *     `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly
+             *     what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently
+             *     narrow the operator: an array-shaped probe matches the whole value and matches *nothing*
+             *     against an exploded element, and a `[]`-valued key is a row in the one and no rows in the
+             *     other. The element view continues to serve `tags` and `facets`, whose semantics genuinely
+             *     are AND-containment over elements.
+             */
+            properties?: components["schemas"]["PropertyPredicate"][];
             stage?: string | null;
             status?: string | null;
             /** @description `kb_properties` where `property_key = 'tags'`. AND-containment. */
@@ -5901,34 +5930,6 @@ export interface components {
              * @description Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.
              */
             r_parent: number;
-        };
-        /**
-         * @description A property predicate that names its own subject, because it sits on the invocation rather than
-         *     in a container.
-         *
-         *     The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
-         *     a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
-         *     subject" has two answers.
-         *
-         *     # This type is transitional, and every arm of it is refused today
-         *
-         *     `[decided — 2026-08-14, Pete]` Both halves get containers and this type disappears with
-         *     [`PropertySubject`]. The edge half landed on 2026-08-15 — an edge predicate now belongs in
-         *     [`EdgeFilter::properties`], and the refusal for a `subject: edge` predicate here REDIRECTS
-         *     there rather than merely declining. The resource half is task
-         *     `01a00502-a774-7001-b5b2-0ce462158f1c`, which deletes this type, [`PropertySubject`], its
-         *     `Other(String)` arm and the `UnknownFilterValue` refusal together.
-         *
-         *     It survives in the meantime **so that a stale caller gets a named refusal that says where the
-         *     capability went**. Deleting the field instead would route the same request into
-         *     `ActInvocation`'s `deny_unknown_fields`, and serde short-circuits before `validate` — so the
-         *     caller would receive a deserializer 400 outside the `ErrorBody` shape, which is a worse answer
-         *     than the one being replaced.
-         */
-        SubjectedPropertyPredicate: {
-            key: string;
-            op: components["schemas"]["PropertyOp"];
-            subject: components["schemas"]["PropertySubject"];
         };
         /**
          * @description A sync subscription — scopes which resources materialize locally.

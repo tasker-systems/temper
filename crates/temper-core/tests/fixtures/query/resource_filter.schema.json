@@ -15,10 +15,62 @@
         "value"
       ],
       "type": "object"
+    },
+    "PropertyOp": {
+      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither\noperator takes a fragment of a query language; both bind their values.",
+      "oneOf": [
+        {
+          "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+          "properties": {
+            "op": {
+              "const": "has_key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+          "properties": {
+            "op": {
+              "const": "contains",
+              "type": "string"
+            },
+            "values": {
+              "items": true,
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "values"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PropertyPredicate": {
+      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/PropertyOp"
+        }
+      },
+      "required": [
+        "key",
+        "op"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized\n[`PropertySubject`] — and its own doc carries the ruling.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
+  "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an\nunrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on\nthis struct raises it.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
   "properties": {
     "doc_type": {
       "description": "`kb_properties` where `property_key = 'doc_type'`.",
@@ -39,6 +91,13 @@
         "string",
         "null"
       ]
+    },
+    "properties": {
+      "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.",
+      "items": {
+        "$ref": "#/$defs/PropertyPredicate"
+      },
+      "type": "array"
     },
     "stage": {
       "type": [

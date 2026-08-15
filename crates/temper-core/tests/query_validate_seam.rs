@@ -113,7 +113,6 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("NoReturns", 1),
         ("NoStages", 1),
         ("UnknownAct", 1),
-        ("UnknownFilterValue", 1),
         ("UnknownReturnStage", 1),
     ]
     .into_iter()

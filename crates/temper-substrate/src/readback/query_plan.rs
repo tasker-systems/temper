@@ -410,12 +410,16 @@ fn emit_act_body(
             // No `bound_for_find` and no paging: the fragment has neither slot, because narrowing a
             // selection by an upstream set is `CombineOp::Intersect` and a selection that truncates
             // is a sample. An anchor IS honoured, which is why `narrowing.anchor()` is read.
+            // Order matters and is not cosmetic: `binds` is positional, so the narrowing binds must
+            // be pushed before the open-key one to match the `$n` indices each renders.
             let narrowings = selection_narrowings_for(inv, binds);
+            let properties = resource_properties_for(inv, binds);
             let call = emit_ungated_core_call(&CoreCall::Selection {
                 core: EMIT_FIND_RESOURCES_WITH,
                 narrowings,
                 anchor_table: &anchor_table,
                 anchor_id: &anchor_id,
+                properties,
             });
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
@@ -611,6 +615,19 @@ enum CoreCall<'a> {
         narrowings: String,
         anchor_table: &'a str,
         anchor_id: &'a str,
+        /// `ResourceFilter`'s open-key slot (`20260815000040`) — a bound `$n::jsonb` carrying the
+        /// serialized predicate list, or `NULL::jsonb`.
+        ///
+        /// **Rendered LAST, deliberately not beside `narrowings`, and the reason is a hazard not a
+        /// preference.** It is a narrowing and it belongs with them by meaning; but `p_facets` is
+        /// also `jsonb`, and two adjacent `jsonb` narrowings is the one transposition this
+        /// positional call could make without a type error. The signature puts it last so the type
+        /// mismatch that catches every other mis-ordering catches this one too.
+        ///
+        /// **The cast is never optional**, for the reason `slot` records: the widened fragment is
+        /// reached by ARITY, and an untyped NULL in the thirteenth position cannot be resolved
+        /// against a name that also has a twelve-parameter form.
+        properties: String,
     },
 }
 
@@ -675,8 +692,10 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             narrowings,
             anchor_table,
             anchor_id,
+            properties,
         } => format!(
-            "{core}({VISIBLE_IDS}, {narrowings}, {anchor_table}, {anchor_id}, {PRINCIPAL_BIND})"
+            "{core}({VISIBLE_IDS}, {narrowings}, {anchor_table}, {anchor_id}, {PRINCIPAL_BIND}, \
+             {properties})"
         ),
         // No `PRINCIPAL_BIND`: the walk reads no anchor, so it needs no `p_anchor_reader`. The
         // visible set is still the first argument, and is still written only here.
@@ -1164,6 +1183,38 @@ fn selection_narrowings_for(
         slot(f.title_contains.clone().map(QueryBind::Text), "text"),
     ]
     .join(", ")
+}
+
+/// `ResourceFilter`'s open-key slot, serialized — this builds no JSON of its own.
+///
+/// The fragment reads the operator at `q->'op'->>'op'` precisely because that is where `PropertyOp`
+/// (internally tagged, in a field called `op`) already puts it. Assembling a flatter object here
+/// would be a second spelling of the shape, free to drift with nothing linking them — which is why
+/// this is modelled on [`edge_filter_for`]'s third axis and deliberately **not** on the facets slot
+/// beside it, which does hand-build its JSON.
+///
+/// **The same `Vec<PropertyPredicate>` the edge container carries**, so `contains` serializes
+/// identically for both and the two fragments' predicates mean the same thing
+/// (`property_value @> v`, the value whole — `20260815000040`).
+///
+/// An empty list binds `NULL` rather than `[]`. Both narrow nothing in the fragment, so this is a
+/// statement-size choice rather than a semantic one — and it keeps "no predicates supplied"
+/// indistinguishable in the SQL from "no resource filter at all", which is what it is.
+fn resource_properties_for(
+    inv: &temper_core::types::query::ActInvocation,
+    binds: &mut Vec<QueryBind>,
+) -> String {
+    let Some(f) = &inv.resource_filter else {
+        return "NULL::jsonb".to_string();
+    };
+    if f.properties.is_empty() {
+        return "NULL::jsonb".to_string();
+    }
+    let idx = binds.len() + 1;
+    binds.push(QueryBind::Json(
+        serde_json::to_value(&f.properties).unwrap_or(serde_json::Value::Null),
+    ));
+    format!("${idx}::jsonb")
 }
 
 /// The composition threaded no QUESTION. Static, and the validator refuses it first — this is the

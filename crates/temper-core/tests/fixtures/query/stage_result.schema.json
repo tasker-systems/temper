@@ -435,11 +435,6 @@
           "type": "string"
         },
         {
-          "const": "unknown_filter_value",
-          "description": "A filter value outside a genuinely CLOSED vocabulary. Refused rather than returned as an\nempty page: a value that cannot possibly match must never be reportable as an absence.\n\n`[corrected — 2026-08-10, ADJ-10]` This said *\"an unknown `doc_type`, `stage` or `status`\"*\nand was false about all three. This door raises it for exactly one thing: an unrecognized\n**property subject** ([`super::filter::PropertySubject::Other`]). `stage` and `status` are\nrefused wholesale here as `FilterNotApplicable` and have **no closed vocabulary in Rust at\nall** — both are free-form `Option<String>`, so there was never a set to be outside of.\n`doc_type` IS admitted and applied, and is deliberately **not** checked.\n\n**The distinction the old wording collapsed** `[ruled — 2026-08-10, Pete]`: *\"an unknown\nvalue in a closed set\"* and *\"a string that may be perfectly legitimate but matches nothing\nin the scope you asked about\"* are different answers, and only the first is a refusal — the\nsecond is an honest empty. A `doc_type` is a `kb_properties` row, not a forced commitment;\nany resource may carry any value, and increasingly does over time. So this door checks the\ntypes it natively supports and does not try to infer what the caller meant by the ones it\ndoes not. Two facts hold that ruling in place rather than convenience: `DocType::ALL` lives\nin `temper-workflow` and is unreachable from here (the dependency runs workflow → core), and\nits own header records that a later task loosens the parse gate to an open tail — so\nchecking against it would bet against the direction of travel and buy a refusal that becomes\nwrong.",
-          "type": "string"
-        },
-        {
           "const": "filter_not_applicable",
           "description": "A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the\nreverse). Declined, never ignored.",
           "type": "string"
