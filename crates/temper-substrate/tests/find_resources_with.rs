@@ -453,6 +453,151 @@ async fn tags_are_and_containment_and_fold_case_on_both_sides(pool: sqlx::PgPool
     );
 }
 
+// ── Malformed facet arguments (`20260815000020`) ────────────────────────────────────────────────
+
+/// A malformed `p_facets` narrows to NOTHING, in every shape a caller can send.
+///
+/// **The control is half the test.** `20260814000010` normalized a non-array argument to `'[]'`,
+/// and `NOT EXISTS` over zero elements is TRUE — so every candidate row passed and a caller who
+/// asked to narrow received an UNNARROWED page. Without the unfiltered arm below, a body that
+/// returned nothing for any reason at all would pass these assertions.
+///
+/// `[measured on prod — 2026-08-15]` before the fix, over five faceted resources: 5 unfiltered,
+/// 5 malformed, 0 for a well-formed non-match.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_malformed_facet_argument_narrows_to_nothing_rather_than_everything(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "malfacet").await);
+    let hit = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Hit",
+        "concept",
+        &[prop("facet", serde_json::json!({"domain": "search"}))],
+    )
+    .await;
+
+    let control = select(&pool, owner, Narrow::default()).await;
+    assert!(
+        control.contains(&hit),
+        "control: with no facet filter the resource is returned"
+    );
+
+    // Every non-array shape a caller can put in a jsonb slot.
+    for malformed in [
+        serde_json::json!({"key": "domain", "value": "search"}), // the object, not wrapped
+        serde_json::json!("domain"),
+        serde_json::json!(42),
+        serde_json::Value::Null,
+    ] {
+        let got = select(
+            &pool,
+            owner,
+            Narrow {
+                facets: Some(malformed.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            got.is_empty(),
+            "a malformed facet filter must narrow to nothing, not to everything; \
+                 {malformed} returned {got:?}"
+        );
+    }
+
+    // And the well-formed arms still mean what they meant: the fix must not have closed the door.
+    let matched = select(
+        &pool,
+        owner,
+        Narrow {
+            facets: Some(serde_json::json!([{"key": "domain", "value": "search"}])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        matched,
+        vec![hit],
+        "a well-formed matching predicate still matches"
+    );
+
+    // An EMPTY list is not malformed. AND over zero predicates is true, so it narrows nothing —
+    // the same reading `p_edge_properties` has, and the one that would be easiest to break here.
+    let empty = select(
+        &pool,
+        owner,
+        Narrow {
+            facets: Some(serde_json::json!([])),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        empty.contains(&hit),
+        "an empty predicate list narrows nothing"
+    );
+}
+
+/// A facet predicate whose element carries no `key` narrows to nothing, and does NOT raise.
+///
+/// **This is the opposite defect from the one above, in the same slot** `[measured on prod —
+/// 2026-08-15]`: `jsonb_build_object` refuses a null key, so a well-formed ARRAY holding a
+/// key-less element raised `argument 1: key must not be null` — a caller's malformed filter
+/// arriving as a server fault.
+///
+/// It was **data-dependent**, which is why it needs a faceted resource to witness at all: the
+/// inner `EXISTS` short-circuits when a resource carries no live `facet` row, so the same argument
+/// was a 500 for a principal who could see one and a silent empty for a principal who could not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_facet_element_without_a_key_narrows_to_nothing_rather_than_raising(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "keyless").await);
+    let hit = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Hit",
+        "concept",
+        &[prop("facet", serde_json::json!({"domain": "search"}))],
+    )
+    .await;
+
+    // The control that makes the raise reachable: without a live `facet` row the inner EXISTS
+    // short-circuits and `jsonb_build_object` is never evaluated, so this test would pass against
+    // the unfixed body.
+    let control = select(&pool, owner, Narrow::default()).await;
+    assert!(
+        control.contains(&hit),
+        "control: the resource carries a live facet row"
+    );
+
+    for keyless in [
+        serde_json::json!([{"nope": 1}]),
+        serde_json::json!([{"value": "search"}]),
+        serde_json::json!([{"key": null, "value": "search"}]),
+    ] {
+        let got = select(
+            &pool,
+            owner,
+            Narrow {
+                facets: Some(keyless.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            got.is_empty(),
+            "{keyless} must narrow to nothing; returned {got:?}"
+        );
+    }
+}
+
 // ── The seventh, which has no incumbent ─────────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

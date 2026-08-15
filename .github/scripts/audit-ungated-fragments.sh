@@ -145,6 +145,21 @@ PREFIX='__temper_ungated_'
 #   `function ... is not unique` (measured, Postgres 18). The failure would land at run time on the
 #   gated wrapper and on `search_graph_expand` — i.e. a migration declaring itself additive would
 #   break the gated path while the ungated body kept working. Do not add a default here later.
+#
+# REVIEWED 2026-08-15 (`20260815000020`, p_facets fails closed, task 01a00510) — the SQL-file set
+# grows by one; the function-NAME set does not, and neither does the Rust half.
+#
+#   VERDICT: unchanged. `query_find_resources_with` still computes resources_visible_to(p_principal)
+#     once and hands the array down; this migration does not touch the wrapper.
+#   EMITTER: unchanged. `emit_ungated_core_call`'s `CoreCall::Selection` arm still writes
+#     `VISIBLE_IDS` itself.
+#   RESIDUE: unchanged and accepted.
+#
+#   BODY-ONLY, and specifically NOT a visibility change: it makes a malformed `p_facets` narrow to
+#   nothing instead of to everything, and stops a key-less element raising out of
+#   `jsonb_build_object`. Note the direction — the pre-fix behaviour returned MORE rows than asked
+#   for, never more than the caller could SEE. `p_visible_ids` was doing its job throughout; the
+#   defect was in a narrowing predicate, not in the gate.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
@@ -233,6 +248,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260814000010_find_resources_with.sql
 20260814000030_follow_from_provenance_sibling.sql
 20260815000010_edge_property_predicates.sql
+20260815000020_facets_fail_closed.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
