@@ -280,11 +280,26 @@ sql_files_current() {
 # than reasoned about, since a leak would be an existence oracle over a caller-chosen key:
 # `find_resources_with.rs::a_second_principal_sees_none_of_another_principals_resources` now probes
 # both open-key spellings.
-# `20260815000050` defines NO function at all — it is three views — and enters this set only by
-# naming both cores in its prose. That is the boring reason, and it is not the reason to look:
-# **it redefines `kb_edge_properties` and `kb_resource_properties`, which are the relations both
-# ungated predicates READ.** A view under a gate is a place a gate can be undone without the gate
-# changing, so it gets the three questions rather than a note that it is only comments.
+# `20260815000050` (owner-agnostic property view, task 01a00675) is REVIEWED BELOW AND IS NOT IN THE
+# SET — and the gap between those two facts is the entry's actual point.
+#
+# It defines no function; it redefines `kb_edge_properties` and `kb_resource_properties`, the
+# relations both ungated predicates READ. A first draft of it named both cores in prose, so it
+# appeared in this scan and was reviewed on that basis. Trimming that prose (the migration-prose
+# standing request — a migration is the worst home for an explanation) dropped it back out, and the
+# count fell 9 -> 8.
+#
+# **THE DERIVATION IS TEXTUAL, SO THIS FILE'S FIELD OF VIEW IS NARROWER THAN ITS SUBJECT.** A
+# migration can redefine a relation an ungated predicate reads and never mention `__temper_ungated_`
+# — and this guard will not fire. That is not hypothetical; it is what the trim just demonstrated,
+# and it is the failure `audit-grant-sinks.sh`'s header names: a guard's view narrowing while the
+# number moves the reassuring way. The review below is kept precisely because the entry left the
+# set: deleting it with the baseline line would erase the one record that the question was asked.
+#
+# NOT WIDENED HERE. Watching the view names too is the obvious fix and is a change to a security
+# guard's scope, which belongs in its own reviewed change rather than as a side effect of a
+# predicate-parity PR. Recorded as a recommendation, not done.
+#
 # Reviewed 2026-08-15, task 01a00675:
 #   1. VERDICT — unchanged, and the views were never part of it. `p_visible_ids` remains the sole
 #      authorization input to both cores; these relations are consulted only inside correlated
@@ -322,7 +337,6 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260815000020_facets_fail_closed.sql
 20260815000030_property_elements_and_tag_normalization.sql
 20260815000040_resource_property_predicates.sql
-20260815000050_owner_agnostic_property_view.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
