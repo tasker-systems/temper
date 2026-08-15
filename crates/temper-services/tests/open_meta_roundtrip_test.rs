@@ -245,3 +245,67 @@ async fn open_meta_add_unions_instead_of_replacing(pool: PgPool) {
         "open_meta must still REPLACE, so an empty array still clears the list"
     );
 }
+
+/// A bare-string `tags` value does not round-trip verbatim — it comes back as a one-element array.
+///
+/// **This is the user-visible residue of §7, and it is declared rather than discovered.**
+/// `[decided — 2026-08-15, Pete]` `tags` is normalized AT WRITE (migration `20260815000030`), so
+/// what `open_meta` surfaces afterwards is the STORED shape, not the submitted one. Every other
+/// open-tier key is still returned exactly as written — `open_meta_round_trips_on_create_and_update`
+/// above is what holds that, and this test is deliberately narrow so the two do not overlap.
+///
+/// The exchange is the point: a caller loses verbatim echo on one key and gains a value whose
+/// meaning is decided rather than per-reader. `open_meta.schema.json` still ACCEPTS both shapes;
+/// this rules what the bare one means, not whether it is legal.
+///
+/// `[measured on prod — 2026-08-15]` zero bare-string `tags` rows exist, so nothing in the corpus
+/// changes shape today. Stated in that direction on purpose: it is why the ruling was cheap, not
+/// evidence that it is invisible.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_bare_string_tags_value_comes_back_as_a_one_element_array(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "bare-roundtrip@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let created = backend
+        .create_resource(CreateResource {
+            idempotency_key: None,
+            slug: "zz-bare-tags".to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ bare tags".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: Some(serde_json::json!({
+                "tags": "concept design",
+                "descriptor": "left alone"
+            })),
+            goal: None,
+            origin_uri: Some("test://bare-tags".to_string()),
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("create")
+        .value;
+
+    let open = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta")
+        .open_meta
+        .expect("open_meta");
+
+    assert_eq!(
+        open.get("tags"),
+        Some(&serde_json::json!(["concept design"])),
+        "a bare string is ONE tag, and the open tier surfaces the stored shape — this is the \
+         round-trip §7 deliberately gave up"
+    );
+    assert_eq!(
+        open.get("descriptor"),
+        Some(&serde_json::json!("left alone")),
+        "and the exchange is bought for `tags` ALONE — every other key still echoes verbatim, or \
+         the normalization is wider than the one that was ruled"
+    );
+}
