@@ -870,18 +870,25 @@ async fn the_core_admits_nothing_when_handed_a_null_visible_set(pool: sqlx::PgPo
 
 // ── Regressions from the adversarial security review ────────────────────────────────────────────
 
+/// A bare-string `tags` value does not raise, and is ONE tag.
+///
+/// `[regression — 2026-08-14]` The **raise** half is the original finding and is unchanged: this
+/// once failed for EVERY caller in the deployment, not just the owner of the offending row.
+/// open_meta convention v2 declares `tags` an array of strings OR a bare string, and
+/// `temper_workflow::schema` asserts both pass validation — so a single schema-VALID resource made
+/// `jsonb_array_elements_text` fail with `cannot extract elements from a scalar` and the whole tag
+/// filter went down for everyone. Availability, not disclosure; the error names nothing.
+///
+/// `[inverted — 2026-08-15, §7 ruled by Pete]` The **split** half is reversed. This asserted that
+/// `tags: "ci auth"` was filterable by `ci`, *"because that is what the same value already means to
+/// FTS — so the two doors do not disagree about one value."* That premise was measured and is
+/// false: FTS does not split, it delegates to a tokenizer that splits differently
+/// (`to_tsvector('english','ci-auth deploy')` yields `ci`, `auth`, `ci-auth`, `deploy`;
+/// `regexp_split_to_array` yields `{ci-auth, deploy}`). The two doors disagreed either way, so the
+/// split centralized an answer that did not achieve its own goal. A bare string is now one tag,
+/// which is the reading a caller can predict from what they wrote.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_bare_string_tags_value_does_not_raise_and_splits_on_whitespace(pool: sqlx::PgPool) {
-    // `[regression — 2026-08-14]` **This raised for EVERY caller in the deployment**, not just the
-    // owner of the offending row. open_meta convention v2 declares `tags` an array of strings OR a
-    // bare string, and `temper_workflow::schema` asserts both pass validation — so a single
-    // schema-VALID resource made `jsonb_array_elements_text` fail with `cannot extract elements
-    // from a scalar`, and the whole tag filter went down for everyone. Availability, not
-    // disclosure; the error names nothing.
-    //
-    // The split is on whitespace rather than taking the string whole, because that is what the
-    // same value already means to FTS — so `tags: "ci auth"` is filterable by `ci` exactly as it
-    // is searchable by `ci`, and the two doors do not disagree about one value.
+async fn a_bare_string_tags_value_does_not_raise_and_is_one_tag(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home = AnchorRef::context(ctx(&pool, owner, "barestring").await);
@@ -907,8 +914,8 @@ async fn a_bare_string_tags_value_does_not_raise_and_splits_on_whitespace(pool: 
     )
     .await;
 
-    // The call completing at all is half the assertion — before the fix it raised here.
-    let got = select(
+    // The call completing at all is still half the assertion — before 2026-08-14 it raised here.
+    let by_fragment = select(
         &pool,
         owner,
         Narrow {
@@ -918,22 +925,109 @@ async fn a_bare_string_tags_value_does_not_raise_and_splits_on_whitespace(pool: 
     )
     .await;
     assert_eq!(
-        got,
-        sorted(vec![bare, arrayed]),
-        "a bare-string tags value must be split, not raise and not be skipped"
+        by_fragment,
+        vec![arrayed],
+        "`ci` is a fragment of the single tag `ci auth`, not a tag anyone wrote — only the \
+         array-shaped resource carries it. The call must still COMPLETE, which is the half of this \
+         assertion that has not changed"
     );
 
-    // The second token is reachable too, or the split silently kept only the first.
-    let by_second = select(
+    let by_whole = select(
         &pool,
         owner,
         Narrow {
-            tags: Some(vec!["auth".into()]),
+            tags: Some(vec!["ci auth".into()]),
             ..Default::default()
         },
     )
     .await;
-    assert_eq!(by_second, vec![bare]);
+    assert_eq!(
+        by_whole,
+        vec![bare],
+        "and the bare string is reachable as itself — a value matching neither its fragments nor \
+         itself would be unreachable, which is worse than the split it replaces"
+    );
+}
+
+/// A bare-string row that PREDATES the write-time normalization still reads as one tag.
+///
+/// **This is the only arm here that holds the READ path accountable.** Once
+/// `_property_value_normalized` (`20260815000030`) is in the projectors, nothing can store a bare
+/// string, so the read-side split becomes unreachable and therefore invisible to every behavioural
+/// test — the test above passes with or without it. This one writes the shape the projector can no
+/// longer produce, which is exactly the row a deployment predating that migration already holds.
+///
+/// `[measured on prod — 2026-08-15]` zero such rows exist. Stated in that direction on purpose:
+/// that is why the change was cheap, not evidence it was unnecessary.
+///
+/// Its sibling is `temper-services`' `a_legacy_bare_string_row_reads_as_one_tag_rather_than_its_
+/// fragments`, which asserts the same thing of `filtered_visible_page`. Two doors, one value — the
+/// disagreement §4 recorded is what both exist to prevent, now that they finally read one relation.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_legacy_bare_string_row_reads_as_one_tag_rather_than_its_fragments(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "legacybare").await);
+
+    let legacy = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Legacy",
+        "concept",
+        &[prop("tags", serde_json::json!(["placeholder"]))],
+    )
+    .await;
+
+    // Rewrite the stored value in place, leaving every key, owner and event reference exactly as
+    // the real write path built them.
+    let rewritten = sqlx::query(
+        "UPDATE kb_properties SET property_value = '\"ci auth\"'::jsonb \
+          WHERE owner_table='kb_resources' AND owner_id=$1 \
+            AND property_key='tags' AND NOT is_folded",
+    )
+    .bind(legacy)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(
+        rewritten, 1,
+        "precondition: exactly one live `tags` row to rewrite — a zero here means this probe \
+         asserted nothing"
+    );
+
+    let by_fragment = select(
+        &pool,
+        owner,
+        Narrow {
+            tags: Some(vec!["ci".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        !by_fragment.contains(&legacy),
+        "a stored bare string is ONE tag at read time too. Matching `ci` means the fragment is \
+         still splitting on whitespace. Got {by_fragment:?}"
+    );
+
+    let by_whole = select(
+        &pool,
+        owner,
+        Narrow {
+            tags: Some(vec!["ci auth".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        by_whole,
+        vec![legacy],
+        "and the legacy row must stay reachable as itself — normalization at write must not orphan \
+         the rows written before it"
+    );
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
