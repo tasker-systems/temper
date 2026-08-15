@@ -14,20 +14,17 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A property predicate: what it addresses, which key, and how.  The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters: a `follow-from` stage walks edges and produces resources, so \"the properties of this stage's subject\" has two answers.
+  # A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.  `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction on purpose: the transitional type carries the transitional name, so when the open-key resource half lands and deletes it, nothing is renamed a second time.
   class PropertyPredicate < ApiModelBase
     attr_accessor :key
 
     attr_accessor :op
 
-    attr_accessor :subject
-
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'key' => :'key',
-        :'op' => :'op',
-        :'subject' => :'subject'
+        :'op' => :'op'
       }
     end
 
@@ -45,8 +42,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'key' => :'String',
-        :'op' => :'PropertyOp',
-        :'subject' => :'PropertySubject'
+        :'op' => :'PropertyOp'
       }
     end
 
@@ -83,12 +79,6 @@ module Temper::Generated
       else
         self.op = nil
       end
-
-      if attributes.key?(:'subject')
-        self.subject = attributes[:'subject']
-      else
-        self.subject = nil
-      end
     end
 
     # Show invalid properties with the reasons. Usually used together with valid?
@@ -104,10 +94,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "op", op cannot be nil.')
       end
 
-      if @subject.nil?
-        invalid_properties.push('invalid value for "subject", subject cannot be nil.')
-      end
-
       invalid_properties
     end
 
@@ -117,7 +103,6 @@ module Temper::Generated
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @key.nil?
       return false if @op.nil?
-      return false if @subject.nil?
       true
     end
 
@@ -141,24 +126,13 @@ module Temper::Generated
       @op = op
     end
 
-    # Custom attribute writer method with validation
-    # @param [Object] subject Value to be assigned
-    def subject=(subject)
-      if subject.nil?
-        fail ArgumentError, 'subject cannot be nil'
-      end
-
-      @subject = subject
-    end
-
     # Checks equality by comparing each attribute.
     # @param [Object] Object to be compared
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
           key == o.key &&
-          op == o.op &&
-          subject == o.subject
+          op == o.op
     end
 
     # @see the `==` method
@@ -170,7 +144,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [key, op, subject].hash
+      [key, op].hash
     end
 
     # Builds the object from hash

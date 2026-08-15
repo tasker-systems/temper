@@ -18,6 +18,16 @@ use crate::types::graph::EdgeKind;
 
 /// Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
 /// kind is a closed DDL enum, the label is free text the caller actually sees on every edge.
+///
+/// # Every field here constrains a HOP, and that is why they live in a container
+///
+/// `[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A
+/// narrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge
+/// predicate has no set-shaped substitute: binding a walk by *"nodes that participate in an edge
+/// matching P"* admits a node because it has a matching edge **somewhere** and then walks it through
+/// a different, non-matching one — a different question, returning plausible rows and looking like
+/// it narrowed. So these constrain the traversal from inside it, and the only act that traverses an
+/// edge is `follow-from`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -28,6 +38,21 @@ pub struct EdgeFilter {
     pub edge_kinds: Vec<EdgeKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// `kb_properties` rows owned by the edge itself: open key space, closed operator set.
+    /// AND across the list, OR within a [`PropertyOp::Contains`].
+    ///
+    /// **This is where an edge property predicate lives, and the container is the point.** It moved
+    /// off [`super::ActInvocation::properties`], where the same field meant different things
+    /// depending on which act carried it — which is what a [`PropertySubject`] tag existed to
+    /// disambiguate. Given a container the tag has no job; the subject is the container.
+    ///
+    /// **Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,
+    /// and the storage has admitted them since the schema's first migration (`kb_properties.
+    /// owner_table` includes `'kb_edges'`, whose DDL comment has said *"§4a edges carry facets"*
+    /// throughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows
+    /// nothing today by data rather than by design.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<PropertyPredicate>,
 }
 
 /// One `kb_properties` facet predicate, at the inner-key grain the facet model uses.
@@ -91,7 +116,7 @@ pub enum FilterField {
     Edge,
 }
 
-/// What a [`PropertyPredicate`] addresses.
+/// What a [`SubjectedPropertyPredicate`] addresses.
 ///
 /// OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a
 /// closed set here would be a claim the schema does not make. This is the OPPOSITE call from
@@ -151,17 +176,50 @@ pub enum PropertyOp {
     Contains { values: Vec<serde_json::Value> },
 }
 
-/// A property predicate: what it addresses, which key, and how.
+/// A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an
+/// [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.
 ///
-/// The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
-/// a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
-/// subject" has two answers.
+/// `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on
+/// the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction on purpose:
+/// the transitional type carries the transitional name, so when the open-key resource half lands
+/// and deletes it, nothing is renamed a second time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct PropertyPredicate {
+    pub key: String,
+    pub op: PropertyOp,
+}
+
+/// A property predicate that names its own subject, because it sits on the invocation rather than
+/// in a container.
+///
+/// The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
+/// a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
+/// subject" has two answers.
+///
+/// # This type is transitional, and every arm of it is refused today
+///
+/// `[decided — 2026-08-14, Pete]` Both halves get containers and this type disappears with
+/// [`PropertySubject`]. The edge half landed on 2026-08-15 — an edge predicate now belongs in
+/// [`EdgeFilter::properties`], and the refusal for a `subject: edge` predicate here REDIRECTS
+/// there rather than merely declining. The resource half is task
+/// `01a00502-a774-7001-b5b2-0ce462158f1c`, which deletes this type, [`PropertySubject`], its
+/// `Other(String)` arm and the `UnknownFilterValue` refusal together.
+///
+/// It survives in the meantime **so that a stale caller gets a named refusal that says where the
+/// capability went**. Deleting the field instead would route the same request into
+/// `ActInvocation`'s `deny_unknown_fields`, and serde short-circuits before `validate` — so the
+/// caller would receive a deserializer 400 outside the `ErrorBody` shape, which is a worse answer
+/// than the one being replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct SubjectedPropertyPredicate {
     pub subject: PropertySubject,
     pub key: String,
     pub op: PropertyOp,
@@ -205,6 +263,7 @@ mod tests {
         let f = EdgeFilter {
             edge_kinds: vec![EdgeKind::LeadsTo],
             labels: vec!["advances".to_string()],
+            properties: vec![],
         };
         let back: EdgeFilter = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
         assert_eq!(back, f);
@@ -266,14 +325,45 @@ mod tests {
     }
 
     #[test]
+    fn an_edge_property_predicate_names_no_subject_because_its_container_is_one() {
+        // The whole argument for the container, at the type level: there is nowhere to put a
+        // subject tag, so an edge predicate cannot claim to be about a resource.
+        let f = EdgeFilter {
+            edge_kinds: vec![EdgeKind::LeadsTo],
+            labels: vec![],
+            properties: vec![PropertyPredicate {
+                key: "confidence".to_string(),
+                op: PropertyOp::Contains {
+                    values: vec![serde_json::json!("high")],
+                },
+            }],
+        };
+        let back: EdgeFilter = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+        assert_eq!(back, f);
+        // And the three axes stay separable — a property predicate is not a label by another name.
+        assert_eq!(back.properties.len(), 1);
+        assert!(back.labels.is_empty());
+    }
+
+    #[test]
+    fn an_edge_filter_with_no_properties_still_serializes_to_nothing() {
+        // `skip_serializing_if`, so adding a third axis did not start emitting an empty array on
+        // every edge filter that has none — the property `an_empty_filter_serializes_to_nothing`
+        // asserts for `ResourceFilter`, now owed by this type too.
+        let f = EdgeFilter::default();
+        assert_eq!(serde_json::to_string(&f).unwrap(), "{}");
+        assert_eq!(serde_json::from_str::<EdgeFilter>("{}").unwrap(), f);
+    }
+
+    #[test]
     fn has_key_and_contains_are_the_whole_v1_vocabulary() {
         // No operator takes a fragment of a query language. Both bind.
-        let hk = PropertyPredicate {
+        let hk = SubjectedPropertyPredicate {
             subject: PropertySubject::Resource,
             key: "keywords".to_string(),
             op: PropertyOp::HasKey,
         };
-        let ct = PropertyPredicate {
+        let ct = SubjectedPropertyPredicate {
             subject: PropertySubject::Edge,
             key: "confidence".to_string(),
             op: PropertyOp::Contains {
@@ -282,11 +372,26 @@ mod tests {
         };
         for p in [hk, ct] {
             assert_eq!(
-                serde_json::from_str::<PropertyPredicate>(&serde_json::to_string(&p).unwrap())
-                    .unwrap(),
+                serde_json::from_str::<SubjectedPropertyPredicate>(
+                    &serde_json::to_string(&p).unwrap()
+                )
+                .unwrap(),
                 p
             );
         }
+    }
+
+    #[test]
+    fn the_subjected_predicates_wire_shape_is_unchanged_by_the_rename() {
+        // The rename is a RUST name. `ActInvocation.properties` still parses exactly what it parsed
+        // before, which is what keeps a stale caller reaching the named refusal that redirects it
+        // rather than `deny_unknown_fields`'s deserializer 400.
+        // Nested, not flat: `PropertyOp` is internally tagged and sits in a field named `op`.
+        let wire = r#"{"subject":"edge","key":"confidence","op":{"op":"has_key"}}"#;
+        let p: SubjectedPropertyPredicate = serde_json::from_str(wire).expect("unchanged shape");
+        assert_eq!(p.subject, PropertySubject::Edge);
+        assert_eq!(p.key, "confidence");
+        assert_eq!(p.op, PropertyOp::HasKey);
     }
 
     #[test]
@@ -303,7 +408,7 @@ mod tests {
         // 21) is still the fixture, because it is the case that would have gone wrong under the
         // old reading — a caller listing only the array shape answers for 112 and silently misses
         // 21.
-        let p = PropertyPredicate {
+        let p = SubjectedPropertyPredicate {
             subject: PropertySubject::Resource,
             key: "derived_from".to_string(),
             op: PropertyOp::Contains {

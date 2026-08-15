@@ -14,21 +14,20 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the kind is a closed DDL enum, the label is free text the caller actually sees on every edge.  # Every field here constrains a HOP, and that is why they live in a container  `[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A narrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge predicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge matching P\"* admits a node because it has a matching edge **somewhere** and then walks it through a different, non-matching one — a different question, returning plausible rows and looking like it narrowed. So these constrain the traversal from inside it, and the only act that traverses an edge is `follow-from`.
-  class EdgeFilter < ApiModelBase
-    attr_accessor :edge_kinds
+  # A property predicate that names its own subject, because it sits on the invocation rather than in a container.  The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters: a `follow-from` stage walks edges and produces resources, so \"the properties of this stage's subject\" has two answers.  # This type is transitional, and every arm of it is refused today  `[decided — 2026-08-14, Pete]` Both halves get containers and this type disappears with [`PropertySubject`]. The edge half landed on 2026-08-15 — an edge predicate now belongs in [`EdgeFilter::properties`], and the refusal for a `subject: edge` predicate here REDIRECTS there rather than merely declining. The resource half is task `01a00502-a774-7001-b5b2-0ce462158f1c`, which deletes this type, [`PropertySubject`], its `Other(String)` arm and the `UnknownFilterValue` refusal together.  It survives in the meantime **so that a stale caller gets a named refusal that says where the capability went**. Deleting the field instead would route the same request into `ActInvocation`'s `deny_unknown_fields`, and serde short-circuits before `validate` — so the caller would receive a deserializer 400 outside the `ErrorBody` shape, which is a worse answer than the one being replaced.
+  class SubjectedPropertyPredicate < ApiModelBase
+    attr_accessor :key
 
-    attr_accessor :labels
+    attr_accessor :op
 
-    # `kb_properties` rows owned by the edge itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **This is where an edge property predicate lives, and the container is the point.** It moved off [`super::ActInvocation::properties`], where the same field meant different things depending on which act carried it — which is what a [`PropertySubject`] tag existed to disambiguate. Given a container the tag has no job; the subject is the container.  **Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`, and the storage has admitted them since the schema's first migration (`kb_properties. owner_table` includes `'kb_edges'`, whose DDL comment has said *\"§4a edges carry facets\"* throughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows nothing today by data rather than by design.
-    attr_accessor :properties
+    attr_accessor :subject
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'edge_kinds' => :'edge_kinds',
-        :'labels' => :'labels',
-        :'properties' => :'properties'
+        :'key' => :'key',
+        :'op' => :'op',
+        :'subject' => :'subject'
       }
     end
 
@@ -45,9 +44,9 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'edge_kinds' => :'Array<EdgeKind>',
-        :'labels' => :'Array<String>',
-        :'properties' => :'Array<PropertyPredicate>'
+        :'key' => :'String',
+        :'op' => :'PropertyOp',
+        :'subject' => :'PropertySubject'
       }
     end
 
@@ -61,34 +60,34 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::EdgeFilter` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::SubjectedPropertyPredicate` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::EdgeFilter`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::SubjectedPropertyPredicate`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'edge_kinds')
-        if (value = attributes[:'edge_kinds']).is_a?(Array)
-          self.edge_kinds = value
-        end
+      if attributes.key?(:'key')
+        self.key = attributes[:'key']
+      else
+        self.key = nil
       end
 
-      if attributes.key?(:'labels')
-        if (value = attributes[:'labels']).is_a?(Array)
-          self.labels = value
-        end
+      if attributes.key?(:'op')
+        self.op = attributes[:'op']
+      else
+        self.op = nil
       end
 
-      if attributes.key?(:'properties')
-        if (value = attributes[:'properties']).is_a?(Array)
-          self.properties = value
-        end
+      if attributes.key?(:'subject')
+        self.subject = attributes[:'subject']
+      else
+        self.subject = nil
       end
     end
 
@@ -97,6 +96,18 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if @key.nil?
+        invalid_properties.push('invalid value for "key", key cannot be nil.')
+      end
+
+      if @op.nil?
+        invalid_properties.push('invalid value for "op", op cannot be nil.')
+      end
+
+      if @subject.nil?
+        invalid_properties.push('invalid value for "subject", subject cannot be nil.')
+      end
+
       invalid_properties
     end
 
@@ -104,7 +115,40 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if @key.nil?
+      return false if @op.nil?
+      return false if @subject.nil?
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] key Value to be assigned
+    def key=(key)
+      if key.nil?
+        fail ArgumentError, 'key cannot be nil'
+      end
+
+      @key = key
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] op Value to be assigned
+    def op=(op)
+      if op.nil?
+        fail ArgumentError, 'op cannot be nil'
+      end
+
+      @op = op
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] subject Value to be assigned
+    def subject=(subject)
+      if subject.nil?
+        fail ArgumentError, 'subject cannot be nil'
+      end
+
+      @subject = subject
     end
 
     # Checks equality by comparing each attribute.
@@ -112,9 +156,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          edge_kinds == o.edge_kinds &&
-          labels == o.labels &&
-          properties == o.properties
+          key == o.key &&
+          op == o.op &&
+          subject == o.subject
     end
 
     # @see the `==` method
@@ -126,7 +170,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [edge_kinds, labels, properties].hash
+      [key, op, subject].hash
     end
 
     # Builds the object from hash

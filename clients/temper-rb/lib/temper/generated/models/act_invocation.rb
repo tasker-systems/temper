@@ -29,7 +29,7 @@ module Temper::Generated
     # This node's name, referenced by downstream stages and by `returns`.
     attr_accessor :name
 
-    # Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An unknown subject or an empty key/value is refused statically (spec §12).
+    # Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An unknown subject or an empty key/value is refused statically (spec §12).  # Every predicate here is refused, and the edge arm now says where to go instead  `[2026-08-15]` The edge half has a container: [`super::filter::EdgeFilter::properties`]. A predicate arriving here with `subject: edge` is refused with a **redirect** naming it, rather than the flat \"this door does not yet apply property predicates\" every arm used to get.  The `resource` arm keeps that flat refusal, because it is still true — the open-key resource half is task `01a00502-a774-7001-b5b2-0ce462158f1c`, and **67 of the 70 live property keys remain unreachable by any narrowing on any act** `[measured on prod — 2026-08-14]`.  **This field is scheduled for deletion, with [`super::filter::PropertySubject`], by that task.** It survives so a stale caller reaches a named refusal; see [`SubjectedPropertyPredicate`] for why deleting it early would answer worse.
     attr_accessor :properties
 
     # Narrowing by what a thing IS. At most one slot applies per act; supplying the other is `RefusalReason::FilterNotApplicable`.
@@ -70,7 +70,7 @@ module Temper::Generated
         :'inputs' => :'Array<StageInput>',
         :'intention' => :'Intention',
         :'name' => :'String',
-        :'properties' => :'Array<PropertyPredicate>',
+        :'properties' => :'Array<SubjectedPropertyPredicate>',
         :'resource_filter' => :'ResourceFilter',
         :'terms' => :'Hash<String, Integer>'
       }

@@ -479,7 +479,7 @@ fn emit_act_body(
             // returns zero rows, which is the honest answer to "walk from nothing" and matches what
             // the fragment does. The act's `accepts_seeds` is what makes a seed expressible; making
             // one MANDATORY is a different rule and is not one anything declares.
-            let (edge_kinds, labels) = edge_filter_for(inv, binds);
+            let (edge_kinds, labels, edge_properties) = edge_filter_for(inv, binds);
             let call = emit_ungated_core_call(&CoreCall::Walk {
                 core: EMIT_FOLLOW_FROM,
                 seeds: narrowing.seed_expr(),
@@ -487,6 +487,11 @@ fn emit_act_body(
                 gamma: WALK_GAMMA,
                 edge_kinds,
                 labels,
+                // The third axis (`20260815000010`). It constrains which edge may be TRAVERSED, so
+                // it rides into the walk beside the other two rather than filtering what came out:
+                // a node admitted for a matching edge and then walked through a non-matching one
+                // has answered a different question and looks like it narrowed.
+                edge_properties,
                 // Constrains the WHOLE walk, intermediates included — the fragment applies it
                 // where visibility is applied. NULL is unbounded here, which is the opposite
                 // polarity from the visible set beside it.
@@ -583,6 +588,13 @@ enum CoreCall<'a> {
         labels: String,
         bound: &'a str,
         limit: &'a str,
+        /// `EdgeFilter`'s third axis (`20260815000010`) — a bound `$n::jsonb` carrying the
+        /// serialized predicate list, or `NULL::jsonb`.
+        ///
+        /// **The cast is never optional**, for the reason `slot` records: the widened fragment is
+        /// reached by ARITY, and an untyped NULL in the ninth position cannot be resolved against a
+        /// name that also has an eight-parameter form.
+        edge_properties: String,
     },
     /// The selection core: eight narrowing slots, an anchor pair, and nothing else.
     ///
@@ -677,9 +689,10 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             labels,
             bound,
             limit,
+            edge_properties,
         } => format!(
             "{core}({VISIBLE_IDS}, {seeds}, {depth}, {gamma}, {edge_kinds}, {labels}, {bound}, \
-             {limit})"
+             {limit}, {edge_properties})"
         ),
     }
 }
@@ -921,17 +934,13 @@ fn narrowing_one(
 fn edge_filter_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
-) -> (String, String) {
+) -> (String, String, String) {
     let Some(f) = &inv.edge_filter else {
-        return ("NULL::text[]".to_string(), "NULL::text[]".to_string());
-    };
-    let mut bind_texts = |values: Vec<String>| {
-        if values.is_empty() {
-            return "NULL::text[]".to_string();
-        }
-        let idx = binds.len() + 1;
-        binds.push(QueryBind::Texts(values));
-        format!("${idx}::text[]")
+        return (
+            "NULL::text[]".to_string(),
+            "NULL::text[]".to_string(),
+            "NULL::jsonb".to_string(),
+        );
     };
     // The kind is a closed enum on BOTH sides — Rust's `EdgeKind` and Postgres's `edge_kind` — and
     // the fragment compares `e.edge_kind::text`, so the wire spelling is what crosses. Taken from
@@ -944,7 +953,39 @@ fn edge_filter_for(
         .map(|s| s.trim_matches('"').to_string())
         .collect();
     let labels = f.labels.clone();
-    (bind_texts(kinds), bind_texts(labels))
+    // **Scoped, so the borrow ends before the third axis binds.** The two text axes are bound
+    // first and the `$n` indices below follow them, matching the fragment's parameter order — the
+    // call is positional, so a bind emitted out of order would name the wrong slot.
+    let (kinds_expr, labels_expr) = {
+        let mut bind_texts = |values: Vec<String>| {
+            if values.is_empty() {
+                return "NULL::text[]".to_string();
+            }
+            let idx = binds.len() + 1;
+            binds.push(QueryBind::Texts(values));
+            format!("${idx}::text[]")
+        };
+        (bind_texts(kinds), bind_texts(labels))
+    };
+    // **The typed vector, serialized — this builds no JSON of its own.** The fragment reads the
+    // operator at `q->'op'->>'op'` precisely because that is where `PropertyOp` (internally tagged,
+    // in a field called `op`) already puts it. Assembling a flatter object here would be a second
+    // spelling of the shape, and the two would be free to drift with nothing linking them; the
+    // facets slot below does have one, and this is deliberately not modelled on it.
+    //
+    // An empty list binds NULL rather than `[]`. Both narrow nothing in the fragment, so this is a
+    // statement-size choice and not a semantic one — but it also keeps "no predicates supplied"
+    // indistinguishable in the SQL from "no edge filter at all", which is what it is.
+    let properties = if f.properties.is_empty() {
+        "NULL::jsonb".to_string()
+    } else {
+        let idx = binds.len() + 1;
+        binds.push(QueryBind::Json(
+            serde_json::to_value(&f.properties).unwrap_or(serde_json::Value::Null),
+        ));
+        format!("${idx}::jsonb")
+    };
+    (kinds_expr, labels_expr, properties)
 }
 
 /// How many of the ids bound at `$idx` the principal cannot use — **invisible, nonexistent and

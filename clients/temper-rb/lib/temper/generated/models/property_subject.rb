@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # What a [`PropertyPredicate`] addresses.  OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a closed set here would be a claim the schema does not make. This is the OPPOSITE call from [`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its closedness is a *fact about the database*; `owner_table` mirrors nothing.
+  # What a [`SubjectedPropertyPredicate`] addresses.  OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a closed set here would be a claim the schema does not make. This is the OPPOSITE call from [`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its closedness is a *fact about the database*; `owner_table` mirrors nothing.
   module PropertySubject
     class << self
       # List of class defined in oneOf (OpenAPI v3)

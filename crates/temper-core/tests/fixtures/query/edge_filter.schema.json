@@ -1,6 +1,60 @@
 {
+  "$defs": {
+    "PropertyOp": {
+      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither\noperator takes a fragment of a query language; both bind their values.",
+      "oneOf": [
+        {
+          "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+          "properties": {
+            "op": {
+              "const": "has_key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+          "properties": {
+            "op": {
+              "const": "contains",
+              "type": "string"
+            },
+            "values": {
+              "items": true,
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "values"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PropertyPredicate": {
+      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.\n\n`[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on\nthe invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction on purpose:\nthe transitional type carries the transitional name, so when the open-key resource half lands\nand deletes it, nothing is renamed a second time.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/PropertyOp"
+        }
+      },
+      "required": [
+        "key",
+        "op"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.",
+  "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.\n\n# Every field here constrains a HOP, and that is why they live in a container\n\n`[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A\nnarrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge\npredicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge\nmatching P\"* admits a node because it has a matching edge **somewhere** and then walks it through\na different, non-matching one — a different question, returning plausible rows and looking like\nit narrowed. So these constrain the traversal from inside it, and the only act that traverses an\nedge is `follow-from`.",
   "properties": {
     "edge_kinds": {
       "items": {
@@ -18,6 +72,13 @@
     "labels": {
       "items": {
         "type": "string"
+      },
+      "type": "array"
+    },
+    "properties": {
+      "description": "`kb_properties` rows owned by the edge itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**This is where an edge property predicate lives, and the container is the point.** It moved\noff [`super::ActInvocation::properties`], where the same field meant different things\ndepending on which act carried it — which is what a [`PropertySubject`] tag existed to\ndisambiguate. Given a container the tag has no job; the subject is the container.\n\n**Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,\nand the storage has admitted them since the schema's first migration (`kb_properties.\nowner_table` includes `'kb_edges'`, whose DDL comment has said *\"§4a edges carry facets\"*\nthroughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows\nnothing today by data rather than by design.",
+      "items": {
+        "$ref": "#/$defs/PropertyPredicate"
       },
       "type": "array"
     }

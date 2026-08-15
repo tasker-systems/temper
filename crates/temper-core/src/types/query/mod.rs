@@ -30,7 +30,7 @@ pub use disposition::{ActRefusal, RefusalReason, StageDisposition};
 pub use envelope::{ActInvocation, NarrowedBy, QueryResponse, StageResult};
 pub use filter::{
     EdgeFilter, FacetPredicate, FilterField, PropertyOp, PropertyPredicate, PropertySubject,
-    ResourceFilter,
+    ResourceFilter, SubjectedPropertyPredicate,
 };
 pub use hits::{MatchLocation, RegionHit, ResourceHit, ScoreKind, Scoring, ViaEntry};
 pub use id_set::{IdKind, IdProvenance, IdSet};
