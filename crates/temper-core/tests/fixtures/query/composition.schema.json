@@ -125,7 +125,7 @@
       "description": "A set combination over two-or-more upstream stages. Its own node kind because no act takes more\nthan one input, so modelling it as an act would lie about what an act is.",
       "properties": {
         "inputs": {
-          "description": "Two or more. One input is not a combination; validation refuses it (beat B).",
+          "description": "Two or more. One input is not a combination; validation refuses it (beat B).\n\n**For `difference` it is exactly two, and it is ORDERED**: `inputs[0]` minus `inputs[1]`.\n`[decided — 2026-08-15, Pete]`\n\nA left fold was the alternative and it is the one Postgres would have given away free —\n`A EXCEPT B EXCEPT C` already evaluates as `A − (B ∪ C)`, which is the exact shape of the\nquestion that motivated this op, with one stage fewer. It is refused for two reasons that\ncompound:\n\n- **This field would mean two different things at once.** It is a set for `union` and\n  `intersect` and would be a distinguished head plus a set for `difference` — one `Vec` with\n  two readings, in a struct that carries no marker saying which is in force.\n- **Nothing would disclose the size of what was subtracted.** With `B ∪ C` written as its\n  own union stage, that stage carries a tally and a reader can see `|B ∪ C|`. Folded into\n  the difference, the union has no stage, no tally and no name — the same\n  no-stage-no-disclosure shape [`super::disposition::RefusalReason::DuplicateInputRelation`]\n  refuses for act inputs, one node kind over.\n\nThe cost is stated rather than hidden: `A − (B ∪ C)` is three stages here and two under a\nfold.",
           "items": {
             "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
             "type": "string"
@@ -148,12 +148,21 @@
       "type": "object"
     },
     "CombineOp": {
-      "description": "A set combinator's operation. `union` and `intersect` take two-or-more inputs; no act does,\nwhich is why a combinator is its own node kind rather than an act invocation.",
-      "enum": [
-        "union",
-        "intersect"
-      ],
-      "type": "string"
+      "description": "A set combinator's operation. Every member takes two or more inputs; no act does, which is why\na combinator is its own node kind rather than an act invocation.\n\n**Two of the three are commutative and one is not, and that split is the whole of what\n[`CombineNode::inputs`] means.** For `union` and `intersect` the input list is a SET — reordering\nit cannot change the answer, and arity above two is a fold with nothing to say about order. For\n`difference` it is an ordered PAIR: `A − B ≠ B − A`, so `inputs[0]` is the minuend and\n`inputs[1]` the subtrahend, and a third input is refused rather than folded (see\n[`CombineNode::inputs`]).\n\nThe set is CLOSED and adding a member is a contract change — the same rule §12 states for\n`PropertyOp`. `union` and `intersect` were chosen as a pair; `difference` joins them because the\nquestion *\"in A, and in neither B nor C\"* is set-expressible, and `EdgeFilter`'s rule is that a\nnarrowing expressible as a set must be an act rather than a predicate. That is why this is not a\n`PropertyOp::LacksKey`, which is the tempting shape — it sits beside `HasKey` and reads\nnaturally, and it would inherit the open-key type hazard for a question that has no type\nquestion at all. `[decided — 2026-08-15, Pete]`",
+      "oneOf": [
+        {
+          "enum": [
+            "union",
+            "intersect"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "difference",
+          "description": "`inputs[0]` minus `inputs[1]`. Exactly two inputs — see [`CombineNode::inputs`].",
+          "type": "string"
+        }
+      ]
     },
     "EdgeFilter": {
       "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.\n\n# Every field here constrains a HOP, and that is why they live in a container\n\n`[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A\nnarrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge\npredicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge\nmatching P\"* admits a node because it has a matching edge **somewhere** and then walks it through\na different, non-matching one — a different question, returning plausible rows and looking like\nit narrowed. So these constrain the traversal from inside it, and the only act that traverses an\nedge is `follow-from`.",

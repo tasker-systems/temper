@@ -17,9 +17,10 @@ module Temper::Generated
   class CombineOp
     UNION = "union".freeze
     INTERSECT = "intersect".freeze
+    DIFFERENCE = "difference".freeze
 
     def self.all_vars
-      @all_vars ||= [UNION, INTERSECT].freeze
+      @all_vars ||= [UNION, INTERSECT, DIFFERENCE].freeze
     end
 
     # Builds the enum from string

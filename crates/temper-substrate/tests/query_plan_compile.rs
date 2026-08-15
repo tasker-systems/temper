@@ -1564,3 +1564,221 @@ fn the_selection_narrowings_bind_in_signature_order() {
         q.sql
     );
 }
+
+// ── Difference ─────────────────────────────────────────────────────────────────────────────────
+//
+// `[added — 2026-08-15]` `CombineOp::Difference`. The emission half is one line; the whole of the
+// design content is what happens when an arm of it REFUSED, and that is what the four tests below
+// this one are about.
+
+/// The set combination `difference` compiles to, in the order the caller declared.
+fn difference(name: &str, minuend: &str, subtrahend: &str) -> StageNode {
+    StageNode::Combine(temper_core::types::query::CombineNode {
+        name: StageName::parse(name).unwrap(),
+        op: temper_core::types::query::CombineOp::Difference,
+        inputs: vec![
+            StageName::parse(minuend).unwrap(),
+            StageName::parse(subtrahend).unwrap(),
+        ],
+    })
+}
+
+fn union(name: &str, a: &str, b: &str) -> StageNode {
+    StageNode::Combine(temper_core::types::query::CombineNode {
+        name: StageName::parse(name).unwrap(),
+        op: temper_core::types::query::CombineOp::Union,
+        inputs: vec![StageName::parse(a).unwrap(), StageName::parse(b).unwrap()],
+    })
+}
+
+/// One stage's CTE body, without the surrounding statement.
+fn cte_body(sql: &str, stage: &str) -> String {
+    sql.split(&format!("\"{stage}\" AS ("))
+        .nth(1)
+        .unwrap_or_else(|| panic!("no CTE for `{stage}` in: {sql}"))
+        .split("\n)")
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn a_difference_emits_except_with_the_minuend_first() {
+    // `EXCEPT`, not `EXCEPT ALL`: it deduplicates, exactly as the `UNION` and `INTERSECT` beside it
+    // do, so all three agree that a stage's output is a SET.
+    let v = build(
+        vec![
+            find_root("tasks", vec![Uuid::now_v7()]),
+            find_root("declared", vec![Uuid::now_v7()]),
+            difference("gap", "tasks", "declared"),
+        ],
+        vec!["tasks"],
+    );
+    let c = compile(&v, test_profile()).expect("compiles");
+    let body = cte_body(&c.sql, "gap");
+
+    assert!(body.contains("EXCEPT"), "got: {body}");
+    assert!(
+        body.find(r#"FROM "tasks""#).unwrap() < body.find(r#"FROM "declared""#).unwrap(),
+        "the minuend is emitted first, or the answer is the other question: {body}"
+    );
+    // Membership only, for the same reason `UNION` and `INTERSECT` project `(id, kind)`: `EXCEPT`
+    // compares WHOLE ROWS, so a quantity in the projection would make one resource two rows and
+    // subtract nothing at all.
+    assert!(
+        !body.contains("quantity"),
+        "a quantity in a set operation makes one resource two rows: {body}"
+    );
+}
+
+/// **The invariant that protects every other consumer of a refusal is the one that breaks here.**
+///
+/// `refused_body` emits `WHERE false`, and `CompiledQuery::refusals` states the rule it serves: *"A
+/// refused stage's CTE is an EMPTY set, so a stage bounded by it is bounded to nothing."* Empty is
+/// the conservative direction for every consumer built so far because every one of them is
+/// MONOTONE — a smaller input can only produce a smaller output.
+///
+/// `EXCEPT` is the first consumer that is not. An empty right arm subtracts nothing, so the stage
+/// returns its minuend IN FULL: the maximal answer, produced by a failure, wearing the shape of a
+/// successful one. That is precisely *"a stage that depends on a refused one answers over nothing
+/// rather than over everything"*, inverted.
+///
+/// So the difference refuses. Refuses rather than emptying, because `refusal-is-distinct-and-
+/// declared` — an empty here would read as an honest zero, and the reader would have no way to tell
+/// that nothing was ever subtracted.
+#[test]
+fn a_refused_subtrahend_refuses_the_difference_rather_than_subtracting_nothing() {
+    let v = build(
+        vec![
+            find_root("tasks", vec![Uuid::now_v7()]),
+            find_stage("declared", ActName::FindAboutAnywhere, None),
+            difference("gap", "tasks", "declared"),
+        ],
+        vec!["tasks"],
+    );
+    let c = compile(&v, test_profile()).expect("a runtime refusal does not abort the plan");
+
+    let gap = c
+        .refusals
+        .iter()
+        .find(|r| r.stage.as_ref().is_some_and(|s| s.as_str() == "gap"))
+        .unwrap_or_else(|| panic!("the difference must refuse; got {:?}", c.refusals));
+    assert_eq!(gap.reason, RefusalReason::SubtrahendRefused);
+    assert!(
+        gap.detail.contains("declared"),
+        "the refusal names the arm that failed, since the caller has to know WHICH: {}",
+        gap.detail
+    );
+
+    // And it produces nothing, so anything bounded by it is bounded to nothing — the ordinary rule,
+    // which applies again once this stage is itself the refusal.
+    let body = cte_body(&c.sql, "gap");
+    assert!(
+        body.contains("WHERE false"),
+        "a refused difference produces no rows: {body}"
+    );
+    assert!(
+        !body.contains("EXCEPT"),
+        "and does not run the subtraction at all: {body}"
+    );
+}
+
+/// The taint is TRANSITIVE, and this is the case that makes it necessary rather than tidy.
+///
+/// A refusal one hop above the subtrahend never reaches the subtrahend's own disposition: `declared`
+/// is a union, it did not refuse, and it answers with whatever its surviving arm produced. But it
+/// answers with LESS than the truth — so the difference subtracts less than it should and returns
+/// MORE than the true answer, silently. A check that looked only at the subtrahend's own refusal
+/// would pass this straight through.
+#[test]
+fn a_refusal_anywhere_above_the_subtrahend_refuses_the_difference_too() {
+    let v = build(
+        vec![
+            find_root("tasks", vec![Uuid::now_v7()]),
+            find_root("enabling", vec![Uuid::now_v7()]),
+            find_stage("witnessing", ActName::FindAboutAnywhere, None),
+            union("declared", "witnessing", "enabling"),
+            difference("gap", "tasks", "declared"),
+        ],
+        vec!["tasks"],
+    );
+    let c = compile(&v, test_profile()).expect("compiles");
+
+    assert!(
+        c.refusals
+            .iter()
+            .any(|r| r.stage.as_ref().is_some_and(|s| s.as_str() == "gap")
+                && r.reason == RefusalReason::SubtrahendRefused),
+        "an under-produced subtrahend over-returns just as an empty one does; got {:?}",
+        c.refusals
+    );
+}
+
+/// The other arm, and the boundary of the rule: a refused MINUEND is left alone.
+///
+/// `∅ − B` is `∅`, which is the ordinary bounded-to-nothing outcome every downstream stage already
+/// gets. The minuend arm is monotone, so the existing rule is correct for it, and refusing here too
+/// would be over-refusal dressed as caution — it would report a refusal for a stage that answered
+/// the honest answer.
+#[test]
+fn a_refused_minuend_leaves_the_difference_empty_rather_than_refused() {
+    let v = build(
+        vec![
+            find_stage("tasks", ActName::FindAboutAnywhere, None),
+            find_root("declared", vec![Uuid::now_v7()]),
+            difference("gap", "tasks", "declared"),
+        ],
+        vec!["declared"],
+    );
+    let c = compile(&v, test_profile()).expect("compiles");
+
+    assert!(
+        !c.refusals
+            .iter()
+            .any(|r| r.stage.as_ref().is_some_and(|s| s.as_str() == "gap")),
+        "the minuend arm is monotone, so an empty one is an honest empty; got {:?}",
+        c.refusals
+    );
+    assert!(
+        cte_body(&c.sql, "gap").contains("EXCEPT"),
+        "and the subtraction still runs, over nothing"
+    );
+}
+
+/// The taint bites `difference` alone, and nothing else acquired a new refusal.
+///
+/// A union with a refused arm still answers — under-completely, and that is the incumbent
+/// behaviour, unchanged. This is what stops the taint from being read as a general
+/// "refusals propagate" rule: it propagates into ONE position, because that position is the only
+/// anti-monotone one in the contract.
+#[test]
+fn a_refused_arm_of_a_union_or_intersect_does_not_refuse_the_combinator() {
+    for op in [
+        temper_core::types::query::CombineOp::Union,
+        temper_core::types::query::CombineOp::Intersect,
+    ] {
+        let v = build(
+            vec![
+                find_root("a", vec![Uuid::now_v7()]),
+                find_stage("wide", ActName::FindAboutAnywhere, None),
+                StageNode::Combine(temper_core::types::query::CombineNode {
+                    name: StageName::parse("merged").unwrap(),
+                    op,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("wide").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
+        );
+        let c = compile(&v, test_profile()).expect("compiles");
+        assert!(
+            !c.refusals
+                .iter()
+                .any(|r| r.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
+            "{op:?} is monotone in both arms; got {:?}",
+            c.refusals
+        );
+    }
+}

@@ -474,10 +474,19 @@ mod tests {
             ],
         );
         let result = validate(&plan(vec![node], vec!["walk"]));
-        // `follow-from` is still refused for other reasons — it is absent from `CALLABLE_FRAGMENTS`
-        // and declares `accepts_bounds: []` — so this asserts the ABSENCE of the duplicate refusal
-        // rather than success. Naming the reason is what makes it survive those other refusals
-        // retiring.
+        // This asserts the ABSENCE of the duplicate refusal rather than success, so that it holds
+        // whether or not `follow-from` is refused for some other reason. Naming the reason is what
+        // makes it survive those other refusals retiring — and two of them since have.
+        //
+        // `[corrected — 2026-08-15]` The list of "other reasons" here read *"it is absent from
+        // `CALLABLE_FRAGMENTS` and declares `accepts_bounds: []`"*, and **both halves stopped being
+        // true on 2026-08-14**: `query_follow_from` entered `CALLABLE_FRAGMENTS`, and the act
+        // declares `accepts_bounds: vec![IdKind::Resource]` — the bounded walk `20260814000030`
+        // built. The `if let Err` below is what let the prose rot silently: the test passes
+        // identically whether the plan validates or not, so nothing ever re-read the reasons it
+        // claimed. The shape is left as it stands — the assertion is about one refusal's absence,
+        // not about the plan's overall verdict — with the stale justification repaired rather than
+        // deleted, since it is the part a reader trusts.
         if let Err(refusals) = result {
             assert!(
                 !refusals
@@ -2468,6 +2477,283 @@ mod tests {
                     && e.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
             "got: {errs:?}"
         );
+    }
+
+    /// `A − B` — the shape the op exists for, and the only arity it admits.
+    fn difference(name: &str, minuend: &str, subtrahend: &str) -> StageNode {
+        StageNode::Combine(CombineNode {
+            name: StageName::parse(name).unwrap(),
+            op: CombineOp::Difference,
+            inputs: vec![
+                StageName::parse(minuend).unwrap(),
+                StageName::parse(subtrahend).unwrap(),
+            ],
+        })
+    }
+
+    #[test]
+    fn a_two_input_difference_is_admitted() {
+        // The boundary the refusal below is measured against. Without this, an arity rule that
+        // refused EVERY difference would look identical from the failing side.
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                difference("gap", "a", "b"),
+            ],
+            vec!["a"],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).unwrap_err());
+    }
+
+    #[test]
+    fn a_three_input_difference_is_refused_because_the_union_it_folds_would_have_no_stage() {
+        // Postgres would evaluate `a EXCEPT b EXCEPT c` as `a − (b ∪ c)` — the exact question this
+        // op exists for, one stage cheaper. It is refused anyway: the fold gives `b ∪ c` no stage,
+        // so nothing tallies it and no reader can see how large the set that did the subtracting
+        // was. Declaring the union as its own stage is what makes the narrowing legible.
+        //
+        // Asserted as a REFUSAL rather than a truncation: silently dropping the third input would
+        // answer a narrower question than the one asked.
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("c", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("gap").unwrap(),
+                    op: CombineOp::Difference,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("b").unwrap(),
+                        StageName::parse("c").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
+        );
+        let errs = validate(&c).expect_err("a difference takes exactly two inputs");
+        let hit = errs
+            .iter()
+            .find(|e| {
+                e.reason == RefusalReason::CombinatorArity
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "gap")
+            })
+            .unwrap_or_else(|| panic!("got: {errs:?}"));
+        // The refusal has to name the repair, not just the rule — the caller's question IS
+        // expressible and the union stage is the whole of what they are missing.
+        assert!(
+            hit.detail.contains("union"),
+            "a refusal that does not name the route is a dead end: {}",
+            hit.detail
+        );
+    }
+
+    #[test]
+    fn a_difference_produces_its_minuends_kind_and_never_its_subtrahends() {
+        // `produced_kind_of` walks a combinator to `inputs.first()`. For a union or an intersect
+        // that is arbitrary-but-consistent — mixed kinds are a malformed plan either way. For a
+        // difference it is LOAD-BEARING: the stage produces a subset of its minuend, so consulting
+        // the subtrahend would attribute the wrong kind to a perfectly well-formed plan.
+        //
+        // The two arms have to differ in kind for the assertion to bite, and `survey` is the only
+        // act declaring a non-`Resource` output. It brings refusals of its own — it reaches no
+        // fragment — so this asserts the ABSENCE of the seed-kind refusal rather than overall
+        // success, the same shape `a_bounded_walk_is_not_a_duplicate_relation` uses. Flip
+        // `produced_kind_of` to `.last()` and `UnsupportedSeedKind` appears here.
+        let c = plan_with_intention(
+            vec![
+                act(
+                    "tasks",
+                    ActName::FindExact,
+                    Some(caller_ids(IdKind::Resource)),
+                ),
+                act("regions", ActName::Survey, None),
+                difference("gap", "tasks", "regions"),
+                act(
+                    "reached",
+                    ActName::FollowFrom,
+                    Some(StageInput::Upstream {
+                        relation: StageRelation::Seed,
+                        stage: StageName::parse("gap").unwrap(),
+                    }),
+                ),
+            ],
+            vec!["reached"],
+        );
+        let refusals = validate(&c).expect_err("the survey stage refuses for its own reasons");
+        assert!(
+            !refusals
+                .iter()
+                .any(|e| e.reason == RefusalReason::UnsupportedSeedKind
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "reached")),
+            "a difference produces resources because its MINUEND does; got {refusals:?}"
+        );
+    }
+
+    /// **The question this op was added for, written out and validated end to end.**
+    ///
+    /// *"Which tasks advancing this goal declare neither `open_meta.witnesses` nor
+    /// `open_meta.enables`"* — `A − (B ∪ C)`, the shape
+    /// [Dogfood: register coverage is a composition](./01a0002b-9fd1-78c3-b1e4-7e3400e9b5d0) names.
+    ///
+    /// It is here rather than in an execute test because what it witnesses is EXPRESSIBILITY, and
+    /// that is decidable without a corpus: every refusal in this contract but one is static, so a
+    /// plan that validates is a plan the compiler will emit.
+    ///
+    /// # The shape below is the SECOND one, and the first was expressible and answered nothing
+    ///
+    /// `[falsified against prod — 2026-08-15]` This test first bounded the WALK by the difference —
+    /// `follow-from(seed = the goal, bound = gap)` — on the reasoning that
+    /// [`crate::types::query::registry`]'s note says the bound is *"applied where visibility is
+    /// applied so it constrains INTERMEDIATE nodes and not merely the returned set"*, which also
+    /// absorbs the act's fixed depth of 2.
+    ///
+    /// **That plan validates, compiles, runs, and returns zero rows for a structural reason.**
+    /// `__temper_ungated_follow_from` seeds only from ids that survive the bound —
+    /// `FROM unnest(p_seed_ids) AS s(id) WHERE EXISTS (SELECT 1 FROM admitted a WHERE a.id = s.id)`,
+    /// where `admitted` is `visible ∩ p_bound_ids`. The seed here is a **goal**; the bound is a set
+    /// of **tasks**; a goal is never in it, so the walk never starts. The doc note is true and was
+    /// over-read: the bound constrains intermediate nodes *and the seed*.
+    ///
+    /// **Nothing in this crate could have caught it**, and that is the lesson rather than the bug.
+    /// `validate` is static — it answers *"is this expressible"*, and the wrong plan is perfectly
+    /// expressible. Only running it against a corpus distinguishes the two, which is exactly the
+    /// gap between this test and the task's own third acceptance criterion.
+    ///
+    /// So the walk runs UNBOUNDED and the narrowing happens in set operations after it — which is
+    /// the shape the task originally proposed, and it was right. The act's fixed depth of 2 is
+    /// absorbed by `∩ tasks`: measured on prod `[2026-08-15]`, hop 2 adds exactly one node and no
+    /// additional task.
+    ///
+    /// # What this still catches that `a_two_input_difference_is_admitted` cannot
+    ///
+    /// **The difference cannot be the returned stage.** A combinator's rows have no single act to
+    /// score them (`StageNotReturnable`), so the answer's stage cannot be asked for directly — the
+    /// composition returns the walk, and `gap`'s size is read from its trace. That is not a
+    /// formality: [`crate::types::query::trace::StageTrace`] carries **no produced count**, so a
+    /// terminal combinator's row count is otherwise recoverable only from a *downstream* stage's
+    /// `input_ids`, and `gap` has no downstream. Its `narrowed_by` disclosure is what makes the
+    /// answer readable at all.
+    #[test]
+    fn the_register_coverage_question_is_expressible_as_a_composition() {
+        let selection = |name: &str, filter: ResourceFilter| {
+            StageNode::Act(ActInvocation {
+                name: StageName::parse(name).unwrap(),
+                act: ActName::FindResourcesWith,
+                intention: None,
+                inputs: vec![],
+                terms: BTreeMap::new(),
+                resource_filter: Some(filter),
+                edge_filter: None,
+                properties: vec![],
+            })
+        };
+        let has_key = |key: &str| ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: key.to_string(),
+                op: PropertyOp::HasKey,
+            }],
+            ..Default::default()
+        };
+        let combine = |name: &str, op: CombineOp, a: &str, b: &str| {
+            StageNode::Combine(CombineNode {
+                name: StageName::parse(name).unwrap(),
+                op,
+                inputs: vec![StageName::parse(a).unwrap(), StageName::parse(b).unwrap()],
+            })
+        };
+
+        let compose = |returned: &str| Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: StageName::parse(returned).unwrap(),
+                    with: vec![],
+                }],
+            },
+            stages: vec![
+                // UNBOUNDED, per the falsification above: a bounded walk whose seed is outside the
+                // bound never starts.
+                StageNode::Act(ActInvocation {
+                    name: StageName::parse("advancing").unwrap(),
+                    act: ActName::FollowFrom,
+                    intention: None,
+                    inputs: vec![StageInput::Caller {
+                        relation: StageRelation::Seed,
+                        ids: IdSet {
+                            kind: IdKind::Resource,
+                            provenance: None,
+                            ids: vec![uuid::Uuid::now_v7()],
+                        },
+                    }],
+                    terms: BTreeMap::new(),
+                    resource_filter: None,
+                    edge_filter: Some(EdgeFilter {
+                        labels: vec!["advances".to_string()],
+                        ..Default::default()
+                    }),
+                    properties: vec![],
+                }),
+                selection(
+                    "tasks",
+                    ResourceFilter {
+                        doc_type: vec!["task".to_string()],
+                        ..Default::default()
+                    },
+                ),
+                // Absorbs both the non-task advancers (4 of 35, measured) and the depth-2 arrivals.
+                combine(
+                    "advancing_tasks",
+                    CombineOp::Intersect,
+                    "advancing",
+                    "tasks",
+                ),
+                selection("witnessing", has_key("witnesses")),
+                selection("enabling", has_key("enables")),
+                combine("declared", CombineOp::Union, "witnessing", "enabling"),
+                combine("gap", CombineOp::Difference, "advancing_tasks", "declared"),
+            ],
+        };
+
+        validate(&compose("advancing"))
+            .unwrap_or_else(|e| panic!("the question must be expressible; got {e:?}"));
+
+        // **The denominator.** Without this, the assertion above is "some composition validates",
+        // which a plan with the difference stage deleted would satisfy just as well. The SAME plan
+        // asking for the answer's rows back is refused — which is why the count has to be read from
+        // the trace, and why the subtraction disclosure exists.
+        let errs = validate(&compose("gap")).expect_err("a combinator's rows have no scorer");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::StageNotReturnable
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "gap")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_three_input_union_stays_legal_so_the_arity_rule_is_per_op() {
+        // The other half: the ceiling belongs to `difference` alone. A rule written on
+        // `CombineNode` rather than on the op would take the three-way union with it, and nothing
+        // else in the contract would have said so.
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("c", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("merged").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("b").unwrap(),
+                        StageName::parse("c").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).unwrap_err());
     }
 
     #[test]

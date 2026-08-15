@@ -244,6 +244,12 @@ fn check_property_caps(
 /// It reads the declarations, which is why it is here and not beside the topology it feeds: what a
 /// stage produces is a declared fact, and a client cannot answer it for a server it does not share
 /// a binary with.
+///
+/// **`first` is right for all three ops, and for `difference` it is right for a stronger reason.**
+/// A union or an intersect of mixed kinds is a malformed plan whichever arm is consulted, so first
+/// is an arbitrary-but-consistent choice there. A difference produces a SUBSET of its minuend, so
+/// its kind is the minuend's by construction — `inputs[0]` is not a sample of the arms, it is the
+/// answer. Pinned by `a_difference_produces_its_minuends_kind_and_never_its_subtrahends`.
 fn produced_kind_of(name: &str, by_name: &BTreeMap<&str, &StageNode>) -> Option<IdKind> {
     match by_name.get(name)? {
         StageNode::Act(inv) => declaration(&inv.act)?.produces,
