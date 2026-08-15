@@ -180,6 +180,21 @@ pub enum RefusalReason {
     DanglingReference,
     /// A stage is named more than once in `returns`.
     DuplicateReturnStage,
+    /// A stage carries two inputs in the same relation — two seeds, or two bounds.
+    ///
+    /// `[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list.
+    /// The list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a
+    /// general fan-in `[decided — 2026-08-14, Pete]`.
+    ///
+    /// **Refused rather than unioned, and that is the whole point of the variant.** Merging two
+    /// seed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the
+    /// trace, and whose `produced` count a reader can see. Doing it implicitly inside one act's
+    /// input list would be the same merge with no stage, no tally and no disclosure, which is the
+    /// silent-substitution class this contract keeps closing.
+    ///
+    /// It lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no
+    /// declaration is consulted to decide it.
+    DuplicateInputRelation,
     /// A returned stage's rows have no single ordering quantity to score them.
     ///
     /// `[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a

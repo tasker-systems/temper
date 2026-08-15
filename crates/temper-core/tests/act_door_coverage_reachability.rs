@@ -83,9 +83,22 @@
 //! **NOT checked, and declared so rather than left silent:** *which* door reaches a mechanic, among
 //! doors that could. Both oracles are workspace-global — they answer "production calls this", never
 //! "the MCP door calls this". Discriminating would need a per-door entry-point table maintained by
-//! hand, i.e. exactly the second copy this field exists to avoid. The live instance is
+//! hand, i.e. exactly the second copy this field exists to avoid. The live instance was
 //! `substantiate`: it declares `Serves` at CLI and API and `Absent` at MCP, and tier 1 sees only
 //! that `resource_standing_shape` is reachable from somewhere. That cell is reviewed, not checked.
+//!
+//! `[restated — 2026-08-14]` **There are now TWO instances of that exact shape, and the second one
+//! arrived by the same route as the first.** `follow-from` declares `Serves` at CLI and API and
+//! `Absent` at MCP, for a reason that is not about its mechanic at all: the MCP server exposes a
+//! `search` tool and no `query` tool, so the door agents use cannot compose. Tier 1 sees only that
+//! `query_follow_from` is emittable and cannot tell the three doors apart, so those three cells are
+//! reviewed too.
+//!
+//! Worth naming as a pattern rather than as a second entry: every act reachable *only* through
+//! `/api/query` will land here with the same MCP asymmetry until MCP gains a query tool, at which
+//! point the whole class resolves at once. The uncovered set is therefore expected to GROW with
+//! composable acts and then shrink to nothing in one step — a shape worth predicting, so that its
+//! growth is not read as coverage decaying.
 //!
 //! [`the_cells_tier_one_cannot_discriminate_are_exactly_these`] pins that uncovered set, so a new
 //! act or a new door lands in it and forces a deliberate restatement instead of quietly inheriting
@@ -590,6 +603,10 @@ fn the_cells_tier_one_cannot_discriminate_are_exactly_these() {
         ActName::FindAboutAnywhere,
         ActName::FindAboutWithin,
         ActName::FindResourcesWith,
+        // `[joined — 2026-08-14]` Reachable through `/api/query` now that `query_follow_from` is in
+        // `CALLABLE_FRAGMENTS`, so tier 1 stops speaking for it and its three cells rest on review
+        // — including the MCP `Absent`, which no oracle here can distinguish from the other two.
+        ActName::FollowFrom,
         ActName::Substantiate,
     ]
     .into_iter()

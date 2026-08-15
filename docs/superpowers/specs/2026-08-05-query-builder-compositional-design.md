@@ -214,6 +214,14 @@ two of them are the point of a knowledge-graph surface and the third is a rebuil
    neighbours should say *which seed each is a neighbour of, and via which edge*. That is real
    information and it needs no tree: `from_id`, `edge_kind`, `label` are columns on a flat row. It
    introduces no ranking, because provenance is structure rather than quantity.
+
+   > **`[corrected — 2026-08-14]` Those three columns are not enough, and the shortfall is
+   > directional.** The walk is undirected over a directed graph (`adj` unions both orientations),
+   > so `from_id, edge_kind, label` carries no arrow — and `contains` / `leads_to` are asymmetric.
+   > `[measured on prod — 2026-08-14]` **24.7% of resource-resource edges are `polarity = inverse`,
+   > and `contains` is inverse in 87% of cases**, so the sketch would report the majority of
+   > containment relationships backwards. An entry names the edge **as asserted** — `seed_id`,
+   > `source_id`, `target_id`, `edge_kind`, `label`, `polarity`. See the mechanic's design §4.
 3. **Nested projection — REFUSED.** A response shaped as a tree, where the caller declares a
    selection set that recursively follows edges into the returned shape, is where a GraphQL rebuild
    actually begins, and no caller has asked for it.
@@ -271,6 +279,14 @@ so first-wins, correctly named here as a silent lossy pick, is not forced by the
   the community corpus (`kb_edges` 4,852 rows over 3,738 resources, average degree ≈2.6) and the
   term that grows on a dense graph. **Now measurable per-statement** — `pg_stat_statements` was
   never installed until migration `20260814000020` (PR #675).
+
+> **`[SETTLED — 2026-08-14]` One row per node with a `via` array; flat rows are refused.** Taken in
+> [the mechanic's own design](./2026-08-14-follow-from-mechanic-design.md) §3, which is where the
+> paragraph below says it belongs. Three arguments were added to the two here, all from the stage
+> contract: only `id` crosses a stage boundary, so flat rows put duplicate ids in a seed slot; the
+> `produced` tally is `count(*)` and would report a *path* count; and `quantity` is per row, so
+> `MAX(score)` would be true of no row. The paragraph below is kept as the material that was
+> inherited.
 
 **OPEN, and deliberately not settled by this spike** — whether the variant emits **one row per node
 with a `via` array** or **flat `(node, parent, …)` rows aggregated above it**. Phase 5's rule is that

@@ -46,6 +46,26 @@ pub enum InputSource {
 // it existed only to serve the metadata-budget concept, whose job nobody could state (YAGNI). If a
 // metadata budget ever materializes it returns designed, additively.
 
+/// One set a stage was handed: what it was FOR, where it came from, and how big it was.
+///
+/// `[added — 2026-08-14]` with the widening of `ActInvocation::inputs`. It carries no `unusable`
+/// count of its own — that stays one conflated number on the stage
+/// ([`StageTrace::input_unusable`]), because splitting it per input would narrow what a caller can
+/// probe with, and the whole reason the stage-level figure conflates invisible/nonexistent/malformed
+/// is to keep it from being a single-probe existence oracle. A per-input split hands that back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct StageInputTrace {
+    /// Whether this set NARROWED the stage or was REACHED from.
+    pub relation: StageRelation,
+    pub source: InputSource,
+    /// How many ids this particular set held.
+    pub ids: i64,
+}
+
 /// One stage's mandatory disclosure. Exists whether or not the stage produced a result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -62,17 +82,33 @@ pub struct StageTrace {
     /// [`super::envelope::StageResult::refusal`], for the same reason as the input numbers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<ActRefusal>,
-    /// Whether this stage NARROWED or REACHED, echoed back.
+    /// What this stage was handed, one entry per input.
     ///
-    /// A reader of the trace can then tell without knowing the act vocabulary — *"did stage 3
-    /// narrow or expand?"* is the question `composition-is-legible` most obviously owes an answer
-    /// to, and a caller reading only the response has no other way to get it. Absent for a stage
-    /// with no input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relation: Option<StageRelation>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_source: Option<InputSource>,
-    /// How many ids this stage was handed. Zero for a stage with no input.
+    /// A reader can then tell without knowing the act vocabulary — *"did stage 3 narrow or
+    /// expand?"* is the question `composition-is-legible` most obviously owes an answer to, and a
+    /// caller reading only the response has no other way to get it. Empty for a stage with no
+    /// input.
+    ///
+    /// # This replaced a `relation` / `input_source` PAIR, and the pair could not be kept
+    ///
+    /// `[widened — 2026-08-14]` with `ActInvocation::inputs`. Both were `Option`s describing *the*
+    /// input, which was a total description while a stage had one. A bounded walk has two — a seed
+    /// and a bound — and filling a single `relation` from whichever arrived first would answer
+    /// *"did this stage narrow or expand?"* with **half the truth and no marker saying so**. That is
+    /// worse than not answering: the field's whole job is to be the thing a caller trusts instead of
+    /// knowing the act vocabulary.
+    ///
+    /// Keeping the two fields beside this list was the alternative and is the drift-by-construction
+    /// this contract keeps removing — two spellings of one fact, free to disagree the moment a
+    /// second input appears.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<StageInputTrace>,
+    /// How many ids this stage was handed **in total, across every input**. Zero for a stage with
+    /// no input.
+    ///
+    /// A sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one
+    /// conflated number by design and a total is the only thing the two can be compared against.
+    /// The per-input split is in [`Self::inputs`].
     pub input_ids: i64,
     // `input_contributed` used to sit here — removed by ratification ⟨6⟩/9d `[2026-08-09, Pete]`,
     // see the tombstone on [`super::envelope::StageResult`].
@@ -112,8 +148,7 @@ mod tests {
             act,
             disposition,
             refusal: None,
-            relation: None,
-            input_source: None,
+            inputs: vec![],
             input_ids: 0,
             input_unusable: 0,
             narrowed_by: vec![],
@@ -129,10 +164,13 @@ mod tests {
             ActName::FindAboutWithin,
             StageDisposition::Refused,
         );
-        t.relation = Some(StageRelation::Bound);
-        t.input_source = Some(InputSource::Upstream {
-            stage: name("hits"),
-        });
+        t.inputs = vec![StageInputTrace {
+            relation: StageRelation::Bound,
+            source: InputSource::Upstream {
+                stage: name("hits"),
+            },
+            ids: 40,
+        }];
         t.input_ids = 40;
         assert_eq!(t.disposition, StageDisposition::Refused);
         assert_eq!(
@@ -151,9 +189,13 @@ mod tests {
             ActName::FollowFrom,
             StageDisposition::Answered,
         );
-        t.input_source = Some(InputSource::Upstream {
-            stage: name("seeds"),
-        });
+        t.inputs = vec![StageInputTrace {
+            relation: StageRelation::Seed,
+            source: InputSource::Upstream {
+                stage: name("seeds"),
+            },
+            ids: 3,
+        }];
         let json = serde_json::to_string(&t).unwrap();
         assert!(json.contains(r#""stage":"neighbours""#), "got: {json}");
         assert!(json.contains(r#""stage":"seeds""#), "got: {json}");
@@ -174,13 +216,57 @@ mod tests {
             ActName::FollowFrom,
             StageDisposition::Answered,
         );
-        seeded.relation = Some(StageRelation::Seed);
+        seeded.inputs = vec![StageInputTrace {
+            relation: StageRelation::Seed,
+            source: InputSource::Caller,
+            ids: 2,
+        }];
         assert!(serde_json::to_string(&seeded)
             .unwrap()
             .contains(r#""relation":"seed""#));
 
         let rooted = trace("hits", ActName::FindExact, StageDisposition::Answered);
         assert!(!serde_json::to_string(&rooted).unwrap().contains("relation"));
+    }
+
+    /// **The case the singular pair could not report**, and the reason it was replaced rather than
+    /// kept beside the list `[2026-08-14]`.
+    ///
+    /// A bounded walk carries a seed AND a bound. With one `relation` field, whichever input was
+    /// written first became the stage's whole answer to *"did you narrow or expand?"* — half the
+    /// truth, with nothing marking it as half.
+    #[test]
+    fn a_stage_with_two_inputs_discloses_both_relations_and_the_total() {
+        let mut t = trace(
+            "neighbours",
+            ActName::FollowFrom,
+            StageDisposition::Answered,
+        );
+        t.inputs = vec![
+            StageInputTrace {
+                relation: StageRelation::Seed,
+                source: InputSource::Upstream {
+                    stage: name("seeds"),
+                },
+                ids: 3,
+            },
+            StageInputTrace {
+                relation: StageRelation::Bound,
+                source: InputSource::Caller,
+                ids: 40,
+            },
+        ];
+        t.input_ids = 43;
+
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains(r#""relation":"seed""#), "got: {json}");
+        assert!(json.contains(r#""relation":"bound""#), "got: {json}");
+        assert!(
+            json.contains(r#""input_ids":43"#),
+            "the stage-level count is the TOTAL across inputs, which is what `input_unusable` \
+             beside it can be compared against; got: {json}"
+        );
+        assert_eq!(serde_json::from_str::<StageTrace>(&json).unwrap(), t);
     }
 
     #[test]

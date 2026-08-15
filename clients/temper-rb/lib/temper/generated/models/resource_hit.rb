@@ -23,12 +23,16 @@ module Temper::Generated
 
     attr_accessor :scoring
 
+    # How a walk reached this resource — one entry per edge it was reached by.  **Filled only by `follow-from`**, and declared in advance rather than discovered: the act's [`super::act::ActDeclaration::discloses`] carries [`super::act::Disclosure::InputContribution`], which the enum predicted would *\"return when a walk carries origin\"*.  # EVERY parent, and the score corresponds to only one of them  `graph_score` is a `MAX` over paths; this is a union over **all** of them. They disagree by construction — a node reached both by a strong one-hop edge and a weak three-hop chain names both and scores from one. **The non-correspondence is declared here rather than repaired**, exactly as [`RegionHit::region`] carries `salience` beside `region_score` and says outright that the two are not rivals. Naming every parent is the more useful and the clearer answer; naming only the winning path's would make this field a second, silent statement about rank.  # ABSENT rather than null, which is the opposite of [`Self::located_at`]  The two look like the same question and are not, and F4's rule is what separates them. `located_at` is PRESENT-null because its null carries a *claim* — *no location declared* — that a missing key could not make. A collection has no such claim to carry: `[]` and absent would both mean \"no provenance\", so a null adds a third spelling of one fact. The key is therefore dropped for every act that is not a walk, and its presence means the same thing as the act's `discloses` already promised.  # No cap, and the reason is structural rather than \"the corpus is small\"  `[measured on prod — 2026-08-14]` at the deliberate worst case (25 highest-degree seeds, depth 3) the whole walk holds 9,434 entries with 124 on one node, while **the page that ships carries 125 in total and at most 9 on any row**. Nodes with enormous parent sets are reached by many long weak paths, so the score ranks them out and the limit sheds them before they are ever described. Capping would silently truncate provenance, which is the one thing this field exists to be trusted about.
+    attr_accessor :via
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'located_at' => :'located_at',
         :'resource' => :'resource',
-        :'scoring' => :'scoring'
+        :'scoring' => :'scoring',
+        :'via' => :'via'
       }
     end
 
@@ -47,7 +51,8 @@ module Temper::Generated
       {
         :'located_at' => :'MatchLocation',
         :'resource' => :'ResourceView',
-        :'scoring' => :'Scoring'
+        :'scoring' => :'Scoring',
+        :'via' => :'Array<ViaEntry>'
       }
     end
 
@@ -90,6 +95,12 @@ module Temper::Generated
         self.scoring = attributes[:'scoring']
       else
         self.scoring = nil
+      end
+
+      if attributes.key?(:'via')
+        if (value = attributes[:'via']).is_a?(Array)
+          self.via = value
+        end
       end
     end
 
@@ -145,7 +156,8 @@ module Temper::Generated
       self.class == o.class &&
           located_at == o.located_at &&
           resource == o.resource &&
-          scoring == o.scoring
+          scoring == o.scoring &&
+          via == o.via
     end
 
     # @see the `==` method
@@ -157,7 +169,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [located_at, resource, scoring].hash
+      [located_at, resource, scoring, via].hash
     end
 
     # Builds the object from hash

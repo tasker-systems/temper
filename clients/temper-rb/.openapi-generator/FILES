@@ -261,6 +261,7 @@ lib/temper/generated/models/stage_disposition.rb
 lib/temper/generated/models/stage_input.rb
 lib/temper/generated/models/stage_input_one_of.rb
 lib/temper/generated/models/stage_input_one_of1.rb
+lib/temper/generated/models/stage_input_trace.rb
 lib/temper/generated/models/stage_node.rb
 lib/temper/generated/models/stage_output.rb
 lib/temper/generated/models/stage_output_one_of.rb
@@ -289,6 +290,7 @@ lib/temper/generated/models/unbind_team_outcome.rb
 lib/temper/generated/models/unrecognized_standing.rb
 lib/temper/generated/models/unshare_context_outcome.rb
 lib/temper/generated/models/vault_config.rb
+lib/temper/generated/models/via_entry.rb
 lib/temper/generated/models/wide_arm.rb
 lib/temper/generated/models/wide_hit.rb
 lib/temper/generated/version.rb

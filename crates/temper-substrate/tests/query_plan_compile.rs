@@ -29,14 +29,14 @@ fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
             query: "salience".to_string(),
             embedding: None,
         }),
-        input: Some(StageInput::Caller {
+        inputs: vec![StageInput::Caller {
             relation: StageRelation::Bound,
             ids: IdSet {
                 kind: IdKind::Resource,
                 provenance: None,
                 ids,
             },
-        }),
+        }],
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -57,10 +57,10 @@ fn find_from(name: &str, upstream: &str) -> StageNode {
             query: "salience".to_string(),
             embedding: None,
         }),
-        input: Some(StageInput::Upstream {
+        inputs: vec![StageInput::Upstream {
             relation: StageRelation::Bound,
             stage: StageName::parse(upstream).unwrap(),
-        }),
+        }],
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -424,7 +424,8 @@ fn stages_are_emitted_in_dependency_order() {
 
 // ─── Beat D: the find acts emit real fragments ──────────────────────────────────────────────────
 
-use temper_core::types::query::{BoundTerm, Intention, RefusalReason};
+use temper_core::types::graph::EdgeKind;
+use temper_core::types::query::{BoundTerm, EdgeFilter, Intention, RefusalReason};
 
 /// The ungated cores, restated here because they are private to the crate. A drift between these
 /// and the compiler's own constants shows up as a failing assertion, which is the right failure.
@@ -442,7 +443,7 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
             embedding: None,
         }),
         act,
-        input,
+        inputs: input.into_iter().collect(),
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -750,12 +751,19 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
     );
 }
 
-/// `follow-from` and `survey` are refused BEFORE the compiler ever sees them.
+/// `survey` is refused BEFORE the compiler ever sees it.
 ///
 /// **`[re-pointed — 2026-08-12]`** This asserted that both acts compile to the deliberately-absent
 /// placeholder — a statement that cannot silently return wrong rows, but also one that fails at
 /// EXECUTION, which is invisible until a door ships. Their fragments take arguments no slot supplies
 /// (`p_depth`/`p_gamma`, `p_lens`), so they left `CALLABLE_FRAGMENTS` and now refuse statically.
+///
+/// `[narrowed to survey — 2026-08-14]` **`follow-from` rejoined the map.** Its `p_depth`/`p_gamma`
+/// turned out to want CONSTANTS rather than slots — both are definitional, fixed by the act rather
+/// than chosen by a caller — so the compiler writes them, and the only thing the act needed a slot
+/// for was a bound, which `inputs: Vec<StageInput>` now carries. The positive half is asserted
+/// beside this, in `a_walk_compiles_to_the_provenance_core_and_carries_its_via_column`: without it,
+/// this test could be kept green by deleting an act from a list.
 ///
 /// Re-pointed rather than deleted, for the reason this file has re-pointed several times before
 /// (`[2026-08-08]`, `[2026-08-09]` twice, `[2026-08-10]`): the property still needs a witness, and
@@ -770,24 +778,237 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
 /// hypothetical eighth act that declared itself into the family without a fragment.
 #[test]
 fn the_unmodelled_acts_are_refused_before_the_compiler_ever_sees_them() {
-    for act in [ActName::FollowFrom, ActName::Survey] {
-        let c = Composition {
-            outcome: OutcomeDeclaration {
-                returns: vec![ReturnSpec {
-                    stage: StageName::parse("s").unwrap(),
-                    with: vec![],
-                }],
+    let act = ActName::Survey;
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("s").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![find_stage("s", act.clone(), None)],
+    };
+    let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
+    assert!(
+        errs.iter()
+            .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
+        "{act:?} must refuse as unreachable rather than compile to `__temper_unbound_act`; \
+         got {errs:?}"
+    );
+}
+
+/// **The positive half**: a walk compiles to the provenance core, carries its `via` column, and
+/// routes its two sets to the two slots the relation names.
+///
+/// `[added — 2026-08-14]` Without this, `the_unmodelled_acts_are_refused_before_the_compiler_ever_
+/// sees_them` could be kept green by deleting an act from a list, and nothing would say whether the
+/// act had become reachable or merely stopped being checked.
+///
+/// **The seed/bound assertion is the load-bearing one.** Both are `uuid[]`, they sit adjacent in the
+/// signature, and routing a seed into `p_bound_ids` compiles a walk that can only return what was
+/// already in its own seed set — a stage that looks like it worked and can never reach a neighbour.
+/// Asserting only that both appear would pass against exactly that bug, so the assertion is about
+/// ORDER: the seed expression must precede the bound expression in the emitted call.
+#[test]
+fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
+    let seeds = vec![Uuid::now_v7()];
+    let bound = vec![Uuid::now_v7(), Uuid::now_v7()];
+    let walk = StageNode::Act(ActInvocation {
+        name: StageName::parse("near").unwrap(),
+        act: ActName::FollowFrom,
+        // A walk asks the corpus no question — it walks from a set it is handed.
+        intention: None,
+        inputs: vec![
+            StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: seeds.clone(),
+                },
             },
-            stages: vec![find_stage("s", act.clone(), None)],
-        };
-        let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
-        assert!(
-            errs.iter()
-                .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
-            "{act:?} must refuse as unreachable rather than compile to `__temper_unbound_act`; \
-             got {errs:?}"
-        );
+            StageInput::Caller {
+                relation: StageRelation::Bound,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: bound.clone(),
+                },
+            },
+        ],
+        terms: Default::default(),
+        resource_filter: None,
+        edge_filter: Some(EdgeFilter {
+            edge_kinds: vec![EdgeKind::LeadsTo],
+            labels: vec!["cites".to_string()],
+        }),
+        properties: vec![],
+    });
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![walk],
+    };
+    let v = validate(&c).expect("a seeded, bounded walk with an edge filter is well-formed");
+    let compiled = compile(&v, ProfileId::new()).expect("it compiles");
+    let sql = &compiled.sql;
+
+    assert!(
+        sql.contains("__temper_ungated_follow_from"),
+        "the walk emits the ungated core, not the absent placeholder; got:\n{sql}"
+    );
+    assert!(
+        !sql.contains("__temper_unbound_act"),
+        "the placeholder is what this act used to compile to; got:\n{sql}"
+    );
+
+    // `via` rides the stage contract as a fourth column, on the walk's arm and on the final select.
+    assert!(
+        sql.contains("graph_score::double precision AS quantity, via"),
+        "the walk projects `via` beside its quantity; got:\n{sql}"
+    );
+    assert!(
+        sql.contains("id, kind, quantity, via,"),
+        "the final select carries `via` in its shared column list; got:\n{sql}"
+    );
+
+    // The two definitional constants the compiler writes rather than binds.
+    assert!(
+        sql.contains(", 2, 0.5::double precision,"),
+        "depth and gamma are constants fixed by the act, not caller-bound parameters; got:\n{sql}"
+    );
+
+    // **POSITION, not presence.** The two id sets are both `uuid[]`, sit in the same call, and mean
+    // opposite things; asserting that each merely appears would pass against a body that swapped
+    // them. The fragment's signature is positional, so the assertion is too — argument 1 is the
+    // seed set and argument 6 is the bound, per `20260814000030`.
+    let call = core_call_args(sql, "__temper_ungated_follow_from");
+    let args: Vec<&str> = split_top_level(&call);
+    assert_eq!(
+        args.len(),
+        8,
+        "the walk core takes eight arguments; got:\n{call}"
+    );
+
+    let seed_bind = args[1];
+    let bound_bind = args[6];
+    assert!(
+        seed_bind.ends_with("::uuid[]") && seed_bind.starts_with('$'),
+        "argument 1 is the SEED set; got `{seed_bind}` in:\n{call}"
+    );
+    assert!(
+        bound_bind.ends_with("::uuid[]") && bound_bind.starts_with('$'),
+        "argument 6 is the BOUND set; got `{bound_bind}` in:\n{call}"
+    );
+    assert_ne!(
+        seed_bind, bound_bind,
+        "two slots, two binds — one bind in both would be a walk bounded to its own seeds, which \
+         is a different act. got:\n{call}"
+    );
+    // The seed is bound before the bound is, because `narrowing_for` walks `inputs` in order and
+    // this plan declares the seed first — which is what makes the two binds distinguishable at all.
+    assert!(
+        seed_bind < bound_bind,
+        "swapping these compiles a walk that can only return what was already in its own seed \
+         set — a stage that looks like it worked and can never reach a neighbour. got:\n{call}"
+    );
+
+    // Both edge axes reach the fragment — the label one has never existed in the incumbent walk.
+    assert!(
+        args[4].ends_with("::text[]") && args[5].ends_with("::text[]"),
+        "arguments 4 and 5 are the kind and label axes; got:\n{call}"
+    );
+}
+
+/// A walk with no edge filter passes NULL on both axes — never `'{{}}'`, which the fragment reads as
+/// a different question.
+#[test]
+fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
+    let walk = StageNode::Act(ActInvocation {
+        name: StageName::parse("near").unwrap(),
+        act: ActName::FollowFrom,
+        intention: None,
+        inputs: vec![StageInput::Caller {
+            relation: StageRelation::Seed,
+            ids: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: vec![Uuid::now_v7()],
+            },
+        }],
+        terms: Default::default(),
+        resource_filter: None,
+        edge_filter: None,
+        properties: vec![],
+    });
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![walk],
+    };
+    let v = validate(&c).expect("an unfiltered walk is well-formed");
+    let compiled = compile(&v, ProfileId::new()).expect("it compiles");
+    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
+    assert!(
+        call.contains("NULL::text[], NULL::text[]"),
+        "both edge axes are NULL — unbounded — and never an empty array; got:\n{call}"
+    );
+    // And the bound slot too: no bound input means no narrowing, not narrowing to nothing.
+    assert!(
+        call.contains("NULL::uuid[]"),
+        "an absent bound is NULL, never '{{}}'; got:\n{call}"
+    );
+}
+
+/// The argument list of a core call, with balanced parentheses honoured.
+///
+/// A naive split on `)` truncates at `(SELECT ids FROM __temper_vis)` — the FIRST argument — so
+/// every assertion downstream would read one argument and pass or fail for the wrong reason.
+fn core_call_args(sql: &str, core: &str) -> String {
+    let open = format!("{core}(");
+    let start = sql.find(&open).expect("the core is called") + open.len();
+    let mut depth = 1usize;
+    for (i, c) in sql[start..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return sql[start..start + i].to_string();
+                }
+            }
+            _ => {}
+        }
     }
+    panic!("unbalanced parentheses in the emitted call");
+}
+
+/// Split an argument list on commas that are NOT inside nested parentheses.
+fn split_top_level(args: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut last = 0usize;
+    for (i, c) in args.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(args[last..i].trim());
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(args[last..].trim());
+    out
 }
 
 // ─── Post-review fixes ──────────────────────────────────────────────────────────────────────────
@@ -1159,7 +1380,7 @@ fn selection(name: &str) -> StageNode {
         // corpus nothing; the shape pass's requirement names three acts and this is not among them,
         // so an omitted intention here is well-formed rather than tolerated.
         intention: None,
-        input: None,
+        inputs: vec![],
         terms: Default::default(),
         resource_filter: Some(temper_core::types::query::ResourceFilter {
             doc_type: vec!["task".to_string(), "session".to_string()],

@@ -294,8 +294,20 @@ pub enum VisibilityProfile {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Disclosure {
-    // `InputContribution` used to lead this enum. Removed with its `input_contributed` field
-    // (ratification ⟨6⟩/9d `[2026-08-09, Pete]`); returns when a walk carries origin.
+    /// Which seed each returned thing descends from, and via which edge — `ResourceHit.via`.
+    ///
+    /// **Removed, and now returned on the condition it named.** It led this enum until ratification
+    /// ⟨6⟩/9d `[2026-08-09, Pete]`, which struck it along with the `input_contributed` field and
+    /// said it *"returns when a walk carries origin"*. `20260814000030` is that walk
+    /// `[2026-08-14]`.
+    ///
+    /// What it names is **not** the field that was struck. `input_contributed` was a COUNT, and the
+    /// reason it went is recorded on `StageResult`: redundant where filled (a bound's contributed
+    /// count equals its produced count by construction — the same fact twice, free to disagree) and
+    /// null where interesting, since the only seeding act discarded origin. This is the structure
+    /// itself rather than a tally of it, so neither objection carries over: it is not derivable from
+    /// another field, and the case that made the old one useless is exactly the case it serves.
+    InputContribution,
     /// Where in the resource the match was — `ResourceHit.located_at`.
     MatchLocation,
     /// How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.

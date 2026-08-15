@@ -490,6 +490,11 @@
           "type": "string"
         },
         {
+          "const": "duplicate_input_relation",
+          "description": "A stage carries two inputs in the same relation — two seeds, or two bounds.\n\n`[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list.\nThe list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a\ngeneral fan-in `[decided — 2026-08-14, Pete]`.\n\n**Refused rather than unioned, and that is the whole point of the variant.** Merging two\nseed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the\ntrace, and whose `produced` count a reader can see. Doing it implicitly inside one act's\ninput list would be the same merge with no stage, no tally and no disclosure, which is the\nsilent-substitution class this contract keeps closing.\n\nIt lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no\ndeclaration is consulted to decide it.",
+          "type": "string"
+        },
+        {
           "const": "stage_not_returnable",
           "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
           "type": "string"
@@ -563,6 +568,13 @@
         },
         "scoring": {
           "$ref": "#/$defs/Scoring"
+        },
+        "via": {
+          "description": "How a walk reached this resource — one entry per edge it was reached by.\n\n**Filled only by `follow-from`**, and declared in advance rather than discovered: the act's\n[`super::act::ActDeclaration::discloses`] carries\n[`super::act::Disclosure::InputContribution`], which the enum predicted would *\"return when\na walk carries origin\"*.\n\n# EVERY parent, and the score corresponds to only one of them\n\n`graph_score` is a `MAX` over paths; this is a union over **all** of them. They disagree by\nconstruction — a node reached both by a strong one-hop edge and a weak three-hop chain names\nboth and scores from one. **The non-correspondence is declared here rather than repaired**,\nexactly as [`RegionHit::region`] carries `salience` beside `region_score` and says outright\nthat the two are not rivals. Naming every parent is the more useful and the clearer answer;\nnaming only the winning path's would make this field a second, silent statement about rank.\n\n# ABSENT rather than null, which is the opposite of [`Self::located_at`]\n\nThe two look like the same question and are not, and F4's rule is what separates them.\n`located_at` is PRESENT-null because its null carries a *claim* — *no location declared* —\nthat a missing key could not make. A collection has no such claim to carry: `[]` and absent\nwould both mean \"no provenance\", so a null adds a third spelling of one fact. The key is\ntherefore dropped for every act that is not a walk, and its presence means the same thing as\nthe act's `discloses` already promised.\n\n# No cap, and the reason is structural rather than \"the corpus is small\"\n\n`[measured on prod — 2026-08-14]` at the deliberate worst case (25 highest-degree seeds,\ndepth 3) the whole walk holds 9,434 entries with 124 on one node, while **the page that\nships carries 125 in total and at most 9 on any row**. Nodes with enormous parent sets are\nreached by many long weak paths, so the score ranks them out and the limit sheds them before\nthey are ever described. Capping would silently truncate provenance, which is the one thing\nthis field exists to be trusted about.",
+          "items": {
+            "$ref": "#/$defs/ViaEntry"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -843,6 +855,59 @@
           "type": "object"
         }
       ]
+    },
+    "ViaEntry": {
+      "description": "One edge a walk reached a node by — **the edge as asserted**, and no quantity.\n\n`[added — 2026-08-14]` with `follow-from`'s provenance-carrying mechanic\n(`20260814000030`), design `docs/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`\n§4.\n\n# Why source and target rather than a parent plus a direction\n\nThe walk is **undirected over a directed graph**: the fragment's `adj` unions both orientations,\nso a traversal runs with or against the stored `source → target`. A `from_id` plus a\nwhich-way-round flag is two fields that must agree, and two fields that must agree are two\nfields that can drift. The edge as stored cannot contradict itself, and the parent is derivable\nfrom it — so the derivable thing is the one left out.\n\n# Polarity rides because the two arrows disagree in practice\n\n[`Polarity`] exists because the structural arrow and the semantic one can differ — its own\nexample is a `depends_on` edge asserted source=dependant/target=dependency, whose causal arrow\nruns the other way. `[measured on prod — 2026-08-14]` **1,099 of 4,454 resource-resource edges\nare `inverse`, and 87% of `contains` edges are** — so an entry omitting it would report the\nmajority of containment relationships backwards.\n\n# It carries no numbers, deliberately `[decided — 2026-08-14, Pete]`\n\nA per-parent score is nearly free to compute at this grain and is **refused**: provenance is\nstructure rather than quantity, and a scored entry would be a second ranking axis inside a row\nwhose one quantity is [`Scoring::score`]. See the note on [`ResourceHit::via`] for the\nnon-correspondence that goes with it.",
+      "properties": {
+        "edge_kind": {
+          "description": "Structural edge type — the four Semantic-Spacetime primitives. Each kind\ncarries a distinct traversal algebra:\n- `Contains`  — transitive (composition / part-of participation)\n- `LeadsTo`   — antisymmetric, causal/temporal order\n- `Near`      — symmetric (proximity / similarity)\n- `Express`   — leaf attribute (has-property)\n\nMirrors the Postgres `edge_kind` enum.",
+          "enum": [
+            "express",
+            "contains",
+            "leads_to",
+            "near"
+          ],
+          "type": "string"
+        },
+        "label": {
+          "description": "The edge's label. **Nullable in the DDL and populated on every edge in prod today**\n(`kb_edges.label` is `TEXT` with no `NOT NULL`), so the `None` is real and unobserved rather\nthan impossible — and an `edge_filter` naming labels silently excludes unlabelled edges.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "polarity": {
+          "description": "Edge direction sign. `source → target` as asserted may run *with* the\nstructural arrow (`Forward`) or *against* it (`Inverse`) — e.g. a\n`depends_on` edge is asserted source=dependant/target=dependency, but the\ncausal arrow runs dependency→dependant, so it is `Inverse` `LeadsTo`.\n`Near` is symmetric: always `Forward`.\n\nMirrors the Postgres `edge_polarity` enum.",
+          "enum": [
+            "forward",
+            "inverse"
+          ],
+          "type": "string"
+        },
+        "seed_id": {
+          "description": "Which of the caller's seeds this node descends from.\n\nThe act's `orders_by.means` says the score is the best path **from any seed**, and the act\ntakes a seed SET — so without this a multi-seed walk answers \"here are the neighbours of the\nthings you found\" with a list that cannot say which. That is the reason `via` exists at all.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_id": {
+          "description": "The edge's own `source_id`, as stored.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The edge's own `target_id`, as stored.",
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seed_id",
+        "source_id",
+        "target_id",
+        "edge_kind",
+        "polarity"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

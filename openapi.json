@@ -7173,16 +7173,12 @@
               }
             ]
           },
-          "input": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/StageInput",
-                "description": "Where this stage's set comes from, and what this act does with it: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose\n\"required whenever `input` is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid."
-              }
-            ]
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageInput"
+            },
+            "description": "Where this stage's sets come from, and what this act does with each: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was\nan `Option<BoundsMode>` whose\n\"required whenever an input is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid.\n\n# A LIST, and at most one per relation\n\n`[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**\nrelation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from\n*and* a bound to stay inside, at the same time, and a single slot can hold one or the other.\nThe fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,\nso `accepts_bounds: [Resource]` would have declared a capability nothing could reach.\n\n**The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed\n([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union\nis `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside\none. So the list is short by construction and is not a general fan-in.\n\n**Why a list rather than a second `bound` field beside this one.** The relation already\ndistinguishes them, so a list gives a bound exactly one spelling; a sibling field would give\nit two — the new field, and this one with a `Bound` relation — which is the incumbent\nliteral `bounds: Option<IdSet>` shape this contract deliberately replaced\n`[decided — 2026-08-14, Pete]`, returning under a different name."
           },
           "intention": {
             "oneOf": [
@@ -7234,7 +7230,8 @@
               ]
             }
           }
-        }
+        },
+        "additionalProperties": false
       },
       "ActName": {
         "oneOf": [
@@ -12091,6 +12088,13 @@
           },
           {
             "type": "string",
+            "description": "A stage carries two inputs in the same relation — two seeds, or two bounds.\n\n`[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list.\nThe list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a\ngeneral fan-in `[decided — 2026-08-14, Pete]`.\n\n**Refused rather than unioned, and that is the whole point of the variant.** Merging two\nseed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the\ntrace, and whose `produced` count a reader can see. Doing it implicitly inside one act's\ninput list would be the same merge with no stage, no tally and no disclosure, which is the\nsilent-substitution class this contract keeps closing.\n\nIt lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no\ndeclaration is consulted to decide it.",
+            "enum": [
+              "duplicate_input_relation"
+            ]
+          },
+          {
+            "type": "string",
             "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
             "enum": [
               "stage_not_returnable"
@@ -12593,6 +12597,13 @@
           },
           "scoring": {
             "$ref": "#/components/schemas/Scoring"
+          },
+          "via": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ViaEntry"
+            },
+            "description": "How a walk reached this resource — one entry per edge it was reached by.\n\n**Filled only by `follow-from`**, and declared in advance rather than discovered: the act's\n[`super::act::ActDeclaration::discloses`] carries\n[`super::act::Disclosure::InputContribution`], which the enum predicted would *\"return when\na walk carries origin\"*.\n\n# EVERY parent, and the score corresponds to only one of them\n\n`graph_score` is a `MAX` over paths; this is a union over **all** of them. They disagree by\nconstruction — a node reached both by a strong one-hop edge and a weak three-hop chain names\nboth and scores from one. **The non-correspondence is declared here rather than repaired**,\nexactly as [`RegionHit::region`] carries `salience` beside `region_score` and says outright\nthat the two are not rivals. Naming every parent is the more useful and the clearer answer;\nnaming only the winning path's would make this field a second, silent statement about rank.\n\n# ABSENT rather than null, which is the opposite of [`Self::located_at`]\n\nThe two look like the same question and are not, and F4's rule is what separates them.\n`located_at` is PRESENT-null because its null carries a *claim* — *no location declared* —\nthat a missing key could not make. A collection has no such claim to carry: `[]` and absent\nwould both mean \"no provenance\", so a null adds a third spelling of one fact. The key is\ntherefore dropped for every act that is not a walk, and its presence means the same thing as\nthe act's `discloses` already promised.\n\n# No cap, and the reason is structural rather than \"the corpus is small\"\n\n`[measured on prod — 2026-08-14]` at the deliberate worst case (25 highest-degree seeds,\ndepth 3) the whole walk holds 9,434 entries with 124 on one node, while **the page that\nships carries 125 in total and at most 9 on any row**. Nodes with enormous parent sets are\nreached by many long weak paths, so the score ranks them out and the limit sheds them before\nthey are ever described. Capping would silently truncate provenance, which is the one thing\nthis field exists to be trusted about."
           }
         }
       },
@@ -13580,6 +13591,29 @@
         ],
         "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage."
       },
+      "StageInputTrace": {
+        "type": "object",
+        "description": "One set a stage was handed: what it was FOR, where it came from, and how big it was.\n\n`[added — 2026-08-14]` with the widening of `ActInvocation::inputs`. It carries no `unusable`\ncount of its own — that stays one conflated number on the stage\n([`StageTrace::input_unusable`]), because splitting it per input would narrow what a caller can\nprobe with, and the whole reason the stage-level figure conflates invisible/nonexistent/malformed\nis to keep it from being a single-probe existence oracle. A per-input split hands that back.",
+        "required": [
+          "relation",
+          "source",
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many ids this particular set held."
+          },
+          "relation": {
+            "$ref": "#/components/schemas/StageRelation",
+            "description": "Whether this set NARROWED the stage or was REACHED from."
+          },
+          "source": {
+            "$ref": "#/components/schemas/InputSource"
+          }
+        }
+      },
       "StageName": {
         "type": "string",
         "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
@@ -13767,22 +13801,19 @@
           "input_ids": {
             "type": "integer",
             "format": "int64",
-            "description": "How many ids this stage was handed. Zero for a stage with no input."
-          },
-          "input_source": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/InputSource"
-              }
-            ]
+            "description": "How many ids this stage was handed **in total, across every input**. Zero for a stage with\nno input.\n\nA sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one\nconflated number by design and a total is the only thing the two can be compared against.\nThe per-input split is in [`Self::inputs`]."
           },
           "input_unusable": {
             "type": "integer",
             "format": "int64",
             "description": "How many of them this stage could not use at all — invisible, nonexistent, or malformed.\n\nConflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].\nNaming the invisible case alone would make the trace a single-probe existence oracle."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageInputTrace"
+            },
+            "description": "What this stage was handed, one entry per input.\n\nA reader can then tell without knowing the act vocabulary — *\"did stage 3 narrow or\nexpand?\"* is the question `composition-is-legible` most obviously owes an answer to, and a\ncaller reading only the response has no other way to get it. Empty for a stage with no\ninput.\n\n# This replaced a `relation` / `input_source` PAIR, and the pair could not be kept\n\n`[widened — 2026-08-14]` with `ActInvocation::inputs`. Both were `Option`s describing *the*\ninput, which was a total description while a stage had one. A bounded walk has two — a seed\nand a bound — and filling a single `relation` from whichever arrived first would answer\n*\"did this stage narrow or expand?\"* with **half the truth and no marker saying so**. That is\nworse than not answering: the field's whole job is to be the thing a caller trusts instead of\nknowing the act vocabulary.\n\nKeeping the two fields beside this list was the alternative and is the drift-by-construction\nthis contract keeps removing — two spellings of one fact, free to disagree the moment a\nsecond input appears."
           },
           "narrowed_by": {
             "type": "array",
@@ -13798,17 +13829,6 @@
               {
                 "$ref": "#/components/schemas/ActRefusal",
                 "description": "Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace\ncovers every stage while results cover only returned ones, so this is the ONLY refusal\nrecord for an intermediate stage. **The pair rule**: identical to\n[`super::envelope::StageResult::refusal`], for the same reason as the input numbers."
-              }
-            ]
-          },
-          "relation": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/StageRelation",
-                "description": "Whether this stage NARROWED or REACHED, echoed back.\n\nA reader of the trace can then tell without knowing the act vocabulary — *\"did stage 3\nnarrow or expand?\"* is the question `composition-is-legible` most obviously owes an answer\nto, and a caller reading only the response has no other way to get it. Absent for a stage\nwith no input."
               }
             ]
           },
@@ -14442,6 +14462,47 @@
               "null"
             ],
             "description": "Managed vault root path"
+          }
+        }
+      },
+      "ViaEntry": {
+        "type": "object",
+        "description": "One edge a walk reached a node by — **the edge as asserted**, and no quantity.\n\n`[added — 2026-08-14]` with `follow-from`'s provenance-carrying mechanic\n(`20260814000030`), design `docs/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`\n§4.\n\n# Why source and target rather than a parent plus a direction\n\nThe walk is **undirected over a directed graph**: the fragment's `adj` unions both orientations,\nso a traversal runs with or against the stored `source → target`. A `from_id` plus a\nwhich-way-round flag is two fields that must agree, and two fields that must agree are two\nfields that can drift. The edge as stored cannot contradict itself, and the parent is derivable\nfrom it — so the derivable thing is the one left out.\n\n# Polarity rides because the two arrows disagree in practice\n\n[`Polarity`] exists because the structural arrow and the semantic one can differ — its own\nexample is a `depends_on` edge asserted source=dependant/target=dependency, whose causal arrow\nruns the other way. `[measured on prod — 2026-08-14]` **1,099 of 4,454 resource-resource edges\nare `inverse`, and 87% of `contains` edges are** — so an entry omitting it would report the\nmajority of containment relationships backwards.\n\n# It carries no numbers, deliberately `[decided — 2026-08-14, Pete]`\n\nA per-parent score is nearly free to compute at this grain and is **refused**: provenance is\nstructure rather than quantity, and a scored entry would be a second ranking axis inside a row\nwhose one quantity is [`Scoring::score`]. See the note on [`ResourceHit::via`] for the\nnon-correspondence that goes with it.",
+        "required": [
+          "seed_id",
+          "source_id",
+          "target_id",
+          "edge_kind",
+          "polarity"
+        ],
+        "properties": {
+          "edge_kind": {
+            "$ref": "#/components/schemas/EdgeKind"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The edge's label. **Nullable in the DDL and populated on every edge in prod today**\n(`kb_edges.label` is `TEXT` with no `NOT NULL`), so the `None` is real and unobserved rather\nthan impossible — and an `edge_filter` naming labels silently excludes unlabelled edges."
+          },
+          "polarity": {
+            "$ref": "#/components/schemas/Polarity"
+          },
+          "seed_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Which of the caller's seeds this node descends from.\n\nThe act's `orders_by.means` says the score is the best path **from any seed**, and the act\ntakes a seed SET — so without this a multi-seed walk answers \"here are the neighbours of the\nthings you found\" with a list that cannot say which. That is the reason `via` exists at all."
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The edge's own `source_id`, as stored."
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The edge's own `target_id`, as stored."
           }
         }
       },
