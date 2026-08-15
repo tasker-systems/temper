@@ -106,10 +106,11 @@ pub struct ActInvocation {
     ///
     /// Every predicate here is refused, and the refusal says where the capability went.
     ///
-    /// **The heading is one short line on purpose** `[2026-08-15, found in review]`. schemars takes
-    /// the first heading line as the schema `title` and the remainder as `description`, so a heading
-    /// that wraps ships a truncated sentence as the title and an orphan word as the start of the
-    /// description — into `act_invocation.schema.json`, `openapi.json`, and every generated client.
+    /// **Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first
+    /// heading LINE as the schema `title` and the remainder as `description`, so a heading that wraps
+    /// ships a truncated sentence as the title and an orphan word as the start of the description —
+    /// into `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical
+    /// constraint of the generator, not a style preference.
     ///
     /// `[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s
     /// `properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a

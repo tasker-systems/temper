@@ -511,8 +511,10 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // no predicate applies** — live-looking refusals that can never reach a predicate that does
     // anything.
     //
-    // The tombstone is still checked, and deliberately: a caller sees every refusal at once, so a
-    // malformed predicate in the wrong place is told both things rather than one at a time.
+    // The tombstone is still checked, under this contract's established rule that a caller sees
+    // every refusal at once (`capability.rs`, the `Other(_)` arm's note) — so a malformed predicate
+    // in the wrong place is told both things rather than one at a time. Applying that rule here, not
+    // making a new one.
     // **Each source names ITSELF in the refusal** `[2026-08-15, found in review]`. With one source
     // a bare "a property predicate needs a key" identified the field by elimination; with three it
     // does not, and a caller with a malformed predicate in two containers on one stage would get

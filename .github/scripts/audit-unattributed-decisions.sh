@@ -104,12 +104,18 @@ ATTRIBUTION='decided —|ADJ-[0-9]|[[]20[0-9][0-9]-[0-9][0-9]-[0-9][0-9], [A-Z]'
 # work through. A whole-repo baseline would run to hundreds and would be rebaselined without reading,
 # which is the outcome this guard exists to prevent. **Widening the scope is the intended direction of
 # travel** — do it one module at a time, with the new incumbents read rather than merely counted.
+# `[lowered — 2026-08-15]` filter.rs 3 -> 1. Two unattributed decision-voiced comments went with the
+# TYPE that carried them: `PropertySubject`'s *"OPEN, deliberately — kb_properties.owner_table is a
+# varchar mirroring no DDL enum"* and its `Other` arm's *"addressable but deliberately not a queryable
+# subject"*. Both halves of the predicate-container split now have containers, so the subject tag was
+# deleted (PR #682) and its doc with it. A removal, not a rebaseline-to-green: the two comments no
+# longer exist rather than no longer being flagged.
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-core/src/types/query/act.rs
 5 crates/temper-core/src/types/query/composition.rs
 6 crates/temper-core/src/types/query/disposition.rs
 1 crates/temper-core/src/types/query/envelope.rs
-3 crates/temper-core/src/types/query/filter.rs
+1 crates/temper-core/src/types/query/filter.rs
 2 crates/temper-core/src/types/query/id_set.rs
 1 crates/temper-core/src/types/query/mod.rs
 7 crates/temper-core/src/types/query/registry.rs
