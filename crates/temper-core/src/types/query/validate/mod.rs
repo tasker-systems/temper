@@ -2013,12 +2013,28 @@ mod tests {
         // The bite probe: one under the cap must NOT refuse, or the assertion below would pass
         // against a rule that refuses everything.
         assert!(
-            over(32).is_ok() || !refuses_with(&over(32), "edge property predicates"),
+            over(32).is_ok() || !refuses_with(&over(32), "per-edge predicates"),
             "32 is admitted"
         );
         assert!(
-            refuses_with(&over(33), "at most 32 edge property predicates"),
+            refuses_with(&over(33), "at most 32 per-edge predicates"),
             "33 is refused"
+        );
+        // **The refusal still says WHICH container refused** `[2026-08-15]`. Both caps render from
+        // one body now, and the failure mode of parameterizing a message is a shared string that
+        // refuses correctly and leaves a caller with two containers on one stage unable to tell
+        // which to fix. `walk` and `edge` are the two nouns that carry it.
+        assert!(
+            refuses_with(&over(33), "a walk admits")
+                && refuses_with(&over(33), "every candidate edge"),
+            "the edge cap names the walk and its candidate, rather than refusing in a voice the \
+             resource container could also have spoken"
+        );
+        // No facet breakdown: `EdgeFilter` has no facet axis, so rendering "(0 facet, N open-key)"
+        // would offer a caller a field that does not exist on the container that refused.
+        assert!(
+            !refuses_with(&over(33), "facet"),
+            "the edge refusal names no facet count"
         );
     }
 

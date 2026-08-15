@@ -129,6 +129,115 @@ fn probe_count(props: &[PropertyPredicate]) -> usize {
         .sum()
 }
 
+/// The nouns one property-predicate container speaks its refusals in.
+///
+/// Both caps below are the same arithmetic over the same predicate type, differing only in what a
+/// candidate IS and what the caller should narrow with instead. Carrying that difference as data
+/// rather than as four hand-written strings is what makes [`check_property_caps`] one body — and
+/// what stops the four from drifting in voice, which they already had: the resource pair said
+/// *"per-row predicates"* / *"containment probes per candidate row"* while the edge pair said
+/// *"edge property predicates"* / *"per candidate edge"*, same arithmetic, four spellings.
+///
+/// **A refusal must still say WHICH container refused.** That is `shape.rs`'s rule, gained there on
+/// 2026-08-15 when three predicate sources each began naming itself, and parameterizing the message
+/// is exactly where it is easiest to lose — a single shared string would refuse correctly and leave
+/// a caller with two containers on one stage unable to tell which to fix.
+struct PredicateContainer {
+    /// What the stage is, in the refusal's voice: `selection` / `walk`.
+    stage: &'static str,
+    /// What ONE candidate is: `row` / `edge`. Also the noun in *"every {unit} that carries the key"*.
+    unit: &'static str,
+    /// What the predicate list multiplies: `read` / `walk`.
+    work: &'static str,
+    /// What the caller should narrow with first, spelled as the refusal renders it.
+    narrow_with: &'static str,
+}
+
+impl PredicateContainer {
+    /// `ResourceFilter` — candidates are visible resource ROWS.
+    const RESOURCE: Self = Self {
+        stage: "selection",
+        unit: "row",
+        work: "read",
+        narrow_with: "the other fields",
+    };
+
+    /// `EdgeFilter` — candidates are EDGES, which is why its counts are never summed with the
+    /// resource ones. See [`MAX_PER_CANDIDATE_PREDICATES`].
+    const EDGE: Self = Self {
+        stage: "walk",
+        unit: "edge",
+        work: "walk",
+        narrow_with: "`edge_kinds` or `labels`",
+    };
+}
+
+/// Both per-candidate caps for one container, in one place.
+///
+/// **The two caps bound different factors and both are needed** — see [`MAX_PER_CANDIDATE_PROBES`]
+/// for the measurement that established the second. The probe cap bounds `Σ|values|`; the predicate
+/// cap bounds the list length. Neither subsumes the other, and the probe cap shipped only because a
+/// reviewer noticed the predicate cap was the wrong factor for [`PropertyOp::Contains`].
+///
+/// **`facets` is summed in only where it shares the candidate set.** The resource container passes
+/// its facet count because `ResourceFilter::facets` walks the same candidate ROWS; the edge
+/// container passes `0` because adding a row count to an edge count would bound the sum of two
+/// quantities that never multiply together. That asymmetry is the reason this takes the count as a
+/// parameter rather than reaching for a filter's field.
+///
+/// The facet breakdown renders only when there ARE facets, so the edge refusal stays clean and the
+/// resource one keeps the caller-actionable detail it was written with.
+fn check_property_caps(
+    name: &StageName,
+    container: &PredicateContainer,
+    facets: usize,
+    properties: &[PropertyPredicate],
+    errs: &mut Vec<PlanRefusal>,
+) {
+    let PredicateContainer {
+        stage,
+        unit,
+        work,
+        narrow_with,
+    } = container;
+
+    // A facet is one probe and carries no value list, so it counts once in both bounds.
+    let probes = facets + probe_count(properties);
+    if probes > MAX_PER_CANDIDATE_PROBES {
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::FilterNotApplicable,
+            format!(
+                "a {stage} admits at most {MAX_PER_CANDIDATE_PROBES} containment probes per \
+                 candidate {unit}; this stage supplied {probes}. A `contains` list is scanned in \
+                 full for every {unit} that carries the key — it short-circuits only on a MATCH — \
+                 so its length multiplies the {work} the same way the predicate count does, and a \
+                 long list of values that all miss is the expensive case rather than the harmless \
+                 one"
+            ),
+        ));
+    }
+
+    let multiplier = facets + properties.len();
+    if multiplier > MAX_PER_CANDIDATE_PREDICATES {
+        let breakdown = if facets > 0 {
+            format!(" ({facets} facet, {} open-key)", properties.len())
+        } else {
+            String::new()
+        };
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::FilterNotApplicable,
+            format!(
+                "a {stage} admits at most {MAX_PER_CANDIDATE_PREDICATES} per-{unit} predicates; \
+                 this stage supplied {multiplier}{breakdown}. Each one is evaluated against every \
+                 candidate {unit}, so the list is a cost multiplier rather than a narrowing — \
+                 narrow with {narrow_with} first, or split the question"
+            ),
+        ));
+    }
+}
+
 /// The kind an upstream node produces, walking a combinator to its first input. `None` for a
 /// dangling reference (already refused as topology) or an act that produces nothing.
 ///
@@ -399,38 +508,13 @@ fn check_act(
             // query on the surface rather than about this act, and it may want a read/write path
             // split rather than a single setting — so it gets a focused session, not a corner of
             // this one.
-            // A facet is one probe and carries no value list, so it counts once in both bounds.
-            let probes = f.facets.len() + probe_count(&f.properties);
-            if probes > MAX_PER_CANDIDATE_PROBES {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::FilterNotApplicable,
-                    format!(
-                        "a selection admits at most {MAX_PER_CANDIDATE_PROBES} containment probes \
-                         per candidate row; this stage supplied {probes}. A `contains` list is \
-                         scanned in full for every row that carries the key — it short-circuits \
-                         only on a MATCH — so its length multiplies the read the same way the \
-                         predicate count does, and a long list of values that all miss is the \
-                         expensive case rather than the harmless one"
-                    ),
-                ));
-            }
-            let multiplier = f.facets.len() + f.properties.len();
-            if multiplier > MAX_PER_CANDIDATE_PREDICATES {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::FilterNotApplicable,
-                    format!(
-                        "a selection admits at most {MAX_PER_CANDIDATE_PREDICATES} per-row \
-                         predicates; this stage supplied {multiplier} ({} facet, {} open-key). Each \
-                         one is evaluated against every candidate row, so the list is a cost \
-                         multiplier rather than a narrowing — narrow with the other fields first, \
-                         or split the question",
-                        f.facets.len(),
-                        f.properties.len()
-                    ),
-                ));
-            }
+            check_property_caps(
+                name,
+                &PredicateContainer::RESOURCE,
+                f.facets.len(),
+                &f.properties,
+                errs,
+            );
         } else {
             let declared: &[(&str, bool)] = &[
                 ("doc_type", !f.doc_type.is_empty()),
@@ -575,32 +659,11 @@ fn check_act(
             // the edge half on 2026-08-15 and is closed here in the same change that closes the
             // resource one, because the two predicates compile to the same shape and a bound
             // honoured on one of them is not a bound.
-            let edge_probes = probe_count(&f.properties);
-            if edge_probes > MAX_PER_CANDIDATE_PROBES {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::FilterNotApplicable,
-                    format!(
-                        "a walk admits at most {MAX_PER_CANDIDATE_PROBES} containment probes per \
-                         candidate edge; this stage supplied {edge_probes}. A `contains` list is \
-                         scanned in full for every edge that carries the key, so its length \
-                         multiplies the walk the same way the predicate count does"
-                    ),
-                ));
-            }
-            if f.properties.len() > MAX_PER_CANDIDATE_PREDICATES {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::FilterNotApplicable,
-                    format!(
-                        "a walk admits at most {MAX_PER_CANDIDATE_PREDICATES} edge property predicates; \
-                         this stage supplied {}. Each one is evaluated against every candidate \
-                         edge, so the list is a cost multiplier rather than a narrowing — narrow \
-                         with `edge_kinds` or `labels` first, or split the question",
-                        f.properties.len()
-                    ),
-                ));
-            }
+            //
+            // **`0` facets, and that is the arithmetic rather than an omission**: `EdgeFilter` has
+            // no facet axis, and an edge count and a row count never multiply together. See
+            // [`check_property_caps`].
+            check_property_caps(name, &PredicateContainer::EDGE, 0, &f.properties, errs);
         } else {
             errs.push(refusal(
                 Some(name),
