@@ -2599,26 +2599,42 @@ mod tests {
     ///
     /// It is here rather than in an execute test because what it witnesses is EXPRESSIBILITY, and
     /// that is decidable without a corpus: every refusal in this contract but one is static, so a
-    /// plan that validates is a plan the compiler will emit. The COUNT it returns is a separate
-    /// claim, needs the real corpus, and is not asserted anywhere yet — see the task.
+    /// plan that validates is a plan the compiler will emit.
     ///
-    /// **Two things this catches that `a_two_input_difference_is_admitted` cannot**, and both were
-    /// live hazards rather than hypotheticals when the op was designed:
+    /// # The shape below is the SECOND one, and the first was expressible and answered nothing
     ///
-    /// - **The difference cannot be the returned stage.** A combinator's rows have no single act
-    ///   to score them (`StageNotReturnable`), so `returns: ["gap"]` is refused — the answer has to
-    ///   be piped into an act that ranks. Anyone writing this composition from the task's own
-    ///   sketch, which ends `answer = A − (B ∪ C)`, hits that.
-    /// - **`follow-from` is what it pipes into, and it carries the seed AND the bound.** That needs
-    ///   `inputs` to be a list rather than a slot (widened 2026-08-14) and needs the act to declare
-    ///   `accepts_bounds: [Resource]` (the bounded walk, `20260814000030`). Before either, this
-    ///   question had nowhere to put its answer.
+    /// `[falsified against prod — 2026-08-15]` This test first bounded the WALK by the difference —
+    /// `follow-from(seed = the goal, bound = gap)` — on the reasoning that
+    /// [`crate::types::query::registry`]'s note says the bound is *"applied where visibility is
+    /// applied so it constrains INTERMEDIATE nodes and not merely the returned set"*, which also
+    /// absorbs the act's fixed depth of 2.
     ///
-    /// Bounding the walk rather than intersecting its output is also the stronger reading: the
-    /// bound is applied where visibility is, so it constrains INTERMEDIATE nodes — a hop-2 node
-    /// reachable only through an excluded hop-1 node does not arrive. The task records depth-2
-    /// leakage as a `follow-from` limitation it was absorbing with an intersect; this absorbs it
-    /// structurally instead.
+    /// **That plan validates, compiles, runs, and returns zero rows for a structural reason.**
+    /// `__temper_ungated_follow_from` seeds only from ids that survive the bound —
+    /// `FROM unnest(p_seed_ids) AS s(id) WHERE EXISTS (SELECT 1 FROM admitted a WHERE a.id = s.id)`,
+    /// where `admitted` is `visible ∩ p_bound_ids`. The seed here is a **goal**; the bound is a set
+    /// of **tasks**; a goal is never in it, so the walk never starts. The doc note is true and was
+    /// over-read: the bound constrains intermediate nodes *and the seed*.
+    ///
+    /// **Nothing in this crate could have caught it**, and that is the lesson rather than the bug.
+    /// `validate` is static — it answers *"is this expressible"*, and the wrong plan is perfectly
+    /// expressible. Only running it against a corpus distinguishes the two, which is exactly the
+    /// gap between this test and the task's own third acceptance criterion.
+    ///
+    /// So the walk runs UNBOUNDED and the narrowing happens in set operations after it — which is
+    /// the shape the task originally proposed, and it was right. The act's fixed depth of 2 is
+    /// absorbed by `∩ tasks`: measured on prod `[2026-08-15]`, hop 2 adds exactly one node and no
+    /// additional task.
+    ///
+    /// # What this still catches that `a_two_input_difference_is_admitted` cannot
+    ///
+    /// **The difference cannot be the returned stage.** A combinator's rows have no single act to
+    /// score them (`StageNotReturnable`), so the answer's stage cannot be asked for directly — the
+    /// composition returns the walk, and `gap`'s size is read from its trace. That is not a
+    /// formality: [`crate::types::query::trace::StageTrace`] carries **no produced count**, so a
+    /// terminal combinator's row count is otherwise recoverable only from a *downstream* stage's
+    /// `input_ids`, and `gap` has no downstream. Its `narrowed_by` disclosure is what makes the
+    /// answer readable at all.
     #[test]
     fn the_register_coverage_question_is_expressible_as_a_composition() {
         let selection = |name: &str, filter: ResourceFilter| {
@@ -2640,6 +2656,13 @@ mod tests {
             }],
             ..Default::default()
         };
+        let combine = |name: &str, op: CombineOp, a: &str, b: &str| {
+            StageNode::Combine(CombineNode {
+                name: StageName::parse(name).unwrap(),
+                op,
+                inputs: vec![StageName::parse(a).unwrap(), StageName::parse(b).unwrap()],
+            })
+        };
 
         let compose = |returned: &str| Composition {
             outcome: OutcomeDeclaration {
@@ -2649,44 +2672,20 @@ mod tests {
                 }],
             },
             stages: vec![
-                selection(
-                    "tasks",
-                    ResourceFilter {
-                        doc_type: vec!["task".to_string()],
-                        ..Default::default()
-                    },
-                ),
-                selection("witnessing", has_key("witnesses")),
-                selection("enabling", has_key("enables")),
-                StageNode::Combine(CombineNode {
-                    name: StageName::parse("declared").unwrap(),
-                    op: CombineOp::Union,
-                    inputs: vec![
-                        StageName::parse("witnessing").unwrap(),
-                        StageName::parse("enabling").unwrap(),
-                    ],
-                }),
-                difference("gap", "tasks", "declared"),
-                // The returnable arm: walk `advances` edges out of the goal, staying inside `gap`.
+                // UNBOUNDED, per the falsification above: a bounded walk whose seed is outside the
+                // bound never starts.
                 StageNode::Act(ActInvocation {
-                    name: StageName::parse("answer").unwrap(),
+                    name: StageName::parse("advancing").unwrap(),
                     act: ActName::FollowFrom,
                     intention: None,
-                    inputs: vec![
-                        // The goal itself, as the walk's seed.
-                        StageInput::Caller {
-                            relation: StageRelation::Seed,
-                            ids: IdSet {
-                                kind: IdKind::Resource,
-                                provenance: None,
-                                ids: vec![uuid::Uuid::now_v7()],
-                            },
+                    inputs: vec![StageInput::Caller {
+                        relation: StageRelation::Seed,
+                        ids: IdSet {
+                            kind: IdKind::Resource,
+                            provenance: None,
+                            ids: vec![uuid::Uuid::now_v7()],
                         },
-                        StageInput::Upstream {
-                            relation: StageRelation::Bound,
-                            stage: StageName::parse("gap").unwrap(),
-                        },
-                    ],
+                    }],
                     terms: BTreeMap::new(),
                     resource_filter: None,
                     edge_filter: Some(EdgeFilter {
@@ -2695,16 +2694,34 @@ mod tests {
                     }),
                     properties: vec![],
                 }),
+                selection(
+                    "tasks",
+                    ResourceFilter {
+                        doc_type: vec!["task".to_string()],
+                        ..Default::default()
+                    },
+                ),
+                // Absorbs both the non-task advancers (4 of 35, measured) and the depth-2 arrivals.
+                combine(
+                    "advancing_tasks",
+                    CombineOp::Intersect,
+                    "advancing",
+                    "tasks",
+                ),
+                selection("witnessing", has_key("witnesses")),
+                selection("enabling", has_key("enables")),
+                combine("declared", CombineOp::Union, "witnessing", "enabling"),
+                combine("gap", CombineOp::Difference, "advancing_tasks", "declared"),
             ],
         };
 
-        validate(&compose("answer"))
+        validate(&compose("advancing"))
             .unwrap_or_else(|e| panic!("the question must be expressible; got {e:?}"));
 
         // **The denominator.** Without this, the assertion above is "some composition validates",
         // which a plan with the difference stage deleted would satisfy just as well. The SAME plan
-        // asking for the difference's rows back is refused — so `validate` is genuinely reading
-        // this shape, and the answer really does have to be piped into an act that ranks.
+        // asking for the answer's rows back is refused — which is why the count has to be read from
+        // the trace, and why the subtraction disclosure exists.
         let errs = validate(&compose("gap")).expect_err("a combinator's rows have no scorer");
         assert!(
             errs.iter()
