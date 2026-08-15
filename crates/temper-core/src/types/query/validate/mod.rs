@@ -2591,6 +2591,129 @@ mod tests {
         );
     }
 
+    /// **The question this op was added for, written out and validated end to end.**
+    ///
+    /// *"Which tasks advancing this goal declare neither `open_meta.witnesses` nor
+    /// `open_meta.enables`"* — `A − (B ∪ C)`, the shape
+    /// [Dogfood: register coverage is a composition](./01a0002b-9fd1-78c3-b1e4-7e3400e9b5d0) names.
+    ///
+    /// It is here rather than in an execute test because what it witnesses is EXPRESSIBILITY, and
+    /// that is decidable without a corpus: every refusal in this contract but one is static, so a
+    /// plan that validates is a plan the compiler will emit. The COUNT it returns is a separate
+    /// claim, needs the real corpus, and is not asserted anywhere yet — see the task.
+    ///
+    /// **Two things this catches that `a_two_input_difference_is_admitted` cannot**, and both were
+    /// live hazards rather than hypotheticals when the op was designed:
+    ///
+    /// - **The difference cannot be the returned stage.** A combinator's rows have no single act
+    ///   to score them (`StageNotReturnable`), so `returns: ["gap"]` is refused — the answer has to
+    ///   be piped into an act that ranks. Anyone writing this composition from the task's own
+    ///   sketch, which ends `answer = A − (B ∪ C)`, hits that.
+    /// - **`follow-from` is what it pipes into, and it carries the seed AND the bound.** That needs
+    ///   `inputs` to be a list rather than a slot (widened 2026-08-14) and needs the act to declare
+    ///   `accepts_bounds: [Resource]` (the bounded walk, `20260814000030`). Before either, this
+    ///   question had nowhere to put its answer.
+    ///
+    /// Bounding the walk rather than intersecting its output is also the stronger reading: the
+    /// bound is applied where visibility is, so it constrains INTERMEDIATE nodes — a hop-2 node
+    /// reachable only through an excluded hop-1 node does not arrive. The task records depth-2
+    /// leakage as a `follow-from` limitation it was absorbing with an intersect; this absorbs it
+    /// structurally instead.
+    #[test]
+    fn the_register_coverage_question_is_expressible_as_a_composition() {
+        let selection = |name: &str, filter: ResourceFilter| {
+            StageNode::Act(ActInvocation {
+                name: StageName::parse(name).unwrap(),
+                act: ActName::FindResourcesWith,
+                intention: None,
+                inputs: vec![],
+                terms: BTreeMap::new(),
+                resource_filter: Some(filter),
+                edge_filter: None,
+                properties: vec![],
+            })
+        };
+        let has_key = |key: &str| ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: key.to_string(),
+                op: PropertyOp::HasKey,
+            }],
+            ..Default::default()
+        };
+
+        let compose = |returned: &str| Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: StageName::parse(returned).unwrap(),
+                    with: vec![],
+                }],
+            },
+            stages: vec![
+                selection(
+                    "tasks",
+                    ResourceFilter {
+                        doc_type: vec!["task".to_string()],
+                        ..Default::default()
+                    },
+                ),
+                selection("witnessing", has_key("witnesses")),
+                selection("enabling", has_key("enables")),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("declared").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: vec![
+                        StageName::parse("witnessing").unwrap(),
+                        StageName::parse("enabling").unwrap(),
+                    ],
+                }),
+                difference("gap", "tasks", "declared"),
+                // The returnable arm: walk `advances` edges out of the goal, staying inside `gap`.
+                StageNode::Act(ActInvocation {
+                    name: StageName::parse("answer").unwrap(),
+                    act: ActName::FollowFrom,
+                    intention: None,
+                    inputs: vec![
+                        // The goal itself, as the walk's seed.
+                        StageInput::Caller {
+                            relation: StageRelation::Seed,
+                            ids: IdSet {
+                                kind: IdKind::Resource,
+                                provenance: None,
+                                ids: vec![uuid::Uuid::now_v7()],
+                            },
+                        },
+                        StageInput::Upstream {
+                            relation: StageRelation::Bound,
+                            stage: StageName::parse("gap").unwrap(),
+                        },
+                    ],
+                    terms: BTreeMap::new(),
+                    resource_filter: None,
+                    edge_filter: Some(EdgeFilter {
+                        labels: vec!["advances".to_string()],
+                        ..Default::default()
+                    }),
+                    properties: vec![],
+                }),
+            ],
+        };
+
+        validate(&compose("answer"))
+            .unwrap_or_else(|e| panic!("the question must be expressible; got {e:?}"));
+
+        // **The denominator.** Without this, the assertion above is "some composition validates",
+        // which a plan with the difference stage deleted would satisfy just as well. The SAME plan
+        // asking for the difference's rows back is refused — so `validate` is genuinely reading
+        // this shape, and the answer really does have to be piped into an act that ranks.
+        let errs = validate(&compose("gap")).expect_err("a combinator's rows have no scorer");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::StageNotReturnable
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "gap")),
+            "got: {errs:?}"
+        );
+    }
+
     #[test]
     fn a_three_input_union_stays_legal_so_the_arity_rule_is_per_op() {
         // The other half: the ceiling belongs to `difference` alone. A rule written on
