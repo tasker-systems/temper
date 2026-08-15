@@ -37,9 +37,25 @@ Checks
 3. **Citation integrity** — goal membership has two spellings: the `advances`
    edge (the only thing `resource list --goal` filters on) and
    `open_meta.witnesses.goal` (the citation). Nothing ties them, so this compares
-   them per task and reports MISSING (no advances edge) separately from DIVERGES
-   (an advances edge that points at a different goal). The distinction is
-   load-bearing — see the note on 019f975e below.
+   them per task and reports MISSING (no advances edge at all) separately from
+   CROSS-GOAL (advances edges exist, and the cited goal is not among them).
+
+   **Only MISSING is a defect, and the distinction is the whole point of keeping
+   two verdicts.** A task may legitimately advance one goal while enabling a
+   clause on another — substrate work that unblocks a clause on a consuming
+   register is the ordinary case, not an anomaly — so CROSS-GOAL is reported and
+   never adjudicated. MISSING is different in kind: the task claims a goal and is
+   linked to nothing, so `list --goal` cannot find it from either spelling.
+
+   `[decided — 2026-08-15, Pete]` CROSS-GOAL was called DIVERGES and counted
+   against `--strict`. The name asserted a defect and the exit code enforced it,
+   which made the one real instance in this corpus — "Extract the visibility
+   spine as shared joinable relations" (019fcd3a-856c-7702-9251-9979fe128e04),
+   advancing "Principal-agnostic substrate vs. principal constraint in SQL"
+   (019fb881-1ca5-7323-986a-834e557ed885) while enabling two clauses on the
+   search-acts register — read as something to repair when it was correctly
+   recorded. A gate that fails on a legitimate shape trains people to stop
+   running it.
 
 4. **Closure staleness** — set difference of the register's closure declaration
    against the project taxonomy. Reported as OUT OF DOMAIN when the register
@@ -298,7 +314,8 @@ def build_report(goal_ref: str) -> dict:
         elif not targets:
             verdict = "MISSING"
         else:
-            verdict = "DIVERGES"
+            # Legitimate: this task advances a different goal and enables a clause here.
+            verdict = "CROSS-GOAL"
         integrity.append((citation, verdict, targets))
 
     uncited = uncited_advancing_tasks(goal_ref, {c.task_id for c in citations})
@@ -377,6 +394,11 @@ def print_report(report: dict) -> None:
     print("  The citation (open_meta) and the link (advances edge) are two spellings of")
     print("  goal membership with nothing tying them. Compared per task:")
     print()
+    print("  MISSING    — cites this goal, carries no `advances` edge at all. A defect: the task")
+    print("               claims a goal and is linked to none, so `list --goal` cannot find it.")
+    print("  CROSS-GOAL — advances a DIFFERENT goal and enables a clause here. Legitimate, and")
+    print("               reported rather than adjudicated; --strict does not count it.")
+    print()
     for citation, verdict, targets in report["integrity"]:
         if verdict == "OK":
             continue
@@ -425,7 +447,10 @@ def main() -> int:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="exit non-zero on integrity defects (dangling citations, missing/diverging edges). "
+        help="exit non-zero on integrity defects: a dangling clause name, or a citation with no "
+        "`advances` edge at all (MISSING). A CROSS-GOAL citation — the task advances another goal "
+        "and enables a clause here — is reported and never counted, because it is a legitimate "
+        "shape rather than a defect. "
         "Uncovered clauses never affect the exit code — they are frequently correct. Neither do "
         "advancing-but-uncited tasks: a task may legitimately advance a goal without evidencing or "
         "enabling any single clause, so they are reported and never adjudicated. Said explicitly "
@@ -476,8 +501,12 @@ def main() -> int:
         print_report(report)
 
     if args.strict:
+        # **CROSS-GOAL is not counted, by decision** `[2026-08-15, Pete]`. It was, under the name
+        # DIVERGES, and the one instance in this corpus was correctly recorded work. Only MISSING —
+        # a citation with no `advances` edge anywhere — is a factual defect, because the task claims
+        # a goal while being linked to none.
         defects = len(report["dangling"]) + sum(
-            1 for _, v, _ in report["integrity"] if v != "OK"
+            1 for _, v, _ in report["integrity"] if v == "MISSING"
         )
         if defects:
             return 1

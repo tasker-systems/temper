@@ -258,3 +258,116 @@ mod tests {
         );
     }
 }
+
+/// The shipped skill's worked examples are held to the same door they teach.
+///
+/// **A JSON fence in a doc is a claim that this JSON works.** `crates/temper-cli/skill-content/`
+/// is the source of the `temper` skill — the only worked composition an agent ever sees — and
+/// until this guard existed nothing read those fences at all. `skills-drift` checks that the
+/// committed projection matches its template, so a template and its projection that are wrong in
+/// the same way are green and correct: it verifies fidelity, never truth.
+///
+/// `[measured — 2026-08-15]` The one example in `querying.md` had been unrunnable since the
+/// `input` → `inputs` rename on 2026-08-14. It failed at DESERIALIZATION —
+/// `ActInvocation` carries `deny_unknown_fields` — with *"data did not match any variant of
+/// untagged enum StageNode"*, which names neither the file nor the field, so an agent copying the
+/// example could not diagnose it. The rename itself was well-guarded, by
+/// `the_retired_singular_input_key_is_refused_rather_than_dropped`; what nothing guarded was the
+/// documentation OF the wire, so the guard worked and the only thing it refused was our own
+/// example. `[decided — 2026-08-15, Pete]` — the example should parse as an executable fixture,
+/// in the spirit of a rust doctest.
+///
+/// # The set is DERIVED, and both directions of the derivation matter
+///
+/// The directory is walked at runtime rather than `include_str!`-listed, so a compositions example
+/// added to a new doc is covered with no edit here — the same reason `detect-ci-scope`'s
+/// compiled-in-doc guard greps rather than trusting a list. (`include_str!` takes no dynamic path,
+/// which is why this is a `std::fs` walk and not a macro.)
+///
+/// A fence is treated as a plan when its object carries a `stages` key, which is what makes the
+/// live defect catchable: the broken example **has** `stages` and fails to become a `Composition`,
+/// so keying on "does it deserialize" would have skipped precisely the thing this exists to catch.
+///
+/// And it asserts its own DENOMINATOR. A walk that matched nothing would pass while checking
+/// nothing — the absence-reads-as-clean shape — so at least one plan must be found.
+#[cfg(test)]
+mod skill_example_tests {
+    use super::*;
+
+    /// Every ```json fence in a markdown file, in source order.
+    fn json_fences(md: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current: Option<String> = None;
+        for line in md.lines() {
+            match (&mut current, line.trim_start()) {
+                (None, l) if l.starts_with("```json") => current = Some(String::new()),
+                (Some(_), l) if l.starts_with("```") => {
+                    out.push(current.take().expect("inside a fence"));
+                }
+                (Some(buf), _) => {
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn skill_markdown() -> Vec<(std::path::PathBuf, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+            for entry in std::fs::read_dir(dir)
+                .expect("skill-content is readable")
+                .flatten()
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "md") {
+                    let body = std::fs::read_to_string(&path).expect("readable");
+                    out.push((path, body));
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skill-content");
+        let mut out = Vec::new();
+        walk(&root, &mut out);
+        out
+    }
+
+    #[test]
+    fn every_worked_composition_the_skill_ships_parses_and_is_expressible() {
+        let mut checked = 0usize;
+        for (path, body) in skill_markdown() {
+            for (i, fence) in json_fences(&body).into_iter().enumerate() {
+                // Not every JSON fence is a plan; one that carries `stages` claims to be.
+                let looks_like_a_plan = serde_json::from_str::<serde_json::Value>(&fence)
+                    .ok()
+                    .is_some_and(|v| v.get("stages").is_some());
+                if !looks_like_a_plan {
+                    continue;
+                }
+                let name = format!("{} fence #{}", path.display(), i + 1);
+                let plan: Composition = serde_json::from_str(&fence).unwrap_or_else(|e| {
+                    panic!(
+                        "{name} claims to be a composition and does not deserialize as one: {e}\n\
+                         An agent copying this gets a refusal naming `StageNode`, not the field.\n\
+                         {fence}"
+                    )
+                });
+                let report = check_plan(&plan);
+                assert!(
+                    report.expressible,
+                    "{name} deserializes but is not expressible: {:?}",
+                    report.refusals
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "no worked composition was found in skill-content, so this guard checked nothing — \
+             either the examples moved or the fence scan broke"
+        );
+    }
+}

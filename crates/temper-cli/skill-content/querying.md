@@ -51,7 +51,7 @@ A plan is JSON: `stages` (a DAG) and `outcome` (which stages return rows).
       "intention": { "query": "refusal" }, "terms": { "limit": 40 } },
     { "name": "why", "act": "find-about-within",
       "intention": { "query": "why a plan is declined before it runs" },
-      "input": { "from": "upstream", "as": "bound", "stage": "refusals" },
+      "inputs": [ { "from": "upstream", "as": "bound", "stage": "refusals" } ],
       "terms": { "limit": 5 } }
   ],
   "outcome": { "returns": [ { "stage": "why", "with": [] } ] }
@@ -63,9 +63,19 @@ Four things carry the design, and each is worth understanding rather than copyin
 - **Every find act carries its own `intention`.** The question lives on the stage, not on the
   envelope — two stages asking different things is the normal case, not an edge case. Omit it on a
   find act and the plan is refused.
-- **`input` names an upstream stage rather than copying ids**, and `as` says what the receiving act
-  does with the set: `bound` narrows to within it, `seed` grows from it. There is no way to supply a
-  set without saying which — the relation belongs to the edge.
+- **`inputs` names upstream stages rather than copying ids**, and `as` says what the receiving act
+  does with each set: `bound` narrows to within it, `seed` grows from it. There is no way to supply
+  a set without saying which — the relation belongs to the edge.
+
+  It is a **list**, because a stage may carry a seed *and* a bound at once — that is what a bounded
+  walk is. Two inputs in the *same* relation are refused rather than merged: merging them is
+  `union`, which is a stage you declare, that appears in the trace, and whose size a reader can see.
+
+  > **The bound applies to the SEED too, and that is the trap.** `follow-from` starts only from
+  > seeds that are inside the bound, so a walk seeded with a resource the bounding set does not
+  > contain returns **nothing** — validly, silently, and with `--check` reporting `expressible`.
+  > Bound a walk only when the seed is a member of the bounding set; otherwise walk unbounded and
+  > narrow afterwards with `intersect` / `difference`.
 - **`outcome.returns` is not "the last stage".** Intermediate stages pipe **ids**, not rows; only
   what you declare comes back hydrated. Returning everything is usually the wrong instinct — it is
   the intermediate stages' *trace* you want, not their rows.
