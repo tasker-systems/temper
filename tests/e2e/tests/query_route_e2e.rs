@@ -166,6 +166,32 @@ async fn a_composition_posted_as_json_comes_back_hydrated(pool: sqlx::PgPool) {
         !response.trace.stages.is_empty(),
         "a composition answered with no trace is a black box"
     );
+
+    // **The tally survives the whole route**, which is the half a unit test on the assembler cannot
+    // reach: the count is computed by `count(*)` over the stage's CTE in the SAME statement as the
+    // hits, carried through `TallyRow`, and serialized. Everything between the database and this
+    // struct is what this asserts.
+    //
+    // Compared against the hydrated rows rather than a literal, because equality here is the
+    // interesting claim: `produced_ids` counts what the corpus yielded and the hits are what
+    // survived hydration, so they agree exactly when nothing was dropped between the two
+    // statements — the ordinary case, and the one a literal would not distinguish from a hardcoded
+    // number that happens to match.
+    let traced = response
+        .trace
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::parse("about").unwrap())
+        .expect("the returned stage is traced");
+    assert_eq!(
+        traced.produced_ids,
+        hits.len() as i64,
+        "the stage's row count must reach the wire, and must agree with the rows beside it"
+    );
+    assert!(
+        traced.produced_ids > 0,
+        "an equality against an empty result set would hold vacuously"
+    );
 }
 
 /// **The 400 carries MORE THAN ONE refusal.**
