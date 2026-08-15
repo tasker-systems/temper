@@ -17,7 +17,7 @@
         { "type": "array", "items": { "type": "string" } },
         { "type": "string" }
       ],
-      "description": "FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string."
+      "description": "FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string. A bare string is ONE tag and is stored as a one-element array: `\"concept design\"` becomes `[\"concept design\"]`, filterable as `concept design` and NOT as `concept` (ruled 2026-08-15, migration 20260815000030). Write the array form when you mean several tags."
     },
     "descriptor": {
       "type": "string",

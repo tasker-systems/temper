@@ -89,7 +89,7 @@ Any key is accepted and stored. The keys below are *recognized*: they carry a de
 | Key | Shape | Notes |
 |---|---|---|
 | `keywords` | string or array | FTS-indexed at weight C (convention v1). Deliberately-attached topical tags that boost search ranking. A JSON array of strings (space-joined into the vector) or a bare JSON string. Synonymous with `tags` for ranking. |
-| `tags` | string or array | FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string. |
+| `tags` | string or array | FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string. A bare string is ONE tag and is stored as a one-element array: `"concept design"` becomes `["concept design"]`, filterable as `concept design` and NOT as `concept` (ruled 2026-08-15, migration 20260815000030). Write the array form when you mean several tags. |
 | `descriptor` | string | FTS-indexed at weight D (convention v1). The full section descriptor, for corpora where importers truncate it out of the title under length pressure — keeps the discriminating words searchable. A JSON string. |
 | `date` | string | Shape-convention (not FTS-indexed). ISO-8601 calendar date, YYYY-MM-DD. The most common open_meta key in production. |
 | `relates_to` | array | Shape-convention (not indexed). Soft relationship to other resources (UUIDs, slugs, or refs). Parallel to the hard edge model. |
