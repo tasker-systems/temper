@@ -11,7 +11,8 @@
 #   cargo make test-all    Run all test tiers
 #   cargo make fix         Auto-fix all issues
 #   cargo make build       Build everything
-#   cargo make audit       Security audit
+#   cargo make audit       Security audit (dependency CVEs)
+#   cargo make tripwires   Run every audit-*.sh tripwire (also runs inside `check`)
 #   cargo make run         Run temper-api locally
 #
 # Docker:
