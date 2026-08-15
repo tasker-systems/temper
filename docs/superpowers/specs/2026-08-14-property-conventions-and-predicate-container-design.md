@@ -224,10 +224,26 @@ With both halves given containers — edge predicates in `EdgeFilter`, open-key 
 `UnknownFilterValue` arm with it `[verified — filter.rs:106-115]`. A subject tag exists only because
 a predicate floats free of a container; give it a container and the tag has no job.
 
+**Done** `[2026-08-15, 20260815000040]`, with one thing this section did not anticipate: the FIELD
+outlives the type. `ActInvocation::properties` is retyped to `PropertyPredicate` and kept as a
+**tombstone** that refuses with a redirect, because `ActInvocation` carries `deny_unknown_fields`
+and serde short-circuits before `validate` — so deleting the field would answer a stale caller with
+a deserializer 400 outside `ErrorBody` instead of a named refusal. The residue: with the tag gone
+the redirect cannot say WHICH container, so it names both. `RefusalReason::UnknownFilterValue` is
+deleted outright, since nothing could raise it any more and no test pins "every variant is raised";
+that narrows a CLOSED wire enum, so a client built after this change cannot parse the reason from a
+server built before it.
+
 **This is the "both halves" branch of the sibling design's §7 fork, and this document is the
 argument for taking it.** The branch was previously blocked on not knowing where conventions live.
 
 ### 6.5 What each half then is
+
+> `[corrected — 2026-08-15]` **"over the same view" is the one phrase of this design not taken
+> literally, and it was wrong for BOTH halves rather than one.** Neither predicate reads the
+> element relation: the edge half reads `kb_edge_properties` and the resource half reads
+> `kb_resource_properties`, both exposing `property_value` whole. `kb_property_elements` serves
+> `tags` and `facet`, whose semantics genuinely are AND-containment over elements. See §9.
 
 - **Edge half** — shape-agnostic containment over the same view, no conventions to preserve, zero
   live rows. The easy half, and independently shippable.
@@ -323,18 +339,48 @@ here would bundle two decisions that can be taken apart.
   one standard deviation of either. So the shape costs what the thing it replaces cost, on its own
   number rather than on `20260808000020`'s.
 
-  Two limits on that measurement, stated rather than left to be assumed. It was taken against the
-  predicate **inlined**, because the migration is not on prod yet; a view is expanded into the query
-  tree by the rewriter, so the inline form is the faithful stand-in, but it is a stand-in. And
-  26,970 blocks is dominated by `resources_visible_to`, not by the tag predicate — this measures
-  that the new shape adds nothing, not what the read costs overall.
+  ~~Two limits on that measurement~~ **One limit; the other is closed** `[2026-08-15, post-deploy]`.
+  It was taken against the predicate **inlined**, because the migration was not on prod yet — a
+  stand-in, and a faithful one, but a stand-in. Re-measured through the **real view** after
+  `20260815000030` applied: **35.03 ms / 26,978 blocks per call**, against the incumbent's 34.71 ms
+  / 26,970 (σ 2.13). The 8-block difference is corpus growth (16,733 live rows against 16,728), so
+  the stand-in is now vindicated by measurement rather than by argument.
+
+  The surviving limit stands: 26,970 blocks is dominated by `resources_visible_to`, not by the tag
+  predicate — this measures that the new shape adds nothing, not what the read costs overall.
 
   `pg_stat_statements` **is installed and collecting on prod** (616 statements): `20260814000020`
   applied. The repeated claim that it is unavailable is stale as of 2026-08-15.
-- **`MAX_FACET_PREDICATES` moves with the answer.** The cap exists because a facet predicate is a
-  per-row `NOT EXISTS` and *"an authenticated caller chooses the second factor"*
-  `[carried — capability.rs]`. Open-key predicates have the identical cost shape, so the cap becomes
-  theirs. Not designed here.
+- ~~**`MAX_FACET_PREDICATES` moves with the answer.**~~ **Designed and measured**
+  `[2026-08-15, 20260815000040]`. It is now `MAX_PER_CANDIDATE_PREDICATES`, and it bounds the
+  **sum** of `ResourceFilter::facets` and `ResourceFilter::properties`, because both are a per-row
+  `NOT EXISTS` over the *same* candidate rows and their costs therefore add. `EdgeFilter::
+  properties` is counted separately — its candidates are EDGES, and summing two quantities that
+  never multiply together would be a cap that looks stricter and means nothing. Capping each field
+  at 32 would have doubled the ceiling by omission; one caller sending 32 facets plus one open-key
+  predicate is now refused, which is the direction that fails safe.
+
+  **The cost claim behind the cap is measured rather than asserted** `[on prod — 2026-08-15]`, and
+  measuring it corrected the picture in both directions. Over 3,409 candidate rows, against a
+  34,273-block / 21.5 ms baseline:
+
+  | predicates | blocks | ms | delta |
+  |---|---|---|---|
+  | none (baseline) | 34,273 | 21.5 | — |
+  | 1 (`contains`, matching) | 37,858 | 33.0 | +3,585 |
+  | 4, **first three non-matching** | 37,692 | 29.1 | +3,419 |
+  | 6, **all matching** | 64,318 | 49.5 | +30,045 |
+
+  The multiplier is real — six all-matching predicates cost ~5,000 blocks each and take the read to
+  ~1.9× baseline — so the cap is doing work rather than decorating. **But the `NOT EXISTS`
+  short-circuits on the first predicate that FAILS**, which is why four predicates cost the same as
+  one when the first does not match. So the cap must be justified by the all-matching worst case and
+  never by a sampled average, and the naive probe — a long list of keys that mostly miss — measures
+  the short-circuit rather than the thing being bounded.
+
+  The predicate plans to an **Index Only Scan on `uq_kb_properties_active`**, whose leading columns
+  are exactly `(owner_table, owner_id, property_key)` — so the open-key lookup rides an index that
+  already existed for the uniqueness constraint, and needs none of its own.
 - **The element relation cannot answer `has_key`, and that is a hole the open-key half must not
   fall into** `[found while building — 2026-08-15]`. An empty array explodes to **no rows**, so a
   resource carrying `tags: []` is indistinguishable in `kb_property_elements` from one carrying no
@@ -343,6 +389,25 @@ here would bundle two decisions that can be taken apart.
   for a different reason (*"a row-existence check on the `property_key` btree"*), so the two
   operators of one closed set legitimately read two different relations. Recorded on the view's
   `COMMENT`, because the predicate that would get this wrong is not written yet.
+- **The `Contains` GRAIN is ruled: WHOLE VALUE, on both halves** `[decided — 2026-08-15, Pete;
+  20260815000040]`. `ResourceFilter::properties` reads `kb_resource_properties` — the owner-scoped
+  sibling of `kb_edge_properties`, value exposed whole — and deliberately **not**
+  `kb_property_elements`. The two grains disagree in exactly two cells and in opposite directions,
+  and only one of them is reachable in this corpus: **zero array-of-objects resource rows exist**
+  (the cell the element grain would win), while **1,228 array-of-scalars rows over 14 keys** do (the
+  cell it would silently lose, turning an array-shaped probe from "matches" into "matches nothing").
+
+  §6.3's *"a predicate reads the view, so it can neither lose a convention nor wrongly inherit
+  one"* is what decides it, and **the input it turns on changed after §7 was ruled**: with `tags`
+  normalized at WRITE, the normalized shape is in the stored bytes, so reading `kb_properties` no
+  longer loses that convention. What the element view still supplies is a *grain*, not a convention
+  — so inheriting it would be the *wrongly-inherit-one* half of that sentence.
+
+  Two things fall out. `Contains` means the same thing in both containers, so the divergence the
+  container design exists to remove does not open. And `HasKey` and `Contains` read ONE relation,
+  which retires the bullet below about the two operators legitimately reading two — a `[]`-valued
+  key is a row in `kb_resource_properties` and no rows in `kb_property_elements`, so the whole-value
+  relation answers both operators and the element one answers neither cleanly.
 - **`kb_edge_properties` deliberately does NOT converge onto the element relation** `[2026-08-15]`.
   §6.5 called the edge half containment *"over the same view"*, and that is now the one part of this
   design not taken literally: the edge predicate needs `property_value` **whole**, because

@@ -43,7 +43,7 @@ pub struct EdgeFilter {
     ///
     /// **This is where an edge property predicate lives, and the container is the point.** It moved
     /// off [`super::ActInvocation::properties`], where the same field meant different things
-    /// depending on which act carried it — which is what a [`PropertySubject`] tag existed to
+    /// depending on which act carried it — which is what a `PropertySubject` tag existed to
     /// disambiguate. Given a container the tag has no job; the subject is the container.
     ///
     /// **Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,
@@ -73,8 +73,9 @@ pub struct FacetPredicate {
 /// vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three
 /// is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as
 /// `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value
-/// for. `UnknownFilterValue` is raised for exactly one thing here — an unrecognized
-/// [`PropertySubject`] — and its own doc carries the ruling.
+/// for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an
+/// unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on
+/// this struct raises it.
 ///
 /// The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,
 /// because it can never match; *a string that may be perfectly legitimate and matches nothing in the
@@ -94,6 +95,27 @@ pub struct ResourceFilter {
     /// `kb_properties` where `property_key = 'facet'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facets: Vec<FacetPredicate>,
+    /// `kb_properties` rows owned by the resource itself: open key space, closed operator set.
+    /// AND across the list, OR within a [`PropertyOp::Contains`].
+    ///
+    /// **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of
+    /// the seventy live property keys were narrowable by nothing on any act
+    /// `[measured on prod — 2026-08-14]`.
+    ///
+    /// **The container is the point, and it is the same container `EdgeFilter` has.** This is where
+    /// a resource property predicate lives; it moved off `ActInvocation::properties`, where the same
+    /// field meant different things depending on which act carried it. Given a container the subject
+    /// tag has no job, which is why the tag no longer exists.
+    ///
+    /// **`Contains` reads the value WHOLE — `kb_resource_properties`, never
+    /// `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly
+    /// what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently
+    /// narrow the operator: an array-shaped probe matches the whole value and matches *nothing*
+    /// against an exploded element, and a `[]`-valued key is a row in the one and no rows in the
+    /// other. The element view continues to serve `tags` and `facets`, whose semantics genuinely
+    /// are AND-containment over elements.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<PropertyPredicate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,29 +136,6 @@ pub struct ResourceFilter {
 pub enum FilterField {
     Resource,
     Edge,
-}
-
-/// What a [`SubjectedPropertyPredicate`] addresses.
-///
-/// OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a
-/// closed set here would be a claim the schema does not make. This is the OPPOSITE call from
-/// [`EdgeKind`], and principled rather than inconsistent: `EdgeKind` mirrors a DDL enum, so its
-/// closedness is a *fact about the database*; `owner_table` mirrors nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum PropertySubject {
-    Resource,
-    /// Empty in this deployment's data and NOT empty in others — the polymorphic owner is design
-    /// intent, not accident. Spec §12.
-    Edge,
-    /// An unrecognized subject — e.g. `content_block`, which is addressable but deliberately not a
-    /// queryable subject (spec §12). Validation renders it as `UnknownFilterValue`.
-    #[serde(untagged)]
-    Other(String),
 }
 
 /// A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
@@ -177,50 +176,22 @@ pub enum PropertyOp {
 }
 
 /// A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an
-/// [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.
+/// [`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the
+/// resource's own, and nothing else has to be said.
 ///
-/// `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on
-/// the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction so that the
-/// transitional type carries the transitional name: when the open-key resource half lands and
-/// deletes it, nothing is renamed a second time.
+/// `[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the
+/// invocation is **deleted**, along with the `PropertySubject` tag it carried and the
+/// `UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is
+/// [`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing
+/// with a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`
+/// and removing the field would route a stale caller into a deserializer 400 outside the
+/// `ErrorBody` shape — a worse answer than the one being replaced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct PropertyPredicate {
-    pub key: String,
-    pub op: PropertyOp,
-}
-
-/// A property predicate that names its own subject, because it sits on the invocation rather than
-/// in a container.
-///
-/// The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
-/// a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
-/// subject" has two answers.
-///
-/// # This type is transitional, and every arm of it is refused today
-///
-/// `[decided — 2026-08-14, Pete]` Both halves get containers and this type disappears with
-/// [`PropertySubject`]. The edge half landed on 2026-08-15 — an edge predicate now belongs in
-/// [`EdgeFilter::properties`], and the refusal for a `subject: edge` predicate here REDIRECTS
-/// there rather than merely declining. The resource half is task
-/// `01a00502-a774-7001-b5b2-0ce462158f1c`, which deletes this type, [`PropertySubject`], its
-/// `Other(String)` arm and the `UnknownFilterValue` refusal together.
-///
-/// It survives in the meantime **so that a stale caller gets a named refusal that says where the
-/// capability went**. Deleting the field instead would route the same request into
-/// `ActInvocation`'s `deny_unknown_fields`, and serde short-circuits before `validate` — so the
-/// caller would receive a deserializer 400 outside the `ErrorBody` shape, which is a worse answer
-/// than the one being replaced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct SubjectedPropertyPredicate {
-    pub subject: PropertySubject,
     pub key: String,
     pub op: PropertyOp,
 }
@@ -311,17 +282,62 @@ mod tests {
     }
 
     #[test]
-    fn a_property_subject_is_open_because_owner_table_is_a_varchar() {
-        // The opposite call from EdgeKind, and principled rather than inconsistent: EdgeKind mirrors
-        // a DDL enum so closedness is a FACT; owner_table mirrors nothing, so closedness would be a
-        // claim the schema does not make.
+    fn a_resource_property_predicate_names_no_subject_because_its_container_is_one() {
+        // The whole argument for the container, at the type level, on the half that closed it. The
+        // subject enum is DELETED — there is nowhere to put a tag, so a resource predicate cannot
+        // claim to be about an edge, and `PropertySubject::Other` has no arm left to be unknown in.
+        let f = ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: "derived_from".to_string(),
+                op: PropertyOp::Contains {
+                    values: vec![serde_json::json!("spec-a")],
+                },
+            }],
+            ..Default::default()
+        };
+        let back: ResourceFilter =
+            serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+        assert_eq!(back, f);
+        // The open-key slot is a THIRD thing beside the three named keys, not a spelling of one.
+        assert_eq!(back.properties.len(), 1);
+        assert!(back.tags.is_empty() && back.doc_type.is_empty() && back.facets.is_empty());
+    }
+
+    #[test]
+    fn a_resource_filter_with_no_properties_still_serializes_to_nothing() {
+        // `skip_serializing_if`, so adding the open-key slot did not start emitting an empty array
+        // on every resource filter that has none.
+        let f = ResourceFilter::default();
+        assert_eq!(serde_json::to_string(&f).unwrap(), "{}");
+        assert_eq!(serde_json::from_str::<ResourceFilter>("{}").unwrap(), f);
+    }
+
+    #[test]
+    fn both_containers_carry_the_same_predicate_type_so_contains_cannot_diverge() {
+        // `[2026-08-15]` The point of the ruling, asserted at the type level rather than described:
+        // one `PropertyPredicate` in both containers means `contains` serializes identically for
+        // both, and both fragments read `property_value @> v` — the value WHOLE. If the resource
+        // half had taken the element grain, these two would still typecheck and would MEAN
+        // different things, which is the divergence the container design exists to remove.
+        let pred = PropertyPredicate {
+            key: "derived_from".to_string(),
+            op: PropertyOp::Contains {
+                values: vec![serde_json::json!("spec-a")],
+            },
+        };
+        let in_resource = ResourceFilter {
+            properties: vec![pred.clone()],
+            ..Default::default()
+        };
+        let in_edge = EdgeFilter {
+            properties: vec![pred],
+            ..Default::default()
+        };
         assert_eq!(
-            serde_json::to_string(&PropertySubject::Edge).unwrap(),
-            "\"edge\""
+            serde_json::to_value(&in_resource.properties).unwrap(),
+            serde_json::to_value(&in_edge.properties).unwrap(),
+            "one predicate type, so the wire shape cannot drift between the two containers"
         );
-        let unknown: PropertySubject =
-            serde_json::from_str("\"block\"").expect("open, so it parses");
-        assert_eq!(unknown, PropertySubject::Other("block".to_string()));
     }
 
     #[test]
@@ -358,13 +374,11 @@ mod tests {
     #[test]
     fn has_key_and_contains_are_the_whole_v1_vocabulary() {
         // No operator takes a fragment of a query language. Both bind.
-        let hk = SubjectedPropertyPredicate {
-            subject: PropertySubject::Resource,
+        let hk = PropertyPredicate {
             key: "keywords".to_string(),
             op: PropertyOp::HasKey,
         };
-        let ct = SubjectedPropertyPredicate {
-            subject: PropertySubject::Edge,
+        let ct = PropertyPredicate {
             key: "confidence".to_string(),
             op: PropertyOp::Contains {
                 values: vec![serde_json::json!("high")],
@@ -372,24 +386,24 @@ mod tests {
         };
         for p in [hk, ct] {
             assert_eq!(
-                serde_json::from_str::<SubjectedPropertyPredicate>(
-                    &serde_json::to_string(&p).unwrap()
-                )
-                .unwrap(),
+                serde_json::from_str::<PropertyPredicate>(&serde_json::to_string(&p).unwrap())
+                    .unwrap(),
                 p
             );
         }
     }
 
     #[test]
-    fn the_subjected_predicates_wire_shape_is_unchanged_by_the_rename() {
-        // The rename is a RUST name. `ActInvocation.properties` still parses exactly what it parsed
-        // before, which is what keeps a stale caller reaching the named refusal that redirects it
-        // rather than `deny_unknown_fields`'s deserializer 400.
-        // Nested, not flat: `PropertyOp` is internally tagged and sits in a field named `op`.
+    fn a_stale_body_still_carrying_a_subject_parses_so_the_redirect_can_fire() {
+        // **The tombstone's whole reason, asserted rather than assumed.** `ActInvocation` carries
+        // `deny_unknown_fields` and serde short-circuits before `validate`, so deleting the field
+        // would answer a stale caller with a deserializer 400 OUTSIDE `ErrorBody`. Retyping it to
+        // `PropertyPredicate` — which carries no `deny_unknown_fields` — keeps the old body
+        // parsing: the now-meaningless `subject` is ignored and the capability pass's redirect
+        // still reaches the caller.
         let wire = r#"{"subject":"edge","key":"confidence","op":{"op":"has_key"}}"#;
-        let p: SubjectedPropertyPredicate = serde_json::from_str(wire).expect("unchanged shape");
-        assert_eq!(p.subject, PropertySubject::Edge);
+        let p: PropertyPredicate =
+            serde_json::from_str(wire).expect("a stale subject tag must not break the parse");
         assert_eq!(p.key, "confidence");
         assert_eq!(p.op, PropertyOp::HasKey);
     }
@@ -408,8 +422,7 @@ mod tests {
         // 21) is still the fixture, because it is the case that would have gone wrong under the
         // old reading — a caller listing only the array shape answers for 112 and silently misses
         // 21.
-        let p = SubjectedPropertyPredicate {
-            subject: PropertySubject::Resource,
+        let p = PropertyPredicate {
             key: "derived_from".to_string(),
             op: PropertyOp::Contains {
                 values: vec![serde_json::json!("abc"), serde_json::json!(["abc"])],

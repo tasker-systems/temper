@@ -353,6 +353,13 @@ fragment, and has no filed task** — "Task 10b" is named in `capability.rs`'s h
 nowhere in the backlog. **67 of the 70 live property keys are unreachable by any narrowing on any
 act.**
 
+> `[closed — 2026-08-15]` **All three sentences above are now history.** The open-key half was
+> filed as task `01a00502-a774-7001-b5b2-0ce462158f1c` and shipped in two PRs
+> (`20260815000030`, `20260815000040`): `ResourceFilter.properties` reaches all 70 keys through
+> `__temper_ungated_find_resources_with`'s `p_properties`, and `capability.rs` no longer refuses
+> for both subjects because there are no subjects — see §7.3's second end state, which is the one
+> that was taken.
+
 ### 7.3 The two coherent end states
 
 - **Edge half only.** `EdgeFilter` grows predicates; `ActInvocation.properties` survives carrying a
@@ -366,6 +373,14 @@ The second is the completion of §7.1's rule: **a subject tag exists only becaus
 floats free of a container.** Give it a container and the tag has no job. That it also makes 67
 property keys queryable for the first time is a second, independent argument. Its cost is pulling in
 a different act's unfiled mechanic.
+
+> `[taken — 2026-08-15]` **The second end state, in both halves.** One detail this section did not
+> foresee: `ActInvocation.properties` does NOT disappear with the enum. The field survives as a
+> **tombstone**, retyped to `PropertyPredicate` and still refusing — with `deny_unknown_fields` on
+> `ActInvocation`, deleting it would answer a stale caller with a deserializer 400 outside
+> `ErrorBody` instead of a refusal that says where the capability went. So "a field in a strange
+> half-life" was avoided for the reason given here, but the field itself outlives the type it
+> carried. `UnknownFilterValue` is deleted outright.
 
 **Deliberately not ruled here.** Per §1 there is no schedule forcing it, and the fork deserves its
 own thinking rather than a decision taken to close a section.

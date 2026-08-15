@@ -9,15 +9,16 @@
 //! permanent structural facts and are not. **Four sites** `[was five — 2026-08-14]`, and no two are
 //! retired by the same thing:
 //!
-//! - property predicates — **now HALF retired, and the surviving half finally has a filed task**
-//!   `[2026-08-15]`. It read *"Task 10b"*, a name that appeared in no backlog. The edge half is
-//!   retired by a container: an edge predicate belongs in `EdgeFilter::properties`, which
-//!   `__temper_ungated_follow_from`'s `p_edge_properties` applies inside the walk. So this site no
-//!   longer refuses one thing on every act for both subjects — the edge arm REDIRECTS and the
-//!   resource arm still declines. What retires the resource arm is task
-//!   `01a00502-a774-7001-b5b2-0ce462158f1c`, which also deletes the subject enum this split reads;
-//!   until then **67 of the 70 live property keys are unreachable by any narrowing on any act**
-//!   `[measured on prod — 2026-08-14]`;
+//! - property predicates — **FULLY retired** `[2026-08-15]`. It read *"Task 10b"*, a name that
+//!   appeared in no backlog, then briefly named the half-retired state. Both halves are retired by
+//!   containers: an edge predicate belongs in `EdgeFilter::properties`, applied inside the walk by
+//!   `__temper_ungated_follow_from`'s `p_edge_properties`; a resource predicate belongs in
+//!   `ResourceFilter::properties`, applied by `__temper_ungated_find_resources_with`'s
+//!   `p_properties` (`20260815000040`), which is what made **67 of the 70 live property keys**
+//!   reachable for the first time `[measured on prod — 2026-08-14]`. The surviving site refuses the
+//!   invocation-level field, which is now a TOMBSTONE — it exists so a stale caller gets a named
+//!   redirect rather than a deserializer 400, and it can no longer say which container to use
+//!   because the subject enum was deleted with the capability it disambiguated;
 //! - the seven-field resource narrowing on any act OTHER than `find-resources-with` — retired by
 //!   nothing, because it is no longer a shortfall. `[amended — 2026-08-14]` It was *"the six-field
 //!   resource narrowing — a compiler slot that does not exist yet"*, beside a seventh entry for
@@ -51,7 +52,7 @@ use crate::types::query::act::{ActName, BuildState};
 use crate::types::query::composition::{Composition, ReturnSpec, StageNode};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::{FilterField, PropertySubject};
+use crate::types::query::filter::{FilterField, PropertyOp, PropertyPredicate};
 use crate::types::query::id_set::IdKind;
 use crate::types::query::registry::declaration;
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
@@ -59,13 +60,74 @@ use crate::types::resource_view::ResourceSection;
 
 use super::{act_wire_name, emitted_fragment_for, refusal, term_wire_name, PlanRefusal};
 
-/// The most facet predicates one selection may carry.
+/// The most predicates one stage may carry that are evaluated **once per candidate**.
 ///
 /// Not a round number chosen for looks: real selections in this corpus carry one or two facets, and
 /// the measured cost cliff is three orders of magnitude above this — so the cap is far above any
 /// question anyone asks and far below anything that hurts. A caller who genuinely needs more is
 /// asking a different question and should say so with a second stage.
-const MAX_FACET_PREDICATES: usize = 32;
+///
+/// # It bounds a MULTIPLIER, and what is summed is what shares a candidate set
+///
+/// `[renamed and widened — 2026-08-15]` This was `MAX_FACET_PREDICATES` and counted one field,
+/// because one field had the shape. Three do now, and the name had stopped describing any of them.
+///
+/// The quantity being bounded is the **second factor** of `|candidates| × |predicates|`, so what may
+/// be added together is exactly what walks the same candidate set:
+///
+/// - `ResourceFilter::facets` + `ResourceFilter::properties` are **summed** — both are a nested
+///   `NOT EXISTS` over the selection's candidate ROWS, so their costs add. Capping each at 32
+///   separately would silently double the ceiling chosen as *"far below anything that hurts"*,
+///   which is a cost decision made by omission rather than by anyone.
+/// - `EdgeFilter::properties` is counted **on its own**, because its candidates are EDGES. Adding it
+///   to the row count would bound the sum of two quantities that never multiply together — a cap
+///   that looks stricter and means nothing.
+///
+/// **One consequence, stated rather than discovered:** a caller sending 32 facets who adds a single
+/// open-key predicate is now refused where before they were admitted. That is a widening of an
+/// existing refusal, and it is the direction that fails safe.
+const MAX_PER_CANDIDATE_PREDICATES: usize = 32;
+
+/// The most containment PROBES one stage may ask per candidate — `Σ` over its predicates of how
+/// many values each carries.
+///
+/// # Why a predicate count is not enough, measured
+///
+/// `[added — 2026-08-15, found in review]` [`MAX_PER_CANDIDATE_PREDICATES`] shipped describing
+/// itself as bounding *"the second factor of `|candidates| × |predicates|`"*, **and for
+/// [`PropertyOp::Contains`] that is the wrong factor.** The fragment runs
+/// `EXISTS (SELECT 1 FROM jsonb_array_elements(q.vals) v WHERE rp.property_value @> v)` per
+/// candidate, and that inner `EXISTS` short-circuits only when a value MATCHES — so a list of
+/// values that all miss is scanned in full, every time. The real second factor is `Σ|values|`, and
+/// nothing bounded it: [`super::shape`] refuses only an *empty* list.
+///
+/// Measured on prod rather than argued `[2026-08-15]`: **one** predicate carrying **2,000**
+/// non-matching values against `doc_type` (3,761 live rows) ran **1,628 ms** and discarded
+/// **2,507,333** join-filter rows — against ~33 ms for the same predicate carrying one value. The
+/// list fits in a fraction of axum's default 2 MB body limit, no `statement_timeout` exists
+/// anywhere in the repo, and the predicate cap admitted 32 such predicates. So the bound it claimed
+/// to place was bypassable by a factor a caller chooses, in the one direction it existed to close.
+///
+/// 256 is chosen against that measurement, not for looks: at ~3,700 candidate rows it bounds the
+/// work at roughly a quarter-million probes, ~0.2 s by the same ratio — while being far more values
+/// than any real question lists (*"`derived_from` is one of these twenty specs"* is twenty).
+///
+/// A `has_key` predicate counts as **one** probe: it is a row-existence test with no value list, so
+/// counting it as zero would let a caller pad the predicate list for free against the other cap.
+const MAX_PER_CANDIDATE_PROBES: usize = 256;
+
+/// How many containment probes a predicate list costs per candidate row.
+///
+/// `max(1, …)` rather than `values.len()`: `has_key` carries no list and still costs a lookup.
+fn probe_count(props: &[PropertyPredicate]) -> usize {
+    props
+        .iter()
+        .map(|p| match &p.op {
+            PropertyOp::Contains { values } => values.len().max(1),
+            PropertyOp::HasKey => 1,
+        })
+        .sum()
+}
 
 /// The kind an upstream node produces, walking a combinator to its first input. `None` for a
 /// dangling reference (already refused as topology) or an act that produces nothing.
@@ -315,12 +377,14 @@ fn check_act(
             // takes a set rather than one value, and there is nothing here to refuse — except the
             // one field whose LENGTH is a cost multiplier rather than a narrowing.
             //
-            // **`facets` is the only per-ROW multiplier on this surface.** `[added — 2026-08-14,
-            // found in adversarial review]` Its fragment predicate is a nested `NOT EXISTS` over
-            // this array, evaluated once per candidate row and short-circuiting on the first
-            // predicate that fails — so cost is `|visible set| × |facets|`, and an authenticated
-            // caller chooses the second factor. `tags` and `doc_type` do NOT have this shape:
-            // array containment and `= ANY` are single operations whatever their length.
+            // **`facets` and `properties` are the per-ROW multipliers on this surface, and they
+            // are counted TOGETHER.** `[added — 2026-08-14, found in adversarial review;
+            // widened — 2026-08-15]` Each fragment predicate is a nested `NOT EXISTS` over its
+            // array, evaluated once per candidate row and short-circuiting on the first predicate
+            // that fails — so cost is `|visible set| × (|facets| + |properties|)`, and an
+            // authenticated caller chooses the second factor. `tags` and `doc_type` do NOT have
+            // this shape: array containment and `= ANY` are single operations whatever their
+            // length.
             //
             // Refused rather than clamped, because clamping would silently answer a different
             // question — the same reason a multi-value `doc_type` was refused rather than truncated
@@ -335,13 +399,35 @@ fn check_act(
             // query on the surface rather than about this act, and it may want a read/write path
             // split rather than a single setting — so it gets a focused session, not a corner of
             // this one.
-            if f.facets.len() > MAX_FACET_PREDICATES {
+            // A facet is one probe and carries no value list, so it counts once in both bounds.
+            let probes = f.facets.len() + probe_count(&f.properties);
+            if probes > MAX_PER_CANDIDATE_PROBES {
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::FilterNotApplicable,
                     format!(
-                        "a selection admits at most {MAX_FACET_PREDICATES} facet predicates; this                          stage supplied {}. Each one is evaluated against every candidate row, so                          the list is a cost multiplier rather than a narrowing — narrow with the                          other fields first, or split the question",
-                        f.facets.len()
+                        "a selection admits at most {MAX_PER_CANDIDATE_PROBES} containment probes \
+                         per candidate row; this stage supplied {probes}. A `contains` list is \
+                         scanned in full for every row that carries the key — it short-circuits \
+                         only on a MATCH — so its length multiplies the read the same way the \
+                         predicate count does, and a long list of values that all miss is the \
+                         expensive case rather than the harmless one"
+                    ),
+                ));
+            }
+            let multiplier = f.facets.len() + f.properties.len();
+            if multiplier > MAX_PER_CANDIDATE_PREDICATES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    format!(
+                        "a selection admits at most {MAX_PER_CANDIDATE_PREDICATES} per-row \
+                         predicates; this stage supplied {multiplier} ({} facet, {} open-key). Each \
+                         one is evaluated against every candidate row, so the list is a cost \
+                         multiplier rather than a narrowing — narrow with the other fields first, \
+                         or split the question",
+                        f.facets.len(),
+                        f.properties.len()
                     ),
                 ));
             }
@@ -350,6 +436,7 @@ fn check_act(
                 ("doc_type", !f.doc_type.is_empty()),
                 ("tags", !f.tags.is_empty()),
                 ("facets", !f.facets.is_empty()),
+                ("properties", !f.properties.is_empty()),
                 ("stage", f.stage.is_some()),
                 ("status", f.status.is_some()),
                 ("owner", f.owner.is_some()),
@@ -373,37 +460,26 @@ fn check_act(
             }
         }
     }
-    // **The `properties` refusal NARROWS rather than retiring** `[2026-08-15]`. It fired once for
-    // the whole field, on every act, for both subjects. The edge half now has a container, so the
-    // edge arm can say where the capability went instead of only that it is absent — the same rule
-    // the `resource_filter` block above states: *a refusal that does not say where the capability
-    // went is a dead end.*
+    // **The `properties` refusal is now ONE arm, because the subject tag is gone** `[2026-08-15]`.
+    // It fired once for the whole field on every act, then briefly in two arms while only the edge
+    // half had a container. Both halves have one now, so every predicate arriving here has a place
+    // to go and the refusal names both — it cannot name which, because `PropertySubject` was
+    // deleted with the capability it was disambiguating.
     //
-    // Both arms still REFUSE. Nothing here started passing, and the test that pins each arm
-    // separately is what makes that a fact rather than a claim: an arm that stops firing must be
-    // shown to have stopped for the right reason.
+    // **The field still REFUSES, and is not removed**, which is the whole point of retyping it: see
+    // `ActInvocation::properties`. Removing it would route a stale caller into `deny_unknown_fields`
+    // and answer with a deserializer 400 outside `ErrorBody` — worse than the refusal it replaces.
     for p in &inv.properties {
-        let detail = match &p.subject {
-            PropertySubject::Edge => format!(
-                "an edge property predicate belongs in `edge_filter.properties`, not on the \
-                 invocation — move `{}` there. Carried here it would name a subject the stage's \
-                 filter already names, and on an act that walks no edge it would name one that \
-                 does not exist",
-                p.key
-            ),
-            // Unchanged, and still true. `Other(_)` is additionally refused as
-            // `UnknownFilterValue` by the shape pass; both refusals are correct and a caller sees
-            // every refusal at once by design.
-            PropertySubject::Resource | PropertySubject::Other(_) => {
-                "this door does not yet apply property predicates — the compiler emits no slot for \
-                 them, and a predicate that narrows nothing is a silent substitution"
-                    .to_string()
-            }
-        };
         errs.push(refusal(
             Some(name),
             RefusalReason::FilterNotApplicable,
-            detail,
+            format!(
+                "a property predicate belongs in a filter container, not on the invocation — move \
+                 `{}` into `resource_filter.properties` or `edge_filter.properties` depending on \
+                 what it narrows. Carried here it would name a subject the stage's filter already \
+                 names",
+                p.key
+            ),
         ));
     }
     // **The unconditional `edge_filter` refusal is RETIRED** `[2026-08-14]`. It read: "this door
@@ -417,8 +493,16 @@ fn check_act(
     // service; the test that pins it is what makes the retirement safe rather than merely smaller.
     //
     // `inv.properties` is deliberately NOT retired with it `[decided — 2026-08-14, Pete]`: spec §7
-    // is OPEN — where a property
-    // predicate's container lives is unsettled — and the compiler still emits no slot for one.
+    // is OPEN — where a property predicate's container lives is unsettled — and the compiler still
+    // emits no slot for one.
+    //
+    // `[both clauses now FALSE — 2026-08-15, missed by this change's own sweep and found in
+    // review]` §7 is ruled and shipped, and the compiler emits BOTH slots: `p_properties` for the
+    // resource half (`20260815000040`) and `p_edge_properties` for the edge half
+    // (`20260815000010`). The field survives for a different reason entirely — it is a TOMBSTONE,
+    // kept so a stale caller reaches a named redirect instead of `deny_unknown_fields`. Left
+    // standing with the correction beside it because the next reader deciding whether the tombstone
+    // is still justified would otherwise weigh an argument that no longer holds.
 
     // Bound terms. A ceiling is NOT a refusal — it clamps and is disclosed at execution. A term
     // outside the range the fragment can express IS a refusal, and must be one HERE. The negative
@@ -487,12 +571,29 @@ fn check_act(
             // **It closes the instance, not the class.** Nothing bounds a composition's stage
             // count and no `statement_timeout` exists anywhere in the repo — task
             // `01a000ee-9fec-7283-baa5-75cd1580f023`, unchanged by this.
-            if f.properties.len() > MAX_FACET_PREDICATES {
+            // The same value-list hazard, over candidate EDGES rather than rows. It shipped with
+            // the edge half on 2026-08-15 and is closed here in the same change that closes the
+            // resource one, because the two predicates compile to the same shape and a bound
+            // honoured on one of them is not a bound.
+            let edge_probes = probe_count(&f.properties);
+            if edge_probes > MAX_PER_CANDIDATE_PROBES {
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::FilterNotApplicable,
                     format!(
-                        "a walk admits at most {MAX_FACET_PREDICATES} edge property predicates; \
+                        "a walk admits at most {MAX_PER_CANDIDATE_PROBES} containment probes per \
+                         candidate edge; this stage supplied {edge_probes}. A `contains` list is \
+                         scanned in full for every edge that carries the key, so its length \
+                         multiplies the walk the same way the predicate count does"
+                    ),
+                ));
+            }
+            if f.properties.len() > MAX_PER_CANDIDATE_PREDICATES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    format!(
+                        "a walk admits at most {MAX_PER_CANDIDATE_PREDICATES} edge property predicates; \
                          this stage supplied {}. Each one is evaluated against every candidate \
                          edge, so the list is a cost multiplier rather than a narrowing — narrow \
                          with `edge_kinds` or `labels` first, or split the question",

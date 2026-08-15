@@ -228,13 +228,12 @@ impl Modify for SecurityAddon {
 /// with one string property `other`") would silently capture a future type that genuinely has an
 /// `other` field, and rewrite a correct contract into a wrong one. This list is auditable and its
 /// completeness is asserted by `every_open_enum_publishes_its_escape_hatch_as_a_bare_string`.
-const OPEN_STRING_ENUMS: [&str; 5] = [
-    "ActName",
-    "RefusalReason",
-    "PropertySubject",
-    "ScoreKind",
-    "IdKind",
-];
+// `[2026-08-15]` `PropertySubject` was here and is DELETED with the type. Nothing would have
+// caught it: `OpenStringEnumAddon` skips an absent schema with `continue`, and
+// `every_open_enum_publishes_its_escape_hatch_as_a_bare_string` asserts only that the INTERSECTION
+// with published schemas is non-empty — so a dead entry sits here indefinitely, quietly weakening
+// the completeness this list claims. Found in review.
+const OPEN_STRING_ENUMS: [&str; 4] = ["ActName", "RefusalReason", "ScoreKind", "IdKind"];
 
 /// Corrects the published schema of an open string enum to match the bytes it actually sends.
 ///

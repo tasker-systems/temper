@@ -365,8 +365,7 @@ mod tests {
     };
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::{
-        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, PropertySubject, ResourceFilter,
-        SubjectedPropertyPredicate,
+        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
     use crate::types::query::scalars::BoundTerm;
@@ -670,16 +669,43 @@ mod tests {
         plan_with_intention(vec![act("s", a, None)], vec!["s"])
     }
 
-    fn plan_with_property(subject: PropertySubject, key: &str, op: PropertyOp) -> Composition {
+    /// A predicate on the TOMBSTONE — `ActInvocation::properties`, which every act refuses.
+    fn plan_with_property(key: &str, op: PropertyOp) -> Composition {
         let mut node = act("s", ActName::FindExact, Some(caller_ids(IdKind::Resource)));
         if let StageNode::Act(a) = &mut node {
-            a.properties.push(SubjectedPropertyPredicate {
-                subject,
+            a.properties.push(PropertyPredicate {
                 key: key.to_string(),
                 op,
             });
         }
         plan_with_intention(vec![node], vec!["s"])
+    }
+
+    /// A resource filter on the one act that applies it, piped into a returnable find act.
+    ///
+    /// The sink is not decoration: a selection orders nothing, so returning it directly is
+    /// `StageNotReturnable` and every assertion below would pass for the wrong reason.
+    fn selection_plan(f: ResourceFilter) -> Composition {
+        let mut node = act("sel", ActName::FindResourcesWith, None);
+        if let StageNode::Act(a) = &mut node {
+            a.resource_filter = Some(f);
+        }
+        let mut sink = act("hits", ActName::FindExact, None);
+        if let StageNode::Act(a) = &mut sink {
+            a.inputs = vec![StageInput::Upstream {
+                relation: StageRelation::Bound,
+                stage: StageName::parse("sel").unwrap(),
+            }];
+        }
+        plan(vec![node, sink], vec!["hits"])
+    }
+
+    /// A predicate in the RESOURCE CONTAINER, on the one act that applies it.
+    fn selection_with_properties(props: Vec<PropertyPredicate>) -> Composition {
+        selection_plan(ResourceFilter {
+            properties: props,
+            ..Default::default()
+        })
     }
 
     // ---- Task 6: topology -------------------------------------------------------------------
@@ -1121,7 +1147,11 @@ mod tests {
     /// arm goes missing.
     ///
     /// Presence, not exclusivity: `stage` / `status` / `doc_type` also carry closed vocabularies, so
-    /// a case may legitimately raise `UnknownFilterValue` beside the refusal under test. The
+    /// a case may legitimately raise `UnknownFilterValue` beside the refusal under test.
+    /// `[stale — 2026-08-15]` That variant is DELETED and nothing raises it; the "closed
+    /// vocabularies" half was already false per ADJ-10. The reason this helper still filters by
+    /// discriminant is unchanged — a plan can raise more than one refusal at once — but the example
+    /// it gives no longer exists. The
     /// validator returns ALL refusals, so asserting the one this test is about stays sharp.
     #[test]
     fn every_narrowing_this_door_cannot_apply_is_refused_and_none_is_silently_dropped() {
@@ -1212,13 +1242,12 @@ mod tests {
             (
                 "a property predicate",
                 Box::new(|a: &mut ActInvocation| {
-                    a.properties = vec![SubjectedPropertyPredicate {
-                        subject: PropertySubject::Resource,
+                    a.properties = vec![PropertyPredicate {
                         key: "k".to_string(),
                         op: PropertyOp::HasKey,
                     }]
                 }),
-                "property predicates",
+                "belongs in a filter container",
             ),
             (
                 // `[changed — 2026-08-14]` The refusal moved. It came from an UNCONDITIONAL site
@@ -1285,6 +1314,14 @@ mod tests {
                 status: Some("active".to_string()),
                 owner: Some("@someone".to_string()),
                 title_contains: Some("door".to_string()),
+                // The open-key slot, in the same "every field at once" case: it is a narrowing this
+                // act admits, not a special one bolted beside them.
+                properties: vec![PropertyPredicate {
+                    key: "derived_from".to_string(),
+                    op: PropertyOp::Contains {
+                        values: vec![serde_json::json!("spec-a")],
+                    },
+                }],
             });
         }
         // Returned nowhere: a selection orders nothing, so asking for its rows is
@@ -1351,8 +1388,10 @@ mod tests {
         assert!(
             errs.iter()
                 .any(|e| e.reason == RefusalReason::FilterNotApplicable
-                    && e.detail.contains("facet predicates")),
-            "the refusal must name what it declined and why; got: {errs:?}"
+                    && e.detail.contains("per-row predicates")
+                    && e.detail.contains("33 facet")),
+            "the refusal must name what it declined and why — and since 2026-08-15 it must break \
+             the count down by field, because the cap now counts two of them together; got: {errs:?}"
         );
     }
 
@@ -1480,23 +1519,50 @@ mod tests {
     // ---- Task 7b: the property predicate ----------------------------------------------------
 
     #[test]
-    fn a_content_block_subject_is_refused_because_blocks_are_addressable_not_queryable() {
-        // Spec §12: block properties exist so provenance can attach to PART of a resource. That is
-        // addressability, a different affordance from being a queryable subject.
-        let c = plan_with_property(
-            PropertySubject::Other("content_block".to_string()),
-            "block_role",
-            PropertyOp::HasKey,
-        );
+    fn a_stale_subject_tagged_predicate_still_reaches_a_named_refusal() {
+        // **The tombstone, end to end.** `PropertySubject` is deleted, so `content_block` — which
+        // spec §12 refused as `UnknownFilterValue` because a block is addressable and not
+        // queryable — no longer has an enum arm to be unknown in. What must NOT happen is that the
+        // stale body becomes unparseable: `ActInvocation` carries `deny_unknown_fields`, so if the
+        // field itself had been removed this plan would die in serde with a 400 outside
+        // `ErrorBody`, and the caller would be told their request is malformed rather than where
+        // their predicate now belongs.
+        let wire = serde_json::json!({
+            "stages": [{
+                "name": "s",
+                "act": "find-exact",
+                "intention": { "query": "anything" },
+                "properties": [{
+                    "subject": "content_block",
+                    "key": "block_role",
+                    "op": { "op": "has_key" }
+                }]
+            }],
+            "outcome": { "returns": [{ "stage": "s" }] }
+        });
+        let c: Composition =
+            serde_json::from_value(wire).expect("a stale subject tag must still parse");
         let errs = validate(&c).unwrap_err();
-        assert!(errs
+        let redirect = errs
             .iter()
-            .any(|e| e.reason == RefusalReason::UnknownFilterValue));
+            .find(|e| e.reason == RefusalReason::FilterNotApplicable)
+            .expect("the tombstone must refuse, and by name");
+        // The refusal has to say where the capability went. It can no longer say WHICH container —
+        // the tag that would have told it apart is gone — so it must name both.
+        assert!(
+            redirect.detail.contains("resource_filter.properties")
+                && redirect.detail.contains("edge_filter.properties"),
+            "a refusal that does not say where the capability went is a dead end; got {}",
+            redirect.detail
+        );
+        // The refusal it replaced (`UnknownFilterValue`) is gone from the enum entirely, not merely
+        // unreachable — deleting the variant is what makes that a compile-time fact rather than a
+        // thing this assertion would have to keep checking.
     }
 
     #[test]
     fn an_empty_property_key_is_refused_rather_than_matching_everything() {
-        let c = plan_with_property(PropertySubject::Resource, "", PropertyOp::HasKey);
+        let c = plan_with_property("", PropertyOp::HasKey);
         assert!(validate(&c).is_err());
     }
 
@@ -1504,12 +1570,244 @@ mod tests {
     fn contains_with_no_values_is_refused_because_it_narrows_nothing() {
         // An empty list is not "match all" and is not "match none" — it is a caller mistake, and
         // silently treating it as either is the confident-empty failure this contract exists to end.
-        let c = plan_with_property(
-            PropertySubject::Resource,
-            "tags",
-            PropertyOp::Contains { values: vec![] },
-        );
+        let c = plan_with_property("tags", PropertyOp::Contains { values: vec![] });
         assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn a_malformed_predicate_inside_a_container_is_refused_too() {
+        // **The gap this half surfaced** `[fixed — 2026-08-15]`. The shape pass read only
+        // `inv.properties`, written when that was the only place a predicate could sit. So a
+        // container predicate with an empty key or an empty `contains` passed shape validation
+        // entirely and COMPILED — to `property_key = ''`, or to an `EXISTS` over an empty array.
+        // Both narrow to nothing silently, which is exactly what these two refusals exist to
+        // prevent.
+        //
+        // It matters more now than when it shipped: with both containers built and the invocation
+        // field refused outright, checking only the tombstone would leave `EmptyPropertyKey` and
+        // `EmptyContains` firing ONLY where no predicate can apply.
+        for (label, op, key) in [
+            ("an empty key", PropertyOp::HasKey, ""),
+            (
+                "an empty contains",
+                PropertyOp::Contains { values: vec![] },
+                "derived_from",
+            ),
+        ] {
+            let c = selection_with_properties(vec![PropertyPredicate {
+                key: key.to_string(),
+                op,
+            }]);
+            assert!(
+                validate(&c).is_err(),
+                "{label} inside resource_filter.properties was accepted"
+            );
+        }
+
+        // The edge container, which is where the gap actually shipped.
+        let mut node = act("w", ActName::FollowFrom, None);
+        if let StageNode::Act(a) = &mut node {
+            a.inputs = vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![Uuid::now_v7()],
+                },
+            }];
+            a.edge_filter = Some(EdgeFilter {
+                properties: vec![PropertyPredicate {
+                    key: String::new(),
+                    op: PropertyOp::HasKey,
+                }],
+                ..Default::default()
+            });
+        }
+        let c = plan_with_intention(vec![node], vec!["w"]);
+        assert!(
+            validate(&c).is_err(),
+            "an empty key inside edge_filter.properties was accepted"
+        );
+
+        // Positive control: the same containers with a well-formed predicate validate, so the
+        // errors above are the shape checks and not the plans being broken some other way.
+        assert!(validate(&selection_with_properties(vec![PropertyPredicate {
+            key: "derived_from".to_string(),
+            op: PropertyOp::Contains {
+                values: vec![serde_json::json!("spec-a")],
+            },
+        }]))
+        .is_ok());
+    }
+
+    #[test]
+    fn the_per_candidate_cap_counts_facets_and_open_key_predicates_together() {
+        // `[2026-08-15]` The cap bounds the SECOND FACTOR of `|candidates| x |predicates|`, and
+        // both of these walk the same candidate rows — so their costs ADD. Capping each at 32
+        // separately would double the ceiling by omission rather than by anyone.
+        let facets = |n: usize| -> Vec<FacetPredicate> {
+            (0..n)
+                .map(|i| FacetPredicate {
+                    key: format!("k{i}"),
+                    value: "v".to_string(),
+                })
+                .collect()
+        };
+        let props = |n: usize| -> Vec<PropertyPredicate> {
+            (0..n)
+                .map(|i| PropertyPredicate {
+                    key: format!("p{i}"),
+                    op: PropertyOp::HasKey,
+                })
+                .collect()
+        };
+
+        let errs = validate(&selection_plan(ResourceFilter {
+            facets: facets(20),
+            properties: props(20),
+            ..Default::default()
+        }))
+        .expect_err("40 = 20 + 20 exceeds the cap");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::FilterNotApplicable
+                    && e.detail.contains("per-row predicates")),
+            "the sum must cross the cap even though neither field does alone; got {errs:?}"
+        );
+
+        // Neither alone crosses it, which is what makes the assertion above about the SUM rather
+        // than about either list being long.
+        for (label, f) in [
+            (
+                "facets alone",
+                ResourceFilter {
+                    facets: facets(20),
+                    ..Default::default()
+                },
+            ),
+            (
+                "open-key alone",
+                ResourceFilter {
+                    properties: props(20),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            assert!(
+                validate(&selection_plan(f)).is_ok(),
+                "{label} is under the cap and must be admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_value_list_is_capped_even_when_the_predicate_count_is_tiny() {
+        // **The hole the predicate cap left, closed** `[2026-08-15, found in review]`. ONE predicate
+        // is far under `MAX_PER_CANDIDATE_PREDICATES`, and its value list is what actually
+        // multiplies the read: the fragment's inner `EXISTS` short-circuits only on a MATCH, so a
+        // list that all misses is scanned in full for every row carrying the key.
+        //
+        // Measured on prod: one predicate with 2,000 non-matching values against `doc_type` (3,761
+        // live rows) ran 1,628 ms and discarded 2,507,333 join-filter rows, against ~33 ms for the
+        // same predicate carrying one value. The old cap admitted 32 of those.
+        let errs = validate(&selection_plan(ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: "derived_from".to_string(),
+                op: PropertyOp::Contains {
+                    values: (0..300)
+                        .map(|i| serde_json::json!(format!("miss-{i}")))
+                        .collect(),
+                },
+            }],
+            ..Default::default()
+        }))
+        .expect_err("300 probes exceeds the probe cap even though 1 predicate does not");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::FilterNotApplicable
+                    && e.detail.contains("containment probes")),
+            "the probe cap must fire on the VALUE count, not the predicate count; got {errs:?}"
+        );
+
+        // Under the probe cap, the same single predicate is admitted — so the refusal above is the
+        // list length and not the predicate merely existing.
+        assert!(validate(&selection_plan(ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: "derived_from".to_string(),
+                op: PropertyOp::Contains {
+                    values: (0..20)
+                        .map(|i| serde_json::json!(format!("v-{i}")))
+                        .collect(),
+                },
+            }],
+            ..Default::default()
+        }))
+        .is_ok());
+
+        // `has_key` counts as ONE probe rather than zero — otherwise a caller pads the predicate
+        // list for free against the other cap.
+        assert!(validate(&selection_plan(ResourceFilter {
+            properties: (0..10)
+                .map(|i| PropertyPredicate {
+                    key: format!("k{i}"),
+                    op: PropertyOp::HasKey,
+                })
+                .collect(),
+            ..Default::default()
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn a_malformed_predicate_refusal_names_which_container_it_came_from() {
+        // `[2026-08-15, found in review]` With one source a bare "a property predicate needs a key"
+        // identified the field by elimination. With three it does not — and a caller with a
+        // malformed predicate in TWO containers on one stage would receive two byte-identical
+        // refusals and no way to tell which to fix.
+        let mut node = act("w", ActName::FollowFrom, None);
+        if let StageNode::Act(a) = &mut node {
+            a.inputs = vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![Uuid::now_v7()],
+                },
+            }];
+            a.edge_filter = Some(EdgeFilter {
+                properties: vec![PropertyPredicate {
+                    key: String::new(),
+                    op: PropertyOp::HasKey,
+                }],
+                ..Default::default()
+            });
+            a.properties = vec![PropertyPredicate {
+                key: String::new(),
+                op: PropertyOp::HasKey,
+            }];
+        }
+        let errs = validate(&plan_with_intention(vec![node], vec!["w"])).expect_err("both refuse");
+        let details: Vec<&str> = errs
+            .iter()
+            .filter(|e| e.reason == RefusalReason::EmptyPropertyKey)
+            .map(|e| e.detail.as_str())
+            .collect();
+        assert_eq!(details.len(), 2, "one per source; got {details:?}");
+        // The tombstone's is `` `properties[0]` `` and the container's is
+        // `` `edge_filter.properties[0]` ``. Matched on the backtick-anchored prefix, because the
+        // container's spelling CONTAINS the tombstone's — a naive `contains` passes for both and
+        // would not notice the two collapsing back into one.
+        assert!(
+            details
+                .iter()
+                .any(|d| d.contains("`edge_filter.properties[0]`"))
+                && details
+                    .iter()
+                    .any(|d| d.contains("`properties[0]`") && !d.contains("edge_filter")),
+            "each refusal must name its own source; got {details:?}"
+        );
+        // And they must not be byte-identical, which is the whole finding.
+        assert_ne!(details[0], details[1]);
     }
 
     // ---- Task 8: the reachability gap -------------------------------------------------------
@@ -1571,53 +1869,89 @@ mod tests {
     /// Without this, the test above could be made to pass by deleting an act from a list, and
     /// nothing would notice that the act had become reachable for a bad reason — or not at all.
     #[test]
-    fn an_edge_subject_predicate_on_the_invocation_is_redirected_to_its_container() {
-        // **The half of the `properties` refusal that narrowed** `[2026-08-15]`. It still REFUSES —
-        // the invocation slot applies nothing and never did — but an edge predicate now has
-        // somewhere to go, and a refusal that does not say where the capability went is a dead end.
+    fn a_predicate_on_the_invocation_is_redirected_to_both_containers() {
+        // **The `properties` refusal is now ONE arm** `[2026-08-15]`. It was two — an edge arm that
+        // redirected and a resource arm that flatly declined — and the pair existed because the
+        // arms retired independently. They have both retired now, so a split would be a
+        // distinction with nothing behind it.
+        //
+        // The predecessor test predicted exactly this: *"If a later edit gives this arm a redirect
+        // too, that is a capability claim and this test is what makes it a deliberate one."* It is
+        // a capability claim, and it is deliberate — `ResourceFilter::properties` applies through
+        // `__temper_ungated_find_resources_with`'s `p_properties` (`20260815000040`).
         //
         // Asserted on the MESSAGE rather than only the reason, because the reason
-        // (`FilterNotApplicable`) is identical to the one it used to give: a test that reads only
-        // the discriminant cannot tell the redirect from the flat decline it replaced, and would
-        // pass unchanged if this arm were reverted.
-        let c = plan_with_property(PropertySubject::Edge, "confidence", PropertyOp::HasKey);
+        // (`FilterNotApplicable`) is the same one the flat decline gave: a test reading only the
+        // discriminant cannot tell a redirect from a dead end, and would pass unchanged if this
+        // arm were reverted.
+        let c = plan_with_property("confidence", PropertyOp::HasKey);
         let errs = validate(&c).expect_err("still refused");
         let detail = errs
             .iter()
             .find(|e| e.reason == RefusalReason::FilterNotApplicable)
             .map(|e| e.detail.clone())
             .expect("a FilterNotApplicable refusal");
+        // Both containers, because the subject tag that would have picked one is deleted.
         assert!(
-            detail.contains("edge_filter.properties"),
-            "the edge arm must name its container; got {detail}"
+            detail.contains("resource_filter.properties")
+                && detail.contains("edge_filter.properties"),
+            "the refusal must name both containers; got {detail}"
         );
         assert!(
             detail.contains("confidence"),
             "and name the predicate it is redirecting; got {detail}"
         );
+        // The flat decline is gone, not merely reworded. It said the door "does not yet apply
+        // property predicates", which is now false on both halves — a refusal outliving the
+        // limitation it describes is worse than no refusal, because it teaches a caller that a
+        // capability is missing when it is there.
+        assert!(
+            !detail.contains("does not yet apply"),
+            "the flat decline outlived the limitation it described; got {detail}"
+        );
     }
 
     #[test]
-    fn the_resource_subject_predicate_keeps_the_flat_refusal_it_always_had() {
-        // The other half, and the reason this is a separate test rather than a second assertion:
-        // **the arms retire independently.** The resource arm is retired by task
-        // 01a00502-a774-7001-b5b2-0ce462158f1c, not by this change, and until then 67 of the 70
-        // live property keys are unreachable. If a later edit gives this arm a redirect too, that
-        // is a capability claim and this test is what makes it a deliberate one.
-        let c = plan_with_property(PropertySubject::Resource, "confidence", PropertyOp::HasKey);
-        let errs = validate(&c).expect_err("still refused");
-        let detail = errs
-            .iter()
-            .find(|e| e.reason == RefusalReason::FilterNotApplicable)
-            .map(|e| e.detail.clone())
-            .expect("a FilterNotApplicable refusal");
+    fn the_selection_act_admits_a_property_predicate_in_its_resource_filter() {
+        // The capability this half adds, stated as the ABSENCE of a refusal — the container is
+        // reachable through `validate`, which is the layer that used to refuse it outright. Sixty-
+        // seven of the seventy live property keys had no narrowing on any act before this.
+        let c = selection_with_properties(vec![PropertyPredicate {
+            key: "derived_from".to_string(),
+            op: PropertyOp::Contains {
+                values: vec![serde_json::json!("spec-a")],
+            },
+        }]);
         assert!(
-            detail.contains("does not yet apply property predicates"),
-            "unchanged wording; got {detail}"
+            validate(&c).is_ok(),
+            "the open-key container must be admitted on the act that applies it: {:?}",
+            validate(&c).err()
         );
+    }
+
+    #[test]
+    fn an_open_key_predicate_is_still_refused_on_an_act_that_does_not_select() {
+        // The container is a parameter of ONE act. Carried on a find act it would narrow nothing,
+        // and a narrowing that narrows nothing is the silent substitution this contract exists to
+        // remove — so it is declined by name, pointing at the act that does apply it.
+        let mut node = act("s", ActName::FindExact, Some(caller_ids(IdKind::Resource)));
+        if let StageNode::Act(a) = &mut node {
+            a.resource_filter = Some(ResourceFilter {
+                properties: vec![PropertyPredicate {
+                    key: "derived_from".to_string(),
+                    op: PropertyOp::HasKey,
+                }],
+                ..Default::default()
+            });
+        }
+        let c = plan_with_intention(vec![node], vec!["s"]);
+        let errs = validate(&c).expect_err("a find act does not select");
         assert!(
-            !detail.contains("edge_filter"),
-            "the resource arm has no container to point at yet; got {detail}"
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::FilterNotApplicable
+                    && e.detail.contains("`properties`")
+                    && e.detail.contains("find-resources-with")),
+            "the refusal must name the field and the act that applies it; got {errs:?}"
         );
     }
 

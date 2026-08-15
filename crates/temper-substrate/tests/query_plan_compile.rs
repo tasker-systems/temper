@@ -1479,6 +1479,14 @@ fn selection(name: &str) -> StageNode {
             status: None,
             owner: Some("j-cole-taylor".to_string()),
             title_contains: Some("door".to_string()),
+            // The open-key slot (`20260815000040`). It is a narrowing this act admits like the
+            // others, and it renders in a different PLACE from them — see the order assertion.
+            properties: vec![temper_core::types::query::PropertyPredicate {
+                key: "derived_from".to_string(),
+                op: temper_core::types::query::PropertyOp::Contains {
+                    values: vec![serde_json::json!("spec-a")],
+                },
+            }],
         }),
         edge_filter: None,
         properties: vec![],
@@ -1513,13 +1521,27 @@ fn the_selection_narrowings_bind_in_signature_order() {
         .expect("the selection stage emits the selection core");
 
     // Signature order: doc_types, tags, facets, stage, status, owner_profile, owner_handle,
-    // title_contains — then the anchor pair, then the principal LAST.
+    // title_contains — then the anchor pair, then the principal, then the OPEN-KEY slot last.
     let expected = "__temper_ungated_find_resources_with((SELECT ids FROM __temper_vis), \
                     $2::text[], $3::text[], $4::jsonb, $5::text, NULL::text, NULL::uuid, \
-                    $6::text, $7::text, NULL, NULL, $1)";
+                    $6::text, $7::text, NULL, NULL, $1, $8::jsonb)";
     assert!(
         call.contains(expected),
         "narrowings must render in signature order.\n  expected: {expected}\n  got: {call}"
+    );
+
+    // **`properties` renders LAST, and not beside `facets` where it belongs by meaning**
+    // `[2026-08-15]`. Both are `jsonb`, and the type system is what catches every other
+    // transposition in this call — `text[]` into a `text` slot does not typecheck. Two ADJACENT
+    // `jsonb` narrowings would be the one swap that compiles, runs, and answers a different
+    // question: a facet list applied as open-key predicates and vice versa, both plausible, neither
+    // erroring. Putting the new slot at the end of the signature is what keeps the type mismatch
+    // doing that work.
+    let facets_at = call.find("$4::jsonb").expect("the facets slot");
+    let props_at = call.find("$8::jsonb").expect("the open-key slot");
+    assert!(
+        props_at > facets_at && !call.contains("$4::jsonb, $8::jsonb"),
+        "the two jsonb narrowings must not be adjacent; got: {call}"
     );
 
     // `status` and `owner_profile` are the two the plan left unset, and they render as TYPED nulls

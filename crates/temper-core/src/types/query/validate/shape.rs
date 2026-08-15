@@ -41,7 +41,7 @@ use crate::types::query::act::ActName;
 use crate::types::query::composition::{Composition, StageNode};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::{PropertyOp, PropertySubject};
+use crate::types::query::filter::PropertyOp;
 use crate::types::query::id_set::IdKind;
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
 
@@ -495,31 +495,64 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         }
     }
 
-    // Property predicates: open subject vocabulary, non-empty key, non-empty `contains`. All three
-    // are about the predicate as written — whether this door APPLIES predicates at all is the
-    // capability pass's question.
-    for p in &inv.properties {
-        if let PropertySubject::Other(s) = &p.subject {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::UnknownFilterValue,
-                format!("`{s}` is not a queryable property subject"),
-            ));
-        }
-        if p.key.is_empty() {
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::EmptyPropertyKey,
-                "a property predicate needs a key",
-            ));
-        }
-        if let PropertyOp::Contains { values } = &p.op {
-            if values.is_empty() {
+    // Property predicates: non-empty key, non-empty `contains`. Both are about the predicate as
+    // written — whether this door APPLIES predicates at all is the capability pass's question.
+    //
+    // **It reads all three sources, and until 2026-08-15 it read only the first.**
+    // `[fixed — 2026-08-15, surfaced by the resource half]` The loop was `for p in &inv.properties`,
+    // written when that was the only place a predicate could sit. `EdgeFilter::properties` shipped
+    // on 2026-08-15 and was never reached by it, so an empty key or an empty `contains` inside a
+    // container passed the shape pass entirely and compiled — to `property_key = ''`, or to an
+    // `EXISTS` over an empty array. Both narrow to nothing silently, which is the exact
+    // substitution both refusals exist to prevent.
+    //
+    // The resource half is what surfaced it: with two containers and a refused tombstone, checking
+    // only `inv.properties` would leave `EmptyPropertyKey` and `EmptyContains` firing **only where
+    // no predicate applies** — live-looking refusals that can never reach a predicate that does
+    // anything.
+    //
+    // The tombstone is still checked, and deliberately: a caller sees every refusal at once, so a
+    // malformed predicate in the wrong place is told both things rather than one at a time.
+    // **Each source names ITSELF in the refusal** `[2026-08-15, found in review]`. With one source
+    // a bare "a property predicate needs a key" identified the field by elimination; with three it
+    // does not, and a caller with a malformed predicate in two containers on one stage would get
+    // two byte-identical refusals and no way to tell which to fix. That is the same *a refusal must
+    // say WHERE* rule this change applies to the tombstone redirect, one layer down — and the layer
+    // where it is easiest to leave unapplied, because the refusal still fires and still reads fine.
+    let sources: [(&str, &[_]); 3] = [
+        ("properties", &inv.properties),
+        (
+            "resource_filter.properties",
+            inv.resource_filter
+                .as_ref()
+                .map_or(&[][..], |f| &f.properties),
+        ),
+        (
+            "edge_filter.properties",
+            inv.edge_filter.as_ref().map_or(&[][..], |f| &f.properties),
+        ),
+    ];
+    for (field, preds) in sources {
+        for (i, p) in preds.iter().enumerate() {
+            if p.key.is_empty() {
                 errs.push(refusal(
                     Some(name),
-                    RefusalReason::EmptyContains,
-                    "`contains` with no values narrows nothing",
+                    RefusalReason::EmptyPropertyKey,
+                    format!("a property predicate needs a key; `{field}[{i}]` has none"),
                 ));
+            }
+            if let PropertyOp::Contains { values } = &p.op {
+                if values.is_empty() {
+                    errs.push(refusal(
+                        Some(name),
+                        RefusalReason::EmptyContains,
+                        format!(
+                            "`contains` with no values narrows nothing; `{field}[{i}]` \
+                             (key `{}`) carries an empty list",
+                            p.key
+                        ),
+                    ));
+                }
             }
         }
     }
