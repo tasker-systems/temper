@@ -9,7 +9,15 @@
 //! permanent structural facts and are not. **Four sites** `[was five — 2026-08-14]`, and no two are
 //! retired by the same thing:
 //!
-//! - property predicates — Task 10b;
+//! - property predicates — **now HALF retired, and the surviving half finally has a filed task**
+//!   `[2026-08-15]`. It read *"Task 10b"*, a name that appeared in no backlog. The edge half is
+//!   retired by a container: an edge predicate belongs in `EdgeFilter::properties`, which
+//!   `__temper_ungated_follow_from`'s `p_edge_properties` applies inside the walk. So this site no
+//!   longer refuses one thing on every act for both subjects — the edge arm REDIRECTS and the
+//!   resource arm still declines. What retires the resource arm is task
+//!   `01a00502-a774-7001-b5b2-0ce462158f1c`, which also deletes the subject enum this split reads;
+//!   until then **67 of the 70 live property keys are unreachable by any narrowing on any act**
+//!   `[measured on prod — 2026-08-14]`;
 //! - the seven-field resource narrowing on any act OTHER than `find-resources-with` — retired by
 //!   nothing, because it is no longer a shortfall. `[amended — 2026-08-14]` It was *"the six-field
 //!   resource narrowing — a compiler slot that does not exist yet"*, beside a seventh entry for
@@ -43,7 +51,7 @@ use crate::types::query::act::{ActName, BuildState};
 use crate::types::query::composition::{Composition, ReturnSpec, StageNode};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::FilterField;
+use crate::types::query::filter::{FilterField, PropertySubject};
 use crate::types::query::id_set::IdKind;
 use crate::types::query::registry::declaration;
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
@@ -365,12 +373,37 @@ fn check_act(
             }
         }
     }
-    if !inv.properties.is_empty() {
+    // **The `properties` refusal NARROWS rather than retiring** `[2026-08-15]`. It fired once for
+    // the whole field, on every act, for both subjects. The edge half now has a container, so the
+    // edge arm can say where the capability went instead of only that it is absent — the same rule
+    // the `resource_filter` block above states: *a refusal that does not say where the capability
+    // went is a dead end.*
+    //
+    // Both arms still REFUSE. Nothing here started passing, and the test that pins each arm
+    // separately is what makes that a fact rather than a claim: an arm that stops firing must be
+    // shown to have stopped for the right reason.
+    for p in &inv.properties {
+        let detail = match &p.subject {
+            PropertySubject::Edge => format!(
+                "an edge property predicate belongs in `edge_filter.properties`, not on the \
+                 invocation — move `{}` there. Carried here it would name a subject the stage's \
+                 filter already names, and on an act that walks no edge it would name one that \
+                 does not exist",
+                p.key
+            ),
+            // Unchanged, and still true. `Other(_)` is additionally refused as
+            // `UnknownFilterValue` by the shape pass; both refusals are correct and a caller sees
+            // every refusal at once by design.
+            PropertySubject::Resource | PropertySubject::Other(_) => {
+                "this door does not yet apply property predicates — the compiler emits no slot for \
+                 them, and a predicate that narrows nothing is a silent substitution"
+                    .to_string()
+            }
+        };
         errs.push(refusal(
             Some(name),
             RefusalReason::FilterNotApplicable,
-            "this door does not yet apply property predicates — the compiler emits no slot for \
-             them, and a predicate that narrows nothing is a silent substitution",
+            detail,
         ));
     }
     // **The unconditional `edge_filter` refusal is RETIRED** `[2026-08-14]`. It read: "this door
@@ -439,17 +472,46 @@ fn check_act(
     // Its message was "act does not admit an edge filter" — true, and it named neither the
     // narrowing nor where the capability lives, which the contract's own rule ("declined, never
     // ignored", naming what was declined) asks for and every neighbouring refusal does.
-    if inv.edge_filter.is_some() && !decl.accepts_filters.contains(&FilterField::Edge) {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            format!(
-                "act `{}` does not traverse edges, so it cannot apply edge filters; narrowing \
-                 which edges a walk follows belongs to `follow-from`, whose `edge_filter` \
-                 constrains the hops themselves. Applying it here would answer a different \
-                 question than the one asked",
-                act_wire_name(&inv.act)
-            ),
-        ));
+    if let Some(f) = &inv.edge_filter {
+        if decl.accepts_filters.contains(&FilterField::Edge) {
+            // **The same cost shape as `facets`, so the same cap** — spec §9 says outright that
+            // this cap "becomes theirs". An edge property predicate compiles to a nested
+            // `NOT EXISTS` evaluated once per candidate EDGE and short-circuiting on the first
+            // that fails, so cost is `|candidate edges| × |properties|` and an authenticated caller
+            // chooses the second factor. `edge_kinds` and `labels` do NOT have this shape: `= ANY`
+            // is one operation whatever its length, which is why neither is capped.
+            //
+            // Refused rather than clamped, for `facets`' reason: clamping answers a different
+            // question silently.
+            //
+            // **It closes the instance, not the class.** Nothing bounds a composition's stage
+            // count and no `statement_timeout` exists anywhere in the repo — task
+            // `01a000ee-9fec-7283-baa5-75cd1580f023`, unchanged by this.
+            if f.properties.len() > MAX_FACET_PREDICATES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    format!(
+                        "a walk admits at most {MAX_FACET_PREDICATES} edge property predicates; \
+                         this stage supplied {}. Each one is evaluated against every candidate \
+                         edge, so the list is a cost multiplier rather than a narrowing — narrow \
+                         with `edge_kinds` or `labels` first, or split the question",
+                        f.properties.len()
+                    ),
+                ));
+            }
+        } else {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::FilterNotApplicable,
+                format!(
+                    "act `{}` does not traverse edges, so it cannot apply edge filters; narrowing \
+                     which edges a walk follows belongs to `follow-from`, whose `edge_filter` \
+                     constrains the hops themselves. Applying it here would answer a different \
+                     question than the one asked",
+                    act_wire_name(&inv.act)
+                ),
+            ));
+        }
     }
 }

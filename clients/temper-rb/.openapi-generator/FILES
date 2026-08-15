@@ -271,6 +271,7 @@ lib/temper/generated/models/stage_result.rb
 lib/temper/generated/models/stage_trace.rb
 lib/temper/generated/models/standing.rb
 lib/temper/generated/models/standing_shape.rb
+lib/temper/generated/models/subjected_property_predicate.rb
 lib/temper/generated/models/subscription.rb
 lib/temper/generated/models/subscription_override.rb
 lib/temper/generated/models/system_access_details.rb

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::act::ActName;
-use super::filter::{EdgeFilter, PropertyPredicate, ResourceFilter};
+use super::filter::{EdgeFilter, ResourceFilter, SubjectedPropertyPredicate};
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageInput, StageName, StageOutput};
 
@@ -104,8 +104,23 @@ pub struct ActInvocation {
     pub edge_filter: Option<EdgeFilter>,
     /// Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An
     /// unknown subject or an empty key/value is refused statically (spec §12).
+    ///
+    /// # Every predicate here is refused, and the edge arm now says where to go instead
+    ///
+    /// `[2026-08-15]` The edge half has a container:
+    /// [`super::filter::EdgeFilter::properties`]. A predicate arriving here with `subject: edge` is
+    /// refused with a **redirect** naming it, rather than the flat "this door does not yet apply
+    /// property predicates" every arm used to get.
+    ///
+    /// The `resource` arm keeps that flat refusal, because it is still true — the open-key resource
+    /// half is task `01a00502-a774-7001-b5b2-0ce462158f1c`, and **67 of the 70 live property keys
+    /// remain unreachable by any narrowing on any act** `[measured on prod — 2026-08-14]`.
+    ///
+    /// **This field is scheduled for deletion, with [`super::filter::PropertySubject`], by that
+    /// task.** It survives so a stale caller reaches a named refusal; see
+    /// [`SubjectedPropertyPredicate`] for why deleting it early would answer worse.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub properties: Vec<PropertyPredicate>,
+    pub properties: Vec<SubjectedPropertyPredicate>,
 }
 
 impl ActInvocation {

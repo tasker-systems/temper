@@ -366,6 +366,7 @@ mod tests {
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::{
         EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, PropertySubject, ResourceFilter,
+        SubjectedPropertyPredicate,
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
     use crate::types::query::scalars::BoundTerm;
@@ -672,7 +673,7 @@ mod tests {
     fn plan_with_property(subject: PropertySubject, key: &str, op: PropertyOp) -> Composition {
         let mut node = act("s", ActName::FindExact, Some(caller_ids(IdKind::Resource)));
         if let StageNode::Act(a) = &mut node {
-            a.properties.push(PropertyPredicate {
+            a.properties.push(SubjectedPropertyPredicate {
                 subject,
                 key: key.to_string(),
                 op,
@@ -1211,7 +1212,7 @@ mod tests {
             (
                 "a property predicate",
                 Box::new(|a: &mut ActInvocation| {
-                    a.properties = vec![PropertyPredicate {
+                    a.properties = vec![SubjectedPropertyPredicate {
                         subject: PropertySubject::Resource,
                         key: "k".to_string(),
                         op: PropertyOp::HasKey,
@@ -1229,6 +1230,7 @@ mod tests {
                 "an edge filter",
                 Box::new(|a: &mut ActInvocation| {
                     a.edge_filter = Some(EdgeFilter {
+                        properties: vec![],
                         edge_kinds: vec![EdgeKind::LeadsTo],
                         labels: vec![],
                     })
@@ -1359,6 +1361,7 @@ mod tests {
         let mut node = act("hits", ActName::FindExact, None);
         if let StageNode::Act(a) = &mut node {
             a.edge_filter = Some(EdgeFilter {
+                properties: vec![],
                 edge_kinds: vec![EdgeKind::LeadsTo],
                 labels: vec![],
             });
@@ -1567,6 +1570,133 @@ mod tests {
     ///
     /// Without this, the test above could be made to pass by deleting an act from a list, and
     /// nothing would notice that the act had become reachable for a bad reason — or not at all.
+    #[test]
+    fn an_edge_subject_predicate_on_the_invocation_is_redirected_to_its_container() {
+        // **The half of the `properties` refusal that narrowed** `[2026-08-15]`. It still REFUSES —
+        // the invocation slot applies nothing and never did — but an edge predicate now has
+        // somewhere to go, and a refusal that does not say where the capability went is a dead end.
+        //
+        // Asserted on the MESSAGE rather than only the reason, because the reason
+        // (`FilterNotApplicable`) is identical to the one it used to give: a test that reads only
+        // the discriminant cannot tell the redirect from the flat decline it replaced, and would
+        // pass unchanged if this arm were reverted.
+        let c = plan_with_property(PropertySubject::Edge, "confidence", PropertyOp::HasKey);
+        let errs = validate(&c).expect_err("still refused");
+        let detail = errs
+            .iter()
+            .find(|e| e.reason == RefusalReason::FilterNotApplicable)
+            .map(|e| e.detail.clone())
+            .expect("a FilterNotApplicable refusal");
+        assert!(
+            detail.contains("edge_filter.properties"),
+            "the edge arm must name its container; got {detail}"
+        );
+        assert!(
+            detail.contains("confidence"),
+            "and name the predicate it is redirecting; got {detail}"
+        );
+    }
+
+    #[test]
+    fn the_resource_subject_predicate_keeps_the_flat_refusal_it_always_had() {
+        // The other half, and the reason this is a separate test rather than a second assertion:
+        // **the arms retire independently.** The resource arm is retired by task
+        // 01a00502-a774-7001-b5b2-0ce462158f1c, not by this change, and until then 67 of the 70
+        // live property keys are unreachable. If a later edit gives this arm a redirect too, that
+        // is a capability claim and this test is what makes it a deliberate one.
+        let c = plan_with_property(PropertySubject::Resource, "confidence", PropertyOp::HasKey);
+        let errs = validate(&c).expect_err("still refused");
+        let detail = errs
+            .iter()
+            .find(|e| e.reason == RefusalReason::FilterNotApplicable)
+            .map(|e| e.detail.clone())
+            .expect("a FilterNotApplicable refusal");
+        assert!(
+            detail.contains("does not yet apply property predicates"),
+            "unchanged wording; got {detail}"
+        );
+        assert!(
+            !detail.contains("edge_filter"),
+            "the resource arm has no container to point at yet; got {detail}"
+        );
+    }
+
+    #[test]
+    fn the_act_that_walks_edges_admits_a_property_predicate_in_its_edge_filter() {
+        // The capability this change adds, stated as the absence of a refusal — the container is
+        // reachable through `validate`, which is the layer that used to refuse it unconditionally.
+        //
+        // **This asserts reachability, NOT that the predicate narrows anything.** The narrowing is
+        // witnessed against a real database, by a test that CREATES an edge-owned property, because
+        // zero of them exist in this deployment and a wire-level green here would prove only that
+        // the plan validates.
+        let mut node = act("s", ActName::FollowFrom, None);
+        if let StageNode::Act(a) = &mut node {
+            a.edge_filter = Some(EdgeFilter {
+                edge_kinds: vec![],
+                labels: vec![],
+                properties: vec![PropertyPredicate {
+                    key: "confidence".to_string(),
+                    op: PropertyOp::Contains {
+                        values: vec![serde_json::json!("high")],
+                    },
+                }],
+            });
+        }
+        if let Err(errs) = validate(&plan_with_intention(vec![node], vec!["s"])) {
+            assert!(
+                !errs
+                    .iter()
+                    .any(|e| e.reason == RefusalReason::FilterNotApplicable),
+                "an edge property predicate on the one act that traverses edges is admitted; \
+                 got {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_walk_caps_the_edge_property_predicates_that_multiply_per_edge_cost() {
+        // Same cost shape as `facets`, so the same cap — spec §9 says it "becomes theirs". Each
+        // predicate is a nested `NOT EXISTS` evaluated once per candidate EDGE, so the list is a
+        // multiplier an authenticated caller chooses. `edge_kinds` and `labels` are `= ANY` and one
+        // operation whatever their length, which is why neither is capped and this is not.
+        let over = |n: usize| {
+            let mut node = act("s", ActName::FollowFrom, None);
+            if let StageNode::Act(a) = &mut node {
+                a.edge_filter = Some(EdgeFilter {
+                    edge_kinds: vec![],
+                    labels: vec![],
+                    properties: (0..n)
+                        .map(|i| PropertyPredicate {
+                            key: format!("k{i}"),
+                            op: PropertyOp::HasKey,
+                        })
+                        .collect(),
+                });
+            }
+            validate(&plan_with_intention(vec![node], vec!["s"]))
+        };
+        // The bite probe: one under the cap must NOT refuse, or the assertion below would pass
+        // against a rule that refuses everything.
+        assert!(
+            over(32).is_ok() || !refuses_with(&over(32), "edge property predicates"),
+            "32 is admitted"
+        );
+        assert!(
+            refuses_with(&over(33), "at most 32 edge property predicates"),
+            "33 is refused"
+        );
+    }
+
+    /// Whether a validation outcome carries a `FilterNotApplicable` whose detail contains `needle`.
+    fn refuses_with<T>(out: &Result<T, Vec<PlanRefusal>>, needle: &str) -> bool {
+        out.as_ref().err().is_some_and(|errs| {
+            errs.iter().any(|e| {
+                e.reason == RefusalReason::FilterNotApplicable && e.detail.contains(needle)
+            })
+        })
+    }
+
     #[test]
     fn follow_from_is_no_longer_refused_as_unreachable() {
         let c = a_legal_single_stage_plan_over(ActName::FollowFrom);

@@ -153,8 +153,23 @@ resource_filter: ResourceFilter | null, edge_filter: EdgeFilter | null,
 /**
  * Narrowing by what a thing IS in `kb_properties`: open key space, closed operator set. An
  * unknown subject or an empty key/value is refused statically (spec §12).
+ *
+ * # Every predicate here is refused, and the edge arm now says where to go instead
+ *
+ * `[2026-08-15]` The edge half has a container:
+ * [`super::filter::EdgeFilter::properties`]. A predicate arriving here with `subject: edge` is
+ * refused with a **redirect** naming it, rather than the flat "this door does not yet apply
+ * property predicates" every arm used to get.
+ *
+ * The `resource` arm keeps that flat refusal, because it is still true — the open-key resource
+ * half is task `01a00502-a774-7001-b5b2-0ce462158f1c`, and **67 of the 70 live property keys
+ * remain unreachable by any narrowing on any act** `[measured on prod — 2026-08-14]`.
+ *
+ * **This field is scheduled for deletion, with [`super::filter::PropertySubject`], by that
+ * task.** It survives so a stale caller reaches a named refusal; see
+ * [`SubjectedPropertyPredicate`] for why deleting it early would answer worse.
  */
-properties: Array<PropertyPredicate>, };
+properties: Array<SubjectedPropertyPredicate>, };
 
 /**
  * The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and
@@ -343,8 +358,34 @@ filters_unapplied: Array<FilterField>, };
 /**
  * Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the
  * kind is a closed DDL enum, the label is free text the caller actually sees on every edge.
+ *
+ * # Every field here constrains a HOP, and that is why they live in a container
+ *
+ * `[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A
+ * narrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge
+ * predicate has no set-shaped substitute: binding a walk by *"nodes that participate in an edge
+ * matching P"* admits a node because it has a matching edge **somewhere** and then walks it through
+ * a different, non-matching one — a different question, returning plausible rows and looking like
+ * it narrowed. So these constrain the traversal from inside it, and the only act that traverses an
+ * edge is `follow-from`.
  */
-export type EdgeFilter = { edge_kinds: Array<EdgeKind>, labels: Array<string>, };
+export type EdgeFilter = { edge_kinds: Array<EdgeKind>, labels: Array<string>, 
+/**
+ * `kb_properties` rows owned by the edge itself: open key space, closed operator set.
+ * AND across the list, OR within a [`PropertyOp::Contains`].
+ *
+ * **This is where an edge property predicate lives, and the container is the point.** It moved
+ * off [`super::ActInvocation::properties`], where the same field meant different things
+ * depending on which act carried it — which is what a [`PropertySubject`] tag existed to
+ * disambiguate. Given a container the tag has no job; the subject is the container.
+ *
+ * **Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,
+ * and the storage has admitted them since the schema's first migration (`kb_properties.
+ * owner_table` includes `'kb_edges'`, whose DDL comment has said *"§4a edges carry facets"*
+ * throughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows
+ * nothing today by data rather than by design.
+ */
+properties: Array<PropertyPredicate>, };
 
 /**
  * Whether the caller received everything that matched.
@@ -534,16 +575,18 @@ export type ProducedVariant = "resources" | "regions";
 export type PropertyOp = { "op": "has_key" } | { "op": "contains", values: Array<JsonValue>, };
 
 /**
- * A property predicate: what it addresses, which key, and how.
+ * A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an
+ * [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.
  *
- * The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
- * a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
- * subject" has two answers.
+ * `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on
+ * the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction so that the
+ * transitional type carries the transitional name: when the open-key resource half lands and
+ * deletes it, nothing is renamed a second time.
  */
-export type PropertyPredicate = { subject: PropertySubject, key: string, op: PropertyOp, };
+export type PropertyPredicate = { key: string, op: PropertyOp, };
 
 /**
- * What a [`PropertyPredicate`] addresses.
+ * What a [`SubjectedPropertyPredicate`] addresses.
  *
  * OPEN, deliberately — `kb_properties.owner_table` is a `varchar` mirroring no DDL enum, so a
  * closed set here would be a claim the schema does not make. This is the OPPOSITE call from
@@ -1045,6 +1088,31 @@ input_ids: bigint,
  * Naming the invisible case alone would make the trace a single-probe existence oracle.
  */
 input_unusable: bigint, narrowed_by: Array<NarrowedBy>, };
+
+/**
+ * A property predicate that names its own subject, because it sits on the invocation rather than
+ * in a container.
+ *
+ * The subject is CARRIED, never inferred, because inference is ambiguous exactly where it matters:
+ * a `follow-from` stage walks edges and produces resources, so "the properties of this stage's
+ * subject" has two answers.
+ *
+ * # This type is transitional, and every arm of it is refused today
+ *
+ * `[decided — 2026-08-14, Pete]` Both halves get containers and this type disappears with
+ * [`PropertySubject`]. The edge half landed on 2026-08-15 — an edge predicate now belongs in
+ * [`EdgeFilter::properties`], and the refusal for a `subject: edge` predicate here REDIRECTS
+ * there rather than merely declining. The resource half is task
+ * `01a00502-a774-7001-b5b2-0ce462158f1c`, which deletes this type, [`PropertySubject`], its
+ * `Other(String)` arm and the `UnknownFilterValue` refusal together.
+ *
+ * It survives in the meantime **so that a stale caller gets a named refusal that says where the
+ * capability went**. Deleting the field instead would route the same request into
+ * `ActInvocation`'s `deny_unknown_fields`, and serde short-circuits before `validate` — so the
+ * caller would receive a deserializer 400 outside the `ErrorBody` shape, which is a worse answer
+ * than the one being replaced.
+ */
+export type SubjectedPropertyPredicate = { subject: PropertySubject, key: string, op: PropertyOp, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.

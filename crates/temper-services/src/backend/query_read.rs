@@ -695,6 +695,22 @@ fn narrowed_by(node: &StageNode) -> Vec<NarrowedBy> {
                         .iter()
                         .map(|l| entry("edge_label".to_string(), l.clone())),
                 )
+                // **The third axis is echoed for the same reason the first two are**
+                // `[2026-08-15]`. An edge property predicate excludes HOPS, so a walk carrying one
+                // returns a smaller set of nodes; leaving it out would recreate the
+                // applied-but-not-echoed defect this block was written for, one axis over — and
+                // recreate it silently, because every refusal test stays green when the answer is
+                // correct and only the disclosure is missing.
+                //
+                // The value is the KEY, not the whole predicate. A caller reading the trace needs
+                // to reconcile the rows with the question they asked, and the operator is in the
+                // request they still hold; rendering `values` here would put caller-supplied JSON
+                // of arbitrary size into every response's disclosure.
+                .chain(
+                    e.properties
+                        .iter()
+                        .map(|p| entry("edge_property".to_string(), p.key.clone())),
+                )
         })
         .collect();
 
@@ -778,13 +794,17 @@ mod tests {
     #[test]
     fn an_applied_edge_filter_is_echoed_in_the_narrowing_disclosure() {
         use temper_core::types::graph::EdgeKind;
-        use temper_core::types::query::EdgeFilter;
+        use temper_core::types::query::{EdgeFilter, PropertyOp, PropertyPredicate};
 
         let mut node = act_node("near", ActName::FollowFrom, None);
         if let StageNode::Act(a) = &mut node {
             a.edge_filter = Some(EdgeFilter {
                 edge_kinds: vec![EdgeKind::LeadsTo, EdgeKind::Contains],
                 labels: vec!["cites".to_string()],
+                properties: vec![PropertyPredicate {
+                    key: "confidence".to_string(),
+                    op: PropertyOp::HasKey,
+                }],
             });
         }
 
@@ -806,10 +826,18 @@ mod tests {
             pairs.contains(&("edge_label", "cites")),
             "the label axis is disclosed too; got {pairs:?}"
         );
+        // The third axis, and it is disclosed by KEY rather than by whole predicate: the caller
+        // still holds the operator, and rendering `values` would put arbitrary caller JSON into
+        // every response.
+        assert!(
+            pairs.contains(&("edge_property", "confidence")),
+            "an applied edge property predicate is echoed, or the walk returns fewer nodes with \
+             nothing saying why; got {pairs:?}"
+        );
         assert_eq!(
             disclosed.len(),
-            3,
-            "two kinds and one label, and nothing invented; got {pairs:?}"
+            4,
+            "two kinds, one label and one property key, and nothing invented; got {pairs:?}"
         );
     }
 

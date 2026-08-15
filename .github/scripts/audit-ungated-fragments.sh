@@ -121,6 +121,30 @@ PREFIX='__temper_ungated_'
 #     a NULL visible set admits NOTHING (fail-closed), a NULL bound is UNBOUNDED. They are not
 #     interchangeable and neither is a gate for the other. `CoreCall::Walk` is the only variant
 #     carrying both, so it is the only place they could be swapped.
+#
+# REVIEWED 2026-08-15 (`20260815000010`, EdgeFilter's third axis, task 01a000c2) — the SQL-file set
+# grows by one; the function-NAME set does not, and that is the fact to check rather than assume.
+#
+#   VERDICT: unchanged. `query_follow_from` still computes `resources_visible_to(p_principal)` once
+#     and hands the array down — at BOTH arities, because the incumbent 8-arity wrapper now
+#     delegates to the widened 9-arity one rather than recomputing the set. One place names
+#     `resources_visible_to`, not two.
+#   EMITTER: unchanged. Still `emit_ungated_core_call`'s `CoreCall::Walk` arm, which writes
+#     `VISIBLE_IDS` itself. The new `edge_properties` field is a narrowing expression, never an id
+#     source, so it cannot be a wrong set to pass.
+#   RESIDUE: unchanged and accepted.
+#
+#   WHY NO NEW FUNCTION NAME. `20260815000010` widens `__temper_ungated_follow_from` by ADDING a
+#   ninth parameter, so Postgres holds two functions under one name. That is an overload, not a new
+#   fragment: the 8-arity form is `CREATE OR REPLACE`d into a two-line delegation to the 9-arity
+#   body, so there is exactly ONE walk in the schema. A reviewer checking that this entry moved only
+#   the file set is checking the right thing.
+#
+#   AND THE REASON THE WIDENED SIGNATURE CARRIES NO `DEFAULT`, which is a security-adjacent fact
+#   rather than a style one: with a default on the added parameter, EVERY 8-argument call becomes
+#   `function ... is not unique` (measured, Postgres 18). The failure would land at run time on the
+#   gated wrapper and on `search_graph_expand` — i.e. a migration declaring itself additive would
+#   break the gated path while the ungated body kept working. Do not add a default here later.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
@@ -208,6 +232,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260810000010_anchor_readability_both_kinds.sql
 20260814000010_find_resources_with.sql
 20260814000030_follow_from_provenance_sibling.sql
+20260815000010_edge_property_predicates.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded

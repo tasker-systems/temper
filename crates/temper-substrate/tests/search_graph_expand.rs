@@ -25,7 +25,7 @@ mod common;
 
 use temper_substrate::content::{PreparedBlock, PreparedChunk};
 use temper_substrate::events::{fire, SeedAction};
-use temper_substrate::ids::{BlockId, ChunkId, ContextId, EntityId, ProfileId, ResourceId};
+use temper_substrate::ids::{BlockId, ChunkId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
 use temper_substrate::scenario::bootseed;
 use uuid::Uuid;
@@ -128,7 +128,7 @@ async fn edge(
     emitter: EntityId,
     kind: EdgeKind,
     weight: f64,
-) {
+) -> EdgeId {
     edge_full(
         pool,
         src,
@@ -140,7 +140,7 @@ async fn edge(
         EdgePolarity::Forward,
         Some("rel"),
     )
-    .await;
+    .await
 }
 
 /// The same assertion with the two fields a `via` entry reports and [`edge`] fixes: polarity, and a
@@ -161,9 +161,9 @@ async fn edge_full(
     weight: f64,
     polarity: EdgePolarity,
     label: Option<&str>,
-) {
+) -> EdgeId {
     let mut tx = pool.begin().await.unwrap();
-    fire(
+    let id = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
             src,
@@ -181,6 +181,7 @@ async fn edge_full(
     .relationship()
     .unwrap();
     tx.commit().await.unwrap();
+    id
 }
 
 async fn graph_expand(
@@ -866,5 +867,222 @@ async fn follow_from_core_trusts_the_visible_set_it_is_handed(pool: sqlx::PgPool
     assert!(
         none.is_empty(),
         "p_visible_ids NULL admits NOTHING — fail-closed, and the opposite of p_bound_ids"
+    );
+}
+
+// ── The third edge axis: property predicates that constrain a HOP (`20260815000010`) ────────────
+
+/// Write one `kb_properties` row owned by an EDGE, through the shipped write path
+/// (`property_set`, widened to a polymorphic owner by `20260727000030`).
+///
+/// **This helper is the point of the tests below.** Zero edge-owned properties exist in prod
+/// `[measured — 2026-08-14]`, so a suite that only queried the corpus would assert an owner-agnostic
+/// predicate against a population of nothing and go green — proving the SQL parses, not that it
+/// narrows. Every assertion here stands on a row this function created.
+async fn edge_property(
+    pool: &sqlx::PgPool,
+    edge: EdgeId,
+    emitter: EntityId,
+    key: &str,
+    value: &str,
+) {
+    sqlx::query("SELECT property_set($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "property_id": Uuid::now_v7(),
+            "owner": { "table": "kb_edges", "id": edge.uuid() },
+            "property_key": key,
+            "value": value,
+            "weight": 1.0,
+        }))
+        .bind(emitter.uuid())
+        .execute(pool)
+        .await
+        .expect("the edge-owned property write path is shipped and takes a polymorphic owner");
+}
+
+/// The walk, through the WIDENED arity — the only one that can carry an edge property predicate.
+async fn follow_from_with_properties(
+    pool: &sqlx::PgPool,
+    principal: Uuid,
+    seeds: &[Uuid],
+    predicates: Option<serde_json::Value>,
+) -> Vec<Walked> {
+    use sqlx::Row;
+    sqlx::query(
+        "SELECT resource_id, graph_score, via FROM query_follow_from(\
+         $1, $2::uuid[], 2, 0.5, NULL::text[], NULL::text[], NULL::uuid[], NULL::int, $3::jsonb)",
+    )
+    .bind(principal)
+    .bind(seeds)
+    .bind(predicates)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| Walked {
+        id: r.get::<Uuid, _>("resource_id"),
+        score: r.get::<f32, _>("graph_score"),
+        via: r.get::<serde_json::Value, _>("via"),
+    })
+    .collect()
+}
+
+/// **THE witness for the edge half**, and the one the design declared could not be provided by
+/// reasoning: *"zero edge-owned properties exist, so §5's owner-agnostic grain is
+/// correct-by-construction and witnessed by nothing"*.
+///
+/// `a — b — c`, and only the `a—b` edge carries `confidence: high`. Narrowing on it must leave `b`
+/// reachable and `c` NOT, because the hop that would have reached `c` is not traversable.
+///
+/// **`c`'s absence is the assertion that distinguishes this from the trap** (task
+/// `01a000c2-033c-7451-8b13-b7aa7469d217`, design §8.2). The tempting implementation — admit nodes
+/// that *participate in* a matching edge, then walk freely — returns `c` here: `b` participates in
+/// the matching `a—b` edge, so it is admitted, and the walk then leaves it through the
+/// non-matching `b—c` edge. That answer is plausible, ordered, and wrong, and the only thing that
+/// separates it from a correct one is this row.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_property_predicate_constrains_the_hop_not_merely_the_endpoint(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ep").await;
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://ep/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://ep/b", unit(1)).await;
+    let c = mk_embedded(&pool, home, owner, emitter, "c", "temper://ep/c", unit(2)).await;
+    let ab = edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    let _bc = edge(&pool, b, c, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    edge_property(&pool, ab, emitter, "confidence", "high").await;
+
+    // The control, and it is half the test: without it a body returning nothing for ANY reason —
+    // a malformed jsonb path, a wrong owner_table, a typo in the key — would pass the assertions
+    // below by accident.
+    let unfiltered = follow_from_with_properties(&pool, owner.uuid(), &[a.uuid()], None).await;
+    assert!(
+        unfiltered.iter().any(|w| w.id == b.uuid()) && unfiltered.iter().any(|w| w.id == c.uuid()),
+        "control: unfiltered, the walk reaches b at hop 1 and c at hop 2"
+    );
+
+    let narrowed = follow_from_with_properties(
+        &pool,
+        owner.uuid(),
+        &[a.uuid()],
+        Some(
+            serde_json::json!([{"key": "confidence", "op": {"op": "contains",
+                                                             "values": ["high"]}}]),
+        ),
+    )
+    .await;
+    assert!(
+        narrowed.iter().any(|w| w.id == b.uuid()),
+        "b is reached through the edge that carries the property"
+    );
+    assert!(
+        !narrowed.iter().any(|w| w.id == c.uuid()),
+        "c is NOT reached: the b—c hop carries no matching property, and a predicate that only \
+         admitted ENDPOINTS would have returned it — that is the trap this asserts against"
+    );
+}
+
+/// `has_key` is a different operator and is witnessed separately: it must match the row whatever
+/// the value, and must not match an edge carrying a different key.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn has_key_matches_on_presence_and_a_different_key_matches_nothing(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "hk").await;
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://hk/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://hk/b", unit(1)).await;
+    let ab = edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    edge_property(&pool, ab, emitter, "confidence", "high").await;
+
+    let present = follow_from_with_properties(
+        &pool,
+        owner.uuid(),
+        &[a.uuid()],
+        Some(serde_json::json!([{"key": "confidence", "op": {"op": "has_key"}}])),
+    )
+    .await;
+    assert!(
+        present.iter().any(|w| w.id == b.uuid()),
+        "has_key matches on presence, whatever the value"
+    );
+
+    let absent = follow_from_with_properties(
+        &pool,
+        owner.uuid(),
+        &[a.uuid()],
+        Some(serde_json::json!([{"key": "provenance", "op": {"op": "has_key"}}])),
+    )
+    .await;
+    assert!(
+        absent.is_empty(),
+        "a key no edge carries narrows the walk to nothing, rather than being ignored"
+    );
+}
+
+/// A malformed predicate list narrows to NOTHING rather than raising.
+///
+/// `jsonb_array_elements` raises on a non-array, and both levels are normalized ahead of it. This
+/// is unreachable through the compiler — its input is a typed `Vec<PropertyPredicate>` — and these
+/// functions are directly callable, so the alternative is a caller's malformed argument arriving as
+/// a server fault.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_malformed_predicate_list_narrows_to_nothing_rather_than_raising(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "mal").await;
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://mal/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://mal/b", unit(1)).await;
+    let ab = edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    edge_property(&pool, ab, emitter, "confidence", "high").await;
+
+    for malformed in [
+        // not an array at the top level
+        serde_json::json!({"key": "confidence", "op": {"op": "has_key"}}),
+        // `values` is not an array
+        serde_json::json!([{"key": "confidence", "op": {"op": "contains", "values": "high"}}]),
+        // an operator the closed set does not contain
+        serde_json::json!([{"key": "confidence", "op": {"op": "matches_regex"}}]),
+    ] {
+        let out =
+            follow_from_with_properties(&pool, owner.uuid(), &[a.uuid()], Some(malformed.clone()))
+                .await;
+        assert!(
+            out.is_empty(),
+            "fail closed: {malformed} narrows to nothing and does not raise"
+        );
+    }
+}
+
+/// The incumbent 8-arity call still resolves, and still answers.
+///
+/// **This is the assertion that a `DEFAULT` on the added parameter would have broken**, and it
+/// would have broken it at run time on a migration declaring itself additive: with a default, an
+/// eight-argument call is ambiguous (`function ... is not unique`) rather than merely narrower.
+/// The three `graph_expand_*` tests above exercise the same property through
+/// `search_graph_expand`; this one names it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_incumbent_arity_is_still_unambiguously_callable(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ar").await;
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://ar/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://ar/b", unit(1)).await;
+    edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+
+    let via_incumbent = follow_from(
+        &pool,
+        owner.uuid(),
+        &[a.uuid()],
+        2,
+        0.5,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        via_incumbent.iter().any(|w| w.id == b.uuid()),
+        "the eight-argument form resolves to one function and returns the same walk"
     );
 }

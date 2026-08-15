@@ -425,7 +425,9 @@ fn stages_are_emitted_in_dependency_order() {
 // ─── Beat D: the find acts emit real fragments ──────────────────────────────────────────────────
 
 use temper_core::types::graph::EdgeKind;
-use temper_core::types::query::{BoundTerm, EdgeFilter, Intention, RefusalReason};
+use temper_core::types::query::{
+    BoundTerm, EdgeFilter, Intention, PropertyOp, PropertyPredicate, RefusalReason,
+};
 
 /// The ungated cores, restated here because they are private to the crate. A drift between these
 /// and the compiler's own constants shows up as a failing assertion, which is the right failure.
@@ -839,6 +841,7 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
         terms: Default::default(),
         resource_filter: None,
         edge_filter: Some(EdgeFilter {
+            properties: vec![],
             edge_kinds: vec![EdgeKind::LeadsTo],
             labels: vec!["cites".to_string()],
         }),
@@ -890,9 +893,15 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
     let args: Vec<&str> = split_top_level(&call);
     assert_eq!(
         args.len(),
-        8,
-        "the walk core takes eight arguments; got:\n{call}"
+        9,
+        "the walk core takes nine arguments; got:\n{call}"
     );
+    // **The arity IS the function selection here** `[2026-08-15]`. `20260815000010` widened the
+    // walk by adding a ninth parameter with NO default, precisely so the eight-parameter incumbent
+    // stays unambiguously callable — measured: a default on the added parameter makes every
+    // eight-argument call an error. So emitting eight arguments would not be a smaller call, it
+    // would silently be a call to the OTHER function, the one that cannot apply an edge property
+    // predicate. This count is what makes that visible.
 
     let seed_bind = args[1];
     let bound_bind = args[6];
@@ -965,6 +974,83 @@ fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
     assert!(
         call.contains("NULL::uuid[]"),
         "an absent bound is NULL, never '{{}}'; got:\n{call}"
+    );
+    // The third axis obeys the same polarity, and is TYPED even when null — the widened fragment is
+    // reached by arity, so an untyped NULL in the ninth position cannot resolve.
+    assert!(
+        call.contains("NULL::jsonb"),
+        "an absent edge property predicate list is a typed NULL; got:\n{call}"
+    );
+}
+
+/// An edge property predicate reaches the walk's ninth slot, as the serialization of the typed
+/// value — not as an object this compiler assembled.
+///
+/// **The shape assertion is the point.** The fragment reads the operator at `q->'op'->>'op'`
+/// because `PropertyOp` is internally tagged inside a field called `op`; a compiler that flattened
+/// it to `{"key":k,"op":"has_key"}` would emit valid-looking JSON that matches nothing, and every
+/// refusal test would stay green because nothing was refused.
+#[test]
+fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
+    let walk = StageNode::Act(ActInvocation {
+        name: StageName::parse("near").unwrap(),
+        act: ActName::FollowFrom,
+        intention: None,
+        inputs: vec![StageInput::Caller {
+            relation: StageRelation::Seed,
+            ids: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: vec![Uuid::now_v7()],
+            },
+        }],
+        terms: Default::default(),
+        resource_filter: None,
+        edge_filter: Some(EdgeFilter {
+            edge_kinds: vec![],
+            labels: vec![],
+            properties: vec![PropertyPredicate {
+                key: "confidence".to_string(),
+                op: PropertyOp::Contains {
+                    values: vec![serde_json::json!("high")],
+                },
+            }],
+        }),
+        properties: vec![],
+    });
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![walk],
+    };
+    let v = validate(&c).expect("a walk with an edge property predicate is well-formed");
+    let compiled = compile(&v, ProfileId::new()).expect("it compiles");
+
+    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
+    let args = split_top_level(&call);
+    assert_eq!(args.len(), 9, "the widened arity; got:\n{call}");
+    assert!(
+        args[8].starts_with('$') && args[8].ends_with("::jsonb"),
+        "the predicate list is BOUND, never interpolated — an open key space is caller text;          got {}",
+        args[8]
+    );
+
+    let bound = compiled
+        .binds
+        .iter()
+        .find_map(|b| match b {
+            QueryBind::Json(v) => Some(v.clone()),
+            _ => None,
+        })
+        .expect("a json bind");
+    assert_eq!(
+        bound,
+        serde_json::json!([{"key": "confidence", "op": {"op": "contains", "values": ["high"]}}]),
+        "the operator is NESTED, matching what the fragment reads at q->'op'->>'op'"
     );
 }
 
