@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use super::act::{
-    ActDeclaration, ActName, ActQuantity, BuildState, Door, DoorReach, QuantityScale,
+    ActDeclaration, ActName, ActQuantity, BuildState, Disclosure, Door, DoorReach, QuantityScale,
     VisibilityProfile,
 };
 use super::filter::FilterField;
@@ -322,24 +322,46 @@ pub fn search_family() -> Vec<ActDeclaration> {
         },
         ActDeclaration {
             name: ActName::FollowFrom,
-            asker_holds: "a found thing; I want its neighbours".to_string(),
-            served_by: Some("search_graph_expand".to_string()),
+            // **A found SET, and the plural is the whole reason `via` exists**
+            // `[rewritten — 2026-08-14, Pete]`. This said "a found thing", while the act declares
+            // `accepts_seeds: vec![IdKind::Resource]` — an id set — and its own `means` already
+            // says "from any seed". A found thing is always a set, even a set of one; and for a
+            // multi-seed walk a bare `(node, score)` row cannot say which seed a neighbour belongs
+            // to, which is the disclosure this act now carries.
+            asker_holds: "found things; I want their neighbours, and which of them each came from"
+                .to_string(),
+            // `query_follow_from`, never `search_graph_expand`: the map this name is looked up in
+            // is keyed GATED entry point -> ungated core, and the incumbent is now a third,
+            // shape-preserving wrapper that delegates to this one (`20260814000030`).
+            served_by: Some("query_follow_from".to_string()),
             build_state: provisionally_unexpressed(),
-            // Bounded follow-from is UNBUILT: search_graph_expand has no scope parameter, so
-            // "walk from these seeds but stay inside this set" is unstatable. The one genuine
-            // foreclosure — the act itself is fused, only its bounded form is missing.
-            accepts_bounds: vec![],
+            // **The one genuine foreclosure, now closed** `[2026-08-14]`. This read: "Bounded
+            // follow-from is UNBUILT: search_graph_expand has no scope parameter, so 'walk from
+            // these seeds but stay inside this set' is unstatable."
+            //
+            // Two things had to land, and the second was found only at build time. The fragment
+            // gained `p_bound_ids` (`20260814000030`), applied where visibility is applied so it
+            // constrains INTERMEDIATE nodes and not merely the returned set — the output-only
+            // reading is `CombineOp::Intersect` and would be a second spelling of a combinator.
+            // Then the WIRE had to carry two sets at once: a bounded walk needs seeds to grow from
+            // and a bound to stay within, and `ActInvocation.input` was one slot with one relation
+            // until it became `inputs: Vec<StageInput>`. Declaring this before that widening would
+            // have named a capability no caller could express.
+            accepts_bounds: vec![IdKind::Resource],
             accepts_seeds: vec![IdKind::Resource],
             accepts_bound_terms: vec![BoundTerm::Limit],
             accepts_filters: vec![FilterField::Edge],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             // No location: it returns nodes reached by walking, not chunks matched by a query, so
-            // there is no match position for it to have. (Its walk also discards seed provenance —
-            // `SELECT node, MAX(score) FROM walk WHERE hop > 0 GROUP BY node` — which is the fact
-            // behind the retired `InputContribution` disclosure's "returns when a walk carries its
-            // origin" clause.)
-            discloses: vec![],
+            // there is no match position for it to have.
+            //
+            // **`InputContribution` is here because the walk stopped discarding origin**
+            // `[2026-08-14]`. This comment used to record the opposite — that the walk collapsed to
+            // `SELECT node, MAX(score) ... GROUP BY node` and threw the path away, which was the
+            // fact behind that disclosure's retirement. The sibling projects it instead: one row
+            // per node carrying every edge it was reached by, as asserted.
+            discloses: vec![Disclosure::InputContribution],
             // CORRECTED 2026-08-05 (was PrincipalRelative). `graph_score` is `MAX(score) GROUP BY
             // node` over `walk`, whose `adj` admits an edge only when BOTH endpoints are visible —
             // so a severed intermediate node changes a surviving node's score. Bite-proven: a 25%
@@ -365,9 +387,34 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // is correct: a door that cannot invoke the act at all falls short on nothing in
             // particular. The `accepts_filters: [Edge]` that today's validator refuses outright is
             // recorded there, in `validate`'s FilterNotApplicable arm, not here.
+            // **Absent -> Serves at CLI and API** `[2026-08-14]`, on the condition the previous
+            // comment set: *"This restores to `Serves` when `/api/query` gives the act a door,
+            // which is additive."* `query_follow_from` is in `CALLABLE_FRAGMENTS` and the compiler
+            // emits its core, so both doors can now invoke it — `temper query` takes a raw JSON
+            // plan, so every wire field is reachable from it by construction.
+            //
+            // **MCP stays `Absent`, and that is not this act's shortfall to close.** The MCP server
+            // exposes a `search` tool and no `query` tool, so the door agents use cannot compose at
+            // all. Flipping this to `Serves` because the mechanic exists would make the declaration
+            // describe the code rather than the DEPLOYED system, which is the whole reason the
+            // three were set to `Absent` in the first place.
             door_coverage: BTreeMap::from([
-                (Door::Cli, DoorReach::Absent),
-                (Door::Api, DoorReach::Absent),
+                (
+                    Door::Cli,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
+                (
+                    Door::Api,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
                 (Door::Mcp, DoorReach::Absent),
             ]),
             orders_by: Some(ActQuantity {
@@ -622,9 +669,6 @@ pub fn declaration(name: &ActName) -> Option<ActDeclaration> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Only the tests still name `Disclosure` — every declaration's list is empty now, so the
-    // registry itself no longer imports it.
-    use crate::types::query::act::Disclosure;
 
     /// `[widened — 2026-08-14]` Eight, was seven. `find-resources-with` is the family's first act
     /// that asks the corpus nothing — every other member carries a question about meaning, or (in
@@ -822,34 +866,60 @@ mod tests {
         }
     }
 
-    /// The two acts nothing can invoke say so at every door.
+    /// The act nothing can invoke says so at every door.
     ///
-    /// `[ruled — 2026-08-10, Pete, ADJ-9a]` Both declared `unified_doors(vec![])` — full reach at
-    /// CLI, API and MCP — while `/api/search` calls only the two find fragments and nothing outside
-    /// temper-substrate's tests calls `search_graph_expand` or `wayfind_region_scores`. Their
-    /// mechanics are live and stranded, which is `build_state`'s business; `door_coverage` answers
-    /// *can a caller standing here ask this*, and the answer was none the whole time.
+    /// `[ruled — 2026-08-10, Pete, ADJ-9a]` `follow-from` and `survey` both declared
+    /// `unified_doors(vec![])` — full reach at CLI, API and MCP — while `/api/search` calls only the
+    /// two find fragments and nothing outside temper-substrate's tests calls `search_graph_expand`
+    /// or `wayfind_region_scores`. Their mechanics were live and stranded, which is `build_state`'s
+    /// business; `door_coverage` answers *can a caller standing here ask this*, and the answer was
+    /// none the whole time.
+    ///
+    /// `[narrowed to one — 2026-08-14]` **`follow-from` is no longer stranded** — it reaches
+    /// `/api/query` at CLI and API, which is the restoration its own comment promised and this test
+    /// exists to force through a deliberate edit. `survey` still waits on a `p_lens` slot.
     ///
     /// Kept as an EXACT set of doors rather than a `contains`, for the same reason
     /// `the_served_set_…` is: an act acquiring a door must be a deliberate edit here, beside the
     /// door actually existing.
     #[test]
-    fn the_two_stranded_mechanics_declare_no_door_at_all() {
-        for name in [ActName::FollowFrom, ActName::Survey] {
-            let a = declaration(&name).unwrap();
-            assert!(
-                a.served_by.is_some(),
-                "{name:?} still names a live mechanic — that is what makes the absence worth \
-                 declaring"
+    fn the_stranded_mechanic_declares_no_door_at_all() {
+        let a = declaration(&ActName::Survey).unwrap();
+        assert!(
+            a.served_by.is_some(),
+            "survey still names a live mechanic — that is what makes the absence worth declaring"
+        );
+        for door in Door::ALL {
+            assert_eq!(
+                a.door_coverage.get(&door),
+                Some(&DoorReach::Absent),
+                "survey claims {door:?} reaches it; no door does"
             );
-            for door in Door::ALL {
-                assert_eq!(
-                    a.door_coverage.get(&door),
-                    Some(&DoorReach::Absent),
-                    "{name:?} claims {door:?} reaches it; no door does"
-                );
-            }
         }
+    }
+
+    /// `follow-from` reaches the two composing doors and **not** MCP, and the asymmetry is the
+    /// point rather than an oversight `[2026-08-14]`.
+    ///
+    /// `temper query` takes a raw JSON plan, so every wire field is reachable from the CLI by
+    /// construction — hence empty shortfall lists rather than a list nobody maintains. MCP exposes a
+    /// `search` tool and no `query` tool, so the door agents actually use cannot compose at all;
+    /// that is a gap this act cannot close and must not paper over by declaring reach it does not
+    /// have.
+    #[test]
+    fn follow_from_reaches_the_composing_doors_and_not_mcp() {
+        let a = declaration(&ActName::FollowFrom).unwrap();
+        for door in [Door::Cli, Door::Api] {
+            assert!(
+                matches!(a.door_coverage.get(&door), Some(DoorReach::Serves { .. })),
+                "{door:?} compiles a composition, so it reaches this act"
+            );
+        }
+        assert_eq!(
+            a.door_coverage.get(&Door::Mcp),
+            Some(&DoorReach::Absent),
+            "MCP exposes no `query` tool; the mechanic existing does not give that door reach"
+        );
     }
 
     #[test]
@@ -1080,14 +1150,30 @@ mod tests {
         }
     }
 
+    /// **The one genuine foreclosure, and it closed** `[2026-08-14]`.
+    ///
+    /// This asserted `accepts_bounds.is_empty()` — "follow-from bounded is unbuilt", because
+    /// `search_graph_expand` had no scope parameter. Inverted rather than deleted: a foreclosure
+    /// that opens should leave behind the assertion that it is open, or nothing records that the
+    /// declaration is meant to carry both.
+    ///
+    /// **It takes BOTH, and both are `Resource`** — which is the shape that made this act the
+    /// reason `ActInvocation.inputs` became a list. A stage hands `follow-from` a seed set to grow
+    /// from and, optionally, a bound to stay within; with one input slot only one of those was
+    /// sayable, so this declaration would have named a capability no caller could express.
     #[test]
-    fn follow_from_takes_resource_seeds_and_cannot_be_bounded() {
-        // The one genuine foreclosure: search_graph_expand has no scope parameter.
+    fn follow_from_takes_resource_seeds_and_a_resource_bound() {
         let a = declaration(&ActName::FollowFrom).unwrap();
         assert_eq!(a.accepts_seeds, vec![IdKind::Resource]);
+        assert_eq!(
+            a.accepts_bounds,
+            vec![IdKind::Resource],
+            "bounded follow-from is built: the fragment's p_bound_ids constrains the whole walk"
+        );
+        // The disclosure the enum predicted would "return when a walk carries origin".
         assert!(
-            a.accepts_bounds.is_empty(),
-            "follow-from bounded is unbuilt"
+            a.discloses.contains(&Disclosure::InputContribution),
+            "the walk projects which seed each neighbour came from, and via which edge"
         );
     }
 

@@ -20,8 +20,8 @@ module Temper::Generated
 
     attr_accessor :edge_filter
 
-    # Where this stage's set comes from, and what this act does with it: caller-supplied ids or an upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].  There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose \"required whenever `input` is present\" invariant lived in prose, which admitted a meaningless state the validator then read as `bound`. The relation belongs to the edge, and nesting it there makes the meaningless state unrepresentable rather than merely invalid.
-    attr_accessor :input
+    # Where this stage's sets come from, and what this act does with each: caller-supplied ids or an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].  There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was an `Option<BoundsMode>` whose \"required whenever an input is present\" invariant lived in prose, which admitted a meaningless state the validator then read as `bound`. The relation belongs to the edge, and nesting it there makes the meaningless state unrepresentable rather than merely invalid.  # A LIST, and at most one per relation  `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one** relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from *and* a bound to stay inside, at the same time, and a single slot can hold one or the other. The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it, so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.  **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside one. So the list is short by construction and is not a general fan-in.  **Why a list rather than a second `bound` field beside this one.** The relation already distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give it two — the new field, and this one with a `Bound` relation — which is the incumbent literal `bounds: Option<IdSet>` shape this contract deliberately replaced `[decided — 2026-08-14, Pete]`, returning under a different name.
+    attr_accessor :inputs
 
     # The question this act asks: its text, and the caller's vector when there is one.  **A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]** `[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then, which made a DAG able to ask only one question — every find stage reading the same string.  `None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a find act is `MissingIntention`, refused by the shape pass: `find-exact` sources its `p_query` from here and there is nowhere else to get it.
     attr_accessor :intention
@@ -43,7 +43,7 @@ module Temper::Generated
       {
         :'act' => :'act',
         :'edge_filter' => :'edge_filter',
-        :'input' => :'input',
+        :'inputs' => :'inputs',
         :'intention' => :'intention',
         :'name' => :'name',
         :'properties' => :'properties',
@@ -67,7 +67,7 @@ module Temper::Generated
       {
         :'act' => :'ActName',
         :'edge_filter' => :'EdgeFilter',
-        :'input' => :'StageInput',
+        :'inputs' => :'Array<StageInput>',
         :'intention' => :'Intention',
         :'name' => :'String',
         :'properties' => :'Array<PropertyPredicate>',
@@ -80,7 +80,6 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'edge_filter',
-        :'input',
         :'intention',
         :'resource_filter',
       ])
@@ -112,8 +111,10 @@ module Temper::Generated
         self.edge_filter = attributes[:'edge_filter']
       end
 
-      if attributes.key?(:'input')
-        self.input = attributes[:'input']
+      if attributes.key?(:'inputs')
+        if (value = attributes[:'inputs']).is_a?(Array)
+          self.inputs = value
+        end
       end
 
       if attributes.key?(:'intention')
@@ -206,7 +207,7 @@ module Temper::Generated
       self.class == o.class &&
           act == o.act &&
           edge_filter == o.edge_filter &&
-          input == o.input &&
+          inputs == o.inputs &&
           intention == o.intention &&
           name == o.name &&
           properties == o.properties &&
@@ -223,7 +224,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, edge_filter, input, intention, name, properties, resource_filter, terms].hash
+      [act, edge_filter, inputs, intention, name, properties, resource_filter, terms].hash
     end
 
     # Builds the object from hash

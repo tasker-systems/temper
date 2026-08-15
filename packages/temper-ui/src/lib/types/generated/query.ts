@@ -5,6 +5,7 @@ import type { CogmapRegionRow } from "./cognitive_maps";
 import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
 import type { JsonValue } from "./serde_json/JsonValue";
+import type { Polarity } from "./graph";
 import type { ResourceSection } from "./ResourceSection";
 import type { ResourceView } from "./resource_view";
 
@@ -108,17 +109,37 @@ name: StageName, act: ActName,
  */
 intention: Intention | null, 
 /**
- * Where this stage's set comes from, and what this act does with it: caller-supplied ids or
- * an upstream stage, each carrying its own [`super::stage::StageRelation`]. Absent for a root
+ * Where this stage's sets come from, and what this act does with each: caller-supplied ids or
+ * an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root
  * act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal
  * `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].
  *
- * There is deliberately no sibling `bounds_mode` here. It was an `Option<BoundsMode>` whose
- * "required whenever `input` is present" invariant lived in prose, which admitted a
+ * There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was
+ * an `Option<BoundsMode>` whose
+ * "required whenever an input is present" invariant lived in prose, which admitted a
  * meaningless state the validator then read as `bound`. The relation belongs to the edge, and
  * nesting it there makes the meaningless state unrepresentable rather than merely invalid.
+ *
+ * # A LIST, and at most one per relation
+ *
+ * `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**
+ * relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from
+ * *and* a bound to stay inside, at the same time, and a single slot can hold one or the other.
+ * The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,
+ * so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.
+ *
+ * **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed
+ * ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union
+ * is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside
+ * one. So the list is short by construction and is not a general fan-in.
+ *
+ * **Why a list rather than a second `bound` field beside this one.** The relation already
+ * distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give
+ * it two — the new field, and this one with a `Bound` relation — which is the incumbent
+ * literal `bounds: Option<IdSet>` shape this contract deliberately replaced
+ * `[decided — 2026-08-14, Pete]`, returning under a different name.
  */
-input: StageInput | null, 
+inputs: Array<StageInput>, 
 /**
  * Act-level bound terms. A term this act does not admit is refused STATICALLY
  * (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
@@ -261,7 +282,7 @@ export type CompositionTrace = { stages: Array<StageTrace>, };
  * whereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking
  * change, and should be.
  */
-export type Disclosure = "match_location" | "filter_counts";
+export type Disclosure = "input_contribution" | "match_location" | "filter_counts";
 
 /**
  * One of Temper's three surfaces. Named as doors rather than as transports because the question
@@ -594,7 +615,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "unknown_filter_value" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
 
 /**
  * One region of a cognitive map. Produced by `survey`.
@@ -674,7 +695,43 @@ export type ResourceHit = { resource: ResourceView, scoring: Scoring,
  * from a shape with no such field, which is exactly the distinction [`RegionHit`] exists to
  * draw.
  */
-located_at: MatchLocation | null, };
+located_at: MatchLocation | null, 
+/**
+ * How a walk reached this resource — one entry per edge it was reached by.
+ *
+ * **Filled only by `follow-from`**, and declared in advance rather than discovered: the act's
+ * [`super::act::ActDeclaration::discloses`] carries
+ * [`super::act::Disclosure::InputContribution`], which the enum predicted would *"return when
+ * a walk carries origin"*.
+ *
+ * # EVERY parent, and the score corresponds to only one of them
+ *
+ * `graph_score` is a `MAX` over paths; this is a union over **all** of them. They disagree by
+ * construction — a node reached both by a strong one-hop edge and a weak three-hop chain names
+ * both and scores from one. **The non-correspondence is declared here rather than repaired**,
+ * exactly as [`RegionHit::region`] carries `salience` beside `region_score` and says outright
+ * that the two are not rivals. Naming every parent is the more useful and the clearer answer;
+ * naming only the winning path's would make this field a second, silent statement about rank.
+ *
+ * # ABSENT rather than null, which is the opposite of [`Self::located_at`]
+ *
+ * The two look like the same question and are not, and F4's rule is what separates them.
+ * `located_at` is PRESENT-null because its null carries a *claim* — *no location declared* —
+ * that a missing key could not make. A collection has no such claim to carry: `[]` and absent
+ * would both mean "no provenance", so a null adds a third spelling of one fact. The key is
+ * therefore dropped for every act that is not a walk, and its presence means the same thing as
+ * the act's `discloses` already promised.
+ *
+ * # No cap, and the reason is structural rather than "the corpus is small"
+ *
+ * `[measured on prod — 2026-08-14]` at the deliberate worst case (25 highest-degree seeds,
+ * depth 3) the whole walk holds 9,434 entries with 124 on one node, while **the page that
+ * ships carries 125 in total and at most 9 on any row**. Nodes with enormous parent sets are
+ * reached by many long weak paths, so the score ranks them out and the limit sheds them before
+ * they are ever described. Capping would silently truncate provenance, which is the one thing
+ * this field exists to be trusted about.
+ */
+via: Array<ViaEntry>, };
 
 /**
  * One stage whose rows come back, and how much of each row.
@@ -748,6 +805,25 @@ export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
  * relation belongs to the edge, not to the stage.
  */
 export type StageInput = { "from": "caller", as: StageRelation, ids: IdSet, } | { "from": "upstream", as: StageRelation, stage: StageName, };
+
+/**
+ * One set a stage was handed: what it was FOR, where it came from, and how big it was.
+ *
+ * `[added — 2026-08-14]` with the widening of `ActInvocation::inputs`. It carries no `unusable`
+ * count of its own — that stays one conflated number on the stage
+ * ([`StageTrace::input_unusable`]), because splitting it per input would narrow what a caller can
+ * probe with, and the whole reason the stage-level figure conflates invisible/nonexistent/malformed
+ * is to keep it from being a single-probe existence oracle. A per-input split hands that back.
+ */
+export type StageInputTrace = { 
+/**
+ * Whether this set NARROWED the stage or was REACHED from.
+ */
+relation: StageRelation, source: InputSource, 
+/**
+ * How many ids this particular set held.
+ */
+ids: bigint, };
 
 /**
  * A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the
@@ -932,16 +1008,34 @@ export type StageTrace = { stage: StageName, act: ActName, disposition: StageDis
  */
 refusal: ActRefusal | null, 
 /**
- * Whether this stage NARROWED or REACHED, echoed back.
+ * What this stage was handed, one entry per input.
  *
- * A reader of the trace can then tell without knowing the act vocabulary — *"did stage 3
- * narrow or expand?"* is the question `composition-is-legible` most obviously owes an answer
- * to, and a caller reading only the response has no other way to get it. Absent for a stage
- * with no input.
+ * A reader can then tell without knowing the act vocabulary — *"did stage 3 narrow or
+ * expand?"* is the question `composition-is-legible` most obviously owes an answer to, and a
+ * caller reading only the response has no other way to get it. Empty for a stage with no
+ * input.
+ *
+ * # This replaced a `relation` / `input_source` PAIR, and the pair could not be kept
+ *
+ * `[widened — 2026-08-14]` with `ActInvocation::inputs`. Both were `Option`s describing *the*
+ * input, which was a total description while a stage had one. A bounded walk has two — a seed
+ * and a bound — and filling a single `relation` from whichever arrived first would answer
+ * *"did this stage narrow or expand?"* with **half the truth and no marker saying so**. That is
+ * worse than not answering: the field's whole job is to be the thing a caller trusts instead of
+ * knowing the act vocabulary.
+ *
+ * Keeping the two fields beside this list was the alternative and is the drift-by-construction
+ * this contract keeps removing — two spellings of one fact, free to disagree the moment a
+ * second input appears.
  */
-relation: StageRelation | null, input_source: InputSource | null, 
+inputs: Array<StageInputTrace>, 
 /**
- * How many ids this stage was handed. Zero for a stage with no input.
+ * How many ids this stage was handed **in total, across every input**. Zero for a stage with
+ * no input.
+ *
+ * A sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one
+ * conflated number by design and a total is the only thing the two can be compared against.
+ * The per-input split is in [`Self::inputs`].
  */
 input_ids: bigint, 
 /**
@@ -977,6 +1071,60 @@ order: Array<StageName>,
  * **This is the part the schema cannot say for itself.**
  */
 will_return: { [key in StageName]?: WillReturn }, };
+
+/**
+ * One edge a walk reached a node by — **the edge as asserted**, and no quantity.
+ *
+ * `[added — 2026-08-14]` with `follow-from`'s provenance-carrying mechanic
+ * (`20260814000030`), design `docs/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`
+ * §4.
+ *
+ * # Why source and target rather than a parent plus a direction
+ *
+ * The walk is **undirected over a directed graph**: the fragment's `adj` unions both orientations,
+ * so a traversal runs with or against the stored `source → target`. A `from_id` plus a
+ * which-way-round flag is two fields that must agree, and two fields that must agree are two
+ * fields that can drift. The edge as stored cannot contradict itself, and the parent is derivable
+ * from it — so the derivable thing is the one left out.
+ *
+ * # Polarity rides because the two arrows disagree in practice
+ *
+ * [`Polarity`] exists because the structural arrow and the semantic one can differ — its own
+ * example is a `depends_on` edge asserted source=dependant/target=dependency, whose causal arrow
+ * runs the other way. `[measured on prod — 2026-08-14]` **1,099 of 4,454 resource-resource edges
+ * are `inverse`, and 87% of `contains` edges are** — so an entry omitting it would report the
+ * majority of containment relationships backwards.
+ *
+ * # It carries no numbers, deliberately `[decided — 2026-08-14, Pete]`
+ *
+ * A per-parent score is nearly free to compute at this grain and is **refused**: provenance is
+ * structure rather than quantity, and a scored entry would be a second ranking axis inside a row
+ * whose one quantity is [`Scoring::score`]. See the note on [`ResourceHit::via`] for the
+ * non-correspondence that goes with it.
+ */
+export type ViaEntry = { 
+/**
+ * Which of the caller's seeds this node descends from.
+ *
+ * The act's `orders_by.means` says the score is the best path **from any seed**, and the act
+ * takes a seed SET — so without this a multi-seed walk answers "here are the neighbours of the
+ * things you found" with a list that cannot say which. That is the reason `via` exists at all.
+ */
+seed_id: string, 
+/**
+ * The edge's own `source_id`, as stored.
+ */
+source_id: string, 
+/**
+ * The edge's own `target_id`, as stored.
+ */
+target_id: string, edge_kind: EdgeKind, 
+/**
+ * The edge's label. **Nullable in the DDL and populated on every edge in prod today**
+ * (`kb_edges.label` is `TEXT` with no `NOT NULL`), so the `None` is real and unobserved rather
+ * than impossible — and an `edge_filter` naming labels silently excludes unlabelled edges.
+ */
+label: string | null, polarity: Polarity, };
 
 /**
  * Where the principal constraint applies to **the fragment that produces this act's ordering** —

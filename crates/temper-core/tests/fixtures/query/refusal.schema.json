@@ -93,6 +93,11 @@
           "type": "string"
         },
         {
+          "const": "duplicate_input_relation",
+          "description": "A stage carries two inputs in the same relation — two seeds, or two bounds.\n\n`[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list.\nThe list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a\ngeneral fan-in `[decided — 2026-08-14, Pete]`.\n\n**Refused rather than unioned, and that is the whole point of the variant.** Merging two\nseed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the\ntrace, and whose `produced` count a reader can see. Doing it implicitly inside one act's\ninput list would be the same merge with no stage, no tally and no disclosure, which is the\nsilent-substitution class this contract keeps closing.\n\nIt lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no\ndeclaration is consulted to decide it.",
+          "type": "string"
+        },
+        {
           "const": "stage_not_returnable",
           "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
           "type": "string"

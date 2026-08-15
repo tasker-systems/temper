@@ -63,7 +63,7 @@ fn find_about(stage: &str, query: &str) -> StageNode {
             query: query.to_string(),
             embedding: None,
         }),
-        input: None,
+        inputs: vec![],
         terms: Default::default(),
         resource_filter: None,
         edge_filter: None,
@@ -250,5 +250,217 @@ async fn the_route_refuses_an_unauthenticated_caller(pool: sqlx::PgPool) {
         resp.status(),
         StatusCode::UNAUTHORIZED,
         "the query door must not answer a caller with no token"
+    );
+}
+
+/// **`find-about` -> `follow-from`, through the door, with provenance coming back.**
+///
+/// `[added — 2026-08-14]` The shape the whole act exists for: find things, then get their
+/// neighbours and know which of the things you found each one came from. It is also the first
+/// end-to-end witness that `follow-from` has a door at all — `registry.rs` declares `Serves` at CLI
+/// and API as of this change, and a declaration nothing exercises is a claim.
+///
+/// **What only this layer can say.** The composition crosses HTTP as JSON, so `inputs` — a LIST
+/// since the widening — has to deserialize with two entries carrying different relations, and
+/// `via` has to survive `jsonb` -> `ViaEntry` -> `QueryResponse` -> the wire. Every layer below
+/// asserts one hop of that; none of them asserts the whole chain.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_walk_seeded_by_a_find_returns_its_provenance_through_the_route(pool: sqlx::PgPool) {
+    use temper_core::types::graph::{EdgeKind, Polarity};
+    use temper_core::types::query::{IdKind, IdSet, StageInput, StageRelation};
+    use temper_core::types::relationship_requests::AssertRelationshipRequest;
+
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("qroute", None)
+        .await
+        .expect("context create");
+
+    ingest_semantic(
+        &app,
+        "Container Scheduling Primer",
+        "container-scheduling-primer",
+        "Pods, replicas, and self-healing workloads are placed and rescheduled automatically by \
+         the control plane.",
+    )
+    .await;
+    ingest_semantic(
+        &app,
+        "Sourdough Starter Notes",
+        "sourdough-starter-notes",
+        "Feeding ratios, hydration, and the smell of a healthy levain after four days.",
+    )
+    .await;
+
+    // The two resources, by title — the walk needs real ids and the ingest returns none here.
+    let ids: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT id, title FROM kb_resources WHERE is_active ORDER BY created")
+            .fetch_all(&app.pool)
+            .await
+            .expect("resources");
+    let id_of = |t: &str| {
+        ids.iter()
+            .find(|(_, title)| title == t)
+            .map(|(id, _)| *id)
+            .unwrap_or_else(|| panic!("{t} was ingested; got {ids:?}"))
+    };
+    let primer = id_of("Container Scheduling Primer");
+    let sourdough = id_of("Sourdough Starter Notes");
+
+    // An edge with a label and an INVERSE polarity — the two fields a `via` entry reports that a
+    // bare parent id could not, and inverse because it is the case a direction flag gets backwards.
+    app.client
+        .relationships()
+        .assert(&AssertRelationshipRequest {
+            source: primer.into(),
+            target: sourdough.into(),
+            edge_kind: EdgeKind::Contains,
+            polarity: Polarity::Inverse,
+            label: "digresses-to".to_string(),
+            weight: 1.0,
+            act: Default::default(),
+        })
+        .await
+        .expect("edge assert");
+
+    // The walk is seeded by the CALLER here rather than by the find stage's output, because what
+    // this test is about is the route and the payload. The upstream-seeded form is exercised at the
+    // compile and execute layers, where the emitted SQL can actually be read.
+    let walk = StageNode::Act(ActInvocation {
+        name: StageName::parse("neighbours").unwrap(),
+        act: ActName::FollowFrom,
+        intention: None,
+        inputs: vec![StageInput::Caller {
+            relation: StageRelation::Seed,
+            ids: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: vec![primer],
+            },
+        }],
+        terms: Default::default(),
+        resource_filter: None,
+        edge_filter: None,
+        properties: vec![],
+    });
+
+    let (status, body) = post_query(&app, &returning_all(vec![walk])).await;
+    assert_eq!(status, StatusCode::OK, "route refused a valid walk: {body}");
+
+    let response: temper_core::types::query::QueryResponse = serde_json::from_value(body.clone())
+        .unwrap_or_else(|e| panic!("QueryResponse parse: {e}\n{body}"));
+    let stage = &response.returned[&StageName::parse("neighbours").unwrap()];
+    assert_eq!(
+        stage.disposition,
+        StageDisposition::Answered,
+        "the walk did not answer; refusal: {:?}",
+        stage.refusal
+    );
+
+    let hits = match &stage.produced {
+        StageOutput::Resources { hits } => hits,
+        other => panic!("expected resources, got {other:?}"),
+    };
+    let hit = hits
+        .iter()
+        .find(|h| h.resource.id.uuid() == sourdough)
+        .unwrap_or_else(|| {
+            panic!(
+                "the neighbour must come back; got {:?}",
+                hits.iter().map(|h| &h.resource.title).collect::<Vec<_>>()
+            )
+        });
+
+    assert_eq!(hit.via.len(), 1, "one edge reached it; got {:?}", hit.via);
+    let entry = &hit.via[0];
+    assert_eq!(entry.seed_id, primer, "which seed this neighbour came from");
+    assert_eq!(
+        entry.source_id, primer,
+        "the edge's own source, as asserted"
+    );
+    assert_eq!(entry.target_id, sourdough, "and its own target");
+    assert_eq!(entry.edge_kind, EdgeKind::Contains);
+    assert_eq!(entry.label.as_deref(), Some("digresses-to"));
+    assert_eq!(
+        entry.polarity,
+        Polarity::Inverse,
+        "polarity survives the whole path — without it a `contains` edge reads backwards, which is \
+         the majority case in prod"
+    );
+
+    // The seed itself is NOT a neighbour of itself: the walk scores only >=1-hop proximity.
+    assert!(
+        hits.iter().all(|h| h.resource.id.uuid() != primer),
+        "a seed earns no hop-0 self-score"
+    );
+
+    // And a find stage in the same response carries no provenance — `via` is absent, not empty,
+    // for an act whose `discloses` does not name it.
+    let (find_status, find_body) = post_query(
+        &app,
+        &returning_all(vec![find_about("about", "kubernetes")]),
+    )
+    .await;
+    assert_eq!(find_status, StatusCode::OK, "{find_body}");
+    let find_json = find_body.to_string();
+    assert!(
+        !find_json.contains("\"via\""),
+        "a find act discloses no origin, so the key is absent rather than an empty array; got \
+         {find_body}"
+    );
+}
+
+/// **What the deserializer boundary already answers with, for ANY unparseable body.**
+///
+/// `[added — 2026-08-14]` Written to check a claim I had made without checking: that refusing an
+/// unknown key at the serde layer is "inconsistent" with the every-refusal-at-once contract. It is
+/// not — the door has always answered malformed bodies from the extractor, and a wrong TYPE on a
+/// known field takes exactly the same path. The refusal contract's promise is about plans that
+/// PARSE and then fail validation.
+///
+/// Pinned because the answer decides a design choice (`deny_unknown_fields` versus capture-and-
+/// refuse) and would otherwise have to be re-derived from axum's defaults by the next person.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unparseable_body_answers_from_the_extractor_not_the_refusal_contract(
+    pool: sqlx::PgPool,
+) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    // A wrong TYPE on a known field — nothing to do with unknown keys.
+    let bad_type = serde_json::json!({
+        "outcome": {"returns": [{"stage": "hits", "with": []}]},
+        "stages": [{"act": {"act": "find-exact", "name": "hits", "terms": "not-a-map"}}]
+    });
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/query"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .json(&bad_type)
+        .send()
+        .await
+        .expect("POST");
+    let status = resp.status();
+    let body = resp.text().await.expect("body");
+
+    assert!(
+        status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "a body that cannot be parsed into a plan is refused: {status} {body}"
+    );
+    assert!(
+        !body.contains("refusals"),
+        "and it does NOT carry the every-refusal-at-once envelope — that promise is about plans \
+         that parse. This is the pre-existing extractor boundary, which every type error already \
+         takes: {body}"
     );
 }
