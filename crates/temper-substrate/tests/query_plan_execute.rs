@@ -718,6 +718,110 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
     let _ = merlin;
 }
 
+/// **`difference` subtracts, and it subtracts in the order the caller declared.**
+///
+/// The asymmetry is the whole assertion, and it is why this needs a database rather than a text
+/// check: `A EXCEPT B` and `B EXCEPT A` are the same emitted shape with the arms swapped, so
+/// nothing about the SQL string distinguishes a correct implementation from one that folds the
+/// inputs as a set. Only running both orders against the same corpus does.
+///
+/// Reads the TALLY, for the same reason its `intersect` sibling above does: a combinator may not be
+/// a returned stage, so its tally is the only observation of it this surface offers.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn difference_subtracts_and_swapping_the_arms_changes_the_answer(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "subtract").await;
+    let kestrel = mk(&pool, home, owner, emitter, "Kestrel", "the kestrel hovers").await;
+    let _merlin = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Merlin",
+        "the kestrel and the merlin",
+    )
+    .await;
+
+    let all = StageName::parse("all_hits").unwrap();
+    let just_one = StageName::parse("just_one").unwrap();
+    let gap = StageName::parse("gap").unwrap();
+
+    let find = |n: &StageName, input: Option<StageInput>| {
+        StageNode::Act(ActInvocation {
+            name: n.clone(),
+            act: ActName::FindExact,
+            intention: Some(Intention {
+                query: "kestrel".to_string(),
+                embedding: None,
+            }),
+            inputs: input.into_iter().collect(),
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
+    };
+    // `just_one` is bounded to Kestrel, so it is a strict SUBSET of `all_hits` — which is what
+    // makes the two orders give different answers rather than merely different rows.
+    let compose = |minuend: &StageName, subtrahend: &StageName| Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: all.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            find(&all, None),
+            find(
+                &just_one,
+                Some(StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: IdSet {
+                        kind: IdKind::Resource,
+                        provenance: None,
+                        ids: vec![kestrel],
+                    },
+                }),
+            ),
+            StageNode::Combine(temper_core::types::query::CombineNode {
+                name: gap.clone(),
+                op: temper_core::types::query::CombineOp::Difference,
+                inputs: vec![minuend.clone(), subtrahend.clone()],
+            }),
+        ],
+    };
+
+    let run = |c: Composition| {
+        let pool = pool.clone();
+        async move {
+            let v = validate(&c).expect("valid");
+            execute(&pool, &compile(&v, owner).expect("compiles"))
+                .await
+                .expect("runs")
+        }
+    };
+
+    let rows = run(compose(&all, &just_one)).await;
+    // The denominator: without these, "1" below could be produced by a subtraction that did
+    // nothing at all against a one-row corpus.
+    assert_eq!(rows.tally("all_hits").unwrap().produced, 2, "both match");
+    assert_eq!(rows.tally("just_one").unwrap().produced, 1);
+    assert_eq!(
+        rows.tally("gap").unwrap().produced,
+        1,
+        "all_hits - just_one is Merlin; 2 would mean nothing was subtracted"
+    );
+
+    let rows = run(compose(&just_one, &all)).await;
+    assert_eq!(
+        rows.tally("gap").unwrap().produced,
+        0,
+        "just_one - all_hits is empty — a difference that folded its inputs as a SET would answer \
+         1 here, identically to the order above"
+    );
+}
+
 // ─── The two properties that were asserted only as SQL TEXT ─────────────────────────────────────
 //
 // Both live in `query_plan_compile.rs` as claims about the emitted string. Neither had ever been

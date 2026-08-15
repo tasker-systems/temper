@@ -474,10 +474,19 @@ mod tests {
             ],
         );
         let result = validate(&plan(vec![node], vec!["walk"]));
-        // `follow-from` is still refused for other reasons — it is absent from `CALLABLE_FRAGMENTS`
-        // and declares `accepts_bounds: []` — so this asserts the ABSENCE of the duplicate refusal
-        // rather than success. Naming the reason is what makes it survive those other refusals
-        // retiring.
+        // This asserts the ABSENCE of the duplicate refusal rather than success, so that it holds
+        // whether or not `follow-from` is refused for some other reason. Naming the reason is what
+        // makes it survive those other refusals retiring — and two of them since have.
+        //
+        // `[corrected — 2026-08-15]` The list of "other reasons" here read *"it is absent from
+        // `CALLABLE_FRAGMENTS` and declares `accepts_bounds: []`"*, and **both halves stopped being
+        // true on 2026-08-14**: `query_follow_from` entered `CALLABLE_FRAGMENTS`, and the act
+        // declares `accepts_bounds: vec![IdKind::Resource]` — the bounded walk `20260814000030`
+        // built. The `if let Err` below is what let the prose rot silently: the test passes
+        // identically whether the plan validates or not, so nothing ever re-read the reasons it
+        // claimed. The shape is left as it stands — the assertion is about one refusal's absence,
+        // not about the plan's overall verdict — with the stale justification repaired rather than
+        // deleted, since it is the part a reader trusts.
         if let Err(refusals) = result {
             assert!(
                 !refusals
@@ -2468,6 +2477,143 @@ mod tests {
                     && e.stage.as_ref().is_some_and(|s| s.as_str() == "merged")),
             "got: {errs:?}"
         );
+    }
+
+    /// `A − B` — the shape the op exists for, and the only arity it admits.
+    fn difference(name: &str, minuend: &str, subtrahend: &str) -> StageNode {
+        StageNode::Combine(CombineNode {
+            name: StageName::parse(name).unwrap(),
+            op: CombineOp::Difference,
+            inputs: vec![
+                StageName::parse(minuend).unwrap(),
+                StageName::parse(subtrahend).unwrap(),
+            ],
+        })
+    }
+
+    #[test]
+    fn a_two_input_difference_is_admitted() {
+        // The boundary the refusal below is measured against. Without this, an arity rule that
+        // refused EVERY difference would look identical from the failing side.
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                difference("gap", "a", "b"),
+            ],
+            vec!["a"],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).unwrap_err());
+    }
+
+    #[test]
+    fn a_three_input_difference_is_refused_because_the_union_it_folds_would_have_no_stage() {
+        // Postgres would evaluate `a EXCEPT b EXCEPT c` as `a − (b ∪ c)` — the exact question this
+        // op exists for, one stage cheaper. It is refused anyway: the fold gives `b ∪ c` no stage,
+        // so nothing tallies it and no reader can see how large the set that did the subtracting
+        // was. Declaring the union as its own stage is what makes the narrowing legible.
+        //
+        // Asserted as a REFUSAL rather than a truncation: silently dropping the third input would
+        // answer a narrower question than the one asked.
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("c", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("gap").unwrap(),
+                    op: CombineOp::Difference,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("b").unwrap(),
+                        StageName::parse("c").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
+        );
+        let errs = validate(&c).expect_err("a difference takes exactly two inputs");
+        let hit = errs
+            .iter()
+            .find(|e| {
+                e.reason == RefusalReason::CombinatorArity
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "gap")
+            })
+            .unwrap_or_else(|| panic!("got: {errs:?}"));
+        // The refusal has to name the repair, not just the rule — the caller's question IS
+        // expressible and the union stage is the whole of what they are missing.
+        assert!(
+            hit.detail.contains("union"),
+            "a refusal that does not name the route is a dead end: {}",
+            hit.detail
+        );
+    }
+
+    #[test]
+    fn a_difference_produces_its_minuends_kind_and_never_its_subtrahends() {
+        // `produced_kind_of` walks a combinator to `inputs.first()`. For a union or an intersect
+        // that is arbitrary-but-consistent — mixed kinds are a malformed plan either way. For a
+        // difference it is LOAD-BEARING: the stage produces a subset of its minuend, so consulting
+        // the subtrahend would attribute the wrong kind to a perfectly well-formed plan.
+        //
+        // The two arms have to differ in kind for the assertion to bite, and `survey` is the only
+        // act declaring a non-`Resource` output. It brings refusals of its own — it reaches no
+        // fragment — so this asserts the ABSENCE of the seed-kind refusal rather than overall
+        // success, the same shape `a_bounded_walk_is_not_a_duplicate_relation` uses. Flip
+        // `produced_kind_of` to `.last()` and `UnsupportedSeedKind` appears here.
+        let c = plan_with_intention(
+            vec![
+                act(
+                    "tasks",
+                    ActName::FindExact,
+                    Some(caller_ids(IdKind::Resource)),
+                ),
+                act("regions", ActName::Survey, None),
+                difference("gap", "tasks", "regions"),
+                act(
+                    "reached",
+                    ActName::FollowFrom,
+                    Some(StageInput::Upstream {
+                        relation: StageRelation::Seed,
+                        stage: StageName::parse("gap").unwrap(),
+                    }),
+                ),
+            ],
+            vec!["reached"],
+        );
+        let refusals = validate(&c).expect_err("the survey stage refuses for its own reasons");
+        assert!(
+            !refusals
+                .iter()
+                .any(|e| e.reason == RefusalReason::UnsupportedSeedKind
+                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "reached")),
+            "a difference produces resources because its MINUEND does; got {refusals:?}"
+        );
+    }
+
+    #[test]
+    fn a_three_input_union_stays_legal_so_the_arity_rule_is_per_op() {
+        // The other half: the ceiling belongs to `difference` alone. A rule written on
+        // `CombineNode` rather than on the op would take the three-way union with it, and nothing
+        // else in the contract would have said so.
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("b", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                act("c", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("merged").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("b").unwrap(),
+                        StageName::parse("c").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).unwrap_err());
     }
 
     #[test]

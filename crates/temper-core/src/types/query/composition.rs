@@ -120,8 +120,23 @@ pub struct OutcomeDeclaration {
     pub returns: Vec<ReturnSpec>,
 }
 
-/// A set combinator's operation. `union` and `intersect` take two-or-more inputs; no act does,
-/// which is why a combinator is its own node kind rather than an act invocation.
+/// A set combinator's operation. Every member takes two or more inputs; no act does, which is why
+/// a combinator is its own node kind rather than an act invocation.
+///
+/// **Two of the three are commutative and one is not, and that split is the whole of what
+/// [`CombineNode::inputs`] means.** For `union` and `intersect` the input list is a SET — reordering
+/// it cannot change the answer, and arity above two is a fold with nothing to say about order. For
+/// `difference` it is an ordered PAIR: `A − B ≠ B − A`, so `inputs[0]` is the minuend and
+/// `inputs[1]` the subtrahend, and a third input is refused rather than folded (see
+/// [`CombineNode::inputs`]).
+///
+/// The set is CLOSED and adding a member is a contract change — the same rule §12 states for
+/// `PropertyOp`. `union` and `intersect` were chosen as a pair; `difference` joins them because the
+/// question *"in A, and in neither B nor C"* is set-expressible, and `EdgeFilter`'s rule is that a
+/// narrowing expressible as a set must be an act rather than a predicate. That is why this is not a
+/// `PropertyOp::LacksKey`, which is the tempting shape — it sits beside `HasKey` and reads
+/// naturally, and it would inherit the open-key type hazard for a question that has no type
+/// question at all. `[decided — 2026-08-15, Pete]`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -131,6 +146,22 @@ pub struct OutcomeDeclaration {
 pub enum CombineOp {
     Union,
     Intersect,
+    /// `inputs[0]` minus `inputs[1]`. Exactly two inputs — see [`CombineNode::inputs`].
+    Difference,
+}
+
+impl CombineOp {
+    /// Does reordering this op's inputs change its answer?
+    ///
+    /// Exists so the arity rule and the emitter cannot disagree about which ops are ordered: both
+    /// read this rather than each matching on the variant. A new op declares its answer here or
+    /// fails to compile.
+    pub const fn is_ordered(self) -> bool {
+        match self {
+            CombineOp::Union | CombineOp::Intersect => false,
+            CombineOp::Difference => true,
+        }
+    }
 }
 
 /// A set combination over two-or-more upstream stages. Its own node kind because no act takes more
@@ -144,9 +175,35 @@ pub struct CombineNode {
     pub name: StageName,
     pub op: CombineOp,
     /// Two or more. One input is not a combination; validation refuses it (beat B).
+    ///
+    /// **For `difference` it is exactly two, and it is ORDERED**: `inputs[0]` minus `inputs[1]`.
+    /// `[decided — 2026-08-15, Pete]`
+    ///
+    /// A left fold was the alternative and it is the one Postgres would have given away free —
+    /// `A EXCEPT B EXCEPT C` already evaluates as `A − (B ∪ C)`, which is the exact shape of the
+    /// question that motivated this op, with one stage fewer. It is refused for two reasons that
+    /// compound:
+    ///
+    /// - **This field would mean two different things at once.** It is a set for `union` and
+    ///   `intersect` and would be a distinguished head plus a set for `difference` — one `Vec` with
+    ///   two readings, in a struct that carries no marker saying which is in force.
+    /// - **Nothing would disclose the size of what was subtracted.** With `B ∪ C` written as its
+    ///   own union stage, that stage carries a tally and a reader can see `|B ∪ C|`. Folded into
+    ///   the difference, the union has no stage, no tally and no name — the same
+    ///   no-stage-no-disclosure shape [`super::disposition::RefusalReason::DuplicateInputRelation`]
+    ///   refuses for act inputs, one node kind over.
+    ///
+    /// The cost is stated rather than hidden: `A − (B ∪ C)` is three stages here and two under a
+    /// fold.
     // `min_items` publishes the arity the doc sentence above already states and `validate` already
     // enforces as `combinator_arity`. The derive cannot infer a bound from a refusal, so without
     // this the contract admits a one-input combination the server always rejects.
+    //
+    // There is no `max_items`, and its absence is FORCED rather than chosen: the ceiling is
+    // per-op, this schema describes the struct shared by all three, and a derive cannot say "two,
+    // but only when `op` is `difference`". A blanket `max_items = 2` would publish a bound that
+    // forbids the three-way union `validate` admits. So the upper bound is `validate`'s alone —
+    // the same division `min_items` and `combinator_arity` already have, one bound over.
     #[cfg_attr(feature = "web-api", schema(min_items = 2))]
     pub inputs: Vec<StageName>,
 }
@@ -459,6 +516,58 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<StageNode>(&serde_json::to_string(&node).unwrap()).unwrap(),
             node
+        );
+    }
+
+    #[test]
+    fn a_difference_is_ordered_and_names_the_set_it_subtracts_from_first() {
+        // `Union` and `Intersect` are commutative, so `inputs` has been readable as a SET since it
+        // was written. `Difference` is the first op for which it is a SEQUENCE — `A − B ≠ B − A` —
+        // and nothing in the struct's shape says so, because the field is shared by all three.
+        //
+        // Asserted on the SERIALIZED form because the order a client sends is the only thing that
+        // decides which set survives, and a `Vec` that happened to round-trip in the wrong order
+        // would be a silently different question answered.
+        let d = CombineNode {
+            name: StageName::parse("gap").unwrap(),
+            op: CombineOp::Difference,
+            inputs: vec![
+                StageName::parse("tasks").unwrap(),
+                StageName::parse("declared").unwrap(),
+            ],
+        };
+        let json = serde_json::to_string(&StageNode::Combine(d.clone())).unwrap();
+        assert!(json.contains(r#""op":"difference""#), "got: {json}");
+        // The minuend precedes the subtrahend on the wire, in the order the caller wrote them.
+        assert!(
+            json.find(r#""tasks""#).unwrap() < json.find(r#""declared""#).unwrap(),
+            "input order is semantic for a difference: {json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<StageNode>(&json).unwrap(),
+            StageNode::Combine(d)
+        );
+    }
+
+    #[test]
+    fn a_difference_reports_both_arms_upstream_so_the_dag_sees_the_subtrahend() {
+        // The subtrahend is a real DAG edge — the cycle check and the topological order are both
+        // built from `upstream_names`, and a difference whose right arm went unreported would be
+        // emitted before the CTE it reads.
+        let d = StageNode::Combine(CombineNode {
+            name: StageName::parse("gap").unwrap(),
+            op: CombineOp::Difference,
+            inputs: vec![
+                StageName::parse("tasks").unwrap(),
+                StageName::parse("declared").unwrap(),
+            ],
+        });
+        assert_eq!(
+            d.upstream_names()
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tasks", "declared"]
         );
     }
 

@@ -26,9 +26,9 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, emitted_fragment_for, validate, validate_shape, ActName,
-    ActRefusal, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, ResourceHit,
-    ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageResult,
-    StageTrace, ValidatedComposition, ViaEntry,
+    ActRefusal, CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse,
+    ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput,
+    StageResult, StageTrace, ValidatedComposition, ViaEntry,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -526,7 +526,7 @@ fn stage_result(
         // fragments return a page, not a count. Absent rather than guessed from the page size.
         total: None,
         terms_applied: terms,
-        narrowed_by: narrowed_by(node),
+        narrowed_by: narrowed_by(node, rows),
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
     }
@@ -561,7 +561,7 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         inputs: n.inputs,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
-        narrowed_by: narrowed_by(node),
+        narrowed_by: narrowed_by(node, rows),
     })
 }
 
@@ -649,9 +649,53 @@ fn extent_of(
 ///
 /// Counts stay absent rather than zero: no fragment computes what it dropped, and requiring it would
 /// reintroduce the second query `Extent` exists to avoid.
-fn narrowed_by(node: &StageNode) -> Vec<NarrowedBy> {
-    let StageNode::Act(inv) = node else {
+/// What a `difference` removed, and which stage removed it.
+///
+/// **The excluded count is `|minuend| − |result|`, never `|subtrahend|`.** The subtrahend counts
+/// rows that were never in the minuend to begin with, so reporting it would over-state the removal
+/// by exactly the arms' non-overlap — a disclosure that is wrong in the flattering direction, since
+/// it makes a subtraction look more consequential than it was. The set identity
+/// `|A − B| = |A| − |A ∩ B|` is what makes the honest number derivable, and both terms of it are
+/// already tallied.
+///
+/// Counts ride here because [`NarrowedBy`]'s rule is that they are carried "ONLY where the act
+/// computes them for free", and two tallies in hand IS free — this is the contract's first
+/// narrowing that can honour that clause rather than skip it.
+///
+/// Returns nothing for a stage that refused: its tally is a `WHERE false` zero, byte-identical to
+/// an honest empty, so `excluded` would read as *"it removed all of them"* for a subtraction that
+/// never ran. The refusal is the disclosure in that case.
+fn subtraction_disclosure(cn: &CombineNode, rows: &QueryRows) -> Vec<NarrowedBy> {
+    if !cn.op.is_ordered() || rows.refusal(cn.name.as_str()).is_some() {
         return vec![];
+    }
+    let produced = |stage: &str| rows.tally(stage).map(|t| t.produced).unwrap_or(0);
+    let (Some(minuend), Some(subtrahend)) = (cn.inputs.first(), cn.inputs.get(1)) else {
+        return vec![];
+    };
+    let survived = produced(cn.name.as_str());
+    vec![NarrowedBy {
+        key: "subtracted".to_string(),
+        value: subtrahend.as_str().to_string(),
+        admitted: Some(survived),
+        excluded: Some(produced(minuend.as_str()) - survived),
+    }]
+}
+
+fn narrowed_by(node: &StageNode, rows: &QueryRows) -> Vec<NarrowedBy> {
+    let inv = match node {
+        StageNode::Act(inv) => inv,
+        // **A combinator discloses a narrowing only when it NARROWS, and only one of them does.**
+        // `union` adds and `intersect` is symmetric — for both, the arms are interchangeable and
+        // their tallies already tell a reader everything, so an entry here would be noise at best
+        // and, for `union`, a disclosure claiming the opposite of what happened.
+        //
+        // `difference` is the one combinator whose arms are not interchangeable, and the trace
+        // could not tell them apart: a combinator contributes no per-input entries, only a summed
+        // `input_ids`, so `a − b` and `b − a` produced identical traces. That is the half of
+        // `composition-is-legible` — *"what narrowed what"* — that a symmetric disclosure cannot
+        // carry.
+        StageNode::Combine(cn) => return subtraction_disclosure(cn, rows),
     };
     let entry = |key: String, value: String| NarrowedBy {
         key,
@@ -778,8 +822,8 @@ fn act_of(node: &StageNode) -> ActName {
 mod tests {
     use super::*;
     use temper_core::types::query::{
-        ActInvocation, Intention, OutcomeDeclaration, RefusalReason, ResourceFilter, ReturnSpec,
-        StageName, StageRelation,
+        ActInvocation, CombineNode, CombineOp, Intention, OutcomeDeclaration, RefusalReason,
+        ResourceFilter, ReturnSpec, StageName, StageRelation,
     };
     use temper_substrate::readback::query_exec::{HitRow, TallyRow};
 
@@ -826,7 +870,7 @@ mod tests {
             });
         }
 
-        let disclosed = narrowed_by(&node);
+        let disclosed = narrowed_by(&node, &no_rows());
         let pairs: Vec<(&str, &str)> = disclosed
             .iter()
             .map(|n| (n.key.as_str(), n.value.as_str()))
@@ -863,7 +907,7 @@ mod tests {
     #[test]
     fn a_stage_that_narrowed_by_nothing_discloses_an_empty_list() {
         let node = act_node("hits", ActName::FindExact, None);
-        assert!(narrowed_by(&node).is_empty());
+        assert!(narrowed_by(&node, &no_rows()).is_empty());
     }
 
     fn act_node(n: &str, act: ActName, input: Option<StageInput>) -> StageNode {
@@ -1034,6 +1078,16 @@ mod tests {
             refusals.len() > 1,
             "every refusal in one round trip, not just the one the gate saw: {refusals:?}"
         );
+    }
+
+    /// No rows at all — for the act-stage disclosure tests, whose narrowings are read off the
+    /// invocation and never off a tally.
+    fn no_rows() -> QueryRows {
+        QueryRows {
+            hits: vec![],
+            tallies: vec![],
+            refusals: vec![],
+        }
     }
 
     fn tally(stage: &str, produced: i64, unusable: i64) -> TallyRow {
@@ -1334,6 +1388,105 @@ mod tests {
         assert_eq!(
             traced.input_ids, 12,
             "the trace and the result must not disagree about one number"
+        );
+    }
+
+    #[test]
+    fn a_difference_discloses_which_stage_it_subtracted_and_how_many_it_removed() {
+        // **`composition-is-legible` asks per stage "what narrowed what", and for every other
+        // combinator the tallies already answer it.** A union or an intersect is symmetric: the
+        // reader knows the arms, the arms' sizes are tallied, and the order carries no meaning.
+        //
+        // A difference is the one combinator where the arms are NOT interchangeable, and where the
+        // trace as it stood said nothing about which was which — a combinator contributes no
+        // per-input entries, only a summed `input_ids`. So `tasks − declared` and
+        // `declared − tasks` were the same trace, and the removal count was left to a reader
+        // willing to subtract two stages' tallies and to know which one was the minuend.
+        //
+        // Carried in `narrowed_by`, which is the existing carrier for exactly this, and with the
+        // counts filled — the first narrowing in the contract that can fill them, because both
+        // numbers are already in hand. `NarrowedBy`'s own rule is that counts ride "ONLY where the
+        // act computes them for free", and here the two tallies ARE the computation.
+        let v = plan(
+            vec![
+                act_node("tasks", ActName::FindExact, None),
+                act_node("declared", ActName::FindExact, None),
+                StageNode::Combine(CombineNode {
+                    name: name("gap"),
+                    op: CombineOp::Difference,
+                    inputs: vec![name("tasks"), name("declared")],
+                }),
+            ],
+            vec!["tasks"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![
+                tally("tasks", 31, 0),
+                tally("declared", 6, 0),
+                tally("gap", 25, 0),
+            ],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        let traced = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("gap"))
+            .unwrap();
+        let [entry] = traced.narrowed_by.as_slice() else {
+            panic!("exactly one narrowing; got {:?}", traced.narrowed_by)
+        };
+        assert_eq!(entry.key, "subtracted");
+        assert_eq!(
+            entry.value, "declared",
+            "the disclosure names the SUBTRAHEND — the arm a reader cannot recover from a \
+             symmetric trace"
+        );
+        assert_eq!(entry.admitted, Some(25), "what survived the subtraction");
+        assert_eq!(
+            entry.excluded,
+            Some(6),
+            "|tasks| - |gap|, which is exactly how many the subtraction removed — NOT |declared|, \
+             which counts rows that were never in the minuend to begin with"
+        );
+    }
+
+    #[test]
+    fn a_union_discloses_no_narrowing_because_it_narrows_nothing() {
+        // The boundary. A union ADDS, so a `narrowed_by` entry on it would be a disclosure that
+        // says the opposite of what happened — and the incumbent behaviour for both symmetric
+        // combinators is an empty list, which is correct and stays.
+        let v = plan(
+            vec![
+                act_node("a", ActName::FindExact, None),
+                act_node("b", ActName::FindExact, None),
+                StageNode::Combine(CombineNode {
+                    name: name("merged"),
+                    op: CombineOp::Union,
+                    inputs: vec![name("a"), name("b")],
+                }),
+            ],
+            vec!["a"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("a", 3, 0), tally("b", 4, 0), tally("merged", 6, 0)],
+            refusals: vec![],
+        };
+        let r = assemble(&v, &rows, &Hydrated::default());
+        let traced = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("merged"))
+            .unwrap();
+        assert!(
+            traced.narrowed_by.is_empty(),
+            "got: {:?}",
+            traced.narrowed_by
         );
     }
 

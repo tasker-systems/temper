@@ -266,14 +266,49 @@ export type BuildState = { "state": "served" } | { "state": "fused", host: strin
 export type CombineNode = { name: StageName, op: CombineOp, 
 /**
  * Two or more. One input is not a combination; validation refuses it (beat B).
+ *
+ * **For `difference` it is exactly two, and it is ORDERED**: `inputs[0]` minus `inputs[1]`.
+ * `[decided — 2026-08-15, Pete]`
+ *
+ * A left fold was the alternative and it is the one Postgres would have given away free —
+ * `A EXCEPT B EXCEPT C` already evaluates as `A − (B ∪ C)`, which is the exact shape of the
+ * question that motivated this op, with one stage fewer. It is refused for two reasons that
+ * compound:
+ *
+ * - **This field would mean two different things at once.** It is a set for `union` and
+ *   `intersect` and would be a distinguished head plus a set for `difference` — one `Vec` with
+ *   two readings, in a struct that carries no marker saying which is in force.
+ * - **Nothing would disclose the size of what was subtracted.** With `B ∪ C` written as its
+ *   own union stage, that stage carries a tally and a reader can see `|B ∪ C|`. Folded into
+ *   the difference, the union has no stage, no tally and no name — the same
+ *   no-stage-no-disclosure shape [`super::disposition::RefusalReason::DuplicateInputRelation`]
+ *   refuses for act inputs, one node kind over.
+ *
+ * The cost is stated rather than hidden: `A − (B ∪ C)` is three stages here and two under a
+ * fold.
  */
 inputs: Array<StageName>, };
 
 /**
- * A set combinator's operation. `union` and `intersect` take two-or-more inputs; no act does,
- * which is why a combinator is its own node kind rather than an act invocation.
+ * A set combinator's operation. Every member takes two or more inputs; no act does, which is why
+ * a combinator is its own node kind rather than an act invocation.
+ *
+ * **Two of the three are commutative and one is not, and that split is the whole of what
+ * [`CombineNode::inputs`] means.** For `union` and `intersect` the input list is a SET — reordering
+ * it cannot change the answer, and arity above two is a fold with nothing to say about order. For
+ * `difference` it is an ordered PAIR: `A − B ≠ B − A`, so `inputs[0]` is the minuend and
+ * `inputs[1]` the subtrahend, and a third input is refused rather than folded (see
+ * [`CombineNode::inputs`]).
+ *
+ * The set is CLOSED and adding a member is a contract change — the same rule §12 states for
+ * `PropertyOp`. `union` and `intersect` were chosen as a pair; `difference` joins them because the
+ * question *"in A, and in neither B nor C"* is set-expressible, and `EdgeFilter`'s rule is that a
+ * narrowing expressible as a set must be an act rather than a predicate. That is why this is not a
+ * `PropertyOp::LacksKey`, which is the tempting shape — it sits beside `HasKey` and reads
+ * naturally, and it would inherit the open-key type hazard for a question that has no type
+ * question at all. `[decided — 2026-08-15, Pete]`
  */
-export type CombineOp = "union" | "intersect";
+export type CombineOp = "union" | "intersect" | "difference";
 
 /**
  * A composition, declared before execution.
@@ -663,7 +698,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
 
 /**
  * One region of a cognitive map. Produced by `survey`.

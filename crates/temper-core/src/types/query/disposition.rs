@@ -148,13 +148,25 @@ pub enum RefusalReason {
     /// `NotImplemented` would have been false about them (they are served); this variant is the
     /// honest one. Beat D deleted the refusal for them by giving the compiler their fragments.
     ///
-    /// The live instances now are `substantiate`, `follow-from` and `survey` — the first `Served`,
-    /// the other two `Fused`, all three with mechanics the compiler emits no fragment for. **The
-    /// rule keys on the callable-fragment set and never on `build_state`, and `substantiate` is
-    /// what holds that**: it is `Served` and unreachable, so a rule reading the discriminant would
-    /// admit an act this surface cannot emit. The `Fused` half of the argument no longer has a
-    /// witness, since all three are unreachable and the two `Fused` declarations are exactly two of
-    /// them — so the discriminant happens to agree about that pair.
+    /// The live instances are `substantiate` and `survey` — the first `Served`, the second
+    /// `Fused`, both with mechanics the compiler emits no fragment for. **The rule keys on the
+    /// callable-fragment set and never on `build_state`, and `substantiate` is what holds that**:
+    /// it is `Served` and unreachable, so a rule reading the discriminant would admit an act this
+    /// surface cannot emit.
+    ///
+    /// `[corrected — 2026-08-15, found while adding `SubtrahendRefused`]` This named a trio —
+    /// *"`substantiate`, `follow-from` and `survey` … all three with mechanics the compiler emits
+    /// no fragment for"* — and **`follow-from` had not belonged to it since 2026-08-14**, when
+    /// `query_follow_from` entered `CALLABLE_FRAGMENTS` and `registry.rs` moved the act from
+    /// `Absent` to `Serves` at CLI and API on exactly that condition. So one edit updated the
+    /// declaration and left the doc describing the world before it.
+    ///
+    /// Worth correcting rather than tidying, because **this doc comment is a published schema
+    /// description** (`tests/fixtures/query/refusal.schema.json`, and `RefusalReason` in
+    /// temper-ui's generated `query.ts`) — the same reason [`super::composition::Intention`]'s
+    /// header gives for repairing its own stale sentence in place. The `Fused`-half argument that
+    /// hung off the trio is dropped with it: it observed that the discriminant *happened* to agree
+    /// about a pair, which was a coincidence of the corpus and is not one now.
     NotSeparablyReachable,
     /// **The one refusal that is not static.** A `find-about-*` stage needed a query embedding,
     /// the server had to compute it because the caller could not, and the attempt failed — an
@@ -166,6 +178,31 @@ pub enum RefusalReason {
     /// this is the only one that can appear mid-flight, and it is what gives a runtime refusal a
     /// referent at all. `[decided — 2026-08-08, Pete]`
     EmbeddingUnavailable,
+
+    /// A `difference` stage whose SUBTRAHEND — or anything upstream of it — refused, so what to
+    /// subtract is not known. `[added — 2026-08-15]`
+    ///
+    /// **The only refusal a stage inherits rather than raises**, and the reason it has to exist is
+    /// that the contract's standing rule inverts here. Every other consumer of a refused stage
+    /// takes it as an EMPTY set and is bounded to nothing — safe, because every other consumer is
+    /// MONOTONE: less input, less output. `EXCEPT` is anti-monotone in its right arm. An empty
+    /// subtrahend subtracts nothing and hands back the minuend IN FULL, which is the maximal
+    /// answer produced by a failure, and it is indistinguishable from a successful one.
+    ///
+    /// That is exactly what [`StageDisposition::Refused`]'s own rule forbids — *"a stage that
+    /// depends on a refused one answers over nothing rather than over everything"* — so the stage
+    /// refuses and its own CTE is empty, at which point the ordinary rule governs everything
+    /// downstream of it again.
+    ///
+    /// **Transitive, and that is not caution.** A refusal one hop ABOVE the subtrahend never
+    /// reaches the subtrahend's own disposition: a union with one refused arm answers with its
+    /// surviving arm, which is less than the truth, so the difference subtracts less than it should
+    /// and over-returns — silently, since nothing anywhere reports a problem. A check reading only
+    /// the subtrahend's own refusal would pass that straight through.
+    ///
+    /// It does **not** fire for a refused MINUEND. `∅ − B` is `∅`, the ordinary bounded-to-nothing
+    /// outcome, and refusing there would report a refusal for a stage that gave the honest answer.
+    SubtrahendRefused,
 
     // ── Expressibility. Promoted from `Other(_)` strings with the door `[2026-08-12]` ───────────
     //

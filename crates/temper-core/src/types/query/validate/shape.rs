@@ -153,6 +153,28 @@ pub(super) fn validate_shape_indexed(
                     RefusalReason::CombinatorArity,
                     "a set combination needs two or more inputs",
                 ));
+            } else if cn.op.is_ordered() && cn.inputs.len() > 2 {
+                // **The ceiling is the ORDERED ops', not `CombineNode`'s.** Keyed on
+                // `CombineOp::is_ordered` rather than on `== Difference` so the rule and the
+                // emitter read one declaration: an op added later states once whether its inputs
+                // are a sequence, and inherits this refusal by saying so.
+                //
+                // `a EXCEPT b EXCEPT c` is `a − (b ∪ c)` in Postgres, so the fold would WORK — it
+                // is refused because it would work invisibly. Folded, `b ∪ c` has no stage, hence
+                // no tally, hence nothing in the trace saying how large the subtracting set was.
+                // Same shape as `DuplicateInputRelation`, which refuses an implicit union of two
+                // seeds for the same reason one node kind over.
+                errs.push(refusal(
+                    Some(node.name()),
+                    RefusalReason::CombinatorArity,
+                    format!(
+                        "stage `{}` subtracts, which takes exactly two inputs and got {}; \
+                         combine the sets to subtract into a `union` stage and subtract that, so \
+                         the trace can report how many it removed",
+                        node.name().as_str(),
+                        cn.inputs.len()
+                    ),
+                ));
             }
         }
         for up in node.upstream_names() {

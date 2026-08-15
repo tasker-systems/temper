@@ -22,6 +22,8 @@
 //! act declarations together, and keeping it out of the substrate is what stops this layer forming
 //! an opinion about what a stage MEANT.
 
+use std::collections::BTreeSet;
+
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
     search_family, BoundTerm, IdKind, PlanRefusal, RefusalReason, StageInput, StageNode,
@@ -256,6 +258,10 @@ pub fn compile(
 
     let mut tallies: Vec<StageTally> = Vec::new();
     let mut refusals: Vec<PlanRefusal> = Vec::new();
+    // Stages whose output cannot be trusted to be COMPLETE: they refused, or something upstream of
+    // them did and they answered over less than the truth. See [`tainted_by_refusal`] for why this
+    // is a different question from "did this stage refuse", and why only one position reads it.
+    let mut tainted: BTreeSet<String> = BTreeSet::new();
     for node in v.ordered() {
         let (name, body, unusable) = match node {
             StageNode::Act(inv) => {
@@ -263,12 +269,21 @@ pub fn compile(
                 (inv.name.as_str(), emitted.body, emitted.unusable)
             }
             // A combinator's inputs are upstream stages, so nothing it was handed can be unusable.
-            StageNode::Combine(cn) => (
-                cn.name.as_str(),
-                emit_combine_body(cn),
-                NO_UNUSABLE.to_string(),
-            ),
+            StageNode::Combine(cn) => {
+                let body = match subtrahend_refusal(cn, &tainted) {
+                    Some(refusal) => {
+                        let body = refused_body(REFUSED_DIFFERENCE);
+                        refusals.push(refusal);
+                        body
+                    }
+                    None => emit_combine_body(cn),
+                };
+                (cn.name.as_str(), body, NO_UNUSABLE.to_string())
+            }
         };
+        if tainted_by_refusal(node, &refusals, &tainted) {
+            tainted.insert(name.to_string());
+        }
         ctes.push(format!("\"{name}\" AS (\n{body}\n)"));
         cte_names.push((name.to_string(), name.to_string()));
         tallies.push(StageTally {
@@ -318,6 +333,77 @@ fn refused_body(act: &str) -> String {
          SELECT NULL::uuid AS id, NULL::text AS kind, NULL::double precision AS quantity, \
          NULL::jsonb AS via WHERE false"
     )
+}
+
+/// What [`refused_body`] names in place of an act when the refusing stage runs no act.
+const REFUSED_DIFFERENCE: &str = "difference (subtrahend refused)";
+
+/// Does this stage's output have to be assumed INCOMPLETE?
+///
+/// **Not the same question as "did it refuse", and the gap between them is the whole reason this
+/// exists.** A stage that refused produces nothing. A stage merely *downstream* of a refusal
+/// produces something — it ran, it answered, and its answer is smaller than the truth because one
+/// of its inputs was empty when it should not have been. Both are untrustworthy as a SUBTRAHEND;
+/// only the first is visible in `refusals`.
+///
+/// Computed as the transitive closure over upstream edges, which costs nothing here because
+/// `v.ordered()` is topological: every upstream of a node has already been decided by the time the
+/// node is reached.
+///
+/// **It changes no stage's own disposition.** A tainted stage still reports whatever it produced —
+/// answered, or an honest empty. The set is read at exactly one position, [`subtrahend_refusal`],
+/// because that is the only anti-monotone position in the contract. Widening it into a general
+/// "refusals propagate downstream" rule would contradict the contract's stated behaviour, which is
+/// that a stage bounded by a refused one is bounded to nothing and answers normally.
+fn tainted_by_refusal(
+    node: &StageNode,
+    refusals: &[PlanRefusal],
+    tainted: &BTreeSet<String>,
+) -> bool {
+    let name = node.name();
+    refusals.iter().any(|r| r.stage.as_ref() == Some(name))
+        || node
+            .upstream_names()
+            .iter()
+            .any(|u| tainted.contains(u.as_str()))
+}
+
+/// The refusal a `difference` inherits when what it was told to subtract is not knowable.
+///
+/// Returns `None` for every other op and for a sound subtrahend. See
+/// [`RefusalReason::SubtrahendRefused`] for why an empty right arm is the one case where the
+/// contract's empty-never-absent rule produces the maximal answer instead of the minimal one.
+///
+/// **Only `inputs[1]` is consulted.** The minuend arm is monotone — `∅ − B` is `∅`, the ordinary
+/// bounded-to-nothing outcome — so a taint there is already governed correctly by the incumbent
+/// rule, and refusing on it would report a refusal for a stage that gave the honest answer.
+fn subtrahend_refusal(
+    cn: &temper_core::types::query::CombineNode,
+    tainted: &BTreeSet<String>,
+) -> Option<PlanRefusal> {
+    if !cn.op.is_ordered() {
+        return None;
+    }
+    // Index 1 by the arity rule `validate` enforces; `get` rather than `[1]` because `compile` is
+    // public and does not require its caller to have run `validate` on the same tick.
+    let subtrahend = cn.inputs.get(1)?;
+    if !tainted.contains(subtrahend.as_str()) {
+        return None;
+    }
+    Some(PlanRefusal {
+        stage: Some(cn.name.clone()),
+        reason: RefusalReason::SubtrahendRefused,
+        detail: format!(
+            "stage `{}` subtracts `{}`, which refused or answered over an incomplete set; \
+             subtracting nothing would return the whole of `{}` and read as an answer",
+            cn.name.as_str(),
+            subtrahend.as_str(),
+            cn.inputs
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("the minuend"),
+        ),
+    })
 }
 
 /// A placeholder act body in the `(id, kind, quantity, via)` stage-contract shape. IDs only cross a
@@ -1278,6 +1364,10 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
     let op = match cn.op {
         temper_core::types::query::CombineOp::Union => "UNION",
         temper_core::types::query::CombineOp::Intersect => "INTERSECT",
+        // Bare `EXCEPT`, never `EXCEPT ALL` — it deduplicates, exactly as its two neighbours do, so
+        // all three agree that a stage's output is a set. `validate` pins this arm at exactly two
+        // inputs, so the join below emits one `A EXCEPT B` and never a fold.
+        temper_core::types::query::CombineOp::Difference => "EXCEPT",
     };
     let arms: Vec<String> = cn
         .inputs

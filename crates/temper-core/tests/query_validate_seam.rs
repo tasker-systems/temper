@@ -93,13 +93,25 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         *found.entry(&tail[..end]).or_insert(0) += 1;
     }
 
-    // Every shape reason is emitted from exactly ONE site today. That uniformity is a fact about
-    // the current code, not a rule — if a future shape check legitimately raises an existing
-    // reason from a second site, bump its count here and say why in the commit.
+    // Every shape reason but one is emitted from exactly ONE site. That uniformity was a fact
+    // about the code rather than a rule, and this comment already said what to do when it stopped
+    // holding: "if a future shape check legitimately raises an existing reason from a second site,
+    // bump its count here and say why".
+    //
+    // `CombinatorArity` is 2 `[since 2026-08-15]`. `CombineOp::Difference` is ordered, so it has a
+    // ceiling as well as a floor — a third input is refused rather than folded into the `EXCEPT`
+    // chain Postgres would otherwise evaluate happily. The two sites raise the same reason because
+    // the caller's repair is the same shape of thing (fix the input count) and a second variant
+    // would make a client's handling depend on which end of the range it missed.
+    //
+    // **Both sites are still shape's**, which is what this guard is actually protecting: the
+    // ceiling reads `CombineOp::is_ordered`, a property of the wire enum, and consults no
+    // declaration — so it remains a refusal a client can raise against a server it does not share
+    // a binary with.
     let expected: BTreeMap<&str, usize> = [
         ("AnchorTakesOneId", 1),
         ("BoundTermNotApplicable", 1),
-        ("CombinatorArity", 1),
+        ("CombinatorArity", 2),
         ("StageNotReturnable", 1),
         ("Cycle", 1),
         ("DanglingReference", 1),
