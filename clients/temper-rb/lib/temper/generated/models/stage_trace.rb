@@ -31,6 +31,9 @@ module Temper::Generated
 
     attr_accessor :narrowed_by
 
+    # How many ids this stage PRODUCED — the mirror of [`Self::input_ids`], and what lets a reader ask *\"did this stage earn its place?\"* rather than only *\"did it find anything?\"*  Carried for EVERY stage, which is the point: an intermediate ships no rows, and a combinator can never be a returned stage at all, so for those this is the only account of their size there is.  **It counts what the corpus yielded, not what came back.** For a returned stage it may exceed that stage's hydrated rows, because an id that stopped being visible between the two statements is dropped from the rows and still counted here. The two are different questions and only the gap between them is interesting.
+    attr_accessor :produced_ids
+
     # Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace covers every stage while results cover only returned ones, so this is the ONLY refusal record for an intermediate stage. **The pair rule**: identical to [`super::envelope::StageResult::refusal`], for the same reason as the input numbers.
     attr_accessor :refusal
 
@@ -68,6 +71,7 @@ module Temper::Generated
         :'input_unusable' => :'input_unusable',
         :'inputs' => :'inputs',
         :'narrowed_by' => :'narrowed_by',
+        :'produced_ids' => :'produced_ids',
         :'refusal' => :'refusal',
         :'stage' => :'stage'
       }
@@ -92,6 +96,7 @@ module Temper::Generated
         :'input_unusable' => :'Integer',
         :'inputs' => :'Array<StageInputTrace>',
         :'narrowed_by' => :'Array<NarrowedBy>',
+        :'produced_ids' => :'Integer',
         :'refusal' => :'ActRefusal',
         :'stage' => :'String'
       }
@@ -158,6 +163,12 @@ module Temper::Generated
         self.narrowed_by = nil
       end
 
+      if attributes.key?(:'produced_ids')
+        self.produced_ids = attributes[:'produced_ids']
+      else
+        self.produced_ids = nil
+      end
+
       if attributes.key?(:'refusal')
         self.refusal = attributes[:'refusal']
       end
@@ -194,6 +205,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "narrowed_by", narrowed_by cannot be nil.')
       end
 
+      if @produced_ids.nil?
+        invalid_properties.push('invalid value for "produced_ids", produced_ids cannot be nil.')
+      end
+
       if @stage.nil?
         invalid_properties.push('invalid value for "stage", stage cannot be nil.')
       end
@@ -215,6 +230,7 @@ module Temper::Generated
       return false if @input_ids.nil?
       return false if @input_unusable.nil?
       return false if @narrowed_by.nil?
+      return false if @produced_ids.nil?
       return false if @stage.nil?
       return false if @stage !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
       true
@@ -271,6 +287,16 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] produced_ids Value to be assigned
+    def produced_ids=(produced_ids)
+      if produced_ids.nil?
+        fail ArgumentError, 'produced_ids cannot be nil'
+      end
+
+      @produced_ids = produced_ids
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] stage Value to be assigned
     def stage=(stage)
       if stage.nil?
@@ -296,6 +322,7 @@ module Temper::Generated
           input_unusable == o.input_unusable &&
           inputs == o.inputs &&
           narrowed_by == o.narrowed_by &&
+          produced_ids == o.produced_ids &&
           refusal == o.refusal &&
           stage == o.stage
     end
@@ -309,7 +336,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, disposition, input_ids, input_unusable, inputs, narrowed_by, refusal, stage].hash
+      [act, disposition, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage].hash
     end
 
     # Builds the object from hash

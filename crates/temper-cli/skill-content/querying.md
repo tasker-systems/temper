@@ -88,9 +88,20 @@ The response carries `trace.stages` for **every** stage, including ones whose ro
 Without it a composition is a black box with an answer at the end, and you cannot tell whether a
 stage earned its place.
 
-The field that answers "did my pipe actually do anything" is `input_ids` — how many ids the stage
-received from upstream. A bound stage showing `input_ids: 0` narrowed nothing, and its answer is the
-unbounded one wearing a composition's costume. `input_unusable` counts ids the act could not use.
+Two numbers bracket each stage and they answer different questions. `input_ids` is how many ids it
+received from upstream — a bound stage showing `input_ids: 0` narrowed nothing, and its answer is
+the unbounded one wearing a composition's costume. `produced_ids` is how many it then produced, and
+it is carried for **every** stage, including the ones whose rows never came back.
+
+That second one is what makes an intermediate stage legible at all. Do not try to recover it from a
+downstream stage's `input_ids`: a **combinator reports only the SUM of its arms**, so two arms
+collapse into one number identifying neither, and a **terminal combinator has no downstream** to
+read. It counts what the corpus yielded, so for a returned stage it can exceed the rows you got back
+— an id that stopped being visible between the two statements is dropped from the rows and still
+counted here.
+
+`input_unusable` counts ids the act could not use, for any reason — invisible, nonexistent and
+malformed are deliberately one number.
 
 Each returned stage also carries `disposition` (`answered` / `empty` / `withheld` / `refused`) and an
 `orders_by` naming the quantity it ranked on. **Two stages' scores are not comparable** — the

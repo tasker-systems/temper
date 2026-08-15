@@ -1150,7 +1150,21 @@ input_ids: bigint,
  * Conflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].
  * Naming the invisible case alone would make the trace a single-probe existence oracle.
  */
-input_unusable: bigint, narrowed_by: Array<NarrowedBy>, };
+input_unusable: bigint, 
+/**
+ * How many ids this stage PRODUCED — the mirror of [`Self::input_ids`], and what lets a
+ * reader ask *"did this stage earn its place?"* rather than only *"did it find anything?"*
+ *
+ * Carried for EVERY stage, which is the point: an intermediate ships no rows, and a
+ * combinator can never be a returned stage at all, so for those this is the only account of
+ * their size there is.
+ *
+ * **It counts what the corpus yielded, not what came back.** For a returned stage it may
+ * exceed that stage's hydrated rows, because an id that stopped being visible between the two
+ * statements is dropped from the rows and still counted here. The two are different questions
+ * and only the gap between them is interesting.
+ */
+produced_ids: bigint, narrowed_by: Array<NarrowedBy>, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.
