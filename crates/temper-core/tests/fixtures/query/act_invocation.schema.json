@@ -246,7 +246,7 @@
       ]
     },
     "PropertyPredicate": {
-      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.\n\n`[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on\nthe invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction on purpose:\nthe transitional type carries the transitional name, so when the open-key resource half lands\nand deletes it, nothing is renamed a second time.",
+      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.\n\n`[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on\nthe invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction so that the\ntransitional type carries the transitional name: when the open-key resource half lands and\ndeletes it, nothing is renamed a second time.",
       "properties": {
         "key": {
           "type": "string"
