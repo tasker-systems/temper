@@ -31,7 +31,7 @@ dependencies = [
   "rust-machete",
   "openapi-check",
   "openapi-routes-check",
-  "security-tripwires",
+  "tripwires",
   "openapi-rb-drift",
   "openapi-ts-drift",
   "ts-rs-drift",
@@ -63,30 +63,108 @@ description = "Fail if any committed ts-rs generated type has drifted from the R
 # is already required by every other task in this list.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-ts-rs-drift.sh"]
 
-[tasks.security-tripwires]
-description = "Run the code-quality security tripwires (grant sinks, route auth, handler authz, signature secrets, credential Debug)"
-# These pin security-relevant sets (grant write-sites, unauthenticated routes, handler-side authz
-# calls, signature-secret distinctness, credential types deriving Debug) against reviewed baselines.
-# They lived ONLY in the `code-quality / Rust Quality` CI job, so a new grant sink / handler-side
-# authz call / unauthenticated route passed a green local `cargo make check` and failed in CI —
-# exactly the round-trip this task removes. Run all five and report EVERY failure in one pass, not
-# just the first, so one `check` surfaces the whole set. Delegates to the same scripts CI runs, so
-# local and CI logic are identical (CI cannot call cargo-make: the root Makefile.toml needs a ./.env
-# no runner has).
-script = ['''
+[tasks.tripwires]
+description = "Run every .github/scripts/audit-*.sh tripwire, and fail if CI runs one this task does not"
+# These pin reviewed sets — grant write-sites, unauthenticated routes, handler-side authz calls,
+# signature-secret distinctness, credential types deriving Debug, ungated fragments, migration
+# declarations, sqlx macro exceptions, ignored tests, contract cross-refs, attestation subject
+# paths, and unattributed decision-voiced prose — against baselines a human approved.
+#
+# `[renamed from security-tripwires — 2026-08-15]` The name had stopped being true: half the set is
+# not security. `audit-unattributed-decisions` is prose hygiene, `audit-ignored-tests` is test
+# hygiene, `audit-contract-crossrefs` is documentation. Kept as an alias below so anything invoking
+# the old name still works.
+#
+# # THE SET IS DERIVED, BECAUSE THE HAND-MAINTAINED ONE ROTTED
+#
+# This task's whole purpose is to remove the green-local-then-red-CI round-trip, and it said so:
+# *"They lived ONLY in the `code-quality / Rust Quality` CI job, so a new grant sink … passed a
+# green local `cargo make check` and failed in CI — exactly the round-trip this task removes."*
+#
+# It then stopped doing that for more than half of them. It listed FIVE scripts by name; CI ran
+# TWELVE `[measured — 2026-08-15]`. The seven it never gained — ungated-fragments,
+# unattributed-decisions, ignored-tests, contract-crossrefs, attest-subject-path,
+# sqlx-macro-exceptions, migration-declarations — were exactly as CI-only as the original five had
+# been, and the task that existed to close that gap read as though it had.
+#
+# Found the way it was always going to be found: `audit-unattributed-decisions` failed in CI on
+# PR #682 after a fully green local `cargo make check`.
+#
+# So the set is now GLOBBED rather than listed. That is this repo's own lesson, applied to the file
+# that needed it — `assert_every_compiled_in_doc_is_vetoed` derives its set by grepping for
+# `include_str!` rather than trusting a list to stay complete, and `audit-ungated-fragments.sh`'s
+# header states the principle outright: *"a hand-maintained enumeration rots while a derived set
+# does not."* A tripwire added tomorrow is covered here with no edit, which is the only version of
+# this that stays true.
+#
+# Two failure modes are closed explicitly, because both are silent:
+#
+#   * **An empty glob FAILS.** A loop over zero scripts passes while asserting nothing, and the
+#     causes are mundane — a moved directory, a renamed prefix. `audit-ungated-fragments.sh` makes
+#     the same rule: *"A scan that finds NOTHING must fail, not pass."*
+#   * **A tripwire CI does not run FAILS.** The glob covers "local is missing one"; this covers the
+#     opposite and more dangerous direction, since CI is the enforcing gate and a tripwire it never
+#     invokes is decoration. Checked by grepping the workflow for each script this task found.
+#
+# `test-audit-*.sh` — the meta-tests that prove each tripwire can FAIL — are deliberately not run
+# here. They are a different question (does the guard bite) from the one `check` asks (does the tree
+# pass), they are slower, and CI runs them in their own steps. Named so their absence reads as a
+# decision rather than as the same oversight one level down.
+#
+# Delegates to the same scripts CI runs, so local and CI logic are identical (CI cannot call
+# cargo-make: the root Makefile.toml needs a ./.env no runner has).
+script = '''
 set -u
 cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+
+# The one seam the bite-probe needs, and it is not reachable in normal use: both default to the
+# real paths, and nothing sets them. Mirrors `audit-unattributed-decisions.sh`'s `BASELINE_FILE`
+# and `audit-ungated-fragments.sh`'s `MIGRATIONS_DIR` — a guard nobody can make FAIL on purpose is
+# a guard nobody has checked.
+scripts_dir="${TRIPWIRE_SCRIPTS_DIR:-.github/scripts}"
+workflow="${TRIPWIRE_WORKFLOW:-.github/workflows/code-quality.yml}"
+found=0
 fail=0
-for s in audit-grant-sinks audit-route-auth audit-handler-authz-drift audit-signature-secrets audit-credential-debug; do
-  echo "--- security tripwire: ${s} ---"
-  if ! bash ".github/scripts/${s}.sh"; then fail=1; fi
+missing_in_ci=""
+
+for path in "${scripts_dir}"/audit-*.sh; do
+  [ -e "${path}" ] || continue
+  found=$((found + 1))
+  name=$(basename "${path}" .sh)
+  echo "--- tripwire: ${name} ---"
+  if ! bash "${path}"; then fail=1; fi
+  if ! grep -q "bash .github/scripts/${name}.sh" "${workflow}"; then
+    missing_in_ci="${missing_in_ci} ${name}"
+  fi
 done
-if [ "${fail}" -ne 0 ]; then
-  echo "security-tripwires: one or more tripwires failed (see above)." >&2
+
+if [ "${found}" -eq 0 ]; then
+  echo "tripwires: FOUND NO SCRIPTS matching ${scripts_dir}/audit-*.sh." >&2
+  echo "  A loop over zero scripts passes while asserting nothing. Either the directory moved or" >&2
+  echo "  the naming prefix changed; until that is fixed this task checks nothing." >&2
   exit 1
 fi
-echo "security-tripwires: all five passed."
-''']
+
+if [ -n "${missing_in_ci}" ]; then
+  echo "" >&2
+  echo "tripwires: these exist and CI does not run them:${missing_in_ci}" >&2
+  echo "  ${workflow} is the ENFORCING gate — a tripwire it never invokes is decoration, however" >&2
+  echo "  green it is here. Add a step for each, or delete the script." >&2
+  fail=1
+fi
+
+if [ "${fail}" -ne 0 ]; then
+  echo "tripwires: one or more failed (see above)." >&2
+  exit 1
+fi
+echo "tripwires: all ${found} passed, and CI runs every one of them."
+'''
+
+# `[2026-08-15]` The old name, kept so anything invoking it still resolves. The set it runs is no
+# longer only security, which is why the canonical name moved.
+[tasks.security-tripwires]
+description = "Deprecated alias for `tripwires`"
+alias = "tripwires"
 
 [tasks.test-schema-substrate]
 description = "Run the payload JSON-Schema snapshot gate (no database, no ONNX). Regenerate: UPDATE_SCHEMA=1 cargo make test-schema-substrate"
