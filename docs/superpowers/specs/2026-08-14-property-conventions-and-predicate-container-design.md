@@ -237,7 +237,7 @@ argument for taking it.** The branch was previously blocked on not knowing where
 
 ---
 
-## 7. What remains open about `tags` specifically
+## 7. What remained open about `tags` specifically — RULED 2026-08-15
 
 `tags`' whitespace-split is the sole hold-out from a **universal** normalization (explode arrays,
 pass scalars), which would serve the other eight recognized keys and the 61 unrecognized ones
@@ -248,9 +248,47 @@ The split exists only to agree with FTS — and **FTS does not split; it delegat
 like a convention worth centralizing and more like a **write-time normalization living in the read
 path**, duplicated across readers because it was never given a home.
 
-`[OPEN — 2026-08-14]` Whether bare-string `tags` should be normalized at write, at the view, or left
-per-reader. Not ruled. The zero-live-instances fact (§4) means nothing is currently wrong, and the
-decision is cheap in every direction today.
+`[WAS OPEN — 2026-08-14]` Whether bare-string `tags` should be normalized at write, at the view, or
+left per-reader. Not ruled. The zero-live-instances fact (§4) means nothing is currently wrong, and
+the decision is cheap in every direction today.
+
+`[RULED — 2026-08-15, Pete]` **At write, and it is ONE tag.** `tags: "concept design"` stores as
+`["concept design"]`. Shipped in `20260815000030`: `_property_value_normalized`, called by both
+projectors, with the ruling recorded on the migration and on `kb_property_elements`' `COMMENT`
+rather than implied by them.
+
+Three things followed, and the third was not foreseen here:
+
+- **The view became universal.** No `tags` branch — explode arrays, pass scalars — which is the
+  normalization this section said the split was the sole hold-out from. One rule for all 70 keys.
+- **The split's justification was measurably false**, which is what decided it. It existed to agree
+  with FTS, and the paragraph above already says FTS does not split; what that paragraph stopped
+  short of is the conclusion — a mechanism that does not achieve its own goal is not a convention
+  worth centralizing. So the split was **deleted rather than moved**: three encodings collapse to
+  none, because there is nothing left to encode.
+- **The read-side split could not be held accountable by a behavioural test** `[found — 2026-08-15]`.
+  Once nothing can STORE a bare string the branch is unreachable, so a witness for the new behaviour
+  passes with or without it. What holds it is a probe that writes the shape the projector can no
+  longer produce — the row a deployment predating the migration already holds. Recorded because the
+  same asymmetry will recur for every convention moved from read time to write time.
+
+**A fourth thing, found in review rather than in design, and it narrows what the projector accepts.**
+`_project_property_asserted`'s non-facet arm *appends*, and `uq_kb_properties_active` is unique on
+`(owner, key, value)` for live rows — so normalizing the bare string `ci` onto an already-live
+`["ci"]` makes a duplicate, and the projector **raises**. The tempting claim *"normalizing forgives
+every shape and refuses none"* is therefore false, and it was written into both the migration and
+the test file before review caught it. Scope it correctly, because the obvious reading is too wide:
+**no product path asserts `tags` at all** — `create_resource` fires `PropertySet`, which folds, and
+the only `PropertyAssert` emitters are `FacetSet` and the scenario loader's `topic`. It is a
+property of the projector, reachable only by a direct assert, which is what replay is; and prod's
+event log holds 467 `tags` events, every one an array, so no such history exists. Recorded rather
+than swallowed with `ON CONFLICT DO NOTHING`, which would return an id for a row it did not write.
+
+**The residue is real and was accepted, not discovered:** someone who wrote `tags: "ci auth"`
+meaning two tags now has one. Zero such rows exist `[measured on prod — 2026-08-15]`, so it changes
+nothing today, and the literal reading is the one a caller can predict from what they wrote.
+`open_meta.schema.json` continues to accept both shapes — this rules what a bare string MEANS, not
+whether it is legal.
 
 ---
 
@@ -268,19 +306,47 @@ here would bundle two decisions that can be taken apart.
 
 ## 9. Declared holes and what is not measured
 
-- **§7 is OPEN** and **§8 is named-not-solved**. Neither is a filed task.
-- **The open-key resource half still has no filed task.** "Task 10b" is named in `capability.rs`'s
-  header and appears nowhere in the backlog `[verified — capability.rs:1-30]`. **67 of the 70 live
-  property keys are unreachable by any narrowing on any act** — `doc_type`, `tags` and `facet` are
-  the three that are.
+- ~~**§7 is OPEN**~~ **§7 is RULED and shipped** `[2026-08-15, 20260815000030]` — see §7. **§8 is
+  named-not-solved** and is still not a filed task.
+- ~~**The open-key resource half still has no filed task.**~~ It is task
+  `01a00502-a774-7001-b5b2-0ce462158f1c` `[filed — 2026-08-15]`, whose first PR is
+  `20260815000030` (this section's §7 ruling and the view). **67 of the 70 live property keys remain
+  unreachable by any narrowing on any act** — `doc_type`, `tags` and `facet` are the three that are,
+  and that is unchanged by the ruling: the view is the *relation* the open-key predicate will read,
+  not the predicate. That is the task's second PR.
 - **No edge-side behaviour is exercised.** Zero edge-owned properties exist, so §5's owner-agnostic
   grain is correct-by-construction and **witnessed by nothing**. A witness is part of the build, not
   of this document.
-- **No cost measurement for the view.** The view-versus-function finding is *carried* from
-  `20260808000020`, which measured `doc_type`. A normalizing view that explodes arrays is a
-  different shape and inherits nothing — it is measured when it is built, against
-  `pg_stat_statements`.
+- ~~**No cost measurement for the view.**~~ **Measured** `[on prod — 2026-08-15]`. Against the real
+  corpus the exploding form and the incumbent expression read an identical **26,970 blocks per
+  call**, at 34.17 ms versus 34.71 ms mean over three calls each (σ 2.7 / 2.1) — a difference inside
+  one standard deviation of either. So the shape costs what the thing it replaces cost, on its own
+  number rather than on `20260808000020`'s.
+
+  Two limits on that measurement, stated rather than left to be assumed. It was taken against the
+  predicate **inlined**, because the migration is not on prod yet; a view is expanded into the query
+  tree by the rewriter, so the inline form is the faithful stand-in, but it is a stand-in. And
+  26,970 blocks is dominated by `resources_visible_to`, not by the tag predicate — this measures
+  that the new shape adds nothing, not what the read costs overall.
+
+  `pg_stat_statements` **is installed and collecting on prod** (616 statements): `20260814000020`
+  applied. The repeated claim that it is unavailable is stale as of 2026-08-15.
 - **`MAX_FACET_PREDICATES` moves with the answer.** The cap exists because a facet predicate is a
   per-row `NOT EXISTS` and *"an authenticated caller chooses the second factor"*
   `[carried — capability.rs]`. Open-key predicates have the identical cost shape, so the cap becomes
   theirs. Not designed here.
+- **The element relation cannot answer `has_key`, and that is a hole the open-key half must not
+  fall into** `[found while building — 2026-08-15]`. An empty array explodes to **no rows**, so a
+  resource carrying `tags: []` is indistinguishable in `kb_property_elements` from one carrying no
+  `tags` row at all. Eleven such rows exist on prod `[measured — 2026-08-15]`. A `PropertyOp::HasKey`
+  predicate must therefore read `kb_properties` directly — which is what its own doc already says
+  for a different reason (*"a row-existence check on the `property_key` btree"*), so the two
+  operators of one closed set legitimately read two different relations. Recorded on the view's
+  `COMMENT`, because the predicate that would get this wrong is not written yet.
+- **`kb_edge_properties` deliberately does NOT converge onto the element relation** `[2026-08-15]`.
+  §6.5 called the edge half containment *"over the same view"*, and that is now the one part of this
+  design not taken literally: the edge predicate needs `property_value` **whole**, because
+  containment over an exploded element is a different question (`'["a"]'::jsonb @> '["a"]'` is true;
+  `'"a"'::jsonb @> '["a"]'` is false). Converging it would be a behaviour change to a shipped
+  predicate, not a refactor. Two relations over one table, each with a stated reason — not drift,
+  but the next reader will have to be told that, which is why it is here.

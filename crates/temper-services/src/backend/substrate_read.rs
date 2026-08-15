@@ -246,43 +246,41 @@ async fn filtered_visible_page(
                  AND cogmap_readable_by_profile($1, h.anchor_id)))
             AND ($11::text IS NULL OR wp.status = $11)
             -- Tag filter. A correlated subquery in the same idiom as the goal filter above,
-            -- rather than a join: tags live in `kb_properties` as a JSONB ARRAY under the single
-            -- key `tags`, not as a column on the `kb_resource_workflow_props` pivot (which holds
-            -- one scalar per key). So this cannot be a sixth pivot column the way `status` was.
+            -- rather than a join: tags live in `kb_properties` under the single key `tags`, not as
+            -- a column on the `kb_resource_workflow_props` pivot (which holds one scalar per key).
+            -- So this cannot be a sixth pivot column the way `status` was.
             --
             -- `text[] @> text[]` is containment, which IS the AND semantics: the row matches when
             -- its tag set contains every requested tag. Both sides are lowercased — the bind is
-            -- folded in Rust, the row's tags by `lower(t)` here — so the match is case-insensitive
-            -- with one fold on each side and no `lower()` on the bind at query time.
+            -- folded in Rust, the row's tags by `lower(...)` here — so the match is
+            -- case-insensitive with one fold on each side and no `lower()` on the bind at query
+            -- time.
             --
-            -- A resource with no `tags` property aggregates to NULL, and `NULL @> $12` is NULL,
-            -- so it is correctly excluded. Three production resources carry `tags: []`; they
-            -- aggregate to the empty array and are likewise excluded for any non-empty filter.
-            -- **`tags` IS NOT ALWAYS AN ARRAY.** `[fixed — 2026-08-14, found in adversarial
-            -- review]` open_meta convention v2 declares it an array of strings OR a bare string,
-            -- and `temper_workflow::schema` asserts both pass validation — rejecting the bare form
-            -- would break existing callers. Calling `jsonb_array_elements_text` on a scalar
-            -- RAISES, so one schema-valid resource carrying a bare-string `tags` value made
-            -- `--tag` fail for EVERY caller, including callers who cannot see that resource.
-            -- Availability, not disclosure. Latent here since this filter shipped.
+            -- A resource with no `tags` property is excluded because the `coalesce` makes it the
+            -- EMPTY ARRAY and `'{{}}' @> $12` is false — NOT because it is NULL.
+            -- `[corrected — 2026-08-15, found in review]` This said it *aggregates to NULL, and
+            -- `NULL @> $12` is NULL, so it is correctly excluded*. `array_agg` over zero rows IS
+            -- NULL, but the `coalesce` sits inside this expression and never lets that NULL out, so
+            -- the stated mechanism is not the one operating. The outcome was right and the reason
+            -- was wrong, which is the dangerous combination: a reader who dropped the `coalesce`
+            -- *because NULL is what excludes* would make every tag filter NULL and match nothing.
+            -- Resources carrying `tags: []` aggregate to the same empty array and are likewise
+            -- excluded for any non-empty filter.
             --
-            -- Normalized BEFORE the lateral rather than guarded with a `WHERE`, which would be
-            -- evaluated after the expansion that already raised. The bare string is
-            -- whitespace-split because that is what the same value means to FTS
-            -- (`20260711000060` hands it to a tokenizing parser), so the two doors agree about
-            -- one value. Any other JSON type yields `[]` — matching nothing, never raising.
+            -- **The shape rule is NOT restated here.** `[converged — 2026-08-15]` This carried the
+            -- third of three encodings of what a `tags` value IS — the one that was Rust rather
+            -- than SQL, and therefore invisible to every SQL-side test. It read the table directly
+            -- and normalized inline, splitting a bare string on whitespace; the selection act's
+            -- fragment carried a second copy of the same expression and the FTS projection a third
+            -- that disagreed with both. `kb_property_elements` (`20260815000030`) is now the one
+            -- definition, and this reads it, so a shape convention cannot be lost or wrongly
+            -- inherited here (design §6.3). The view's `NOT is_folded` is the liveness predicate
+            -- this used to spell itself.
             AND ($12::text[] IS NULL OR (
-                  SELECT coalesce(array_agg(DISTINCT lower(t)), '{{}}')
-                    FROM kb_properties tp
-                    CROSS JOIN LATERAL jsonb_array_elements_text(
-                      CASE jsonb_typeof(tp.property_value)
-                        WHEN 'array'  THEN tp.property_value
-                        WHEN 'string' THEN to_jsonb(
-                          regexp_split_to_array(trim(tp.property_value #>> '{{}}'), '\\s+'))
-                        ELSE '[]'::jsonb
-                      END) AS t
-                   WHERE tp.owner_table = 'kb_resources' AND tp.owner_id = r.id
-                     AND tp.property_key = 'tags' AND NOT tp.is_folded
+                  SELECT coalesce(array_agg(DISTINCT lower(pe.element #>> '{{}}')), '{{}}')
+                    FROM kb_property_elements pe
+                   WHERE pe.owner_table = 'kb_resources' AND pe.owner_id = r.id
+                     AND pe.property_key = 'tags'
                 ) @> $12)
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
