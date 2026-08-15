@@ -986,24 +986,9 @@ fn edge_filter_for(
         };
         (bind_texts(kinds), bind_texts(labels))
     };
-    // **The typed vector, serialized — this builds no JSON of its own.** The fragment reads the
-    // operator at `q->'op'->>'op'` precisely because that is where `PropertyOp` (internally tagged,
-    // in a field called `op`) already puts it. Assembling a flatter object here would be a second
-    // spelling of the shape, and the two would be free to drift with nothing linking them; the
-    // facets slot below does have one, and this is deliberately not modelled on it.
-    //
-    // An empty list binds NULL rather than `[]`. Both narrow nothing in the fragment, so this is a
-    // statement-size choice and not a semantic one — but it also keeps "no predicates supplied"
-    // indistinguishable in the SQL from "no edge filter at all", which is what it is.
-    let properties = if f.properties.is_empty() {
-        "NULL::jsonb".to_string()
-    } else {
-        let idx = binds.len() + 1;
-        binds.push(QueryBind::Json(
-            serde_json::to_value(&f.properties).unwrap_or(serde_json::Value::Null),
-        ));
-        format!("${idx}::jsonb")
-    };
+    // The third axis, through the one emitter both containers share. Called HERE rather than
+    // earlier because it binds, and `binds.len() + 1` is positional — see the scope note above.
+    let properties = properties_slot(&f.properties, binds);
     (kinds_expr, labels_expr, properties)
 }
 
@@ -1185,21 +1170,48 @@ fn selection_narrowings_for(
     .join(", ")
 }
 
-/// `ResourceFilter`'s open-key slot, serialized — this builds no JSON of its own.
+/// A property predicate list, bound to one `$n::jsonb` slot — **the one emitter both containers
+/// use**, `ResourceFilter::properties` and `EdgeFilter::properties` alike.
 ///
-/// The fragment reads the operator at `q->'op'->>'op'` precisely because that is where `PropertyOp`
-/// (internally tagged, in a field called `op`) already puts it. Assembling a flatter object here
-/// would be a second spelling of the shape, free to drift with nothing linking them — which is why
-/// this is modelled on [`edge_filter_for`]'s third axis and deliberately **not** on the facets slot
-/// beside it, which does hand-build its JSON.
+/// **This is one function because the two slots are one thing.** They carry the same
+/// `Vec<PropertyPredicate>`, `contains` means the same thing on both sides (`property_value @> v`,
+/// the value whole), and both compile to a `$n::jsonb` the fragment parses the same way. Two
+/// emitters agreed only because the second was written by reading the first, which is the agreement
+/// that decays — and the cost of the decay is invisible, because both copies keep emitting
+/// plausible SQL. A new [`PropertyOp`](temper_core::types::query::filter::PropertyOp) arm now
+/// reaches both containers by construction rather than by a second edit.
 ///
-/// **The same `Vec<PropertyPredicate>` the edge container carries**, so `contains` serializes
-/// identically for both and the two fragments' predicates mean the same thing
-/// (`property_value @> v`, the value whole — `20260815000040`).
+/// **This builds no JSON of its own.** The fragment reads the operator at `q->'op'->>'op'` precisely
+/// because that is where `PropertyOp` (internally tagged, in a field called `op`) already puts it.
+/// Assembling a flatter object here would be a second spelling of the shape, free to drift with
+/// nothing linking them — which is why this is deliberately **not** modelled on the facets slot,
+/// which does hand-build its JSON.
 ///
 /// An empty list binds `NULL` rather than `[]`. Both narrow nothing in the fragment, so this is a
 /// statement-size choice rather than a semantic one — and it keeps "no predicates supplied"
-/// indistinguishable in the SQL from "no resource filter at all", which is what it is.
+/// indistinguishable in the SQL from "no filter at all", which is what it is.
+///
+/// **Call it at the position its bind occupies.** `binds.len() + 1` is positional and the emitted
+/// call is positional, so hoisting the call away from where the slot appears would name the wrong
+/// `$n`.
+fn properties_slot(
+    properties: &[temper_core::types::query::filter::PropertyPredicate],
+    binds: &mut Vec<QueryBind>,
+) -> String {
+    if properties.is_empty() {
+        return "NULL::jsonb".to_string();
+    }
+    let idx = binds.len() + 1;
+    binds.push(QueryBind::Json(
+        serde_json::to_value(properties).unwrap_or(serde_json::Value::Null),
+    ));
+    format!("${idx}::jsonb")
+}
+
+/// `ResourceFilter`'s open-key slot — the absent-container case, then [`properties_slot`].
+///
+/// The container is optional here and mandatory in [`edge_filter_for`], which is the whole of what
+/// separates the two call sites; the emission itself is shared.
 fn resource_properties_for(
     inv: &temper_core::types::query::ActInvocation,
     binds: &mut Vec<QueryBind>,
@@ -1207,14 +1219,7 @@ fn resource_properties_for(
     let Some(f) = &inv.resource_filter else {
         return "NULL::jsonb".to_string();
     };
-    if f.properties.is_empty() {
-        return "NULL::jsonb".to_string();
-    }
-    let idx = binds.len() + 1;
-    binds.push(QueryBind::Json(
-        serde_json::to_value(&f.properties).unwrap_or(serde_json::Value::Null),
-    ));
-    format!("${idx}::jsonb")
+    properties_slot(&f.properties, binds)
 }
 
 /// The composition threaded no QUESTION. Static, and the validator refuses it first — this is the

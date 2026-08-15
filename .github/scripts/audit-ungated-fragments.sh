@@ -280,6 +280,39 @@ sql_files_current() {
 # than reasoned about, since a leak would be an existence oracle over a caller-chosen key:
 # `find_resources_with.rs::a_second_principal_sees_none_of_another_principals_resources` now probes
 # both open-key spellings.
+# `20260815000050` defines NO function at all — it is three views — and enters this set only by
+# naming both cores in its prose. That is the boring reason, and it is not the reason to look:
+# **it redefines `kb_edge_properties` and `kb_resource_properties`, which are the relations both
+# ungated predicates READ.** A view under a gate is a place a gate can be undone without the gate
+# changing, so it gets the three questions rather than a note that it is only comments.
+# Reviewed 2026-08-15, task 01a00675:
+#   1. VERDICT — unchanged, and the views were never part of it. `p_visible_ids` remains the sole
+#      authorization input to both cores; these relations are consulted only inside correlated
+#      subqueries whose candidate rows have ALREADY passed `unnest(p_visible_ids)` (the resource
+#      side correlates `rp.resource_id = r.id`, the edge side `ep.edge_id = e.id` inside `adj`).
+#      Neither appears in a FROM clause that PRODUCES a candidate, so neither can widen a set.
+#      **The new `kb_owner_properties` inherits exactly this and adds nothing**: it is
+#      `kb_properties` minus folded rows, with no principal, profile or visibility term anywhere in
+#      it — it cannot express an authorization decision, correctly or incorrectly.
+#   2. EMITTER — untouched. No Rust changed shape here; `emit_ungated_core_call` still fixes
+#      `VISIBLE_IDS` and `PRINCIPAL_BIND` itself. (`query_plan.rs` did change in this task — two
+#      property emitters became one `properties_slot` — but that function can only push a
+#      `QueryBind::Json` of the caller's predicate list, exactly as both halves could before.)
+#   3. RESIDUE — unchanged; still source discipline rather than a database permission.
+#   THE SCOPING PREDICATE IS THE THING TO GUARD. Each wrapper's `owner_table = '...'` is what keeps
+#      an edge predicate from reading resource properties and vice versa. It moved from two
+#      hand-written view bodies into two wrappers over one base — same predicate, one fewer place to
+#      lose `NOT is_folded`, which now lives in the base alone. A future edit that dropped a
+#      wrapper's `owner_table` filter would cross the two owners' properties silently, and
+#      `kb_properties.owner_id` is NOT unique across owner tables — that is the specific edit this
+#      entry exists to make a reviewer look for. Both filters are witnessed, and both still pass
+#      through the derived views:
+#        `find_resources_with.rs::an_open_key_predicate_does_not_reach_another_owner_kinds_property`
+#          — writes a block-owned row at the SAME owner_id and key, requires it not to match, then
+#            flips `owner_table` to prove the empty answer was the filter and not a dead fixture.
+#        `find_resources_with.rs::a_folded_property_is_not_narrowable`
+#          — the `NOT is_folded` half, which `20260815000050` moved into the base. It is now
+#            asserted in one place and inherited by both wrappers rather than restated in each.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -289,6 +322,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260815000020_facets_fail_closed.sql
 20260815000030_property_elements_and_tag_normalization.sql
 20260815000040_resource_property_predicates.sql
+20260815000050_owner_agnostic_property_view.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
