@@ -242,6 +242,28 @@ sql_files_current() {
 # its gated wrapper, both new. Two CREATE FUNCTION, no DROP and no replace: the whole point of the
 # act framing is that a narrowing expressed as a SET needs a new function rather than new parameters
 # on the shipped find fragments, which would have been shape-breaking and halted the deploy.
+#
+# REVIEWED 2026-08-15 (`20260815000030`, the element relation and the §7 tags ruling, task
+# 01a00502) — the SQL-file set grows by one; the function-NAME set does not, and neither does the
+# Rust half.
+#
+#   VERDICT: unchanged. `query_find_resources_with` still computes resources_visible_to(p_principal)
+#     once and hands the array down; this migration does not touch the wrapper.
+#   EMITTER: unchanged. `emit_ungated_core_call`'s `CoreCall::Selection` arm still writes
+#     `VISIBLE_IDS` itself.
+#   RESIDUE: unchanged and accepted.
+#
+#   BODY-ONLY, and specifically NOT a visibility change. Two narrowing predicates — `p_tags` and
+#   `p_facets` — stop reading `kb_properties` directly and read `kb_property_elements`, the new
+#   owner-agnostic element relation, instead.
+#
+#   THE ONE THING WORTH CHECKING HERE, because a view interposed under an ungated core is exactly
+#   the shape that could smuggle rows in: `kb_property_elements` carries NO visibility predicate and
+#   is NOT asked to. It is joined to `r.id` inside a correlated subquery whose candidate rows have
+#   already passed `unnest(p_visible_ids)`, so it can only ever be consulted ABOUT a resource the
+#   caller was handed. It cannot widen the candidate set, because it appears in no FROM clause that
+#   produces one. A future edit that lifted it into the outer FROM would change that, and is the
+#   thing this entry exists to make a reviewer look for.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -249,6 +271,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260814000030_follow_from_provenance_sibling.sql
 20260815000010_edge_property_predicates.sql
 20260815000020_facets_fail_closed.sql
+20260815000030_property_elements_and_tag_normalization.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded

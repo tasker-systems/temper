@@ -101,7 +101,16 @@ pub struct CreateParams<'a> {
     pub owner: ProfileId,
     pub originator: ProfileId,
     pub emitter: EntityId,
-    /// Managed (§7-Property-fated) + open property pairs, each fired as a `PropertyAssert`.
+    /// Managed (§7-Property-fated) + open property pairs, each fired as a
+    /// [`SeedAction::PropertySet`].
+    ///
+    /// `[corrected — 2026-08-15]` This said `PropertyAssert`, which the loop below has not fired
+    /// for as long as the current code has stood. The two are not interchangeable and the
+    /// difference is the whole semantics: `PropertySet` **folds** the key's live set before
+    /// inserting (one current value per key), while `PropertyAssert` **appends** (several live rows
+    /// per key, which is how facets work). Found while reasoning about a projector-level duplicate
+    /// on `tags` — a test written from this comment asserted through this path expecting append
+    /// semantics, and did not get them.
     pub properties: &'a [(String, serde_json::Value)],
     /// Caller-supplied, already-embedded chunks. When `Some`, the body block is built from these
     /// verbatim (no server-side embed — the client did extract→chunk→embed); when `None`, the server

@@ -26,9 +26,19 @@
 //! `20260730000010:228-231` states the rule a reader will reach for here: *"The guard lives HERE and
 //! not in the projector, and the split matters: replay calls the projector directly, so a projector
 //! that refused a shape would make the history that already contains it unreplayable. The door
-//! refuses new bad shapes; the projector forgives old ones."* That rule is about **refusal**, and
-//! this is not one. A projector that normalizes forgives every historical shape and converges it —
-//! which is the behaviour that rule exists to protect, arrived at from the other side.
+//! refuses new bad shapes; the projector forgives old ones."*
+//!
+//! `[corrected — 2026-08-15, found in review]` This file previously answered that rule with *"a
+//! projector that normalizes forgives every historical shape and converges it — it refuses none."*
+//! **That is false, in exactly one case**, and
+//! `normalizing_can_collide_with_an_existing_live_row_and_that_raises` below is the witness for it:
+//! the assert arm APPENDS, `uq_kb_properties_active` is unique on (owner, key, value) for live
+//! rows, so normalizing a bare string onto an array that is already there is a duplicate and
+//! raises. The rule holds for every shape except a duplicate this normalization itself creates.
+//!
+//! Recorded rather than papered over. The prod measurement that bounds it is about the EVENT LOG,
+//! not the live rows — 467 `tags` events, every one an array — because it is replay, not the
+//! current projection, that the refusal would break.
 
 mod common;
 
@@ -316,5 +326,100 @@ async fn normalization_is_scoped_to_tags_and_leaves_every_other_key_verbatim(poo
         stored(&pool, arrayed, "tags").await,
         serde_json::json!(["ci", "auth"]),
         "normalization applies to the string shape only — an array must not be nested inside another"
+    );
+}
+
+/// Normalizing a bare string onto an array that is ALREADY live is a duplicate, and it raises.
+///
+/// **The one case where the projector refuses rather than forgives** `[found in review —
+/// 2026-08-15]`. Three facts meet here, and none is new on its own:
+///
+/// - `_project_property_asserted`'s non-facet arm **appends** — only `property_set` folds — so one
+///   owner may hold several live rows for one key;
+/// - `uq_kb_properties_active` is unique on `(owner_table, owner_id, property_key, property_value)`
+///   for live rows;
+/// - normalization makes `"ci"` and `["ci"]` the **same value**.
+///
+/// So a pair that used to store as two distinct live rows now collides: the second raises and takes
+/// its transaction with it. Replay calls this projector directly, so a history containing that pair
+/// would be unreplayable.
+///
+/// ## How reachable it actually is — narrower than it first looks, and measured both ways
+///
+/// **No product path asserts `tags` at all** `[verified — 2026-08-15]`. `create_resource` fires
+/// `SeedAction::PropertySet` per property (`writes.rs:297`), and `property_set` folds the key's
+/// whole live set first, so it can never collide with itself — the first draft of this test
+/// asserted through `create_resource` and did NOT raise, which is what exposed the premise. The only
+/// `PropertyAssert` emitters are `FacetSet` (key `facet`) and the scenario loader (key `topic`).
+///
+/// So this is a property of the **projector**, reachable only by a direct assert — which is exactly
+/// what replay is. Hence this test fires one, rather than going through a write path that would
+/// quietly fold and prove nothing.
+///
+/// `[measured on prod — 2026-08-15]` the whole event log holds 467 `tags` events and **every one is
+/// an array**. The measurement is over the EVENT LOG rather than the live rows on purpose, because
+/// replay is what the refusal would break. Two array-shaped asserts of the same array would already
+/// collide today, before this migration; normalization can only create a NEW collision where a
+/// string-shaped `tags` event meets an array-shaped one, and there are no string-shaped ones.
+///
+/// Not papered over with `ON CONFLICT DO NOTHING`: that arm returns `ARRAY[v_prop]`, so swallowing
+/// the conflict would name a row it did not write. And the state now refused was already
+/// incoherent — `_rebuild_resource_search_vector` reads `tags` with `LIMIT 1` and would index one
+/// of the two arbitrarily.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn normalizing_can_collide_with_an_existing_live_row_and_that_raises(pool: sqlx::PgPool) {
+    use temper_substrate::events::{fire, SeedAction};
+
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = AnchorRef::context(ctx(&pool, owner, "collide").await);
+
+    let r = mk(&pool, home, owner, emitter, "collide", &[]).await;
+
+    let assert_tags = |value: serde_json::Value| {
+        let pool = pool.clone();
+        async move {
+            let mut conn = pool.acquire().await.unwrap();
+            fire(
+                &mut conn,
+                SeedAction::PropertyAssert {
+                    resource: ResourceId::from(r),
+                    key: "tags",
+                    value: &value,
+                    weight: 1.0,
+                    emitter,
+                },
+            )
+            .await
+        }
+    };
+
+    assert_tags(serde_json::json!(["ci"]))
+        .await
+        .expect("the first assert lands");
+
+    // The control, and it is what makes the assertion below about DUPLICATION rather than about
+    // asserting the key twice: a second assert that stays distinct after normalization succeeds,
+    // and appends rather than replacing.
+    assert_tags(serde_json::json!("auth"))
+        .await
+        .expect("a second assert is legal — the assert arm appends");
+    let mut live: Vec<String> = elements(&pool, r, "tags").await;
+    live.sort();
+    assert_eq!(
+        live,
+        vec!["auth".to_string(), "ci".to_string()],
+        "two live `tags` rows coexist, which is the state the collision below is a duplicate WITHIN"
+    );
+
+    // And the collision: `"ci"` normalizes onto the `["ci"]` already live.
+    let err = assert_tags(serde_json::json!("ci"))
+        .await
+        .expect_err("normalization makes this the same value as the live row — it must raise");
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.contains("uq_kb_properties_active"),
+        "the refusal must be the unique index, not some other failure that would make this test \
+         pass for the wrong reason. Got: {rendered}"
     );
 }

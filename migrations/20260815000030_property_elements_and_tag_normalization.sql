@@ -1,29 +1,24 @@
--- The owner-agnostic element relation, and the write-time `tags` normalization that lets it be
--- universal.
+-- The owner-agnostic element relation, and the write-time `tags` normalization (design §6.2/§6.3
+-- and §7, ruled 2026-08-15). Reasoning, measurements and residue: task
+-- 01a00502-a774-7001-b5b2-0ce462158f1c and
+-- docs/superpowers/specs/2026-08-14-property-conventions-and-predicate-container-design.md.
 --
--- Design: docs/superpowers/specs/2026-08-14-property-conventions-and-predicate-container-design.md
--- §6.2/§6.3 and §7 (ruled 2026-08-15). Task 01a00502-a774-7001-b5b2-0ce462158f1c, which carries the
--- reasoning, the measurements and the residue.
---
--- Three things a later edit can break silently:
---   1. The view has NO `tags` branch, and that is the point — one rule for all 70 live keys.
---   2. Normalization is scoped to `tags`. Widening it to every scalar silently rewrites `date`,
---      `descriptor` and the 61 unrecognized keys.
---   3. It lives in the PROJECTORS, so nothing bypasses it and replay converges history. That does
---      not contradict 20260730000010's *"the door refuses new bad shapes; the projector forgives
---      old ones"* — normalizing forgives every shape; it refuses none.
+-- Traps a later edit breaks silently:
+--   1. The view has NO `tags` branch — one rule for all 70 live keys, which is the point.
+--   2. Normalization is scoped to `tags`. Widening it rewrites `date`, `descriptor` and 61 others.
+--   3. It does NOT forgive every shape. Normalizing onto an already-live equal value is a
+--      `uq_kb_properties_active` duplicate and RAISES out of the projector, which replay calls
+--      directly. Unreachable today: nothing asserts `tags` (`create_resource` fires `PropertySet`,
+--      which folds), and prod's 467 `tags` events are all arrays. Witness:
+--      `property_elements.rs::normalizing_can_collide_with_an_existing_live_row_and_that_raises`.
+--   4. The `facet` predicate WIDENS — see its comment.
 --
 -- Additive: one CREATE VIEW, one CREATE FUNCTION, three CREATE OR REPLACE at byte-identical
 -- signatures. No DROP.
 
 -- ── The shape convention, owner-agnostic (§6.2) ─────────────────────────────────────────────────
--- Explode arrays, pass everything else through whole. An empty array contributes no rows, so this
--- relation cannot witness a key's mere presence — the case a `has_key` predicate must not read here.
---
--- `[measured on prod — 2026-08-15]` This shape's cost is MEASURED, not carried from
--- `20260808000020`'s plain-EXISTS finding: against the real corpus the exploding form and the
--- incumbent expression read an identical 26,970 blocks per call, at 34.17 ms vs 34.71 ms mean over
--- three calls each (σ 2.7 / 2.1) — a difference inside one standard deviation of either.
+-- Explode arrays, pass everything else whole. An empty array yields NO rows, so this cannot
+-- witness a key's mere PRESENCE — a `has_key` predicate must read `kb_properties` directly.
 CREATE VIEW kb_property_elements AS
     SELECT p.owner_table, p.owner_id, p.property_key, elem.value AS element, p.weight
       FROM kb_properties p
@@ -35,12 +30,10 @@ CREATE VIEW kb_property_elements AS
      WHERE NOT p.is_folded;
 
 COMMENT ON VIEW kb_property_elements IS
-    'Live kb_properties at ELEMENT grain, for every owner table: an array-valued row becomes one row per element, any other shape becomes one row holding itself. A predicate reads this rather than the table, so it can neither lose a shape convention nor wrongly inherit one (design 6.3). Universal by construction — there is no per-key branch, which is what the retirement of the tags whitespace-split bought. An empty array yields NO rows, so this relation cannot answer whether a key is merely PRESENT; a key-existence predicate must read kb_properties directly.';
+    'Live kb_properties at ELEMENT grain, for every owner table: an array-valued row becomes one row per element, any other shape becomes one row holding itself. A predicate reads this rather than the table, so it can neither lose a shape convention nor wrongly inherit one. An empty array yields NO rows, so a key-existence predicate must read kb_properties directly.';
 
--- ── The write-time rule, in one place because two projectors need it (§7) ───────────────────────
--- A bare-string `tags` value is ONE tag: `"concept design"` stores as `["concept design"]`. The
--- whitespace split this replaces existed to agree with FTS, and FTS does not split — it delegates to
--- a tokenizer that splits differently. Owner-agnostic: a shape convention applies to every owner.
+-- ── The write-time rule, in one place because both projectors need it (§7) ─────────────────────
+-- A bare-string `tags` value is ONE tag. Owner-agnostic: a shape convention applies to every owner.
 CREATE FUNCTION _property_value_normalized(p_key text, p_value jsonb)
 RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN p_key = 'tags' AND jsonb_typeof(p_value) = 'string'
@@ -49,7 +42,7 @@ RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 COMMENT ON FUNCTION _property_value_normalized(text, jsonb) IS
-    'The stored shape of a property value. Today: a bare-string `tags` value becomes a one-element array, and every other key and shape is returned verbatim. One definition because both projectors write kb_properties and a rule honoured by one of them is not a rule. Owner-agnostic, because a shape convention applies to every owner (design 5).';
+    'The stored shape of a property value: a bare-string tags value becomes a one-element array, every other key and shape is returned verbatim. One definition because both projectors write kb_properties.';
 
 -- ── Both projectors, body-only ──────────────────────────────────────────────────────────────────
 
@@ -159,8 +152,9 @@ END;
 $$;
 
 -- ── The selection act's two property predicates now read the view ───────────────────────────────
--- `tags` loses its `regexp_split_to_array` arm and `facet` loses its own copy of
--- `owner_table = … AND NOT is_folded`. Body change only; the signature is byte-identical.
+-- `tags` loses its `regexp_split_to_array` arm. `facet` loses its own copy of
+-- `owner_table = … AND NOT is_folded` AND changes meaning slightly — see its comment. Body change
+-- only; the signature is byte-identical.
 CREATE OR REPLACE FUNCTION __temper_ungated_find_resources_with(
     p_visible_ids    uuid[],
     p_doc_types      text[]  DEFAULT NULL,
@@ -195,18 +189,24 @@ LANGUAGE sql STABLE AS $$
              SELECT 1 FROM kb_profiles p
               WHERE p.id = h.owner_profile_id AND p.handle = p_owner_handle))
        AND (p_title_contains IS NULL OR r.title ILIKE '%' || p_title_contains || '%')
-       -- AND-containment, both sides folded. A resource with no `tags` aggregates to NULL and
-       -- `NULL @> $` is NULL, so it is correctly excluded; `tags: []` yields the empty array and is
-       -- likewise excluded for any non-empty filter.
+       -- AND-containment, both sides folded. A resource with no `tags` is excluded because the
+       -- `coalesce` makes it the EMPTY ARRAY — NOT because it is NULL, which is what the
+       -- incumbent's comment said `[corrected — 2026-08-15]`. Drop the `coalesce` and every tag
+       -- filter becomes NULL and matches nothing.
        AND (p_tags IS NULL OR (
              SELECT coalesce(array_agg(DISTINCT lower(pe.element #>> '{}')), '{}')
                FROM kb_property_elements pe
               WHERE pe.owner_table = 'kb_resources' AND pe.owner_id = r.id
                 AND pe.property_key = 'tags'
            ) @> ARRAY(SELECT lower(x) FROM unnest(p_tags) AS x))
-       -- `jsonb_typeof` is what fails CLOSED; the `CASE` is what keeps jsonb_array_elements from
-       -- RAISING whatever order the planner takes the conjuncts in. Neither substitutes for the
-       -- other. The key guard is the third: jsonb_build_object RAISES on a null key.
+       -- Three guards, distinct jobs: `jsonb_typeof` fails closed, the `CASE` stops
+       -- `jsonb_array_elements` raising, the null-key test stops `jsonb_build_object` raising.
+       --
+       -- Reading `pe.element` rather than `fp.property_value` WIDENS this: an ARRAY-shaped facet
+       -- value explodes, and a one-element array wrapping an object does not contain that object
+       -- while the element does (jsonb's array-containment exception is primitives only).
+       -- Reachable via `_facet_marks`' sentinel arm; accepted, and all 1,281 live facet rows on
+       -- prod are objects `[measured — 2026-08-15]`.
        AND (p_facets IS NULL OR (
              jsonb_typeof(p_facets) = 'array'
              AND NOT EXISTS (
@@ -228,5 +228,5 @@ $$;
 SELECT declare_migration(
     20260815000030,
     'additive',
-    'Gives the property layer its owner-agnostic element relation and rules what a bare-string tags value MEANS (task 01a00502-a774-7001-b5b2-0ce462158f1c, design section 6.2/6.3 and section 7). Three objects. kb_property_elements exposes live kb_properties at element grain for every owner table — an array becomes one row per element, any other shape becomes one row holding itself — which is the view a predicate reads instead of the table, so it can neither lose a shape convention nor wrongly inherit one. It has NO per-key branch and that is the point: one rule for all 70 live property keys. _property_value_normalized carries the section 7 ruling (decided 2026-08-15, Pete): a bare-string tags value is normalized AT WRITE and is ONE tag, so tags "concept design" stores as ["concept design"]. It lives in ONE function because both projectors write kb_properties and a rule honoured by one of them is not a rule, and it is scoped to tags because widening it to every scalar would silently rewrite date, descriptor and the 61 unrecognized keys. The normalization sits in the PROJECTORS rather than at a door or in Rust so that nothing can bypass it — not a direct SQL caller, not the scenario loader, not replay — and so replay CONVERGES historical events instead of reproducing them; that does not contradict 20260730000010''s rule that the door refuses new bad shapes while the projector forgives old ones, because normalizing forgives every shape and refuses none. The whitespace split it retires existed only to agree with FTS, and FTS does not split — it delegates to a tokenizer that splits differently (to_tsvector(''english'',''ci-auth deploy'') yields ci, auth, ci-auth, deploy while regexp_split_to_array yields {ci-auth, deploy}), so the split centralized an answer that did not achieve its own goal. Both of __temper_ungated_find_resources_with''s property predicates now read the view: tags loses its regexp_split_to_array arm and facet loses its own copy of the owner/liveness predicate. Measured on prod before the change: over all 428 live tags rows the view form and the incumbent expression disagree on ZERO, because the only shape they treat differently is the bare string and zero bare-string tags exist. Its COST is measured too rather than carried from 20260808000020, whose view-versus-function finding was taken on a plain doc_type EXISTS and which an element-exploding shape inherits nothing from: against the real prod corpus the two forms read an identical 26,970 blocks per call at 34.17 ms versus 34.71 ms mean over three calls each, a difference inside one standard deviation of either. That measurement used pg_stat_statements, which IS now installed and collecting on prod (616 statements) — 20260814000020 applied, so the repeated note that it is unavailable is stale. The behaviour change is therefore real but currently uninstantiated: someone who wrote tags "ci auth" meaning two tags now has one. Body change only on all three functions, at byte-identical signatures. One CREATE VIEW, one CREATE FUNCTION, three CREATE OR REPLACE, no DROP.'
+    'Gives the property layer its owner-agnostic element relation (kb_property_elements: live kb_properties at element grain, arrays exploded, every other shape passed whole) and rules that a bare-string tags value is ONE tag, normalized at write by _property_value_normalized in both projectors. Repoints find_resources_with''s tags and facet predicates onto the view, deleting the last SQL copy of the tags whitespace-split; the third copy was Rust (filtered_visible_page) and goes in the same change. Additive: one CREATE VIEW, one CREATE FUNCTION, three CREATE OR REPLACE at byte-identical signatures, no DROP. Two behaviour changes, NOT no-ops: normalizing onto an already-live equal value is a uq_kb_properties_active duplicate and raises out of the projector (unreachable today — nothing asserts tags, and prod''s 467 tags events are all arrays); and the facet predicate widens for an array-shaped facet value, of which prod has none. Reasoning, measurements and residue live in task 01a00502-a774-7001-b5b2-0ce462158f1c and docs/superpowers/specs/2026-08-14-property-conventions-and-predicate-container-design.md sections 6.2, 6.3, 7 and 9 — deliberately not here, because an applied migration cannot have its prose corrected.'
 );

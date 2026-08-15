@@ -256,9 +256,16 @@ async fn filtered_visible_page(
             -- case-insensitive with one fold on each side and no `lower()` on the bind at query
             -- time.
             --
-            -- A resource with no `tags` property aggregates to NULL, and `NULL @> $12` is NULL, so
-            -- it is correctly excluded. Production resources carrying `tags: []` aggregate to the
-            -- empty array and are likewise excluded for any non-empty filter.
+            -- A resource with no `tags` property is excluded because the `coalesce` makes it the
+            -- EMPTY ARRAY and `'{{}}' @> $12` is false — NOT because it is NULL.
+            -- `[corrected — 2026-08-15, found in review]` This said it *aggregates to NULL, and
+            -- `NULL @> $12` is NULL, so it is correctly excluded*. `array_agg` over zero rows IS
+            -- NULL, but the `coalesce` sits inside this expression and never lets that NULL out, so
+            -- the stated mechanism is not the one operating. The outcome was right and the reason
+            -- was wrong, which is the dangerous combination: a reader who dropped the `coalesce`
+            -- *because NULL is what excludes* would make every tag filter NULL and match nothing.
+            -- Resources carrying `tags: []` aggregate to the same empty array and are likewise
+            -- excluded for any non-empty filter.
             --
             -- **The shape rule is NOT restated here.** `[converged — 2026-08-15]` This carried the
             -- third of three encodings of what a `tags` value IS — the one that was Rust rather

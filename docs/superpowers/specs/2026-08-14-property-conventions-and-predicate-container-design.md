@@ -272,6 +272,18 @@ Three things followed, and the third was not foreseen here:
   longer produce — the row a deployment predating the migration already holds. Recorded because the
   same asymmetry will recur for every convention moved from read time to write time.
 
+**A fourth thing, found in review rather than in design, and it narrows what the projector accepts.**
+`_project_property_asserted`'s non-facet arm *appends*, and `uq_kb_properties_active` is unique on
+`(owner, key, value)` for live rows — so normalizing the bare string `ci` onto an already-live
+`["ci"]` makes a duplicate, and the projector **raises**. The tempting claim *"normalizing forgives
+every shape and refuses none"* is therefore false, and it was written into both the migration and
+the test file before review caught it. Scope it correctly, because the obvious reading is too wide:
+**no product path asserts `tags` at all** — `create_resource` fires `PropertySet`, which folds, and
+the only `PropertyAssert` emitters are `FacetSet` and the scenario loader's `topic`. It is a
+property of the projector, reachable only by a direct assert, which is what replay is; and prod's
+event log holds 467 `tags` events, every one an array, so no such history exists. Recorded rather
+than swallowed with `ON CONFLICT DO NOTHING`, which would return an id for a row it did not write.
+
 **The residue is real and was accepted, not discovered:** someone who wrote `tags: "ci auth"`
 meaning two tags now has one. Zero such rows exist `[measured on prod — 2026-08-15]`, so it changes
 nothing today, and the literal reading is the one a caller can predict from what they wrote.
