@@ -579,9 +579,9 @@ export type PropertyOp = { "op": "has_key" } | { "op": "contains", values: Array
  * [`EdgeFilter`] means the edge's own `kb_properties` rows, and nothing else has to be said.
  *
  * `[2026-08-15]` This name previously belonged to the subject-tagged variant that floats free on
- * the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction on purpose:
- * the transitional type carries the transitional name, so when the open-key resource half lands
- * and deletes it, nothing is renamed a second time.
+ * the invocation, now [`SubjectedPropertyPredicate`]. The rename runs this direction so that the
+ * transitional type carries the transitional name: when the open-key resource half lands and
+ * deletes it, nothing is renamed a second time.
  */
 export type PropertyPredicate = { key: string, op: PropertyOp, };
 
