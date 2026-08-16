@@ -14,14 +14,15 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither operator takes a fragment of a query language; both bind their values.
+  # A property narrowing operator. CLOSED — the key space is open, the operator set is not. No operator takes a fragment of a query language; all bind their values.
   module PropertyOp
     class << self
       # List of class defined in oneOf (OpenAPI v3)
       def openapi_one_of
         [
           :'PropertyOpOneOf',
-          :'PropertyOpOneOf1'
+          :'PropertyOpOneOf1',
+          :'PropertyOpOneOf2'
         ]
       end
 

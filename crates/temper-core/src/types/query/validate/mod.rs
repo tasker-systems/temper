@@ -1734,7 +1734,7 @@ mod tests {
         assert!(
             errs.iter()
                 .any(|e| e.reason == RefusalReason::FilterNotApplicable
-                    && e.detail.contains("containment probes")),
+                    && e.detail.contains("probes per candidate")),
             "the probe cap must fire on the VALUE count, not the predicate count; got {errs:?}"
         );
 

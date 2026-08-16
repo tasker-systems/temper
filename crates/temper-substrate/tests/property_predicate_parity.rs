@@ -253,6 +253,12 @@ fn has_key(key: &str) -> serde_json::Value {
     serde_json::json!({ "key": key, "op": { "op": "has_key" } })
 }
 
+/// One `Compare` predicate in the wire shape the fragment parses — `PropertyOp` is internally
+/// tagged inside a field named `op`, with `direction` and `value` inside the `compare` arm.
+fn compare(key: &str, direction: &str, value: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "key": key, "op": { "op": "compare", "direction": direction, "value": value } })
+}
+
 /// The property set BOTH halves carry.
 ///
 /// Chosen to exercise the shapes the grain ruling turns on rather than a tidy fixture: an
@@ -268,6 +274,12 @@ fn subject_properties() -> Vec<(String, serde_json::Value)> {
         p("derived_from", serde_json::json!(["spec-a", "spec-b"])),
         p("empty_list", serde_json::json!([])),
         p("meta", serde_json::json!({"a": 1, "b": 2})),
+        // `[added — 2026-08-16]` A numeric value, so the `compare` type guard exercises BOTH
+        // directions: a numeric bound matches here and a string bound misses (honest empty), and
+        // the reverse against the string-valued `confidence` key. This is the `temper-pr` shape
+        // (mixed on one key) the type guard exists to make safe — `seq` stands in for the numeric
+        // sub-population; `confidence` for the string one.
+        p("seq", serde_json::json!(42)),
     ]
 }
 
@@ -362,6 +374,91 @@ fn corpus() -> Vec<(&'static str, Option<serde_json::Value>)> {
             "an operator the closed set lacks falls to ELSE false",
             Some(serde_json::json!([
                 {"key": "confidence", "op": {"op": "matches_regex"}}
+            ])),
+        ),
+        // `Compare` — the ordering operator. Type-guarded jsonb native ordering; cross-type rows
+        // are honest empties. `confidence` is the string sub-population, `seq` is the numeric one,
+        // so the type-guard cases exercise the `temper-pr`-shaped hazard in both directions.
+        (
+            "compare, string, gte, matching (high >= high)",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "gte",
+                serde_json::json!("high")
+            )])),
+        ),
+        (
+            "compare, string, gt, missing (high > high is false)",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "gt",
+                serde_json::json!("high")
+            )])),
+        ),
+        (
+            "compare, string, lt, matching (high < i)",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "lt",
+                serde_json::json!("i")
+            )])),
+        ),
+        (
+            "compare, numeric, gte, matching (42 >= 42)",
+            Some(serde_json::json!([compare(
+                "seq",
+                "gte",
+                serde_json::json!(42)
+            )])),
+        ),
+        (
+            "compare, numeric, gt, missing (42 > 42 is false)",
+            Some(serde_json::json!([compare(
+                "seq",
+                "gt",
+                serde_json::json!(42)
+            )])),
+        ),
+        (
+            "compare, numeric, lt, matching (42 < 100)",
+            Some(serde_json::json!([compare(
+                "seq",
+                "lt",
+                serde_json::json!(100)
+            )])),
+        ),
+        (
+            "compare, TYPE GUARD: numeric bound against string key → honest empty",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "gte",
+                serde_json::json!(42)
+            )])),
+        ),
+        (
+            "compare, TYPE GUARD: string bound against numeric key → honest empty",
+            Some(serde_json::json!([compare(
+                "seq",
+                "gte",
+                serde_json::json!("42")
+            )])),
+        ),
+        (
+            "compare, malformed: missing value fails closed (bound is NULL → guard is falsy)",
+            Some(serde_json::json!([
+                {"key": "confidence", "op": {"op": "compare", "direction": "gt"}}
+            ])),
+        ),
+        (
+            "compare, malformed: missing direction falls to inner ELSE false",
+            Some(serde_json::json!([
+                {"key": "confidence", "op": {"op": "compare", "value": "high"}}
+            ])),
+        ),
+        (
+            "compare, malformed: unknown direction falls to inner ELSE false",
+            Some(serde_json::json!([
+                {"key": "confidence", "op": {"op": "compare", "direction": "between", "value": "high"}}
             ])),
         ),
         (
@@ -537,6 +634,69 @@ async fn the_shared_predicate_admits_and_denies_the_cases_it_is_supposed_to(pool
         (
             "a malformed list fails CLOSED",
             Some(serde_json::json!({"key": "confidence", "op": {"op": "has_key"}})),
+            false,
+        ),
+        // `Compare` expected verdicts. The type-guard cases are the load-bearing ones: they pin
+        // that a cross-type bound is an honest empty (ELSE false), not a type-confusion match.
+        // A symmetric mistake — both SQL bodies wrong identically — is what THIS test catches,
+        // and the type-guard cases are where it would show.
+        (
+            "compare gte hit (high >= high)",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "gte",
+                serde_json::json!("high")
+            )])),
+            true,
+        ),
+        (
+            "compare gt miss (high > high is false)",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "gt",
+                serde_json::json!("high")
+            )])),
+            false,
+        ),
+        (
+            "compare numeric gte hit (42 >= 42)",
+            Some(serde_json::json!([compare(
+                "seq",
+                "gte",
+                serde_json::json!(42)
+            )])),
+            true,
+        ),
+        (
+            "compare type guard: numeric bound vs string key → honest empty",
+            Some(serde_json::json!([compare(
+                "confidence",
+                "gte",
+                serde_json::json!(42)
+            )])),
+            false,
+        ),
+        (
+            "compare type guard: string bound vs numeric key → honest empty",
+            Some(serde_json::json!([compare(
+                "seq",
+                "gte",
+                serde_json::json!("42")
+            )])),
+            false,
+        ),
+        (
+            "compare malformed: missing value fails closed",
+            Some(serde_json::json!([
+                {"key": "confidence", "op": {"op": "compare", "direction": "gt"}}
+            ])),
+            false,
+        ),
+        (
+            "compare malformed: unknown direction falls to inner ELSE false",
+            Some(serde_json::json!([
+                {"key": "confidence", "op": {"op": "compare", "direction": "between", "value": "high"}}
+            ])),
             false,
         ),
     ];

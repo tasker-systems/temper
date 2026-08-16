@@ -325,6 +325,16 @@
       ],
       "type": "object"
     },
+    "OrdOp": {
+      "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
+      "enum": [
+        "gt",
+        "gte",
+        "lt",
+        "lte"
+      ],
+      "type": "string"
+    },
     "OutcomeDeclaration": {
       "description": "Which stages come back, and how much of each row.",
       "properties": {
@@ -342,7 +352,7 @@
       "type": "object"
     },
     "PropertyOp": {
-      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither\noperator takes a fragment of a query language; both bind their values.",
+      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
       "oneOf": [
         {
           "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
@@ -372,6 +382,25 @@
           "required": [
             "op",
             "values"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/OrdOp"
+            },
+            "op": {
+              "const": "compare",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "op",
+            "direction",
+            "value"
           ],
           "type": "object"
         }

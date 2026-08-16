@@ -327,7 +327,21 @@ sql_files_current() {
 #            flips `owner_table` to prove the empty answer was the filter and not a dead fixture.
 #        `find_resources_with.rs::a_folded_property_is_not_narrowable`
 #          — the `NOT is_folded` half, which `20260815000050` moved into the base. It is now
-#            asserted in one place and inherited by both wrappers rather than restated in each.
+#          asserted in one place and inherited by both wrappers rather than restated in each.
+#
+# Reviewed 2026-08-16, task 01a001af (the ordering operator):
+#   1. VERDICT — unchanged. The new `compare` arm is a predicate inside the same `CASE q.op`
+#      that `contains` and `has_key` already occupy; it correlates `rp.resource_id = r.id` /
+#      `ep.edge_id = e.id` exactly as they do, so it can no more widen the candidate set than
+#      they can. The `jsonb_typeof` type guard is a NARROWING — it drops cross-type rows to
+#      `ELSE false` — never a widening.
+#   2. EMITTER — untouched. `properties_slot` serializes the caller's `Vec<PropertyPredicate>`
+#      to jsonb; the new variant rides through verbatim, same as `contains` does. No Rust call
+#      shape changed.
+#   3. RESIDUE — unchanged; still source discipline rather than a database permission.
+#   No new ungated FUNCTION: both bodies are `CREATE OR REPLACE` at byte-identical signatures.
+#   The new SQL file is listed because it edits two ungated bodies, which is the same reason
+#   `20260815000010` and `20260815000040` are listed.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -337,6 +351,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260815000020_facets_fail_closed.sql
 20260815000030_property_elements_and_tag_normalization.sql
 20260815000040_resource_property_predicates.sql
+20260816000010_range_operator.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
