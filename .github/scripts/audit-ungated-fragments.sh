@@ -262,6 +262,43 @@ sql_files_current() {
   || true
 }
 
+# The RELATION watch: derives the relation names ungated functions READ (FROM/JOIN targets in
+# their bodies), then finds migration files that CREATE/REPLACE/ALTER those relations. Catches a
+# migration that redefines a view an ungated predicate reads without naming the prefix — the gap
+# `20260815000050` demonstrated. See the RELATION WATCH block above for the full reasoning.
+#
+# The derivation: extract every `FROM <name>` / `JOIN <name>` from every migration file that
+# defines an ungated function, keep only the `kb_*` / `wayfind_*` relation names (filtering out
+# CTE aliases, `unnest`, `jsonb_build_*`, single-letter aliases), then find migration files that
+# `CREATE` (including `OR REPLACE`) or `ALTER` those names.
+sql_relations_current() {
+  # Step 1: find migration files that define ungated functions.
+  local definers
+  definers="$(grep -rlE "CREATE([[:space:]]+OR[[:space:]]+REPLACE)?[[:space:]]+FUNCTION[[:space:]]+${PREFIX}" "$MIGRATIONS_DIR"/*.sql 2>/dev/null || true)"
+
+  # Step 2: extract relation names from FROM/JOIN clauses in those files.
+  local relations
+  relations="$(echo "$definers" | xargs grep -hoE '(FROM|JOIN)[[:space:]]+[a-z_]+' 2>/dev/null \
+    | sed -E 's/^(FROM|JOIN)[[:space:]]+//' \
+    | sort -u \
+    | grep -E '^(kb_|wayfind_)' \
+    | grep -vE '^(kb_resources|kb_chunks|kb_edges|kb_events|kb_profiles)$' \
+    || true)"
+
+  # Step 3: find migration files that CREATE/REPLACE/ALTER those relations.
+  # Build a grep pattern from the relation names and scan all migrations.
+  local pattern
+  pattern="$(echo "$relations" | tr '\n' '|' | sed 's/|$//')"
+  if [[ -z "$pattern" ]]; then
+    return 0
+  fi
+
+  grep -rlE "CREATE([[:space:]]+OR[[:space:]]+REPLACE)?[[:space:]]+(VIEW|TABLE|FUNCTION)[[:space:]]+($pattern)\b|ALTER[[:space:]]+(VIEW|TABLE)[[:space:]]+.*($pattern)\b" "$MIGRATIONS_DIR"/*.sql 2>/dev/null \
+    | sed -E 's|.*/||' \
+    | sort -u \
+    || true
+}
+
 # REVIEWED 2026-08-08 — the defining migration, plus the gated wrappers it re-points, are all in one
 # file. `scripts/measure/gate-shape-comparison.sql` also names the prefix but is not a migration and
 # is not scanned; it is a read-only measurement harness that defines and calls nothing.
@@ -334,6 +371,12 @@ sql_files_current() {
 # guard's scope, which belongs in its own reviewed change rather than as a side effect of a
 # predicate-parity PR. Recorded as a recommendation, not done.
 #
+# `[done — 2026-08-16, task 01a006f4]` The relation watch below IS that widening. It derives the
+# relation names the ungated functions read and watches for migrations that CREATE/REPLACE/ALTER
+# them, so `20260815000050` is now in scope through the `SQL_RELATIONS_BASELINE` rather than the
+# prefix scan. The review below is kept because the entry left the prefix-scan set and the review
+# is the one record that the question was asked.
+#
 # Reviewed 2026-08-15, task 01a00675:
 #   1. VERDICT — unchanged, and the views were never part of it. `p_visible_ids` remains the sole
 #      authorization input to both cores; these relations are consulted only inside correlated
@@ -389,6 +432,44 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260816000020_survey_act.sql
 EOF
 
+# ── THE RELATION WATCH — derived from what the cores READ, not what names them ──
+#
+# `[added — 2026-08-16, task 01a006f4]` The SQL-file scan above watches migrations that MENTION the
+# `__temper_ungated_` prefix. A migration that redefines a RELATION an ungated predicate reads can
+# change what the core sees without naming it — and `20260815000050` did exactly that, redefining
+# `kb_edge_properties` and `kb_resource_properties` after trimming the prose that mentioned the
+# cores. The count fell 9 → 8 and CI went green, which is the guard's own stated failure mode:
+# "a guard's view narrowing while the number moves the reassuring way."
+#
+# This scan closes that gap. It DERIVES the relation names the ungated functions read (FROM/JOIN
+# targets in their bodies), then watches for migrations that CREATE, REPLACE, or ALTER those
+# relations. The watch-set follows the cores rather than being restated beside them — the same
+# "DERIVED, NOT PINNED" discipline the other scans follow.
+#
+# WHAT IT WATCHES: every relation name appearing in a FROM or JOIN clause inside an ungated
+# function body, filtered to those that are VIEWs or functions (the ones a CREATE OR REPLACE can
+# silently change). Base tables (`kb_resources`, `kb_chunks`, `kb_edges`) are excluded — their
+# schema changes are DDL, which is visible and shape-breaking, not the silent redefinition a view
+# swap is.
+#
+# WHAT IT DOES NOT WATCH: base tables, and relations read by non-ungated functions. The first would
+# put most migrations in scope (the task's own warning); the second is not this guard's subject.
+# `resources_visible_to` is the gate itself, not a relation the cores read for data — it is the one
+# thing the cores are handed rather than consulting.
+read -r -d '' SQL_RELATIONS_BASELINE <<'EOF' || true
+20260624000001_canonical_schema.sql
+20260626000001_fts_search_index.sql
+20260709000002_kb_resource_workflow_props_view.sql
+20260712000030_region_anchor_expand.sql
+20260728000010_workflow_props_status.sql
+20260731000050_wayfind_per_map_fairness.sql
+20260808000020_search_arm_shared_interiority.sql
+20260815000010_edge_property_predicates.sql
+20260815000030_property_elements_and_tag_normalization.sql
+20260815000040_resource_property_predicates.sql
+20260815000050_owner_agnostic_property_view.sql
+EOF
+
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
 # so prose about the hazard does not move the count — the same treatment audit-grant-sinks.sh gives
 # its own definition lines.
@@ -405,11 +486,13 @@ rust_current() {
 
 SQL_CURRENT="$(sql_current)"
 SQL_FILES_CURRENT="$(sql_files_current)"
+SQL_RELATIONS_CURRENT="$(sql_relations_current)"
 RUST_CURRENT="$(rust_current)"
 
 if [[ "${1:-}" == "--list" ]]; then
   echo "--- SQL functions:"; echo "$SQL_CURRENT"
   echo "--- SQL files:";     echo "$SQL_FILES_CURRENT"
+  echo "--- SQL relations:"; echo "$SQL_RELATIONS_CURRENT"
   echo "--- Rust sites:";    echo "$RUST_CURRENT"
   exit 0
 fi
@@ -417,9 +500,11 @@ fi
 if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then
   echo "--- SQL functions:"; echo "$SQL_CURRENT"
   echo "--- SQL files:";     echo "$SQL_FILES_CURRENT"
+  echo "--- SQL relations:"; echo "$SQL_RELATIONS_CURRENT"
   echo "--- Rust sites:";    echo "$RUST_CURRENT"
-  echo "^^^ copy the blocks above into SQL_BASELINE / SQL_FILES_BASELINE / RUST_BASELINE, only" >&2
-  echo "    after reviewing each new site for who supplies its RBAC verdict." >&2
+  echo "^^^ copy the blocks above into SQL_BASELINE / SQL_FILES_BASELINE /" >&2
+  echo "    SQL_RELATIONS_BASELINE / RUST_BASELINE, only after reviewing each" >&2
+  echo "    new site for who supplies its RBAC verdict." >&2
   exit 0
 fi
 
@@ -429,7 +514,7 @@ fail=0
 # while asserting nothing at all, and the failure mode is mundane — a renamed directory, a changed
 # CREATE spelling. This is the guard `audit-grant-sinks.sh` learned to add after its SQL half
 # silently stopped covering the authoritative write.
-for pair in "SQL functions:$SQL_CURRENT" "SQL files:$SQL_FILES_CURRENT" "Rust sites:$RUST_CURRENT"; do
+for pair in "SQL functions:$SQL_CURRENT" "SQL files:$SQL_FILES_CURRENT" "SQL relations:$SQL_RELATIONS_CURRENT" "Rust sites:$RUST_CURRENT"; do
   label="${pair%%:*}"
   value="${pair#*:}"
   if [[ -z "$value" ]]; then
@@ -454,9 +539,10 @@ check() {
   fi
 }
 
-check "sqlfns"   "$SQL_BASELINE"       "$SQL_CURRENT"       "-u"
-check "sqlfiles" "$SQL_FILES_BASELINE" "$SQL_FILES_CURRENT" "-u"
-check "rust"     "$RUST_BASELINE"      "$RUST_CURRENT"      "-k2"
+check "sqlfns"     "$SQL_BASELINE"           "$SQL_CURRENT"           "-u"
+check "sqlfiles"   "$SQL_FILES_BASELINE"     "$SQL_FILES_CURRENT"     "-u"
+check "sqlrel"     "$SQL_RELATIONS_BASELINE" "$SQL_RELATIONS_CURRENT" "-u"
+check "rust"       "$RUST_BASELINE"          "$RUST_CURRENT"          "-k2"
 
 if [[ "$fail" == "0" ]]; then
   echo "audit-ungated-fragments: OK — $(printf '%s\n' "$SQL_CURRENT" | grep -c .) ungated function(s), $(printf '%s\n' "$RUST_CURRENT" | grep -c .) production file(s) naming one."
