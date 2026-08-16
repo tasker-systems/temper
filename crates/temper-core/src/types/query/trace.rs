@@ -117,6 +117,63 @@ pub struct StageTrace {
     /// Conflates the three on purpose — see [`super::envelope::StageResult::input_unusable`].
     /// Naming the invisible case alone would make the trace a single-probe existence oracle.
     pub input_unusable: i64,
+    /// How many ids this stage PRODUCED — the mirror of [`Self::input_ids`], and what lets a
+    /// reader ask *"did this stage earn its place?"* rather than only *"did it find anything?"*
+    ///
+    /// Carried for EVERY stage, which is the point: an intermediate ships no rows, and a
+    /// combinator can never be a returned stage at all, so for those this is the only account of
+    /// their size there is.
+    ///
+    /// **It counts what the corpus yielded, not what came back.** For a returned stage it may
+    /// exceed that stage's hydrated rows, because an id that stopped being visible between the two
+    /// statements is dropped from the rows and still counted here. The two are different questions
+    /// and only the gap between them is interesting.
+    // # Why it is here and not on `StageResult`, and why the pair rule does not reach it
+    //
+    // `[added — 2026-08-15]` The number was already computed, shipped across the wire, read, spent
+    // on one boolean (`Answered` vs `Empty`) and dropped. So the trace disclosed *whether* and
+    // never *how much*. This is that number reaching the wire — plumbing, not a fetch.
+    //
+    // `input_ids`, `input_unusable` and `refusal` are each duplicated onto `StageResult` because
+    // the trace covers every stage and the results only the returned ones, so disagreeing copies
+    // would leave a reader unable to tell which was right. **This field inverts that argument**: a
+    // returned stage already ships its rows, so a count beside them would be a THIRD spelling of
+    // one fact, and the three would legitimately disagree by the hydration drop above.
+    //
+    // The workaround it replaces — recover it from a downstream stage's `input_ids` — fails on the
+    // two shapes that matter. A combinator contributes no per-input entries, only a SUM, so two
+    // arms collapse into one number identifying neither; and a terminal combinator has no
+    // downstream. Measured on the register-coverage composition `[2026-08-15]`: seven stages, of
+    // which exactly one — the returned one — had a knowable count.
+    //
+    // # Why HOW MANY is disclosable where the neighbouring numbers are conflated
+    //
+    // `[ruled — 2026-08-15, Pete]` `input_unusable` conflates invisible / nonexistent / malformed
+    // because splitting it would be a single-probe existence oracle: it counts CALLER-SUPPLIED ids,
+    // so a caller naming one id and reading the counter learns whether that id exists.
+    // `produced_ids` is structurally the other thing — it counts ROWS THE CORPUS YIELDED, never ids
+    // the caller named, so there is no id to probe with.
+    //
+    // And every row it counts is already inside this principal's visibility: every act's core call
+    // takes the visible set as its first argument (`emit_ungated_core_call` in
+    // `temper_substrate::readback::query_plan`), and a combinator projects over those CTEs, so it
+    // inherits the gate. A cardinality over the caller's own visible corpus, for a question the
+    // caller authored, is the class of thing `Extent` and `total` already disclose.
+    //
+    // The design had already ruled it: `final_select`'s doc says *"a tally carries how many, never
+    // which"*, and NULLs the id, kind, quantity and `via` columns by construction so membership
+    // stays the pipe's internal currency. How-many was the disclosable half from the start. And the
+    // hardest case shipped AHEAD of this field — `NarrowedBy::admitted` on a `difference` is a
+    // combinator's produced count, on the wire since 2026-08-15 — so generalizing it adds no new
+    // class of disclosure, only the missing coverage.
+    //
+    // # The trap
+    //
+    // **Never fetch this separately.** The tally rides in the SAME statement as the hits, and
+    // `final_select`'s doc says why: asking again would answer from a DIFFERENT SNAPSHOT, and *"a
+    // trace that disagrees with the rows beside it is worse than no trace: it reads as disclosure
+    // and is not."*
+    pub produced_ids: i64,
     pub narrowed_by: Vec<NarrowedBy>,
 }
 
@@ -151,6 +208,7 @@ mod tests {
             inputs: vec![],
             input_ids: 0,
             input_unusable: 0,
+            produced_ids: 0,
             narrowed_by: vec![],
         }
     }

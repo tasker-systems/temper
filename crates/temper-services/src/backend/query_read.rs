@@ -358,6 +358,10 @@ struct StageNumbers {
     refusal: Option<ActRefusal>,
     input_ids: i64,
     input_unusable: i64,
+    /// What the stage produced, in ids. Derived from the same tally the disposition below is
+    /// derived from — one read, two consumers, so a stage can never report `answered` beside a
+    /// zero count.
+    produced_ids: i64,
     /// One entry per input. `[widened — 2026-08-14]` was a `relation`/`input_source` pair
     /// describing *the* input; a stage carrying a seed AND a bound has two, and a single relation
     /// filled from whichever came first is half the truth with no marker saying so.
@@ -430,6 +434,9 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
         refusal,
         input_ids,
         input_unusable: tally.map(|t| t.unusable).unwrap_or(0),
+        // The same `produced` the disposition above was derived from, now also reaching the wire
+        // rather than being spent on one boolean and dropped.
+        produced_ids: produced,
         inputs,
     }
 }
@@ -561,6 +568,7 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         inputs: n.inputs,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
+        produced_ids: n.produced_ids,
         narrowed_by: narrowed_by(node, rows),
     })
 }
@@ -1451,6 +1459,100 @@ mod tests {
             Some(6),
             "|tasks| - |gap|, which is exactly how many the subtraction removed — NOT |declared|, \
              which counts rows that were never in the minuend to begin with"
+        );
+    }
+
+    /// **The count exists at every layer except the one the reader sees** — and the two ways a
+    /// reader was told to recover it both fail on the shape this test builds.
+    ///
+    /// `final_select` emits a `produced` tally arm for EVERY stage, returned or not, and its own
+    /// doc says why they ride in the same statement: *"that is what lets a reader decide whether
+    /// stage 2 earned its place"*. [`stage_numbers`] read it, spent it on one boolean
+    /// (`answered` vs `empty`) and dropped it. So a reader learned **whether** a stage produced
+    /// anything and never **how much**.
+    ///
+    /// The standing workaround is that a downstream stage's `input_ids` recovers it. It does not,
+    /// in two ways that compound, and this is the register-coverage plan measured on prod
+    /// `[2026-08-15]` — where **not one of seven stages' counts was knowable** except the single
+    /// returned one:
+    ///
+    ///   * **A combinator contributes no per-input entries**, only a SUM (the `StageNode::Combine`
+    ///     arm of [`stage_numbers`]). So `witnessing` and `enabling` — *how many resources declare
+    ///     each key*, the question's actual subject — collapse into one number, `47`, and neither
+    ///     is recoverable from it.
+    ///   * **A terminal combinator has no downstream at all.** `declared` is consumed by nothing
+    ///     here, so there is no `input_ids` anywhere carrying its size.
+    ///
+    /// The asymmetric arm counts are what make this bite: with `20` and `27` the sum identifies
+    /// neither, where two equal arms would let a reader halve it and be right by accident.
+    #[test]
+    fn every_stage_discloses_how_many_it_produced_including_the_ones_no_downstream_can_recover() {
+        let v = plan(
+            vec![
+                // The returned stage is a ranking act, because a selection orders nothing and
+                // `StageNotReturnable` refuses it — the same constraint that forces the real
+                // composition to return its walk and read the answer's size off the trace.
+                act_node("tasks", ActName::FindExact, None),
+                act_node("witnessing", ActName::FindResourcesWith, None),
+                act_node("enabling", ActName::FindResourcesWith, None),
+                StageNode::Combine(CombineNode {
+                    name: name("declared"),
+                    op: CombineOp::Union,
+                    inputs: vec![name("witnessing"), name("enabling")],
+                }),
+            ],
+            // Neither the arms nor the combinator is returned, so every count this test asserts
+            // is knowable from the trace or not at all.
+            vec!["tasks"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![
+                tally("tasks", 33, 0),
+                tally("witnessing", 20, 0),
+                tally("enabling", 27, 0),
+                tally("declared", 47, 0),
+            ],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        let produced = |stage: &str| {
+            r.trace
+                .stages
+                .iter()
+                .find(|s| s.stage == name(stage))
+                .unwrap_or_else(|| panic!("every stage is traced; {stage} was not"))
+                .produced_ids
+        };
+
+        assert_eq!(
+            produced("witnessing"),
+            20,
+            "a non-returned act stage's own row count"
+        );
+        assert_eq!(
+            produced("enabling"),
+            27,
+            "the sibling arm's, which the sum it is folded into cannot identify"
+        );
+        assert_eq!(
+            produced("declared"),
+            47,
+            "a terminal combinator's, which no downstream `input_ids` exists to carry"
+        );
+
+        let combinator = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("declared"))
+            .unwrap();
+        assert_eq!(
+            combinator.input_ids, 47,
+            "the incumbent field is the SUM of the arms — the very conflation `produced_ids` on \
+             each arm is what resolves, so a reader can now see 20 and 27 beside it rather than \
+             only their total"
         );
     }
 

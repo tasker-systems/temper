@@ -375,6 +375,11 @@
       },
       "type": "array"
     },
+    "produced_ids": {
+      "description": "How many ids this stage PRODUCED — the mirror of [`Self::input_ids`], and what lets a\nreader ask *\"did this stage earn its place?\"* rather than only *\"did it find anything?\"*\n\nCarried for EVERY stage, which is the point: an intermediate ships no rows, and a\ncombinator can never be a returned stage at all, so for those this is the only account of\ntheir size there is.\n\n**It counts what the corpus yielded, not what came back.** For a returned stage it may\nexceed that stage's hydrated rows, because an id that stopped being visible between the two\nstatements is dropped from the rows and still counted here. The two are different questions\nand only the gap between them is interesting.",
+      "format": "int64",
+      "type": "integer"
+    },
     "refusal": {
       "anyOf": [
         {
@@ -397,6 +402,7 @@
     "disposition",
     "input_ids",
     "input_unusable",
+    "produced_ids",
     "narrowed_by"
   ],
   "title": "StageTrace",

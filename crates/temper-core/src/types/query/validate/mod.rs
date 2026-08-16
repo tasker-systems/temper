@@ -2630,11 +2630,21 @@ mod tests {
     ///
     /// **The difference cannot be the returned stage.** A combinator's rows have no single act to
     /// score them (`StageNotReturnable`), so the answer's stage cannot be asked for directly — the
-    /// composition returns the walk, and `gap`'s size is read from its trace. That is not a
-    /// formality: [`crate::types::query::trace::StageTrace`] carries **no produced count**, so a
-    /// terminal combinator's row count is otherwise recoverable only from a *downstream* stage's
-    /// `input_ids`, and `gap` has no downstream. Its `narrowed_by` disclosure is what makes the
-    /// answer readable at all.
+    /// composition returns the walk, and `gap`'s size is read from its trace.
+    ///
+    /// `[amended — 2026-08-15]` This read *"[`crate::types::query::trace::StageTrace`] carries no
+    /// produced count, so a terminal combinator's row count is otherwise recoverable only from a
+    /// downstream stage's `input_ids`, and `gap` has no downstream. Its `narrowed_by` disclosure is
+    /// what makes the answer readable at all."* **The first clause is now false**:
+    /// [`crate::types::query::trace::StageTrace::produced_ids`] carries it for every stage, which
+    /// is what that sentence was evidence for the absence of.
+    ///
+    /// What survives is the part that was never about the count. `narrowed_by` on a difference
+    /// names **which arm was the subtrahend** — a combinator contributes no per-input entries, so
+    /// `a − b` and `b − a` are otherwise the same trace — and reports `excluded` as
+    /// `|minuend| − |result|` rather than `|subtrahend|`, an arithmetic a reader holding three raw
+    /// counts can get wrong in the flattering direction. So the two disclosures are not redundant:
+    /// this one answers *how many*, that one answers *what narrowed what*.
     #[test]
     fn the_register_coverage_question_is_expressible_as_a_composition() {
         let selection = |name: &str, filter: ResourceFilter| {
