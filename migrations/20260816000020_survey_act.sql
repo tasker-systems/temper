@@ -115,8 +115,9 @@ LANGUAGE sql STABLE AS $$
     JOIN LATERAL (
       SELECT ch.embedding
         FROM kb_chunks ch
-       WHERE ch.home_resource_id = rm.member_id
-       ORDER BY ch.chunk_ordinal
+       WHERE ch.resource_id = rm.member_id
+         AND ch.is_current
+       ORDER BY ch.chunk_index
        LIMIT 1
     ) ch ON true
    WHERE rm.member_id = ANY(p_visible_ids)
