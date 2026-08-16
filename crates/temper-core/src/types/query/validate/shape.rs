@@ -487,7 +487,10 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // server invent the question. No server builds its way out of either.
     if matches!(
         inv.act,
-        ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
+        ActName::FindExact
+            | ActName::FindAboutAnywhere
+            | ActName::FindAboutWithin
+            | ActName::Survey
     ) {
         // `[widened — 2026-08-09]` An empty or whitespace-only query is the SAME omission as an
         // absent intention, and leaving it out here sent it somewhere false: the server-side embed
@@ -505,11 +508,26 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         // refusal to `name`, so the move is one field access; what changes is that a sibling stage's
         // intention no longer satisfies this one. That is the point: two find stages may now ask
         // different questions, and each must bring its own.
+        //
+        // `[added — 2026-08-16]` `Survey` joins the intention-required list. Without a query,
+        // survey collapses into `cogmap_read(shape)` / `context_read(shape)`, which already serve
+        // pure orientation. Survey's distinct value is query-relevance within a scope's region
+        // structure: "what does this scope know *about X*?" The within-region ranking is by
+        // `query_cos` (the resource's embedding similarity to the query), which is meaningless
+        // without a query. The error message says "this act" rather than "this find act" because
+        // survey is not a find act.
+        let is_survey = matches!(inv.act, ActName::Survey);
         let missing = match inv.intention.as_ref() {
-            None => Some("this find act carries no intention, and a find act needs a question"),
-            Some(i) if i.query.trim().is_empty() => {
-                Some("this find act's intention carries no question; its query text is empty")
-            }
+            None => Some(if is_survey {
+                "this survey act carries no intention, and survey needs a question"
+            } else {
+                "this find act carries no intention, and a find act needs a question"
+            }),
+            Some(i) if i.query.trim().is_empty() => Some(if is_survey {
+                "this survey act's intention carries no question; its query text is empty"
+            } else {
+                "this find act's intention carries no question; its query text is empty"
+            }),
             Some(_) => None,
         };
         if let Some(detail) = missing {

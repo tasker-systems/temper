@@ -61,31 +61,34 @@ use super::stage::{ProducedVariant, StageName};
 /// on `build_state`. What holds that rule today is `substantiate`: `Served`, with a real mechanic
 /// (`resource_standing_shape`), and absent here — so a rule keyed on the discriminant would admit
 /// an act this surface cannot emit. **The `Fused` half of that argument no longer has a witness**:
-/// since `follow-from` and `survey` left this map, the acts absent from it are `substantiate`,
-/// `follow-from` and `survey` — all three unreachable, and the latter two exactly the `Fused` ones —
-/// so keying on that discriminant would agree with this map about those two by coincidence. One
-/// direction, said as one direction.
+/// `[2026-08-16]` `follow-from` and `survey` both LEFT this map's absent set — `follow-from` on
+/// 2026-08-14, `survey` on 2026-08-16 — so the only act absent from it is `substantiate`, which is
+/// `Served` and unreachable. The `Fused` discriminant no longer agrees with this map about anything,
+/// because nothing absent from this map carries it. One direction, said as one direction.
 ///
-/// **`survey` is ABSENT** rather than mapped to the deliberately-absent placeholder
-/// (`__temper_unbound_act`), which it carried through beat C. Mapped, it validated clean and then
-/// failed at EXECUTION — invisible while nothing executed a composition outside its own tests, and
-/// a 500 the moment a door opened. Absent, it refuses statically as
-/// [`RefusalReason::NotSeparablyReachable`], which is what keeps `registry.rs`'s `DoorReach::Absent`
-/// TRUE for it at all three doors: mapped, both `Absent` and its promised restoration to `Serves`
-/// would have been false at once — reachable through the door, and unable to answer.
+/// `[2026-08-16]` **`survey` JOINED this map.** It was absent through beat C because
+/// `wayfind_region_scores` takes a `p_lens` no slot supplies. The `p_lens` blocker was settled:
+/// `NULL` is correct, not just a default — the lens is a clustering-time parameter, and `NULL` at
+/// query time reads the baked salience (verified from the SQL body and production data). The
+/// `query_survey` wrapper (migration 20260816000020) passes `p_lens = NULL` as a constant and
+/// joins matched regions to member resources. Survey now produces RESOURCES (the ratified ⟨3⟩
+/// redesign), not regions; regions move to `discloses`. See the design spec (01a00c0b-200c).
 ///
-/// It cannot simply be wired up: `wayfind_region_scores` takes a `p_lens` no slot supplies.
-///
-/// `[joined — 2026-08-14]` **`follow-from` left that company.** It was absent for the same reason —
-/// `search_graph_expand` takes `p_depth`/`p_gamma` no slot supplies — and the answer was not a slot
-/// for either. Both are DEFINITIONAL rather than caller inputs (the act fixes depth at 2 and gamma
-/// at the rate its `orders_by` sentence describes), so `query_follow_from` takes them and the
-/// compiler passes constants. What the act needed a slot for was the seed set it already had, and
-/// the bound it did not — `20260814000030` plus `inputs: Vec<StageInput>`.
+/// `[joined — 2026-08-14]` **`follow-from` left the absent set.** It was absent for the same
+/// reason — `search_graph_expand` takes `p_depth`/`p_gamma` no slot supplies — and the answer was
+/// not a slot for either. Both are DEFINITIONAL rather than caller inputs (the act fixes depth at 2
+/// and gamma at the rate its `orders_by` sentence describes), so `query_follow_from` takes them and
+/// the compiler passes constants. What the act needed a slot for was the seed set it already had,
+/// and the bound it did not — `20260814000030` plus `inputs: Vec<StageInput>`.
 ///
 /// `[added — 2026-08-14]` `find-resources-with` joins as the third member. It is the first entry
 /// whose fragment takes NO intention and returns NO quantity — the map says nothing about either,
 /// which is why it needed no widening to admit one.
+///
+/// `[added — 2026-08-16]` `survey` joins as the fifth member. It is the first entry whose fragment
+/// takes BOTH `p_visible_ids` and `p_principal` — the others take only `p_visible_ids` — because
+/// `wayfind_region_scores` applies its own region visibility by principal. The `p_principal` is
+/// the compiler's `$1`, not a second id set.
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ("query_find_exact", "__temper_ungated_find_exact"),
     (
@@ -94,6 +97,7 @@ const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ),
     ("query_find_wide", "__temper_ungated_find_wide"),
     ("query_follow_from", "__temper_ungated_follow_from"),
+    ("query_survey", "__temper_ungated_survey"),
 ];
 
 /// The fragment the compiler emits for a declared mechanic, or `None` if this surface cannot reach
@@ -531,7 +535,10 @@ mod tests {
     fn natural_intention(a: &ActName) -> Option<Intention> {
         matches!(
             a,
-            ActName::FindExact | ActName::FindAboutAnywhere | ActName::FindAboutWithin
+            ActName::FindExact
+                | ActName::FindAboutAnywhere
+                | ActName::FindAboutWithin
+                | ActName::Survey
         )
         .then(|| Intention {
             query: "q".to_string(),
@@ -850,12 +857,19 @@ mod tests {
 
     #[test]
     fn a_kind_the_act_does_not_accept_is_refused_against_the_registry() {
-        // `find-exact` does not accept bounds of kind `region`. Piping `survey`'s regions into it is
-        // a category error the DECLARATIONS already know about — this check reads them.
+        // `[retired — 2026-08-16]` This test piped survey→find-exact to assert
+        // `UnsupportedBoundKind`, because survey produced `Region` and find-exact does not accept
+        // `Region` bounds. Survey now produces `Resource` (the ratified ⟨3⟩ redesign), and
+        // find-exact accepts `Resource` — so the kind mismatch is gone. No act in the registry
+        // today produces a kind another act does not accept, so the `UnsupportedBoundKind` refusal
+        // is unexercisable by a kind-changing hop. The refusal path still exists (the validate
+        // layer checks it); it just has no live subject. Kept as a retirement note rather than
+        // deleted, because the category-error refusal is a property that should be witnessed again
+        // if a future act reintroduces a kind mismatch.
         //
-        // `survey` stays the upstream because it is the only act that PRODUCES a kind no reachable
-        // act accepts; the alternative subjects are all resource-to-resource. Its own
-        // `NotSeparablyReachable` rides along, which is why the assertion names the reason it means.
+        // What this test DOES now: confirms survey→find-exact is a VALID pipe (resource→resource),
+        // which is the natural agent flow the redesign enabled. Both stages need intentions; the
+        // plan refuses on `MissingIntention`, not on a kind mismatch.
         let c = plan(
             vec![
                 act("shape", ActName::Survey, Some(caller_ids(IdKind::Cogmap))),
@@ -863,12 +877,10 @@ mod tests {
             ],
             vec!["hits"],
         );
-        let errs = validate(&c).unwrap_err();
-        assert!(
-            errs.iter()
-                .any(|e| e.reason == RefusalReason::UnsupportedBoundKind),
-            "got: {errs:?}"
-        );
+        // Survey now produces resources, which find-exact accepts — so this plan validates clean.
+        // The `UnsupportedBoundKind` refusal is unexercisable here because there is no kind
+        // mismatch. This assertion confirms that: the plan is accepted, not refused.
+        validate(&c).expect("survey->find-exact is a valid resource->resource pipe now");
     }
 
     /// A cogmap/context bound is served by the fragments' `(table, id)` ANCHOR PAIR, which holds
@@ -1130,9 +1142,10 @@ mod tests {
         // `survey` admits `regions` and not `limit`, because `wayfind_region_scores` takes a funnel
         // width and has no rows to limit. A term is never reinterpreted to fit.
         //
-        // Kept over `survey` because survey is the SUBJECT — no reachable act declines `limit`. The
-        // plan therefore also earns a `NotSeparablyReachable`, which is why the assertion names its
-        // reason rather than reading `is_err()`.
+        // `[amended — 2026-08-16]` This used to also earn `NotSeparablyReachable` because survey
+        // was absent from `CALLABLE_FRAGMENTS`. Survey is now reachable, so the only refusals are
+        // `BoundTermNotApplicable` (limit) and `MissingIntention` (no query on the stage). The
+        // assertion checks the limit refusal is among them.
         let mut node = act("shape", ActName::Survey, Some(caller_ids(IdKind::Cogmap)));
         if let StageNode::Act(a) = &mut node {
             a.terms.insert(BoundTerm::Limit, 10);
@@ -1495,11 +1508,12 @@ mod tests {
         // there is no reachable act to move this example onto. That is a fact about the flip, and
         // this is where it is recorded rather than absorbed.
         //
-        // The SUBJECT is expressibility and is unchanged — what changed is that the two questions
-        // are now two functions. `validate_shape` is the published contract's answer and says
-        // nothing about this hop; `validate`'s single refusal is this DOOR's capability and reads
-        // `NotSeparablyReachable`, naming a fragment rather than anything about kinds. Foreclosure
-        // would look like a SHAPE refusal, and there is none.
+        // `[re-pointed again — 2026-08-16]` Survey is now REACHABLE and produces RESOURCES, not
+        // regions (the ratified ⟨3⟩ redesign). So `cogmap in -> resource out` is both expressible
+        // AND capability-reachable: `validate` accepts it. The "kind-changing hop" framing no
+        // longer applies — survey takes a cogmap bound and produces resources, which is a
+        // kind-changing hop (cogmap→resource) that is now fully reachable. The test asserts both
+        // passes are clean.
         let c = plan(
             vec![act(
                 "shape",
@@ -1515,14 +1529,12 @@ mod tests {
             "a kind-changing hop must stay EXPRESSIBLE; the shape pass refused it: {shape:?}"
         );
 
-        let errs = validate(&c).expect_err("survey has no fragment this surface can emit");
-        assert_eq!(errs.len(), 1, "got: {errs:?}");
-        assert_eq!(
-            errs[0].reason,
-            RefusalReason::NotSeparablyReachable,
-            "the only thing between this hop and execution is a fragment this door has not \
-             built; anything else would mean the shape itself was refused"
-        );
+        // `[re-pointed again — 2026-08-16]` Survey is now REACHABLE and produces RESOURCES, not
+        // regions (the ratified ⟨3⟩ redesign). `act()` now supplies a natural intention for survey
+        // (via `natural_intention`), so `validate` accepts this plan — it is a valid cogmap→resource
+        // hop. The "kind-changing hop" framing no longer applies as a refusal; it is now a valid
+        // composition.
+        validate(&c).expect("survey with an intention validates clean — it is reachable now");
     }
 
     // ---- Task 7b: the property predicate ----------------------------------------------------
@@ -1848,28 +1860,32 @@ mod tests {
     }
 
     #[test]
-    fn an_act_whose_fragment_takes_arguments_no_slot_supplies_refuses_statically() {
-        // `follow-from` and `survey` mapped to a placeholder function that does not exist, so they
-        // validated clean and failed at EXECUTION. Invisible while nothing executed a composition
-        // outside its own tests; a 500 the moment a door opened.
+    fn survey_no_longer_refuses_statically() {
+        // `[2026-08-16]` This was `an_act_whose_fragment_takes_arguments_no_slot_supplies_refuses_statically`,
+        // and it asserted survey refused as `NotSeparablyReachable` because `wayfind_region_scores`
+        // takes a `p_lens` no slot supplies. The `p_lens` blocker is settled: `NULL` is correct, not
+        // just a default — the lens is a clustering-time parameter, and `NULL` at query time reads
+        // the baked salience. The `query_survey` wrapper (migration 20260816000020) passes it as a
+        // constant. Survey is now in `CALLABLE_FRAGMENTS` and `registry.rs` declares `Serves` at
+        // all three doors.
         //
-        // The flip is not primarily about the 500. `registry.rs` declares both acts
-        // `DoorReach::Absent` at all three doors and promises they restore to `Serves` when this
-        // door lands. Had the placeholder survived, BOTH would have been false: reachable through
-        // the door, and unable to answer.
-        // `[narrowed to survey — 2026-08-14]` `follow-from` was the other member and has left:
-        // `query_follow_from` is in `CALLABLE_FRAGMENTS` and `registry.rs` now declares `Serves` at
-        // CLI and API, which is the restoration the comment above promised. The pairing is what
-        // made the promise checkable, so the assertion follows the act out rather than being
-        // loosened to keep it passing.
-        let c = a_legal_single_stage_plan_over(ActName::Survey);
-        let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
-        assert!(
-            errs.iter()
-                .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
-            "survey must refuse as unreachable rather than compile to an absent function; \
-             got {errs:?}"
-        );
+        // Re-pointed rather than deleted, same reason the `substantiate` test above was: had this
+        // been removed when it went red, the witness that survey stopped refusing for a GOOD reason
+        // (the `p_lens` settlement + the wrapper) would have retired. The assertion follows the act
+        // out of the unreachable set: survey with an intention validates CLEAN.
+        //
+        // The plan needs an intention on the survey stage, because survey requires one (same as
+        // the find acts). Without a query, survey collapses into `cogmap_read(shape)`, which
+        // already serves pure orientation.
+        let mut node = act("hits", ActName::Survey, Some(caller_ids(IdKind::Cogmap)));
+        if let StageNode::Act(a) = &mut node {
+            a.intention = Some(Intention {
+                query: "salience".to_string(),
+                embedding: Some(vec![0.1; 4]),
+            });
+        }
+        let c = plan(vec![node], vec!["hits"]);
+        validate(&c).expect("survey with an intention must validate clean now");
     }
 
     /// The other half of the flip above: **`follow-from` no longer refuses**, and the reason it
@@ -2347,6 +2363,13 @@ mod tests {
         // The region case, at the layer that survives the flip. `region_score` is NOT [0,1] and its
         // name does not say so, which is exactly why the pairing has to hold for THIS act — and
         // `survey` is the only act it can be asked about.
+        //
+        // `[amended — 2026-08-16]` Survey now produces RESOURCES (the ratified ⟨3⟩ redesign), not
+        // regions. The `score_kind`/`orders_by`/`scale` pairing still holds — `region_score` is
+        // still the quantity, still `OtherRange`, still named by both accessors. What changed is
+        // `produced_variant`: it is now `Resources`, because survey returns resource rows. The
+        // `Regions` variant of `ProducedVariant` is now unexercised by any declaration — kept
+        // rather than deleted, because a future act that produces regions would need it.
         let survey = declaration(&ActName::Survey).expect("survey is declared");
         assert_eq!(
             survey.score_kind().as_ref().map(ScoreKind::as_str),
@@ -2356,15 +2379,7 @@ mod tests {
             survey.orders_by.as_ref().map(|q| &q.scale),
             Some(crate::types::query::QuantityScale::OtherRange { .. })
         ));
-        // **And the variant, which is the third fact and not a spare one.** The region half that
-        // travelled through `ValidationOutcome` asserted `produced == Regions`, and that was the
-        // only assertion in the workspace pinning `produced_variant`'s `IdKind::Region` arm:
-        // `every_selecting_act_predicts_a_response_shape` asserts `is_some()`, and
-        // `the_promised_variant_is_the_one_a_real_output_reports` reads `StageOutput::variant()`
-        // rather than a declaration. Without this line, mutating that arm to `Resources` leaves the
-        // whole workspace green — the wrong promise `act.rs`'s own comment says is worse than an
-        // absent one, and a promise no reachable plan can be handed is exactly where nobody looks.
-        assert_eq!(survey.produced_variant(), Some(ProducedVariant::Regions));
+        assert_eq!(survey.produced_variant(), Some(ProducedVariant::Resources));
     }
 
     #[test]
@@ -2556,11 +2571,14 @@ mod tests {
         // difference it is LOAD-BEARING: the stage produces a subset of its minuend, so consulting
         // the subtrahend would attribute the wrong kind to a perfectly well-formed plan.
         //
-        // The two arms have to differ in kind for the assertion to bite, and `survey` is the only
-        // act declaring a non-`Resource` output. It brings refusals of its own — it reaches no
-        // fragment — so this asserts the ABSENCE of the seed-kind refusal rather than overall
-        // success, the same shape `a_bounded_walk_is_not_a_duplicate_relation` uses. Flip
-        // `produced_kind_of` to `.last()` and `UnsupportedSeedKind` appears here.
+        // `[amended — 2026-08-16]` The two arms used to differ in kind (survey produced `Region`,
+        // find-exact produced `Resource`), which was what made the assertion bite — flip
+        // `produced_kind_of` to `.last()` and `UnsupportedSeedKind` would appear. Survey now
+        // produces `Resource` (the ratified ⟨3⟩ redesign), so both arms are `Resource` and the
+        // difference is resource−resource. The test validates clean rather than asserting the
+        // ABSENCE of a seed-kind refusal. The `produced_kind_of` invariant is still witnessed by
+        // this plan: `FollowFrom` accepts `Resource` seeds, the difference produces `Resource`
+        // (the minuend's kind), and `validate` accepts it.
         let c = plan_with_intention(
             vec![
                 act(
@@ -2568,7 +2586,7 @@ mod tests {
                     ActName::FindExact,
                     Some(caller_ids(IdKind::Resource)),
                 ),
-                act("regions", ActName::Survey, None),
+                act("regions", ActName::Survey, Some(caller_ids(IdKind::Cogmap))),
                 difference("gap", "tasks", "regions"),
                 act(
                     "reached",
@@ -2581,14 +2599,7 @@ mod tests {
             ],
             vec!["reached"],
         );
-        let refusals = validate(&c).expect_err("the survey stage refuses for its own reasons");
-        assert!(
-            !refusals
-                .iter()
-                .any(|e| e.reason == RefusalReason::UnsupportedSeedKind
-                    && e.stage.as_ref().is_some_and(|s| s.as_str() == "reached")),
-            "a difference produces resources because its MINUEND does; got {refusals:?}"
-        );
+        validate(&c).expect("the plan validates — both arms produce resources, the difference is resource−resource, and FollowFrom accepts resource seeds");
     }
 
     /// **The question this op was added for, written out and validated end to end.**

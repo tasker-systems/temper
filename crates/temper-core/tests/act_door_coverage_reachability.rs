@@ -460,6 +460,19 @@ fn the_shared_params_doors_declare_exactly_the_terms_that_type_carries() {
                 continue;
             };
 
+            // `[added — 2026-08-16]` Acts served through `/api/query` (the `Composition` type)
+            // are NOT served by `SearchParams`, so this test does not speak for their terms.
+            // `SearchParams` is the `/api/search` door; `/api/query` carries its own bound terms
+            // in the composition envelope. `emitted_fragment_for` returns `Some` for acts in
+            // `CALLABLE_FRAGMENTS` — the `/api/query`-served set.
+            if temper_core::types::query::emitted_fragment_for(
+                act.served_by.as_deref().unwrap_or(""),
+            )
+            .is_some()
+            {
+                continue;
+            }
+
             let derived: BTreeSet<BoundTerm> = act
                 .accepts_bound_terms
                 .iter()
@@ -607,6 +620,10 @@ fn the_cells_tier_one_cannot_discriminate_are_exactly_these() {
         // `CALLABLE_FRAGMENTS`, so tier 1 stops speaking for it and its three cells rest on review
         // — including the MCP `Absent`, which no oracle here can distinguish from the other two.
         ActName::FollowFrom,
+        // `[joined — 2026-08-16]` Reachable through `/api/query` now that `query_survey` is in
+        // `CALLABLE_FRAGMENTS`. Survey serves all three doors (it is a knowledge subject, so
+        // `subject-decides-the-door` requires it). Its three cells rest on review.
+        ActName::Survey,
         ActName::Substantiate,
     ]
     .into_iter()

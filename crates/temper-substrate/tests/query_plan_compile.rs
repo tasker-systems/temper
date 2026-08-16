@@ -778,9 +778,15 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
 /// INFERENCE from `ValidatedComposition` being parse-don't-validate, not something this test
 /// carries. The arm survives as an unreachable drift guard, which is why it is still emitted for a
 /// hypothetical eighth act that declared itself into the family without a fragment.
+///
+/// `[re-pointed — 2026-08-16]` The subject was `Survey`, which is now reachable (the `p_lens`
+/// blocker was settled and `query_survey` shipped). `Substantiate` is the only act that is still
+/// `NotSeparablyReachable` — `Served` with a real mechanic (`resource_standing_shape`) but absent
+/// from `CALLABLE_FRAGMENTS`, so it validates-and-refuses. It is the witness for the
+/// parse-don't-validate invariant now.
 #[test]
 fn the_unmodelled_acts_are_refused_before_the_compiler_ever_sees_them() {
-    let act = ActName::Survey;
+    let act = ActName::Substantiate;
     let c = Composition {
         outcome: OutcomeDeclaration {
             returns: vec![ReturnSpec {
@@ -1386,6 +1392,12 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
             // not for the one being added. Its first argument was checked only incidentally, inside
             // a different test's expected-string.
             selection("sel"),
+            // `[added — 2026-08-16]` **The `Survey` arm was absent for the same reason.** The guard
+            // must cover every `CoreCall` variant or it verifies only the shapes that already
+            // existed. Survey is the only core that takes BOTH `VISIBLE_IDS` and `PRINCIPAL_BIND`,
+            // which is exactly the thing to get wrong — the test asserts the first argument is
+            // still the hoisted visible set.
+            survey_stage("surveyed"),
         ],
         vec!["narrowed"],
     );
@@ -1394,8 +1406,9 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
         calls.len(),
-        3,
-        "both find stages AND the selection must reach an ungated core; got {calls:?} in:\n{}",
+        4,
+        "both find stages, the selection, AND the survey must reach an ungated core; got {calls:?} \
+         in:\n{}",
         c.sql
     );
     assert!(
@@ -1488,6 +1501,32 @@ fn selection(name: &str) -> StageNode {
                 },
             }],
         }),
+        edge_filter: None,
+        properties: vec![],
+    })
+}
+
+/// A survey stage: an intention with an embedding, a cogmap anchor bound, and a `Regions` term.
+/// Survey is the only core that takes BOTH `VISIBLE_IDS` and `PRINCIPAL_BIND`, so the guard test
+/// must cover it to verify the first argument is still the hoisted visible set.
+fn survey_stage(name: &str) -> StageNode {
+    StageNode::Act(ActInvocation {
+        name: StageName::parse(name).unwrap(),
+        act: ActName::Survey,
+        intention: Some(Intention {
+            query: "salience".to_string(),
+            embedding: Some(an_embedding()),
+        }),
+        inputs: vec![StageInput::Caller {
+            relation: StageRelation::Bound,
+            ids: IdSet {
+                kind: IdKind::Cogmap,
+                provenance: None,
+                ids: vec![Uuid::now_v7()],
+            },
+        }],
+        terms: std::collections::BTreeMap::new(),
+        resource_filter: None,
         edge_filter: None,
         properties: vec![],
     })

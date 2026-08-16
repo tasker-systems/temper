@@ -343,7 +343,7 @@ export type CompositionTrace = { stages: Array<StageTrace>, };
  * whereas it must tolerate a refusal reason it has never seen. A third disclosure is a breaking
  * change, and should be.
  */
-export type Disclosure = "input_contribution" | "match_location" | "filter_counts";
+export type Disclosure = "input_contribution" | "match_location" | "filter_counts" | "region";
 
 /**
  * One of Temper's three surfaces. Named as doors rather than as transports because the question
