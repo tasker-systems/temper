@@ -1347,6 +1347,29 @@ mod tests {
         );
     }
 
+    /// **The frontmatter must start at byte 0 — nothing else may precede it.**
+    ///
+    /// opencode and Claude Code parse skill frontmatter with a strict `---` at
+    /// byte 0; any leading line (a `<!-- config-hash -->` comment, an HTML
+    /// preamble, anything) causes the parser to treat the whole frontmatter
+    /// block as body text. The `description` field is then never read, the
+    /// skill is filtered out of the registry, and the model is never told the
+    /// skill exists — silent and total. This pins the invariant the
+    /// leading-comment bug broke.
+    #[test]
+    fn skill_md_frontmatter_starts_at_byte_zero() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let skill_md = &files["SKILL.md"];
+
+        assert!(
+            skill_md.starts_with("---\n"),
+            "SKILL.md must begin with `---\\n` at byte 0 so frontmatter parsers read it; \
+             got: {:?}",
+            skill_md.chars().take(40).collect::<String>()
+        );
+    }
+
     /// The referencing convention is the reason sessions stop writing unresolvable id prefixes.
     /// It lives in two places — SKILL.md (read every session) and reference.md — and a silent
     /// drop from either is invisible until documents start citing nothing again.
@@ -1827,7 +1850,11 @@ mod tests {
 
     #[test]
     fn test_extract_config_hash_found() {
-        let content = "<!-- config-hash: abc123 -->\n---\nname: temper\n---";
+        // The config-hash comment lives AFTER the frontmatter block (see templates/skill.md).
+        // Frontmatter parsers in opencode and Claude Code require `---` at byte 0; a leading
+        // comment line silently drops the skill from the loader's registry. The extractor scans
+        // line-by-line, so it finds the hash wherever it sits.
+        let content = "---\nname: temper\ndescription: x\n---\n\n<!-- config-hash: abc123 -->\n";
         assert_eq!(extract_config_hash(content), Some("abc123".to_string()));
     }
 
